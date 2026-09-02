@@ -60,6 +60,8 @@ set(SHADERC_SKIP_EXAMPLES ON CACHE BOOL "" FORCE)
 
 set(FG_BUILD_TEST OFF CACHE BOOL "" FORCE)
 
+set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
+
 # Add well-behaved CMake submodules
 add_subdirectory(external/glfw)
 add_subdirectory(external/fmt)
@@ -72,9 +74,17 @@ add_subdirectory(external/shaderc)
 add_subdirectory(external/meshoptimizer)
 add_subdirectory(external/FrameGraph)
 add_subdirectory(external/tracy)
+add_subdirectory(external/VulkanMemoryAllocator)
 
-# ImGui (Now using Vulkan instead of OpenGL3)
 set(IMGUI_DIR external/imgui)
+set(IMGUIZMO_DIR external/ImGuizmo)
+
+# Safely locate ImGuizmo sources (avoids example folders)
+file(GLOB IMGUIZMO_SOURCES
+    "${IMGUIZMO_DIR}/*.cpp"
+    "${IMGUIZMO_DIR}/src/*.cpp"
+)
+
 add_library(imgui STATIC
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
@@ -83,8 +93,17 @@ add_library(imgui STATIC
     ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
     ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+    ${IMGUIZMO_SOURCES}
 )
-target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+
+# Export ImGuizmo headers alongside ImGui
+target_include_directories(imgui PUBLIC
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${IMGUIZMO_DIR}
+    ${IMGUIZMO_DIR}/src
+)
+
 target_link_libraries(imgui PUBLIC glfw Vulkan::Vulkan)
 
 # 4. Define the Library
@@ -102,9 +121,7 @@ target_include_directories(brassica
         external/glm
         external/entt/single_include
         external/stb
-        external/VulkanMemoryAllocator/include
         external/miniaudio
-        external/ImGuizmo
         external/imgui_entt_entity_editor
 )
 
@@ -118,13 +135,14 @@ target_link_libraries(brassica
         spdlog::spdlog
         enkiTS
         fastgltf::fastgltf
-        JoltPhysics
+        Jolt
         vk-bootstrap
         shaderc_shared
         meshoptimizer
         FrameGraph
         TracyClient
         Threads::Threads
+        VulkanMemoryAllocator
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)
