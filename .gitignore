@@ -1,28 +1,26 @@
-# Prerequisites
-*.d
+*.patch
+
+# Build artifacts
+build/
+bin/
+obj/
+terrain_cache/
+*.png
 
 # Compiled Object files
-*.slo
-*.lo
 *.o
 *.obj
+!assets/**
+assets/grammar_inputs/**
 
 # Precompiled Headers
 *.gch
 *.pch
 
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
 # Compiled Dynamic libraries
 *.so
 *.dylib
 *.dll
-*.so.*
-
 
 # Fortran module files
 *.mod
@@ -38,32 +36,178 @@
 *.exe
 *.out
 *.app
+boidsish
 
-# Build directories
-build/
-Build/
-build-*/
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
 
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
+# IDE specific files
+.vscode/
+.vs/
+*.vcxproj*
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.ini
+
+# Qt-es
+object_script.*.Release
+object_script.*.Debug
+*_plugin_import.cpp
+/.qmake.cache
+/.qmake.stash
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.jsc
+Makefile*
+*build-*
+*.qm
+*.prl
+
+# Qt unit tests
+target_wrapper.*
+
+# QtCreator
+*.autosave
+*.config
+
+# QtCreator Qml
+*.qmlproject.user
+*.qmlproject.user.*
+
+# QtCreator CMake
+CMakeLists.txt.user*
+
+# QtCreator 4.8< compilation database
 compile_commands.json
 
-# Temporary files
+# QtCreator local machine specific files for imported projects
+*creator.user*
+
+# IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Eclipse CDT
+.autotools
+.cproject
+.project
+.pydevproject
+
+# Code::Blocks
+*.cbp
+*.layout
+*.depend
+
+# Codelite
+*.project
+*.workspace
+
+# CodeLite
+*.codelite-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
 *.tmp
-*.log
+*.temp
+*.~vsd*
+
+# Windows Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+# Linux
+*~
+
+# Temporary files
+.#*
+.*.swp
+.*.swo
+*.tmp
 *.bak
-*.swp
 
-# vcpkg
-vcpkg_installed/
+# Log files
+*.log
 
-# debug information files
-*.dwo
+# CMake
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
 
-# test output & cache
-Testing/
-.cache/
+# Package files
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tgz
+*.zip
+
+# Coverage files
+*.gcov
+*.gcno
+*.gcda
+
+# Profiling files
+gmon.out
+
+# XWD files
+*.xwd
+
+core.*
+*.ini
+
+scenes/*.dict

@@ -1,0 +1,63 @@
+[submodule "external/imgui"]
+	path = external/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "external/stb"]
+	path = external/stb
+	url = https://github.com/nothings/stb.git
+[submodule "external/glm"]
+	path = external/glm
+	url = https://github.com/g-truc/glm
+[submodule "external/lygia"]
+	path = external/lygia
+	url = https://github.com/patriciogonzalezvivo/lygia.git
+[submodule "external/meshoptimizer"]
+	path = external/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer
+[submodule "external/FrameGraph"]
+	path = external/FrameGraph
+	url = https://github.com/skaarj1989/FrameGraph
+[submodule "external/imgui_entt_entity_editor"]
+	path = external/imgui_entt_entity_editor
+	url = https://github.com/Green-Sky/imgui_entt_entity_editor
+[submodule "external/entt"]
+	path = external/entt
+	url = https://github.com/skypjack/entt
+[submodule "external/fmt"]
+	path = external/fmt
+	url = https://github.com/fmtlib/fmt
+[submodule "external/doctest"]
+	path = external/doctest
+	url = https://github.com/doctest/doctest
+[submodule "external/VulkanMemoryAllocator"]
+	path = external/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+[submodule "external/vk-bootstrap"]
+	path = external/vk-bootstrap
+	url = https://github.com/charles-lunarg/vk-bootstrap
+[submodule "external/tracy"]
+	path = external/tracy
+	url = https://github.com/wolfpld/tracy
+[submodule "external/ImGuizmo"]
+	path = external/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo
+[submodule "external/glfw"]
+	path = external/glfw
+	url = https://github.com/glfw/glfw
+[submodule "external/shaderc"]
+	path = external/shaderc
+	url = https://github.com/google/shaderc
+[submodule "external/miniaudio"]
+	path = external/miniaudio
+	url = https://github.com/mackron/miniaudio
+[submodule "external/spdlog"]
+	path = external/spdlog
+	url = https://github.com/gabime/spdlog
+[submodule "external/JoltPhysics"]
+	path = external/JoltPhysics
+	url = https://github.com/jrouwe/JoltPhysics
+[submodule "external/enkits"]
+	path = external/enkits
+	url = https://github.com/dougbinks/enkits
+[submodule "external/fastgltf"]
+	path = external/fastgltf
+	url = https://github.com/spnda/fastgltf
