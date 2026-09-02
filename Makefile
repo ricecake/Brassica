@@ -1,16 +1,17 @@
 BUILD_DIR = build
-# CONFIG = Release
 CONFIG = RelWithDebInfo
+APP = sandbox
 
-.PHONY: all clean format run clean-build
+.PHONY: all clean format run clean-build test profile setup-deps
 
 all:
-	rm -rf $(BUILD_DIR)/shaders/
-	cd external/shaderc && ./utils/git-sync-deps
 	@cmake -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG)
 	@cmake --build $(BUILD_DIR) --parallel
 
-# Bridges the wrapper to the CMake 'format' target we created earlier
+# Run once after pulling submodules
+setup-deps:
+	cd external/shaderc && ./utils/git-sync-deps
+
 format:
 	@cmake -B $(BUILD_DIR)
 	@cmake --build $(BUILD_DIR) --target format
@@ -21,10 +22,9 @@ test:
 	@cd $(BUILD_DIR) && ctest --output-on-failure
 
 run: all
-	@./$(BUILD_DIR)/$(X)
+	@./$(BUILD_DIR)/bin/$(APP)
 
 profile:
-	rm -rf $(BUILD_DIR)/shaders/
 	@cmake -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG) -DENABLE_PROFILING=ON
 	@cmake --build $(BUILD_DIR) --parallel
 

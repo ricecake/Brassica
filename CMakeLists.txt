@@ -1,19 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 project(Brassica VERSION 1.0 LANGUAGES CXX)
 
-# 1. C++ Standard and Flags
+# 1. Output Directories & Standards
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Set a common directory for all executable binaries
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-
-# Set a common directory for all shared libraries
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-
-# Set a common directory for all static libraries
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 include(CheckIPOSupported)
@@ -22,7 +17,7 @@ if(ipo_supported)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
-# Get the current git hash and branch
+# Build Metadata
 execute_process(COMMAND git rev-parse --abbrev-ref HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE GIT_BRANCH OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE GIT_HASH OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT GIT_HASH)
@@ -39,6 +34,13 @@ if(CCACHE_PROGRAM)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
 endif()
 
+# Profiling Option (Forwards to Tracy)
+option(ENABLE_PROFILING "Enable Tracy Profiling" OFF)
+if(ENABLE_PROFILING)
+    set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+    add_compile_definitions(PROFILING_ENABLED)
+endif()
+
 option(BRASSICA_BUILD_SHARED "Build brassica as a shared library" OFF)
 if(BRASSICA_BUILD_SHARED)
     set(BRASSICA_LIB_TYPE SHARED)
@@ -52,26 +54,23 @@ find_package(Vulkan REQUIRED)
 find_package(Threads REQUIRED)
 
 # 3. Submodule Configurations
-# Disable testing/examples globally for all submodules to speed up build
 set(BUILD_TESTING OFF CACHE BOOL "Disable submodule tests" FORCE)
 
-# JoltPhysics specific configuration
+# JoltPhysics
 set(TARGET_UNIT_TESTS OFF CACHE BOOL "" FORCE)
 set(TARGET_HELLO_WORLD OFF CACHE BOOL "" FORCE)
 set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
 set(TARGET_SAMPLES OFF CACHE BOOL "" FORCE)
 set(TARGET_VIEWER OFF CACHE BOOL "" FORCE)
-set(USE_SSE4_2 ON CACHE BOOL "Enable SSE4.2 for Jolt" FORCE) # Standard baseline for modern CPUs
+set(USE_SSE4_2 ON CACHE BOOL "Enable SSE4.2 for Jolt" FORCE)
 
-# Shaderc specific configuration
+# Shaderc & FastGLTF
 set(SHADERC_SKIP_TESTS ON CACHE BOOL "" FORCE)
 set(SHADERC_SKIP_EXAMPLES ON CACHE BOOL "" FORCE)
-
 set(FG_BUILD_TEST OFF CACHE BOOL "" FORCE)
-
 set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
 
-# Add well-behaved CMake submodules
+# Subdirectories
 add_subdirectory(external/glfw)
 add_subdirectory(external/fmt)
 add_subdirectory(external/spdlog)
@@ -84,15 +83,13 @@ add_subdirectory(external/meshoptimizer)
 add_subdirectory(external/FrameGraph)
 add_subdirectory(external/tracy)
 add_subdirectory(external/VulkanMemoryAllocator)
+add_subdirectory(external/doctest)
 
+# ImGui & ImGuizmo
 set(IMGUI_DIR external/imgui)
 set(IMGUIZMO_DIR external/ImGuizmo)
 
-# Safely locate ImGuizmo sources (avoids example folders)
-file(GLOB IMGUIZMO_SOURCES
-    "${IMGUIZMO_DIR}/*.cpp"
-    "${IMGUIZMO_DIR}/src/*.cpp"
-)
+file(GLOB IMGUIZMO_SOURCES "${IMGUIZMO_DIR}/*.cpp" "${IMGUIZMO_DIR}/src/*.cpp")
 
 add_library(imgui STATIC
     ${IMGUI_DIR}/imgui.cpp
@@ -105,24 +102,21 @@ add_library(imgui STATIC
     ${IMGUIZMO_SOURCES}
 )
 
-# Export ImGuizmo headers alongside ImGui
 target_include_directories(imgui PUBLIC
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${IMGUIZMO_DIR}
     ${IMGUIZMO_DIR}/src
 )
-
 target_link_libraries(imgui PUBLIC glfw Vulkan::Vulkan)
 
-# 4. Define the Library
+# 4. Engine Library
 file(GLOB_RECURSE LIB_SOURCES "src/*.cpp")
 add_library(brassica ${BRASSICA_LIB_TYPE} ${LIB_SOURCES})
 
 target_compile_definitions(brassica PUBLIC GLM_ENABLE_EXPERIMENTAL BRASSICA_BUILD_DIR="${CMAKE_BINARY_DIR}")
 target_compile_options(brassica PRIVATE -march=native -ffast-math)
 
-# Interface/Header-only includes mapped from your structure
 target_include_directories(brassica
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -134,7 +128,6 @@ target_include_directories(brassica
         external/imgui_entt_entity_editor
 )
 
-# 5. Link Dependencies
 target_link_libraries(brassica
     PUBLIC
         Vulkan::Vulkan
@@ -158,7 +151,17 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_G
     target_link_libraries(brassica PRIVATE stdc++exp)
 endif()
 
-# 6. Build Apps, Examples, and Tests
+# Asset Sync Post-Build Rule
+add_custom_command(TARGET brassica POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
+)
+
+# 5. Apps & Executables
 file(GLOB APP_DIRS "apps/*")
 foreach(APP_DIR ${APP_DIRS})
     if(IS_DIRECTORY ${APP_DIR})
@@ -168,20 +171,35 @@ foreach(APP_DIR ${APP_DIRS})
             add_executable(${APP_NAME} ${APP_SOURCES})
             target_link_libraries(${APP_NAME} PRIVATE brassica)
             target_include_directories(${APP_NAME} PRIVATE "${APP_DIR}/include")
-            set_target_properties(${APP_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
         endif()
     endif()
 endforeach()
 
-# Tests
-enable_testing()
-add_subdirectory(external/doctest)
+# 6. Formatting Target
+find_program(CLANG_FORMAT_EXE NAMES clang-format)
+if(CLANG_FORMAT_EXE)
+    file(GLOB_RECURSE FORMAT_SOURCES "src/*.[ch]pp" "include/*.[ch]pp" "apps/*.[ch]pp")
+    add_custom_target(format
+        COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SOURCES}
+        COMMENT "Running clang-format..."
+    )
+endif()
 
+# 7. Test Targets
+enable_testing()
 file(GLOB TEST_SOURCES "tests/*.cpp")
+set(ALL_TEST_TARGETS "")
+
 foreach(TEST_SOURCE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
     add_executable(${TEST_NAME} ${TEST_SOURCE})
     target_link_libraries(${TEST_NAME} PRIVATE brassica doctest::doctest)
     set_target_properties(${TEST_NAME} PROPERTIES EXCLUDE_FROM_ALL TRUE)
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    list(APPEND ALL_TEST_TARGETS ${TEST_NAME})
 endforeach()
+
+add_custom_target(tests)
+if(ALL_TEST_TARGETS)
+    add_dependencies(tests ${ALL_TEST_TARGETS})
+endif()

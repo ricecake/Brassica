@@ -145,19 +145,21 @@ BraceWrapping:
 
 # Include Management
 IncludeBlocks: Regroup
-SortIncludes: CaseSensitive
+SortIncludes: CaseInsensitive
 IncludeCategories:
+  # - Regex:           '^"Jolt/Jolt\.h"$'
+  #   Priority:        5
+  - Regex:           '^[<"]([a-zA-Z0-9_]+)/\1\.(h|hpp)[>"]$'
+    Priority:        10
+
   # C System Headers (<*.h>)
-  - Regex:           '^<.*\\.h>$'
+  - Regex:           '^<.*\.h>$'
     Priority:        1
   # C++ System Headers (<...>)
   - Regex:           '^<[a-zA-Z0-9_]+>$'
     Priority:        2
-  # Arduino Headers
-  - Regex:           '^(Arduino|esp_).*\\.h'
-    Priority:        10
   # Project Headers (".h", ".hpp")
-  - Regex:           '.*\.(h|hpp)$'
+  - Regex:           '"".*\.(h|hpp)$"'
     Priority:        20
   # Catch-all for any other includes
   - Regex:           '.*'

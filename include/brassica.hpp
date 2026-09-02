@@ -1,6 +1,6 @@
 #pragma once
 
 namespace brassica {
-    // A test entry point to verify library linkages
-    void InitializeCore();
-}
+	// A test entry point to verify library linkages
+	void InitializeCore();
+} // namespace brassica
