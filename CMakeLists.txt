@@ -58,13 +58,15 @@ set(USE_SSE4_2 ON CACHE BOOL "Enable SSE4.2 for Jolt" FORCE) # Standard baseline
 set(SHADERC_SKIP_TESTS ON CACHE BOOL "" FORCE)
 set(SHADERC_SKIP_EXAMPLES ON CACHE BOOL "" FORCE)
 
+set(FG_BUILD_TEST OFF CACHE BOOL "" FORCE)
+
 # Add well-behaved CMake submodules
 add_subdirectory(external/glfw)
 add_subdirectory(external/fmt)
 add_subdirectory(external/spdlog)
 add_subdirectory(external/enkits)
 add_subdirectory(external/fastgltf)
-add_subdirectory(external/JoltPhysics)
+add_subdirectory(external/JoltPhysics/Build)
 add_subdirectory(external/vk-bootstrap)
 add_subdirectory(external/shaderc)
 add_subdirectory(external/meshoptimizer)
