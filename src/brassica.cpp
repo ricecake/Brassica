@@ -80,12 +80,14 @@ void InitializeCore() {
     // Test vk-bootstrap
     vkb::InstanceBuilder builder;
     auto inst_ret = builder.set_app_name("Brassica Test")
-                           .request_validation_layers(false)
+                           .request_validation_layers(true)
                            .use_default_debug_messenger()
                            .build();
     if (inst_ret) {
          spdlog::info("vk-bootstrap linked.");
     }
+
+	VmaAllocator vmalloc;
 }
 
 } // namespace brassica
