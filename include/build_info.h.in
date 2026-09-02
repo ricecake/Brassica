@@ -1,0 +1,2 @@
+#pragma once
+#define BRASSICA_BUILD_ID "@BRASSICA_GIT_IDENT@"
