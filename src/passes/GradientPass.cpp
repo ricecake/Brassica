@@ -233,11 +233,12 @@ namespace brassica {
 		}
 	}
 
-	FrameGraphResource GradientPass::RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent) {
+	FrameGraphResource GradientPass::RegisterPass(FrameGraph& fg, FrameGraphBlackboard& blackboard, vk::Extent2D extent) {
+		const auto& swapchainData = blackboard.get<SwapchainData>();
 		const auto& passData = fg.addCallbackPass<GradientPassData>(
 			"GradientPass",
 			[&](FrameGraph::Builder& builder, GradientPassData& data) {
-				data.target = builder.write(swapchainImageResource);
+				data.target = builder.write(swapchainData.target);
 				builder.setSideEffect();
 			},
 			[this, extent](const GradientPassData& data, FrameGraphPassResources& resources, void* ctx) {
@@ -302,6 +303,7 @@ namespace brassica {
 				);
 			}
 		);
+		blackboard.add<GradientPassData>() = passData;
 		return passData.target;
 	}
 

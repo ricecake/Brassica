@@ -2,6 +2,7 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "fg/Blackboard.hpp"
 #include "fg/FrameGraph.hpp"
 #include "passes/RenderResources.hpp"
 #include "Shader.hpp"
@@ -36,10 +37,10 @@ namespace brassica {
 		void DestroyPipeline(vk::Device device);
 
 		FrameGraphResource RegisterPass(
-			FrameGraph&        fg,
-			FrameGraphResource inputResource,
-			vk::Extent2D       extent,
-			vk::DescriptorSet  globalDescriptorSet
+			FrameGraph&           fg,
+			FrameGraphBlackboard& blackboard,
+			vk::Extent2D          extent,
+			vk::DescriptorSet     globalDescriptorSet
 		);
 
 	private:

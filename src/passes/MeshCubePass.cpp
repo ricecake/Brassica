@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "spdlog/spdlog.h"
+#include "passes/GradientPass.hpp"
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
@@ -225,11 +226,18 @@ namespace brassica {
 	}
 
 	FrameGraphResource MeshCubePass::RegisterPass(
-		FrameGraph&        fg,
-		FrameGraphResource inputResource,
-		vk::Extent2D       extent,
-		vk::DescriptorSet  globalDescriptorSet
+		FrameGraph&           fg,
+		FrameGraphBlackboard& blackboard,
+		vk::Extent2D          extent,
+		vk::DescriptorSet     globalDescriptorSet
 	) {
+		FrameGraphResource inputResource;
+		if (const auto* gradientData = blackboard.try_get<GradientPassData>()) {
+			inputResource = gradientData->target;
+		} else {
+			inputResource = blackboard.get<SwapchainData>().target;
+		}
+
 		const auto& passData = fg.addCallbackPass<MeshCubePassData>(
 			"MeshCubePass",
 			[&](FrameGraph::Builder& builder, MeshCubePassData& data) {
@@ -303,6 +311,7 @@ namespace brassica {
 				);
 			}
 		);
+		blackboard.add<MeshCubePassData>() = passData;
 		return passData.target;
 	}
 
