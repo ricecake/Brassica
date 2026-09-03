@@ -1,6 +1,7 @@
 #include "Engine.hpp"
 
 #include <cstring>
+#include "fg/Blackboard.hpp"
 #include "spdlog/spdlog.h"
 
 namespace brassica {
@@ -283,8 +284,9 @@ namespace brassica {
 		frame.commandBuffer.begin(cmdBeginInfo);
 
 		// FrameGraph Setup and Execution
-		FrameGraph        fg;
-		FrameGraphTexture swapchainTexWrapper{
+		FrameGraph           fg;
+		FrameGraphBlackboard blackboard;
+		FrameGraphTexture    swapchainTexWrapper{
 			swapchainImages[swapchainImageIndex],
 			swapchainImageViews[swapchainImageIndex]
 		};
@@ -293,6 +295,7 @@ namespace brassica {
 		vk::Format   format = GetSwapchainFormat();
 
 		FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(swapchainTexWrapper));
+		blackboard.add<SwapchainData>() = SwapchainData{.target = swapchainRes};
 
 		uint32_t activeFrame = frameNumber % FRAME_OVERLAP;
 
@@ -306,8 +309,8 @@ namespace brassica {
 			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
 		}
 
-		FrameGraphResource gradientRes = gradientPass->RegisterPass(fg, swapchainRes, extent);
-		meshCubePass->RegisterPass(fg, gradientRes, extent, globalDescriptorSets[activeFrame]);
+		gradientPass->RegisterPass(fg, blackboard, extent);
+		meshCubePass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame]);
 
 		fg.compile();
 		vk::CommandBuffer rawCmd = frame.commandBuffer;

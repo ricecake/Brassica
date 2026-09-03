@@ -1,8 +1,13 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
+#include "fg/FrameGraphResource.hpp"
 
 namespace brassica {
+
+	struct SwapchainData {
+		FrameGraphResource target;
+	};
 
 	struct FrameGraphTexture {
 		struct Desc {
