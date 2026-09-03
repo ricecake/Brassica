@@ -1,8 +1,26 @@
 #include "Engine.hpp"
 
+#include <cstring>
 #include "spdlog/spdlog.h"
 
 namespace brassica {
+
+	namespace {
+		uint32_t FindMemoryType(
+			const vk::PhysicalDeviceMemoryProperties& memProperties,
+			uint32_t                                  typeFilter,
+			vk::MemoryPropertyFlags                   properties
+		) {
+			for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+				if ((typeFilter & (1 << i)) &&
+					(memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+					return i;
+				}
+			}
+			spdlog::error("Failed to find suitable memory type!");
+			return 0;
+		}
+	} // namespace
 
 	void Engine::InitWindow() {
 		glfwInit();
@@ -80,6 +98,8 @@ namespace brassica {
 				gradientPass.reset();
 			}
 
+			CleanupGlobalUBO();
+
 			for (int i = 0; i < FRAME_OVERLAP; i++) {
 				device.destroyFence(frames[i].renderFence);
 				device.destroySemaphore(frames[i].swapchainSemaphore);
@@ -117,9 +137,11 @@ namespace brassica {
 		globalSeed = rd();
 		rng.seed(globalSeed);
 
+		InitGlobalUBO();
+
 		shaderWatcher.WatchDirectory("shaders");
 
-		meshCubePass = std::make_unique<MeshCubePass>(instance, chosenGPU, device, GetSwapchainFormat(), &shaderWatcher);
+		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 		gradientPass = std::make_unique<GradientPass>(device, GetSwapchainFormat(), &shaderWatcher);
 
 		taskScheduler.Initialize();
@@ -271,13 +293,20 @@ namespace brassica {
 
 		FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(swapchainTexWrapper));
 
+		uint32_t activeFrame = frameNumber % FRAME_OVERLAP;
+
 		FrameUBO ubo{};
 		ubo.time = static_cast<float>(glfwGetTime());
 		ubo.frameIndex = frameNumber;
 		ubo.globalSeed = globalSeed;
 		ubo.frameRandom = static_cast<uint32_t>(rng());
 
-		meshCubePass->RegisterPass(fg, swapchainRes, extent, ubo, frameNumber);
+		if (globalUboMapped[activeFrame]) {
+			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
+		}
+
+		FrameGraphResource gradientRes = gradientPass->RegisterPass(fg, swapchainRes, extent);
+		meshCubePass->RegisterPass(fg, gradientRes, extent, globalDescriptorSets[activeFrame]);
 
 		fg.compile();
 		vk::CommandBuffer rawCmd = frame.commandBuffer;
@@ -314,6 +343,104 @@ namespace brassica {
 		(void)graphicsQueue.presentKHR(presentInfo);
 
 		frameNumber++;
+	}
+
+	void Engine::InitGlobalUBO() {
+		// 1. Set 0 Layout
+		vk::DescriptorSetLayoutBinding layoutBinding{};
+		layoutBinding.setBinding(0);
+		layoutBinding.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+		layoutBinding.setDescriptorCount(1);
+		layoutBinding.setStageFlags(vk::ShaderStageFlagBits::eAllGraphics | vk::ShaderStageFlagBits::eCompute);
+
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.setBindings(layoutBinding);
+		globalSet0Layout = device.createDescriptorSetLayout(layoutInfo);
+
+		// 2. Descriptor Pool
+		vk::DescriptorPoolSize poolSize{};
+		poolSize.setType(vk::DescriptorType::eUniformBuffer);
+		poolSize.setDescriptorCount(FRAME_OVERLAP);
+
+		vk::DescriptorPoolCreateInfo poolInfo{};
+		poolInfo.setMaxSets(FRAME_OVERLAP);
+		poolInfo.setPoolSizes(poolSize);
+		globalDescriptorPool = device.createDescriptorPool(poolInfo);
+
+		// 3. Allocate Descriptor Sets & UBO Buffers
+		vk::PhysicalDeviceMemoryProperties memProperties = chosenGPU.getMemoryProperties();
+
+		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, globalSet0Layout);
+		vk::DescriptorSetAllocateInfo allocInfo{};
+		allocInfo.setDescriptorPool(globalDescriptorPool);
+		allocInfo.setSetLayouts(layouts);
+
+		auto allocatedSets = device.allocateDescriptorSets(allocInfo);
+
+		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
+			globalDescriptorSets[i] = allocatedSets[i];
+
+			vk::BufferCreateInfo bufferInfo{};
+			bufferInfo.setSize(sizeof(FrameUBO));
+			bufferInfo.setUsage(vk::BufferUsageFlagBits::eUniformBuffer);
+			bufferInfo.setSharingMode(vk::SharingMode::eExclusive);
+
+			globalUboBuffers[i] = device.createBuffer(bufferInfo);
+
+			vk::MemoryRequirements memReqs = device.getBufferMemoryRequirements(globalUboBuffers[i]);
+			uint32_t memoryTypeIndex = FindMemoryType(
+				memProperties,
+				memReqs.memoryTypeBits,
+				vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+			);
+
+			vk::MemoryAllocateInfo memAllocInfo{memReqs.size, memoryTypeIndex};
+			globalUboMemory[i] = device.allocateMemory(memAllocInfo);
+			device.bindBufferMemory(globalUboBuffers[i], globalUboMemory[i], 0);
+
+			globalUboMapped[i] = device.mapMemory(globalUboMemory[i], 0, sizeof(FrameUBO));
+
+			vk::DescriptorBufferInfo bufferDescInfo{};
+			bufferDescInfo.setBuffer(globalUboBuffers[i]);
+			bufferDescInfo.setOffset(0);
+			bufferDescInfo.setRange(sizeof(FrameUBO));
+
+			vk::WriteDescriptorSet descriptorWrite{};
+			descriptorWrite.setDstSet(globalDescriptorSets[i]);
+			descriptorWrite.setDstBinding(0);
+			descriptorWrite.setDstArrayElement(0);
+			descriptorWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+			descriptorWrite.setBufferInfo(bufferDescInfo);
+
+			device.updateDescriptorSets(descriptorWrite, nullptr);
+		}
+	}
+
+	void Engine::CleanupGlobalUBO() {
+		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
+			if (globalUboMapped[i] && globalUboMemory[i]) {
+				device.unmapMemory(globalUboMemory[i]);
+				globalUboMapped[i] = nullptr;
+			}
+			if (globalUboBuffers[i]) {
+				device.destroyBuffer(globalUboBuffers[i]);
+				globalUboBuffers[i] = nullptr;
+			}
+			if (globalUboMemory[i]) {
+				device.freeMemory(globalUboMemory[i]);
+				globalUboMemory[i] = nullptr;
+			}
+		}
+
+		if (globalDescriptorPool) {
+			device.destroyDescriptorPool(globalDescriptorPool);
+			globalDescriptorPool = nullptr;
+		}
+
+		if (globalSet0Layout) {
+			device.destroyDescriptorSetLayout(globalSet0Layout);
+			globalSet0Layout = nullptr;
+		}
 	}
 
 } // namespace brassica

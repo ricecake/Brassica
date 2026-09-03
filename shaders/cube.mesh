@@ -99,7 +99,7 @@ void main() {
 
 		vec4 clipPos;
 		clipPos.x = rotatedPos.x * fov / aspect;
-		clipPos.y = rotatedPos.y * fov;
+		clipPos.y = -rotatedPos.y * fov; // Vulkan inverted Y
 		clipPos.z = (rotatedPos.z * (zFar + zNear) - 2.0 * zFar * zNear) / (zFar - zNear);
 		clipPos.w = rotatedPos.z;
 

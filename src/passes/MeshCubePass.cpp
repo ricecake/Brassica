@@ -1,6 +1,5 @@
 #include "passes/MeshCubePass.hpp"
 
-#include <cstring>
 #include <vector>
 
 #include "spdlog/spdlog.h"
@@ -9,21 +8,6 @@
 namespace brassica {
 
 	namespace {
-		uint32_t FindMemoryType(
-			const vk::PhysicalDeviceMemoryProperties& memProperties,
-			uint32_t                                  typeFilter,
-			vk::MemoryPropertyFlags                   properties
-		) {
-			for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-				if ((typeFilter & (1 << i)) &&
-					(memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-					return i;
-				}
-			}
-			spdlog::error("Failed to find suitable memory type!");
-			return 0;
-		}
-
 		void TransitionImageLayout(
 			vk::CommandBuffer       cmd,
 			vk::Image               image,
@@ -54,13 +38,13 @@ namespace brassica {
 	} // namespace
 
 	MeshCubePass::MeshCubePass(
-		vk::Instance       instance,
-		vk::PhysicalDevice physicalDevice,
-		vk::Device         device,
-		vk::Format         colorFormat,
-		ShaderWatcher*     watcher
+		vk::Instance            instance,
+		vk::Device              device,
+		vk::DescriptorSetLayout globalSet0Layout,
+		vk::Format              colorFormat,
+		ShaderWatcher*          watcher
 	) {
-		InitPipeline(instance, physicalDevice, device, colorFormat, watcher);
+		InitPipeline(instance, device, globalSet0Layout, colorFormat, watcher);
 	}
 
 	MeshCubePass::~MeshCubePass() {
@@ -68,13 +52,14 @@ namespace brassica {
 	}
 
 	void MeshCubePass::InitPipeline(
-		vk::Instance       instance,
-		vk::PhysicalDevice physicalDevice,
-		vk::Device         device,
-		vk::Format         colorFormat,
-		ShaderWatcher*     watcher
+		vk::Instance            instance,
+		vk::Device              device,
+		vk::DescriptorSetLayout globalSet0Layout,
+		vk::Format              colorFormat,
+		ShaderWatcher*          watcher
 	) {
 		dls.init(instance, device);
+
 		if (!meshShader.CompileMeshFromFile(device, "shaders/cube.mesh")) {
 			spdlog::error("Failed to compile cube.mesh shader file");
 		}
@@ -83,81 +68,12 @@ namespace brassica {
 			spdlog::error("Failed to compile cube.frag shader file");
 		}
 
-		// 1. Descriptor Set Layout
-		vk::DescriptorSetLayoutBinding layoutBinding{};
-		layoutBinding.setBinding(0);
-		layoutBinding.setDescriptorType(vk::DescriptorType::eUniformBuffer);
-		layoutBinding.setDescriptorCount(1);
-		layoutBinding.setStageFlags(vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment);
-
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(layoutBinding);
-		descriptorSetLayout = device.createDescriptorSetLayout(layoutInfo);
-
-		// 2. Descriptor Pool & Sets
-		vk::DescriptorPoolSize poolSize{};
-		poolSize.setType(vk::DescriptorType::eUniformBuffer);
-		poolSize.setDescriptorCount(FRAME_OVERLAP);
-
-		vk::DescriptorPoolCreateInfo poolInfo{};
-		poolInfo.setMaxSets(FRAME_OVERLAP);
-		poolInfo.setPoolSizes(poolSize);
-		descriptorPool = device.createDescriptorPool(poolInfo);
-
-		// 3. UBO Buffers
-		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
-
-		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, descriptorSetLayout);
-		vk::DescriptorSetAllocateInfo allocInfo{};
-		allocInfo.setDescriptorPool(descriptorPool);
-		allocInfo.setSetLayouts(layouts);
-
-		auto allocatedSets = device.allocateDescriptorSets(allocInfo);
-
-		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
-			descriptorSets[i] = allocatedSets[i];
-
-			vk::BufferCreateInfo bufferInfo{};
-			bufferInfo.setSize(sizeof(FrameUBO));
-			bufferInfo.setUsage(vk::BufferUsageFlagBits::eUniformBuffer);
-			bufferInfo.setSharingMode(vk::SharingMode::eExclusive);
-
-			uboBuffers[i] = device.createBuffer(bufferInfo);
-
-			vk::MemoryRequirements memReqs = device.getBufferMemoryRequirements(uboBuffers[i]);
-			uint32_t memoryTypeIndex = FindMemoryType(
-				memProperties,
-				memReqs.memoryTypeBits,
-				vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-			);
-
-			vk::MemoryAllocateInfo memAllocInfo{memReqs.size, memoryTypeIndex};
-			uboMemory[i] = device.allocateMemory(memAllocInfo);
-			device.bindBufferMemory(uboBuffers[i], uboMemory[i], 0);
-
-			uboMapped[i] = device.mapMemory(uboMemory[i], 0, sizeof(FrameUBO));
-
-			vk::DescriptorBufferInfo bufferDescInfo{};
-			bufferDescInfo.setBuffer(uboBuffers[i]);
-			bufferDescInfo.setOffset(0);
-			bufferDescInfo.setRange(sizeof(FrameUBO));
-
-			vk::WriteDescriptorSet descriptorWrite{};
-			descriptorWrite.setDstSet(descriptorSets[i]);
-			descriptorWrite.setDstBinding(0);
-			descriptorWrite.setDstArrayElement(0);
-			descriptorWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
-			descriptorWrite.setBufferInfo(bufferDescInfo);
-
-			device.updateDescriptorSets(descriptorWrite, nullptr);
-		}
-
-		// 4. Pipeline Layout
+		// 1. Pipeline Layout using global Set 0 Layout
 		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-		pipelineLayoutInfo.setSetLayouts(descriptorSetLayout);
+		pipelineLayoutInfo.setSetLayouts(globalSet0Layout);
 		pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
 
-		// 5. Shader Watcher setup
+		// 2. Shader Watcher setup
 		if (watcher) {
 			auto rebuildCb = [this, device, colorFormat]() {
 				spdlog::info("Rebuilding MeshCubePass pipeline due to shader change...");
@@ -166,6 +82,9 @@ namespace brassica {
 					device.destroyPipeline(pipeline);
 					pipeline = nullptr;
 				}
+
+				meshShader.CompileMeshFromFile(device, "shaders/cube.mesh");
+				fragShader.CompileFragmentFromFile(device, "shaders/cube.frag");
 
 				vk::PipelineShaderStageCreateInfo stages[2] = {
 					meshShader.GetStageCreateInfo(),
@@ -181,7 +100,7 @@ namespace brassica {
 				rasterizer.setRasterizerDiscardEnable(VK_FALSE);
 				rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 				rasterizer.setLineWidth(1.0f);
-				rasterizer.setCullMode(vk::CullModeFlagBits::eNone);
+				rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
 				rasterizer.setFrontFace(vk::FrontFace::eClockwise);
 
 				vk::PipelineMultisampleStateCreateInfo multisampling{};
@@ -231,7 +150,7 @@ namespace brassica {
 			watcher->RegisterShader(&fragShader, rebuildCb);
 		}
 
-		// 6. Graphics Pipeline Creation
+		// 3. Graphics Pipeline Creation
 		vk::PipelineShaderStageCreateInfo shaderStages[2] = {
 			meshShader.GetStageCreateInfo(),
 			fragShader.GetStageCreateInfo()
@@ -246,7 +165,7 @@ namespace brassica {
 		rasterizer.setRasterizerDiscardEnable(VK_FALSE);
 		rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 		rasterizer.setLineWidth(1.0f);
-		rasterizer.setCullMode(vk::CullModeFlagBits::eNone);
+		rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
 		rasterizer.setFrontFace(vk::FrontFace::eClockwise);
 
 		vk::PipelineMultisampleStateCreateInfo multisampling{};
@@ -295,29 +214,6 @@ namespace brassica {
 		meshShader.Destroy(device);
 		fragShader.Destroy(device);
 
-		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
-			if (uboMapped[i] && uboMemory[i]) {
-				device.unmapMemory(uboMemory[i]);
-				uboMapped[i] = nullptr;
-			}
-			if (uboBuffers[i]) {
-				device.destroyBuffer(uboBuffers[i]);
-				uboBuffers[i] = nullptr;
-			}
-			if (uboMemory[i]) {
-				device.freeMemory(uboMemory[i]);
-				uboMemory[i] = nullptr;
-			}
-		}
-
-		if (descriptorPool) {
-			device.destroyDescriptorPool(descriptorPool);
-			descriptorPool = nullptr;
-		}
-		if (descriptorSetLayout) {
-			device.destroyDescriptorSetLayout(descriptorSetLayout);
-			descriptorSetLayout = nullptr;
-		}
 		if (pipeline) {
 			device.destroyPipeline(pipeline);
 			pipeline = nullptr;
@@ -328,47 +224,38 @@ namespace brassica {
 		}
 	}
 
-	void MeshCubePass::RegisterPass(
+	FrameGraphResource MeshCubePass::RegisterPass(
 		FrameGraph&        fg,
-		FrameGraphResource swapchainImageResource,
+		FrameGraphResource inputResource,
 		vk::Extent2D       extent,
-		const FrameUBO&    uboData,
-		uint32_t           frameIndex
+		vk::DescriptorSet  globalDescriptorSet
 	) {
-		uint32_t activeFrame = frameIndex % FRAME_OVERLAP;
-		if (uboMapped[activeFrame]) {
-			std::memcpy(uboMapped[activeFrame], &uboData, sizeof(FrameUBO));
-		}
-
-		fg.addCallbackPass<MeshCubePassData>(
+		const auto& passData = fg.addCallbackPass<MeshCubePassData>(
 			"MeshCubePass",
 			[&](FrameGraph::Builder& builder, MeshCubePassData& data) {
-				data.target = builder.write(swapchainImageResource);
+				data.target = builder.write(inputResource);
 				builder.setSideEffect();
 			},
-			[this, extent, activeFrame](const MeshCubePassData& data, FrameGraphPassResources& resources, void* ctx) {
+			[this, extent, globalDescriptorSet](const MeshCubePassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 				auto&             targetTexture = resources.get<FrameGraphTexture>(data.target);
 
 				TransitionImageLayout(
 					cmd,
 					targetTexture.image,
-					vk::ImageLayout::eUndefined,
+					vk::ImageLayout::eColorAttachmentOptimal,
 					vk::ImageLayout::eColorAttachmentOptimal,
 					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-					{},
+					vk::AccessFlagBits2::eColorAttachmentWrite,
 					vk::AccessFlagBits2::eColorAttachmentWrite
 				);
 
 				vk::RenderingAttachmentInfo colorAttachment{};
 				colorAttachment.setImageView(targetTexture.imageView);
 				colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
-				colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear);
+				colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
 				colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
-				colorAttachment.setClearValue(
-					vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.05f, 0.05f, 0.08f, 1.0f}}}
-				);
 
 				vk::RenderingInfo renderingInfo{};
 				renderingInfo.setRenderArea(vk::Rect2D({0, 0}, extent));
@@ -383,7 +270,7 @@ namespace brassica {
 					vk::PipelineBindPoint::eGraphics,
 					pipelineLayout,
 					0,
-					descriptorSets[activeFrame],
+					globalDescriptorSet,
 					nullptr
 				);
 
@@ -416,6 +303,7 @@ namespace brassica {
 				);
 			}
 		);
+		return passData.target;
 	}
 
 } // namespace brassica

@@ -233,8 +233,8 @@ namespace brassica {
 		}
 	}
 
-	void GradientPass::RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent) {
-		fg.addCallbackPass<GradientPassData>(
+	FrameGraphResource GradientPass::RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent) {
+		const auto& passData = fg.addCallbackPass<GradientPassData>(
 			"GradientPass",
 			[&](FrameGraph::Builder& builder, GradientPassData& data) {
 				data.target = builder.write(swapchainImageResource);
@@ -294,14 +294,15 @@ namespace brassica {
 					cmd,
 					targetTexture.image,
 					vk::ImageLayout::eColorAttachmentOptimal,
-					vk::ImageLayout::ePresentSrcKHR,
+					vk::ImageLayout::eColorAttachmentOptimal,
 					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-					vk::PipelineStageFlagBits2::eBottomOfPipe,
+					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 					vk::AccessFlagBits2::eColorAttachmentWrite,
-					{}
+					vk::AccessFlagBits2::eColorAttachmentWrite
 				);
 			}
 		);
+		return passData.target;
 	}
 
 } // namespace brassica

@@ -18,43 +18,34 @@ namespace brassica {
 	class MeshCubePass {
 	public:
 		MeshCubePass(
-			vk::Instance       instance,
-			vk::PhysicalDevice physicalDevice,
-			vk::Device         device,
-			vk::Format         colorFormat,
-			ShaderWatcher*     watcher = nullptr
+			vk::Instance            instance,
+			vk::Device              device,
+			vk::DescriptorSetLayout globalSet0Layout,
+			vk::Format              colorFormat,
+			ShaderWatcher*          watcher = nullptr
 		);
 		~MeshCubePass();
 
 		void InitPipeline(
-			vk::Instance       instance,
-			vk::PhysicalDevice physicalDevice,
-			vk::Device         device,
-			vk::Format         colorFormat,
-			ShaderWatcher*     watcher = nullptr
+			vk::Instance            instance,
+			vk::Device              device,
+			vk::DescriptorSetLayout globalSet0Layout,
+			vk::Format              colorFormat,
+			ShaderWatcher*          watcher = nullptr
 		);
 		void DestroyPipeline(vk::Device device);
 
-		void RegisterPass(
+		FrameGraphResource RegisterPass(
 			FrameGraph&        fg,
-			FrameGraphResource swapchainImageResource,
+			FrameGraphResource inputResource,
 			vk::Extent2D       extent,
-			const FrameUBO&    uboData,
-			uint32_t           frameIndex
+			vk::DescriptorSet  globalDescriptorSet
 		);
 
 	private:
 		vk::DispatchLoaderDynamic dls;
-		vk::Pipeline            pipeline{nullptr};
-		vk::PipelineLayout      pipelineLayout{nullptr};
-		vk::DescriptorSetLayout descriptorSetLayout{nullptr};
-		vk::DescriptorPool      descriptorPool{nullptr};
-
-		static constexpr unsigned int FRAME_OVERLAP = 2;
-		vk::Buffer            uboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
-		vk::DeviceMemory      uboMemory[FRAME_OVERLAP]{nullptr, nullptr};
-		void*                 uboMapped[FRAME_OVERLAP]{nullptr, nullptr};
-		vk::DescriptorSet     descriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
+		vk::Pipeline              pipeline{nullptr};
+		vk::PipelineLayout        pipelineLayout{nullptr};
 
 		MeshShader     meshShader;
 		FragmentShader fragShader;
