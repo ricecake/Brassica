@@ -1,9 +1,8 @@
-#include "passes/GradientPass.hpp"
+#include "passes/MeshCubePass.hpp"
 
 #include <vector>
 
 #include "spdlog/spdlog.h"
-
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
@@ -38,46 +37,59 @@ namespace brassica {
 		}
 	} // namespace
 
-	GradientPass::GradientPass(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher) {
-		InitPipeline(device, colorFormat, watcher);
+	MeshCubePass::MeshCubePass(
+		vk::Instance            instance,
+		vk::Device              device,
+		vk::DescriptorSetLayout globalSet0Layout,
+		vk::Format              colorFormat,
+		ShaderWatcher*          watcher
+	) {
+		InitPipeline(instance, device, globalSet0Layout, colorFormat, watcher);
 	}
 
-	GradientPass::~GradientPass() {
+	MeshCubePass::~MeshCubePass() {
 		// Cleanup should be managed via DestroyPipeline
 	}
 
-	void GradientPass::InitPipeline(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher) {
-		if (!vertShader.CompileVertexFromFile(device, "shaders/gradient.vert")) {
-			spdlog::error("Failed to compile gradient.vert shader file");
+	void MeshCubePass::InitPipeline(
+		vk::Instance            instance,
+		vk::Device              device,
+		vk::DescriptorSetLayout globalSet0Layout,
+		vk::Format              colorFormat,
+		ShaderWatcher*          watcher
+	) {
+		dls.init(instance, device);
+
+		if (!meshShader.CompileMeshFromFile(device, "shaders/cube.mesh")) {
+			spdlog::error("Failed to compile cube.mesh shader file");
 		}
 
-		if (!fragShader.CompileFragmentFromFile(device, "shaders/gradient.frag")) {
-			spdlog::error("Failed to compile gradient.frag shader file");
+		if (!fragShader.CompileFragmentFromFile(device, "shaders/cube.frag")) {
+			spdlog::error("Failed to compile cube.frag shader file");
 		}
 
+		// 1. Pipeline Layout using global Set 0 Layout
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
+		pipelineLayoutInfo.setSetLayouts(globalSet0Layout);
+		pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
+
+		// 2. Shader Watcher setup
 		if (watcher) {
 			auto rebuildCb = [this, device, colorFormat]() {
-				spdlog::info("Rebuilding GradientPass pipeline due to shader change...");
+				spdlog::info("Rebuilding MeshCubePass pipeline due to shader change...");
 				device.waitIdle();
 				if (pipeline) {
 					device.destroyPipeline(pipeline);
 					pipeline = nullptr;
 				}
-				if (pipelineLayout) {
-					device.destroyPipelineLayout(pipelineLayout);
-					pipelineLayout = nullptr;
-				}
+
+				meshShader.CompileMeshFromFile(device, "shaders/cube.mesh");
+				fragShader.CompileFragmentFromFile(device, "shaders/cube.frag");
 
 				vk::PipelineShaderStageCreateInfo stages[2] = {
-					vertShader.GetStageCreateInfo(),
+					meshShader.GetStageCreateInfo(),
 					fragShader.GetStageCreateInfo()
 				};
-
-				vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
-
-				vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
-				inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
-				inputAssembly.setPrimitiveRestartEnable(VK_FALSE);
 
 				vk::PipelineViewportStateCreateInfo viewportState{};
 				viewportState.setViewportCount(1);
@@ -88,7 +100,7 @@ namespace brassica {
 				rasterizer.setRasterizerDiscardEnable(VK_FALSE);
 				rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 				rasterizer.setLineWidth(1.0f);
-				rasterizer.setCullMode(vk::CullModeFlagBits::eNone);
+				rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
 				rasterizer.setFrontFace(vk::FrontFace::eClockwise);
 
 				vk::PipelineMultisampleStateCreateInfo multisampling{};
@@ -110,22 +122,14 @@ namespace brassica {
 				vk::PipelineDynamicStateCreateInfo dynamicState{};
 				dynamicState.setDynamicStates(dynamicStates);
 
-				vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-				try {
-					pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
-				} catch (const vk::SystemError& err) {
-					spdlog::error("Failed to create pipeline layout on reload: {}", err.what());
-					return;
-				}
-
 				vk::PipelineRenderingCreateInfo renderingCreateInfo{};
 				renderingCreateInfo.setColorAttachmentFormats(colorFormat);
 
 				vk::GraphicsPipelineCreateInfo pipelineInfo{};
 				pipelineInfo.setPNext(&renderingCreateInfo);
 				pipelineInfo.setStages(stages);
-				pipelineInfo.setPVertexInputState(&vertexInputInfo);
-				pipelineInfo.setPInputAssemblyState(&inputAssembly);
+				pipelineInfo.setPVertexInputState(nullptr);
+				pipelineInfo.setPInputAssemblyState(nullptr);
 				pipelineInfo.setPViewportState(&viewportState);
 				pipelineInfo.setPRasterizationState(&rasterizer);
 				pipelineInfo.setPMultisampleState(&multisampling);
@@ -136,26 +140,21 @@ namespace brassica {
 				auto result = device.createGraphicsPipeline(nullptr, pipelineInfo);
 				if (result.result == vk::Result::eSuccess) {
 					pipeline = result.value;
-					spdlog::info("GradientPass pipeline rebuilt successfully.");
+					spdlog::info("MeshCubePass pipeline rebuilt successfully.");
 				} else {
-					spdlog::error("Failed to rebuild graphics pipeline for GradientPass");
+					spdlog::error("Failed to rebuild graphics pipeline for MeshCubePass");
 				}
 			};
 
-			watcher->RegisterShader(&vertShader, rebuildCb);
+			watcher->RegisterShader(&meshShader, rebuildCb);
 			watcher->RegisterShader(&fragShader, rebuildCb);
 		}
 
+		// 3. Graphics Pipeline Creation
 		vk::PipelineShaderStageCreateInfo shaderStages[2] = {
-			vertShader.GetStageCreateInfo(),
+			meshShader.GetStageCreateInfo(),
 			fragShader.GetStageCreateInfo()
 		};
-
-		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
-
-		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
-		inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
-		inputAssembly.setPrimitiveRestartEnable(VK_FALSE);
 
 		vk::PipelineViewportStateCreateInfo viewportState{};
 		viewportState.setViewportCount(1);
@@ -166,7 +165,7 @@ namespace brassica {
 		rasterizer.setRasterizerDiscardEnable(VK_FALSE);
 		rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 		rasterizer.setLineWidth(1.0f);
-		rasterizer.setCullMode(vk::CullModeFlagBits::eNone);
+		rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
 		rasterizer.setFrontFace(vk::FrontFace::eClockwise);
 
 		vk::PipelineMultisampleStateCreateInfo multisampling{};
@@ -188,22 +187,14 @@ namespace brassica {
 		vk::PipelineDynamicStateCreateInfo dynamicState{};
 		dynamicState.setDynamicStates(dynamicStates);
 
-		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-		try {
-			pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
-		} catch (const vk::SystemError& err) {
-			spdlog::error("Failed to create pipeline layout: {}", err.what());
-			return;
-		}
-
 		vk::PipelineRenderingCreateInfo renderingCreateInfo{};
 		renderingCreateInfo.setColorAttachmentFormats(colorFormat);
 
 		vk::GraphicsPipelineCreateInfo pipelineInfo{};
 		pipelineInfo.setPNext(&renderingCreateInfo);
 		pipelineInfo.setStages(shaderStages);
-		pipelineInfo.setPVertexInputState(&vertexInputInfo);
-		pipelineInfo.setPInputAssemblyState(&inputAssembly);
+		pipelineInfo.setPVertexInputState(nullptr);
+		pipelineInfo.setPInputAssemblyState(nullptr);
 		pipelineInfo.setPViewportState(&viewportState);
 		pipelineInfo.setPRasterizationState(&rasterizer);
 		pipelineInfo.setPMultisampleState(&multisampling);
@@ -215,12 +206,12 @@ namespace brassica {
 		if (result.result == vk::Result::eSuccess) {
 			pipeline = result.value;
 		} else {
-			spdlog::error("Failed to create graphics pipeline");
+			spdlog::error("Failed to create graphics pipeline for MeshCubePass");
 		}
 	}
 
-	void GradientPass::DestroyPipeline(vk::Device device) {
-		vertShader.Destroy(device);
+	void MeshCubePass::DestroyPipeline(vk::Device device) {
+		meshShader.Destroy(device);
 		fragShader.Destroy(device);
 
 		if (pipeline) {
@@ -233,36 +224,38 @@ namespace brassica {
 		}
 	}
 
-	FrameGraphResource GradientPass::RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent) {
-		const auto& passData = fg.addCallbackPass<GradientPassData>(
-			"GradientPass",
-			[&](FrameGraph::Builder& builder, GradientPassData& data) {
-				data.target = builder.write(swapchainImageResource);
+	FrameGraphResource MeshCubePass::RegisterPass(
+		FrameGraph&        fg,
+		FrameGraphResource inputResource,
+		vk::Extent2D       extent,
+		vk::DescriptorSet  globalDescriptorSet
+	) {
+		const auto& passData = fg.addCallbackPass<MeshCubePassData>(
+			"MeshCubePass",
+			[&](FrameGraph::Builder& builder, MeshCubePassData& data) {
+				data.target = builder.write(inputResource);
 				builder.setSideEffect();
 			},
-			[this, extent](const GradientPassData& data, FrameGraphPassResources& resources, void* ctx) {
+			[this, extent, globalDescriptorSet](const MeshCubePassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 				auto&             targetTexture = resources.get<FrameGraphTexture>(data.target);
 
 				TransitionImageLayout(
 					cmd,
 					targetTexture.image,
-					vk::ImageLayout::eUndefined,
+					vk::ImageLayout::eColorAttachmentOptimal,
 					vk::ImageLayout::eColorAttachmentOptimal,
 					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-					{},
+					vk::AccessFlagBits2::eColorAttachmentWrite,
 					vk::AccessFlagBits2::eColorAttachmentWrite
 				);
 
 				vk::RenderingAttachmentInfo colorAttachment{};
 				colorAttachment.setImageView(targetTexture.imageView);
 				colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
-				colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear);
+				colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
 				colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
-				colorAttachment.setClearValue(
-					vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}}
-				);
 
 				vk::RenderingInfo renderingInfo{};
 				renderingInfo.setRenderArea(vk::Rect2D({0, 0}, extent));
@@ -272,6 +265,14 @@ namespace brassica {
 				cmd.beginRendering(renderingInfo);
 
 				cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+				cmd.bindDescriptorSets(
+					vk::PipelineBindPoint::eGraphics,
+					pipelineLayout,
+					0,
+					globalDescriptorSet,
+					nullptr
+				);
 
 				vk::Viewport viewport{
 					0.0f,
@@ -286,7 +287,7 @@ namespace brassica {
 				vk::Rect2D scissor{{0, 0}, extent};
 				cmd.setScissor(0, scissor);
 
-				cmd.draw(3, 1, 0, 0);
+				cmd.drawMeshTasksEXT(1, 1, 1, dls);
 
 				cmd.endRendering();
 
@@ -294,11 +295,11 @@ namespace brassica {
 					cmd,
 					targetTexture.image,
 					vk::ImageLayout::eColorAttachmentOptimal,
-					vk::ImageLayout::eColorAttachmentOptimal,
+					vk::ImageLayout::ePresentSrcKHR,
 					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+					vk::PipelineStageFlagBits2::eBottomOfPipe,
 					vk::AccessFlagBits2::eColorAttachmentWrite,
-					vk::AccessFlagBits2::eColorAttachmentWrite
+					{}
 				);
 			}
 		);

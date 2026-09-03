@@ -6,7 +6,11 @@
 #include "vulkan/vulkan.hpp"
 
 #include "GLFW/glfw3.h"
+#include <random>
+
 #include "passes/GradientPass.hpp"
+#include "passes/MeshCubePass.hpp"
+#include "types/ubo/FrameUBO.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
 #include "VkBootstrap.h"
@@ -66,6 +70,21 @@ namespace brassica {
 		std::vector<vk::ImageView> swapchainImageViews;
 
 		std::unique_ptr<GradientPass> gradientPass;
+		std::unique_ptr<MeshCubePass> meshCubePass;
+
+		uint32_t      globalSeed{0};
+		std::mt19937  rng;
+
+		// Global Descriptor Set 0 (FrameUBO)
+		vk::DescriptorSetLayout globalSet0Layout{nullptr};
+		vk::DescriptorPool      globalDescriptorPool{nullptr};
+		vk::Buffer              globalUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		vk::DeviceMemory        globalUboMemory[FRAME_OVERLAP]{nullptr, nullptr};
+		void*                   globalUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
+		vk::DescriptorSet       globalDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
+
+		void InitGlobalUBO();
+		void CleanupGlobalUBO();
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
