@@ -67,14 +67,19 @@ set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 
-# Shaderc & FastGLTF
+# Shaderc & FastGLTF & efsw
 set(SHADERC_SKIP_TESTS ON CACHE BOOL "" FORCE)
 set(SHADERC_SKIP_EXAMPLES ON CACHE BOOL "" FORCE)
 set(FG_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
+set(BUILD_TEST_APP OFF CACHE BOOL "" FORCE)
+set(EFSW_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 # Subdirectories
 add_subdirectory(external/glfw)
+add_subdirectory(external/efsw)
 add_subdirectory(external/fmt)
 add_subdirectory(external/spdlog)
 add_subdirectory(external/enkits)
@@ -148,6 +153,7 @@ target_link_libraries(brassica
         TracyClient
         Threads::Threads
         VulkanMemoryAllocator
+        efsw-static
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)

@@ -72,6 +72,8 @@ namespace brassica {
 		if (device) {
 			device.waitIdle();
 
+			shaderWatcher.StopWatching();
+
 			if (gradientPass) {
 				gradientPass->DestroyPipeline(device);
 				gradientPass.reset();
@@ -107,7 +109,9 @@ namespace brassica {
 		InitCommands();
 		InitSyncStructures();
 
-		gradientPass = std::make_unique<GradientPass>(device, GetSwapchainFormat());
+		shaderWatcher.WatchDirectory("shaders");
+
+		gradientPass = std::make_unique<GradientPass>(device, GetSwapchainFormat(), &shaderWatcher);
 
 		taskScheduler.Initialize();
 		spdlog::info("Brassica Engine Initialized.");
@@ -177,6 +181,8 @@ namespace brassica {
 	}
 
 	void Engine::DrawFrame() {
+		shaderWatcher.ProcessPendingReloads(device);
+
 		FrameData& frame = GetCurrentFrame();
 
 		// 1. Wait for GPU to finish the last time this frame context was used
