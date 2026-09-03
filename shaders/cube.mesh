@@ -1,0 +1,118 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 24, max_primitives = 12) out;
+
+layout(set = 0, binding = 0) uniform FrameUBO {
+	float time;
+	uint  frameIndex;
+	uint  globalSeed;
+	uint  frameRandom;
+} ubo;
+
+layout(location = 0) out vec4 outColor[];
+layout(location = 1) out vec3 outNormal[];
+
+// Cube face definitions
+const vec3 CUBE_POSITIONS[24] = vec3[](
+	// Front (+Z)
+	vec3(-0.5, -0.5,  0.5), vec3( 0.5, -0.5,  0.5), vec3( 0.5,  0.5,  0.5), vec3(-0.5,  0.5,  0.5),
+	// Back (-Z)
+	vec3( 0.5, -0.5, -0.5), vec3(-0.5, -0.5, -0.5), vec3(-0.5,  0.5, -0.5), vec3( 0.5,  0.5, -0.5),
+	// Top (+Y)
+	vec3(-0.5,  0.5,  0.5), vec3( 0.5,  0.5,  0.5), vec3( 0.5,  0.5, -0.5), vec3(-0.5,  0.5, -0.5),
+	// Bottom (-Y)
+	vec3(-0.5, -0.5, -0.5), vec3( 0.5, -0.5, -0.5), vec3( 0.5, -0.5,  0.5), vec3(-0.5, -0.5,  0.5),
+	// Right (+X)
+	vec3( 0.5, -0.5,  0.5), vec3( 0.5, -0.5, -0.5), vec3( 0.5,  0.5, -0.5), vec3( 0.5,  0.5,  0.5),
+	// Left (-X)
+	vec3(-0.5, -0.5, -0.5), vec3(-0.5, -0.5,  0.5), vec3(-0.5,  0.5,  0.5), vec3(-0.5,  0.5, -0.5)
+);
+
+const vec3 NORMALS[6] = vec3[](
+	vec3( 0.0,  0.0,  1.0), // Front
+	vec3( 0.0,  0.0, -1.0), // Back
+	vec3( 0.0,  1.0,  0.0), // Top
+	vec3( 0.0, -1.0,  0.0), // Bottom
+	vec3( 1.0,  0.0,  0.0), // Right
+	vec3(-1.0,  0.0,  0.0)  // Left
+);
+
+const vec3 COLORS[6] = vec3[](
+	vec3(0.9, 0.2, 0.2), // Front: Red
+	vec3(0.2, 0.8, 0.2), // Back: Green
+	vec3(0.2, 0.4, 0.9), // Top: Blue
+	vec3(0.9, 0.8, 0.2), // Bottom: Yellow
+	vec3(0.8, 0.3, 0.8), // Right: Magenta
+	vec3(0.2, 0.8, 0.8)  // Left: Cyan
+);
+
+mat3 rotateX(float angle) {
+	float s = sin(angle);
+	float c = cos(angle);
+	return mat3(
+		1.0, 0.0, 0.0,
+		0.0,   c,   s,
+		0.0,  -s,   c
+	);
+}
+
+mat3 rotateY(float angle) {
+	float s = sin(angle);
+	float c = cos(angle);
+	return mat3(
+		  c, 0.0,  -s,
+		0.0, 1.0, 0.0,
+		  s, 0.0,   c
+	);
+}
+
+mat3 rotateZ(float angle) {
+	float s = sin(angle);
+	float c = cos(angle);
+	return mat3(
+		  c,   s, 0.0,
+		 -s,   c, 0.0,
+		0.0, 0.0, 1.0
+	);
+}
+
+void main() {
+	SetMeshOutputsEXT(24, 12);
+
+	float angleX = ubo.time * 0.8;
+	float angleY = ubo.time * 1.2;
+	float angleZ = ubo.time * 0.5;
+	mat3 rot = rotateZ(angleZ) * rotateY(angleY) * rotateX(angleX);
+
+	float aspect = 1280.0 / 720.0;
+	float fov = 1.2;
+	float zNear = 0.1;
+	float zFar = 100.0;
+
+	for (uint i = 0; i < 24; i++) {
+		vec3 pos = CUBE_POSITIONS[i];
+		vec3 rotatedPos = rot * pos;
+
+		rotatedPos.z += 2.5;
+
+		vec4 clipPos;
+		clipPos.x = rotatedPos.x * fov / aspect;
+		clipPos.y = rotatedPos.y * fov;
+		clipPos.z = (rotatedPos.z * (zFar + zNear) - 2.0 * zFar * zNear) / (zFar - zNear);
+		clipPos.w = rotatedPos.z;
+
+		gl_MeshVerticesEXT[i].gl_Position = clipPos;
+
+		uint faceIdx = i / 4;
+		outNormal[i] = rot * NORMALS[faceIdx];
+		outColor[i] = vec4(COLORS[faceIdx], 1.0);
+	}
+
+	for (uint f = 0; f < 6; f++) {
+		uint baseVertex = f * 4;
+		gl_PrimitiveTriangleIndicesEXT[f * 2 + 0] = uvec3(baseVertex + 0, baseVertex + 1, baseVertex + 2);
+		gl_PrimitiveTriangleIndicesEXT[f * 2 + 1] = uvec3(baseVertex + 2, baseVertex + 3, baseVertex + 0);
+	}
+}

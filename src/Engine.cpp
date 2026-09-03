@@ -70,6 +70,11 @@ namespace brassica {
 
 			shaderWatcher.StopWatching();
 
+			if (meshCubePass) {
+				meshCubePass->DestroyPipeline(device);
+				meshCubePass.reset();
+			}
+
 			if (gradientPass) {
 				gradientPass->DestroyPipeline(device);
 				gradientPass.reset();
@@ -108,8 +113,13 @@ namespace brassica {
 		InitCommands();
 		InitSyncStructures();
 
+		std::random_device rd;
+		globalSeed = rd();
+		rng.seed(globalSeed);
+
 		shaderWatcher.WatchDirectory("shaders");
 
+		meshCubePass = std::make_unique<MeshCubePass>(instance, chosenGPU, device, GetSwapchainFormat(), &shaderWatcher);
 		gradientPass = std::make_unique<GradientPass>(device, GetSwapchainFormat(), &shaderWatcher);
 
 		taskScheduler.Initialize();
@@ -179,11 +189,17 @@ namespace brassica {
 		features12.descriptorBindingPartiallyBound = VK_TRUE;
 		features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
 
+		VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+		meshFeatures.meshShader = VK_TRUE;
+		meshFeatures.taskShader = VK_TRUE;
+
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
 			.set_minimum_version(chosenMajor, chosenMinor)
 			.set_required_features_13(features13)
-			.set_required_features_12(features12);
+			.set_required_features_12(features12)
+			.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
+			.add_required_extension_features(meshFeatures);
 
 		auto phys_ret = selector.select();
 		if (!phys_ret) {
@@ -255,7 +271,13 @@ namespace brassica {
 
 		FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(swapchainTexWrapper));
 
-		gradientPass->RegisterPass(fg, swapchainRes, extent);
+		FrameUBO ubo{};
+		ubo.time = static_cast<float>(glfwGetTime());
+		ubo.frameIndex = frameNumber;
+		ubo.globalSeed = globalSeed;
+		ubo.frameRandom = static_cast<uint32_t>(rng());
+
+		meshCubePass->RegisterPass(fg, swapchainRes, extent, ubo, frameNumber);
 
 		fg.compile();
 		vk::CommandBuffer rawCmd = frame.commandBuffer;

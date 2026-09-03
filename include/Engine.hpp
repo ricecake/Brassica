@@ -6,7 +6,11 @@
 #include "vulkan/vulkan.hpp"
 
 #include "GLFW/glfw3.h"
+#include <random>
+
 #include "passes/GradientPass.hpp"
+#include "passes/MeshCubePass.hpp"
+#include "types/ubo/FrameUBO.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
 #include "VkBootstrap.h"
@@ -66,6 +70,10 @@ namespace brassica {
 		std::vector<vk::ImageView> swapchainImageViews;
 
 		std::unique_ptr<GradientPass> gradientPass;
+		std::unique_ptr<MeshCubePass> meshCubePass;
+
+		uint32_t      globalSeed{0};
+		std::mt19937  rng;
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
