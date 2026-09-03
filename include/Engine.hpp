@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "vulkan/vulkan.hpp"
+#include "vk_mem_alloc.h"
 
 #include "GLFW/glfw3.h"
 #include <random>
@@ -33,6 +34,7 @@ namespace brassica {
 		void Cleanup();
 
 		vk::Device GetDevice() const { return device; }
+		VmaAllocator GetAllocator() const { return allocator; }
 
 		vk::Extent2D GetSwapchainExtent() const {
 			return vk::Extent2D{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
@@ -75,11 +77,14 @@ namespace brassica {
 		uint32_t      globalSeed{0};
 		std::mt19937  rng;
 
+		// Vulkan Memory Allocator
+		VmaAllocator allocator{VK_NULL_HANDLE};
+
 		// Global Descriptor Set 0 (FrameUBO)
 		vk::DescriptorSetLayout globalSet0Layout{nullptr};
 		vk::DescriptorPool      globalDescriptorPool{nullptr};
 		vk::Buffer              globalUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
-		vk::DeviceMemory        globalUboMemory[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation           globalUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*                   globalUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
 		vk::DescriptorSet       globalDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
