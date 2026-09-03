@@ -168,4 +168,14 @@ namespace brassica {
 		return CompileFromFile(device, filepath, shaderc_glsl_tess_evaluation_shader);
 	}
 
+	// MeshShader
+	bool MeshShader::CompileMeshFromFile(vk::Device device, const std::string& filepath) {
+		return CompileFromFile(device, filepath, shaderc_glsl_mesh_shader);
+	}
+
+	// TaskShader
+	bool TaskShader::CompileTaskFromFile(vk::Device device, const std::string& filepath) {
+		return CompileFromFile(device, filepath, shaderc_glsl_task_shader);
+	}
+
 } // namespace brassica

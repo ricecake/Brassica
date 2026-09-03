@@ -104,4 +104,20 @@ namespace brassica {
 		}
 	};
 
+	class MeshShader: public GraphicsShader {
+	public:
+		MeshShader() = default;
+		bool CompileMeshFromFile(vk::Device device, const std::string& filepath);
+
+		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eMeshEXT; }
+	};
+
+	class TaskShader: public GraphicsShader {
+	public:
+		TaskShader() = default;
+		bool CompileTaskFromFile(vk::Device device, const std::string& filepath);
+
+		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eTaskEXT; }
+	};
+
 } // namespace brassica
