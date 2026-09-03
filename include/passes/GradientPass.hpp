@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Shader.hpp"
 #include "fg/FrameGraph.hpp"
 #include "passes/RenderResources.hpp"
 #include "vulkan/vulkan.h"
@@ -25,6 +26,9 @@ namespace brassica {
 	private:
 		VkPipeline       pipeline{VK_NULL_HANDLE};
 		VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
+
+		VertexShader   vertShader;
+		FragmentShader fragShader;
 	};
 
 } // namespace brassica

@@ -1,56 +1,11 @@
 #include "passes/GradientPass.hpp"
 
 #include <vector>
-#include "shaderc/shaderc.hpp"
 #include "spdlog/spdlog.h"
 
 namespace brassica {
 
 	namespace {
-		const char* VERT_SHADER_GLSL = R"(
-			#version 450
-			layout(location = 0) out vec2 outUV;
-			void main() {
-				outUV = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-				gl_Position = vec4(outUV * 2.0f - 1.0f, 0.0f, 1.0f);
-			}
-		)";
-
-		const char* FRAG_SHADER_GLSL = R"(
-			#version 450
-			layout(location = 0) in vec2 inUV;
-			layout(location = 0) out vec4 outColor;
-			void main() {
-				outColor = vec4(inUV.x, inUV.y, 0.5f, 1.0f);
-			}
-		)";
-
-		VkShaderModule CompileShader(VkDevice device, const char* source, shaderc_shader_kind kind, const char* name) {
-			shaderc::Compiler       compiler;
-			shaderc::CompileOptions options;
-			options.SetOptimizationLevel(shaderc_optimization_level_performance);
-
-			auto result = compiler.CompileGlslToSpv(source, kind, name, options);
-			if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
-				spdlog::error("Shader compilation error ({}) : {}", name, result.GetErrorMessage());
-				return VK_NULL_HANDLE;
-			}
-
-			std::vector<uint32_t> spirv(result.cbegin(), result.cend());
-
-			VkShaderModuleCreateInfo createInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-			createInfo.codeSize = spirv.size() * sizeof(uint32_t);
-			createInfo.pCode = spirv.data();
-
-			VkShaderModule shaderModule;
-			if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-				spdlog::error("Failed to create shader module for {}", name);
-				return VK_NULL_HANDLE;
-			}
-
-			return shaderModule;
-		}
-
 		void TransitionImageLayout(
 			VkCommandBuffer      cmd,
 			VkImage              image,
@@ -92,19 +47,18 @@ namespace brassica {
 	}
 
 	void GradientPass::InitPipeline(VkDevice device, VkFormat colorFormat) {
-		VkShaderModule vertShader = CompileShader(device, VERT_SHADER_GLSL, shaderc_glsl_vertex_shader, "GradientVert");
-		VkShaderModule fragShader = CompileShader(device, FRAG_SHADER_GLSL, shaderc_glsl_fragment_shader, "GradientFrag");
+		if (!vertShader.CompileVertexFromFile(device, "shaders/gradient.vert")) {
+			spdlog::error("Failed to compile gradient.vert shader file");
+		}
 
-		VkPipelineShaderStageCreateInfo shaderStages[2]{};
-		shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-		shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-		shaderStages[0].module = vertShader;
-		shaderStages[0].pName = "main";
+		if (!fragShader.CompileFragmentFromFile(device, "shaders/gradient.frag")) {
+			spdlog::error("Failed to compile gradient.frag shader file");
+		}
 
-		shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-		shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-		shaderStages[1].module = fragShader;
-		shaderStages[1].pName = "main";
+		VkPipelineShaderStageCreateInfo shaderStages[2]{
+			vertShader.GetStageCreateInfo(),
+			fragShader.GetStageCreateInfo()
+		};
 
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
 
@@ -166,11 +120,12 @@ namespace brassica {
 
 		vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
 
-		vkDestroyShaderModule(device, vertShader, nullptr);
-		vkDestroyShaderModule(device, fragShader, nullptr);
 	}
 
 	void GradientPass::DestroyPipeline(VkDevice device) {
+		vertShader.Destroy(device);
+		fragShader.Destroy(device);
+
 		if (pipeline) {
 			vkDestroyPipeline(device, pipeline, nullptr);
 			pipeline = VK_NULL_HANDLE;
