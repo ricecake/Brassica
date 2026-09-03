@@ -83,11 +83,12 @@ namespace brassica {
 
 		// Test vk-bootstrap
 		vkb::InstanceBuilder builder;
-		auto                 inst_ret =
-			builder.set_app_name("Brassica Test").request_validation_layers(true).use_default_debug_messenger().build();
-		if (inst_ret) {
-			spdlog::info("vk-bootstrap linked.");
+		builder.set_app_name("Brassica Test").use_default_debug_messenger();
+		auto inst_res1 = builder.request_validation_layers(true).build();
+		if (!inst_res1) {
+			auto inst_res2 = builder.request_validation_layers(false).build();
 		}
+		spdlog::info("vk-bootstrap linked.");
 
 		VmaAllocator vmalloc;
 	}

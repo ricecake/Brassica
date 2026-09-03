@@ -1,21 +1,21 @@
 #pragma once
 
-#include "vulkan/vulkan.h"
+#include "vulkan/vulkan.hpp"
 
 namespace brassica {
 
 	struct FrameGraphTexture {
 		struct Desc {
-			VkExtent2D extent{0, 0};
-			VkFormat   format{VK_FORMAT_UNDEFINED};
+			vk::Extent2D extent{0, 0};
+			vk::Format   format{vk::Format::eUndefined};
 		};
 
-		VkImage     image{VK_NULL_HANDLE};
-		VkImageView imageView{VK_NULL_HANDLE};
+		vk::Image     image{nullptr};
+		vk::ImageView imageView{nullptr};
 
 		FrameGraphTexture() = default;
 
-		FrameGraphTexture(VkImage img, VkImageView view): image(img), imageView(view) {}
+		FrameGraphTexture(vk::Image img, vk::ImageView view): image(img), imageView(view) {}
 
 		FrameGraphTexture(FrameGraphTexture&&) noexcept = default;
 		FrameGraphTexture& operator=(FrameGraphTexture&&) noexcept = default;

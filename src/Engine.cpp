@@ -28,43 +28,49 @@ namespace brassica {
 		}
 
 		vkbSwapchain = swap_ret.value();
-		swapchainImages = vkbSwapchain.get_images().value();
-		swapchainImageViews = vkbSwapchain.get_image_views().value();
+
+		swapchainImages.clear();
+		for (VkImage img : vkbSwapchain.get_images().value()) {
+			swapchainImages.push_back(img);
+		}
+
+		swapchainImageViews.clear();
+		for (VkImageView view : vkbSwapchain.get_image_views().value()) {
+			swapchainImageViews.push_back(view);
+		}
 	}
 
 	void Engine::InitCommands() {
-		VkCommandPoolCreateInfo commandPoolCreateInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-		commandPoolCreateInfo.queueFamilyIndex = graphicsQueueFamily;
-		commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		vk::CommandPoolCreateInfo commandPoolCreateInfo{};
+		commandPoolCreateInfo.setQueueFamilyIndex(graphicsQueueFamily);
+		commandPoolCreateInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
 
 		for (int i = 0; i < FRAME_OVERLAP; i++) {
-			vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &frames[i].commandPool);
+			frames[i].commandPool = device.createCommandPool(commandPoolCreateInfo);
 
-			VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-			cmdAllocInfo.commandPool = frames[i].commandPool;
-			cmdAllocInfo.commandBufferCount = 1;
-			cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+			vk::CommandBufferAllocateInfo cmdAllocInfo{};
+			cmdAllocInfo.setCommandPool(frames[i].commandPool);
+			cmdAllocInfo.setCommandBufferCount(1);
+			cmdAllocInfo.setLevel(vk::CommandBufferLevel::ePrimary);
 
-			vkAllocateCommandBuffers(device, &cmdAllocInfo, &frames[i].commandBuffer);
+			frames[i].commandBuffer = device.allocateCommandBuffers(cmdAllocInfo).front();
 		}
 	}
 
 	void Engine::InitSyncStructures() {
-		VkFenceCreateInfo fenceCreateInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-		fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-
-		VkSemaphoreCreateInfo semaphoreCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+		vk::FenceCreateInfo fenceCreateInfo{vk::FenceCreateFlagBits::eSignaled};
+		vk::SemaphoreCreateInfo semaphoreCreateInfo{};
 
 		for (int i = 0; i < FRAME_OVERLAP; i++) {
-			vkCreateFence(device, &fenceCreateInfo, nullptr, &frames[i].renderFence);
-			vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frames[i].swapchainSemaphore);
-			vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frames[i].renderSemaphore);
+			frames[i].renderFence = device.createFence(fenceCreateInfo);
+			frames[i].swapchainSemaphore = device.createSemaphore(semaphoreCreateInfo);
+			frames[i].renderSemaphore = device.createSemaphore(semaphoreCreateInfo);
 		}
 	}
 
 	void Engine::Cleanup() {
 		if (device) {
-			vkDeviceWaitIdle(device);
+			device.waitIdle();
 
 			if (gradientPass) {
 				gradientPass->DestroyPipeline(device);
@@ -72,19 +78,19 @@ namespace brassica {
 			}
 
 			for (int i = 0; i < FRAME_OVERLAP; i++) {
-				vkDestroyFence(device, frames[i].renderFence, nullptr);
-				vkDestroySemaphore(device, frames[i].swapchainSemaphore, nullptr);
-				vkDestroySemaphore(device, frames[i].renderSemaphore, nullptr);
-				vkDestroyCommandPool(device, frames[i].commandPool, nullptr);
+				device.destroyFence(frames[i].renderFence);
+				device.destroySemaphore(frames[i].swapchainSemaphore);
+				device.destroySemaphore(frames[i].renderSemaphore);
+				device.destroyCommandPool(frames[i].commandPool);
 			}
 
 			for (auto view : swapchainImageViews) {
-				vkDestroyImageView(device, view, nullptr);
+				device.destroyImageView(view);
 			}
 			vkb::destroy_swapchain(vkbSwapchain);
 
-			vkDestroyDevice(device, nullptr);
-			vkDestroySurfaceKHR(instance, surface, nullptr);
+			device.destroy();
+			instance.destroySurfaceKHR(surface);
 			vkb::destroy_instance(vkbInst);
 		}
 
@@ -101,24 +107,26 @@ namespace brassica {
 		InitCommands();
 		InitSyncStructures();
 
-		gradientPass = std::make_unique<GradientPass>(device, vkbSwapchain.image_format);
+		gradientPass = std::make_unique<GradientPass>(device, GetSwapchainFormat());
 
 		taskScheduler.Initialize();
 		spdlog::info("Brassica Engine Initialized.");
 	}
 
 	void Engine::InitVulkan() {
-		// 1. Instance (Require Vulkan 1.3)
+		// 1. Instance (Require Vulkan 1.4)
 		vkb::InstanceBuilder builder;
-		auto                 inst_ret = builder.set_app_name("Brassica")
-											.request_validation_layers(true)
-											.require_api_version(1, 3, 0)
-											.use_default_debug_messenger()
-											.build();
-		vkbInst = inst_ret.value();
+		builder.set_app_name("Brassica")
+			.require_api_version(1, 4, 0)
+			.use_default_debug_messenger();
+
+		auto inst_res = builder.request_validation_layers(true).build();
+		vkbInst = inst_res ? inst_res.value() : builder.request_validation_layers(false).build().value();
 		instance = vkbInst.instance;
 
-		glfwCreateWindowSurface(instance, window, nullptr, &surface);
+		VkSurfaceKHR c_surface;
+		glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
+		surface = c_surface;
 
 		// 2. Physical Device (Enable Dynamic Rendering & Sync2)
 		VkPhysicalDeviceVulkan13Features features13{};
@@ -135,7 +143,7 @@ namespace brassica {
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		auto                        phys_ret = selector.set_surface(surface)
-												   .set_minimum_version(1, 3)
+												   .set_minimum_version(1, 4)
 												   .add_required_extension_features(features13)
 												   .add_required_extension_features(features12)
 												   .select();
@@ -172,25 +180,17 @@ namespace brassica {
 		FrameData& frame = GetCurrentFrame();
 
 		// 1. Wait for GPU to finish the last time this frame context was used
-		vkWaitForFences(device, 1, &frame.renderFence, VK_TRUE, 1000000000);
-		vkResetFences(device, 1, &frame.renderFence);
+		(void)device.waitForFences(frame.renderFence, VK_TRUE, 1000000000);
+		device.resetFences(frame.renderFence);
 
 		// 2. Acquire Swapchain Image
-		uint32_t swapchainImageIndex;
-		vkAcquireNextImageKHR(
-			device,
-			vkbSwapchain.swapchain,
-			1000000000,
-			frame.swapchainSemaphore,
-			VK_NULL_HANDLE,
-			&swapchainImageIndex
-		);
+		auto acquireResult = device.acquireNextImageKHR(vkbSwapchain.swapchain, 1000000000, frame.swapchainSemaphore);
+		uint32_t swapchainImageIndex = acquireResult.value;
 
 		// 3. Record Commands
-		vkResetCommandBuffer(frame.commandBuffer, 0);
-		VkCommandBufferBeginInfo cmdBeginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-		cmdBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-		vkBeginCommandBuffer(frame.commandBuffer, &cmdBeginInfo);
+		frame.commandBuffer.reset();
+		vk::CommandBufferBeginInfo cmdBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+		frame.commandBuffer.begin(cmdBeginInfo);
 
 		// FrameGraph Setup and Execution
 		FrameGraph        fg;
@@ -198,50 +198,51 @@ namespace brassica {
 			swapchainImages[swapchainImageIndex],
 			swapchainImageViews[swapchainImageIndex]
 		};
+
+		vk::Extent2D extent{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
+		vk::Format   format = GetSwapchainFormat();
+
 		FrameGraphResource swapchainRes = fg.import(
 			"SwapchainImage",
-			{vkbSwapchain.extent, vkbSwapchain.image_format},
+			{extent, format},
 			std::move(swapchainTexWrapper)
 		);
 
-		gradientPass->RegisterPass(fg, swapchainRes, vkbSwapchain.extent);
+		gradientPass->RegisterPass(fg, swapchainRes, extent);
 
 		fg.compile();
-		fg.execute(&frame.commandBuffer);
+		vk::CommandBuffer rawCmd = frame.commandBuffer;
+		fg.execute(&rawCmd);
 
-		vkEndCommandBuffer(frame.commandBuffer);
+		frame.commandBuffer.end();
 
-		// 4. Submit to GPU (Using Vulkan 1.3 Sync2 API)
-		VkCommandBufferSubmitInfo cmdSubmitInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-		cmdSubmitInfo.commandBuffer = frame.commandBuffer;
+		// 4. Submit to GPU (Using Vulkan 1.4 / Sync2 API)
+		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
+		cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
-		VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-		waitInfo.semaphore = frame.swapchainSemaphore;
-		waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
+		vk::SemaphoreSubmitInfo waitInfo{};
+		waitInfo.setSemaphore(frame.swapchainSemaphore);
+		waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 
-		VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-		signalInfo.semaphore = frame.renderSemaphore;
-		signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+		vk::SemaphoreSubmitInfo signalInfo{};
+		signalInfo.setSemaphore(frame.renderSemaphore);
+		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
 
-		VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-		submitInfo.waitSemaphoreInfoCount = 1;
-		submitInfo.pWaitSemaphoreInfos = &waitInfo;
-		submitInfo.signalSemaphoreInfoCount = 1;
-		submitInfo.pSignalSemaphoreInfos = &signalInfo;
-		submitInfo.commandBufferInfoCount = 1;
-		submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+		vk::SubmitInfo2 submitInfo{};
+		submitInfo.setWaitSemaphoreInfos(waitInfo);
+		submitInfo.setSignalSemaphoreInfos(signalInfo);
+		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
 
-		vkQueueSubmit2(graphicsQueue, 1, &submitInfo, frame.renderFence);
+		graphicsQueue.submit2(submitInfo, frame.renderFence);
 
 		// 5. Present
-		VkPresentInfoKHR presentInfo{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-		presentInfo.waitSemaphoreCount = 1;
-		presentInfo.pWaitSemaphores = &frame.renderSemaphore;
-		presentInfo.swapchainCount = 1;
-		presentInfo.pSwapchains = &vkbSwapchain.swapchain;
-		presentInfo.pImageIndices = &swapchainImageIndex;
+		vk::PresentInfoKHR presentInfo{};
+		presentInfo.setWaitSemaphores(frame.renderSemaphore);
+		vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
+		presentInfo.setSwapchains(swapchain);
+		presentInfo.setImageIndices(swapchainImageIndex);
 
-		vkQueuePresentKHR(graphicsQueue, &presentInfo);
+		(void)graphicsQueue.presentKHR(presentInfo);
 
 		frameNumber++;
 	}

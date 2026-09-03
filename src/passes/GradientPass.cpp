@@ -8,38 +8,33 @@ namespace brassica {
 
 	namespace {
 		void TransitionImageLayout(
-			VkCommandBuffer      cmd,
-			VkImage              image,
-			VkImageLayout        oldLayout,
-			VkImageLayout        newLayout,
-			VkPipelineStageFlags srcStage,
-			VkPipelineStageFlags dstStage,
-			VkAccessFlags        srcAccess,
-			VkAccessFlags        dstAccess
+			vk::CommandBuffer        cmd,
+			vk::Image                image,
+			vk::ImageLayout          oldLayout,
+			vk::ImageLayout          newLayout,
+			vk::PipelineStageFlags2  srcStage,
+			vk::PipelineStageFlags2  dstStage,
+			vk::AccessFlags2         srcAccess,
+			vk::AccessFlags2         dstAccess
 		) {
-			VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-			barrier.srcStageMask = srcStage;
-			barrier.srcAccessMask = srcAccess;
-			barrier.dstStageMask = dstStage;
-			barrier.dstAccessMask = dstAccess;
-			barrier.oldLayout = oldLayout;
-			barrier.newLayout = newLayout;
-			barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			barrier.subresourceRange.baseMipLevel = 0;
-			barrier.subresourceRange.levelCount = 1;
-			barrier.subresourceRange.baseArrayLayer = 0;
-			barrier.subresourceRange.layerCount = 1;
-			barrier.image = image;
+			vk::ImageMemoryBarrier2 barrier{};
+			barrier.setSrcStageMask(srcStage);
+			barrier.setSrcAccessMask(srcAccess);
+			barrier.setDstStageMask(dstStage);
+			barrier.setDstAccessMask(dstAccess);
+			barrier.setOldLayout(oldLayout);
+			barrier.setNewLayout(newLayout);
+			barrier.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+			barrier.setImage(image);
 
-			VkDependencyInfo depInfo{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-			depInfo.imageMemoryBarrierCount = 1;
-			depInfo.pImageMemoryBarriers = &barrier;
+			vk::DependencyInfo depInfo{};
+			depInfo.setImageMemoryBarriers(barrier);
 
-			vkCmdPipelineBarrier2(cmd, &depInfo);
+			cmd.pipelineBarrier2(depInfo);
 		}
 	} // namespace
 
-	GradientPass::GradientPass(VkDevice device, VkFormat colorFormat) {
+	GradientPass::GradientPass(vk::Device device, vk::Format colorFormat) {
 		InitPipeline(device, colorFormat);
 	}
 
@@ -47,7 +42,7 @@ namespace brassica {
 		// Cleanup should be managed via DestroyPipeline
 	}
 
-	void GradientPass::InitPipeline(VkDevice device, VkFormat colorFormat) {
+	void GradientPass::InitPipeline(vk::Device device, vk::Format colorFormat) {
 		if (!vertShader.CompileVertexFromFile(device, "shaders/gradient.vert")) {
 			spdlog::error("Failed to compile gradient.vert shader file");
 		}
@@ -56,89 +51,94 @@ namespace brassica {
 			spdlog::error("Failed to compile gradient.frag shader file");
 		}
 
-		VkPipelineShaderStageCreateInfo shaderStages[2]{
+		vk::PipelineShaderStageCreateInfo shaderStages[2] = {
 			vertShader.GetStageCreateInfo(),
 			fragShader.GetStageCreateInfo()
 		};
 
-		VkPipelineVertexInputStateCreateInfo vertexInputInfo{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
 
-		VkPipelineInputAssemblyStateCreateInfo inputAssembly{
-			VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
-		};
-		inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		inputAssembly.primitiveRestartEnable = VK_FALSE;
+		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+		inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
+		inputAssembly.setPrimitiveRestartEnable(VK_FALSE);
 
-		VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-		viewportState.viewportCount = 1;
-		viewportState.scissorCount = 1;
+		vk::PipelineViewportStateCreateInfo viewportState{};
+		viewportState.setViewportCount(1);
+		viewportState.setScissorCount(1);
 
-		VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-		rasterizer.depthClampEnable = VK_FALSE;
-		rasterizer.rasterizerDiscardEnable = VK_FALSE;
-		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-		rasterizer.lineWidth = 1.0f;
-		rasterizer.cullMode = VK_CULL_MODE_NONE;
-		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+		vk::PipelineRasterizationStateCreateInfo rasterizer{};
+		rasterizer.setDepthClampEnable(VK_FALSE);
+		rasterizer.setRasterizerDiscardEnable(VK_FALSE);
+		rasterizer.setPolygonMode(vk::PolygonMode::eFill);
+		rasterizer.setLineWidth(1.0f);
+		rasterizer.setCullMode(vk::CullModeFlagBits::eNone);
+		rasterizer.setFrontFace(vk::FrontFace::eClockwise);
 
-		VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-		multisampling.sampleShadingEnable = VK_FALSE;
-		multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+		vk::PipelineMultisampleStateCreateInfo multisampling{};
+		multisampling.setSampleShadingEnable(VK_FALSE);
+		multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
 
-		VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-		colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-			VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-		colorBlendAttachment.blendEnable = VK_FALSE;
+		vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
+		colorBlendAttachment.setColorWriteMask(
+			vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+			vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+		);
+		colorBlendAttachment.setBlendEnable(VK_FALSE);
 
-		VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-		colorBlending.logicOpEnable = VK_FALSE;
-		colorBlending.attachmentCount = 1;
-		colorBlending.pAttachments = &colorBlendAttachment;
+		vk::PipelineColorBlendStateCreateInfo colorBlending{};
+		colorBlending.setLogicOpEnable(VK_FALSE);
+		colorBlending.setAttachments(colorBlendAttachment);
 
-		VkDynamicState                   dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-		VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-		dynamicState.dynamicStateCount = 2;
-		dynamicState.pDynamicStates = dynamicStates;
+		std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+		vk::PipelineDynamicStateCreateInfo dynamicState{};
+		dynamicState.setDynamicStates(dynamicStates);
 
-		VkPipelineLayoutCreateInfo pipelineLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-		vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
+		try {
+			pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
+		} catch (const vk::SystemError& err) {
+			spdlog::error("Failed to create pipeline layout: {}", err.what());
+			return;
+		}
 
-		VkPipelineRenderingCreateInfo renderingCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-		renderingCreateInfo.colorAttachmentCount = 1;
-		renderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+		vk::PipelineRenderingCreateInfo renderingCreateInfo{};
+		renderingCreateInfo.setColorAttachmentFormats(colorFormat);
 
-		VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-		pipelineInfo.pNext = &renderingCreateInfo;
-		pipelineInfo.stageCount = 2;
-		pipelineInfo.pStages = shaderStages;
-		pipelineInfo.pVertexInputState = &vertexInputInfo;
-		pipelineInfo.pInputAssemblyState = &inputAssembly;
-		pipelineInfo.pViewportState = &viewportState;
-		pipelineInfo.pRasterizationState = &rasterizer;
-		pipelineInfo.pMultisampleState = &multisampling;
-		pipelineInfo.pColorBlendState = &colorBlending;
-		pipelineInfo.pDynamicState = &dynamicState;
-		pipelineInfo.layout = pipelineLayout;
-		pipelineInfo.renderPass = VK_NULL_HANDLE;
+		vk::GraphicsPipelineCreateInfo pipelineInfo{};
+		pipelineInfo.setPNext(&renderingCreateInfo);
+		pipelineInfo.setStages(shaderStages);
+		pipelineInfo.setPVertexInputState(&vertexInputInfo);
+		pipelineInfo.setPInputAssemblyState(&inputAssembly);
+		pipelineInfo.setPViewportState(&viewportState);
+		pipelineInfo.setPRasterizationState(&rasterizer);
+		pipelineInfo.setPMultisampleState(&multisampling);
+		pipelineInfo.setPColorBlendState(&colorBlending);
+		pipelineInfo.setPDynamicState(&dynamicState);
+		pipelineInfo.setLayout(pipelineLayout);
 
-		vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+		auto result = device.createGraphicsPipeline(nullptr, pipelineInfo);
+		if (result.result == vk::Result::eSuccess) {
+			pipeline = result.value;
+		} else {
+			spdlog::error("Failed to create graphics pipeline");
+		}
 	}
 
-	void GradientPass::DestroyPipeline(VkDevice device) {
+	void GradientPass::DestroyPipeline(vk::Device device) {
 		vertShader.Destroy(device);
 		fragShader.Destroy(device);
 
 		if (pipeline) {
-			vkDestroyPipeline(device, pipeline, nullptr);
-			pipeline = VK_NULL_HANDLE;
+			device.destroyPipeline(pipeline);
+			pipeline = nullptr;
 		}
 		if (pipelineLayout) {
-			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-			pipelineLayout = VK_NULL_HANDLE;
+			device.destroyPipelineLayout(pipelineLayout);
+			pipelineLayout = nullptr;
 		}
 	}
 
-	void GradientPass::RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, VkExtent2D extent) {
+	void GradientPass::RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent) {
 		fg.addCallbackPass<GradientPassData>(
 			"GradientPass",
 			[&](FrameGraph::Builder& builder, GradientPassData& data) {
@@ -146,38 +146,37 @@ namespace brassica {
 				builder.setSideEffect();
 			},
 			[this, extent](const GradientPassData& data, FrameGraphPassResources& resources, void* ctx) {
-				VkCommandBuffer cmd = *static_cast<VkCommandBuffer*>(ctx);
-				auto&           targetTexture = resources.get<FrameGraphTexture>(data.target);
+				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
+				auto&             targetTexture = resources.get<FrameGraphTexture>(data.target);
 
 				TransitionImageLayout(
 					cmd,
 					targetTexture.image,
-					VK_IMAGE_LAYOUT_UNDEFINED,
-					VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-					VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-					VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-					0,
-					VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+					vk::ImageLayout::eUndefined,
+					vk::ImageLayout::eColorAttachmentOptimal,
+					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+					{},
+					vk::AccessFlagBits2::eColorAttachmentWrite
 				);
 
-				VkRenderingAttachmentInfo colorAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-				colorAttachment.imageView = targetTexture.imageView;
-				colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-				colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-				colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-				colorAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+				vk::RenderingAttachmentInfo colorAttachment{};
+				colorAttachment.setImageView(targetTexture.imageView);
+				colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
+				colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear);
+				colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
+				colorAttachment.setClearValue(vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}});
 
-				VkRenderingInfo renderingInfo{VK_STRUCTURE_TYPE_RENDERING_INFO};
-				renderingInfo.renderArea = {{0, 0}, extent};
-				renderingInfo.layerCount = 1;
-				renderingInfo.colorAttachmentCount = 1;
-				renderingInfo.pColorAttachments = &colorAttachment;
+				vk::RenderingInfo renderingInfo{};
+				renderingInfo.setRenderArea(vk::Rect2D({0, 0}, extent));
+				renderingInfo.setLayerCount(1);
+				renderingInfo.setColorAttachments(colorAttachment);
 
-				vkCmdBeginRendering(cmd, &renderingInfo);
+				cmd.beginRendering(renderingInfo);
 
-				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+				cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
 
-				VkViewport viewport{
+				vk::Viewport viewport{
 					0.0f,
 					0.0f,
 					static_cast<float>(extent.width),
@@ -185,24 +184,24 @@ namespace brassica {
 					0.0f,
 					1.0f
 				};
-				vkCmdSetViewport(cmd, 0, 1, &viewport);
+				cmd.setViewport(0, viewport);
 
-				VkRect2D scissor{{0, 0}, extent};
-				vkCmdSetScissor(cmd, 0, 1, &scissor);
+				vk::Rect2D scissor{{0, 0}, extent};
+				cmd.setScissor(0, scissor);
 
-				vkCmdDraw(cmd, 3, 1, 0, 0);
+				cmd.draw(3, 1, 0, 0);
 
-				vkCmdEndRendering(cmd);
+				cmd.endRendering();
 
 				TransitionImageLayout(
 					cmd,
 					targetTexture.image,
-					VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-					VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-					VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-					VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-					VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-					0
+					vk::ImageLayout::eColorAttachmentOptimal,
+					vk::ImageLayout::ePresentSrcKHR,
+					vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+					vk::PipelineStageFlagBits2::eBottomOfPipe,
+					vk::AccessFlagBits2::eColorAttachmentWrite,
+					{}
 				);
 			}
 		);

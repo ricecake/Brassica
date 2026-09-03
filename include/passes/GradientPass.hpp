@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vulkan/vulkan.h"
+#include "vulkan/vulkan.hpp"
 
 #include "fg/FrameGraph.hpp"
 #include "passes/RenderResources.hpp"
@@ -16,17 +16,17 @@ namespace brassica {
 
 	class GradientPass {
 	public:
-		GradientPass(VkDevice device, VkFormat colorFormat);
+		GradientPass(vk::Device device, vk::Format colorFormat);
 		~GradientPass();
 
-		void InitPipeline(VkDevice device, VkFormat colorFormat);
-		void DestroyPipeline(VkDevice device);
+		void InitPipeline(vk::Device device, vk::Format colorFormat);
+		void DestroyPipeline(vk::Device device);
 
-		void RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, VkExtent2D extent);
+		void RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent);
 
 	private:
-		VkPipeline       pipeline{VK_NULL_HANDLE};
-		VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
+		vk::Pipeline       pipeline{nullptr};
+		vk::PipelineLayout pipelineLayout{nullptr};
 
 		VertexShader   vertShader;
 		FragmentShader fragShader;

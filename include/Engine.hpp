@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "vulkan/vulkan.hpp"
@@ -13,11 +14,11 @@ namespace brassica {
 
 	// Double-buffering data to prevent CPU/GPU stalling
 	struct FrameData {
-		VkCommandPool   commandPool;
-		VkCommandBuffer commandBuffer;
-		VkSemaphore     swapchainSemaphore; // Signaled when image is acquired
-		VkSemaphore     renderSemaphore;    // Signaled when rendering finishes
-		VkFence         renderFence;        // Signaled when GPU finishes frame execution
+		vk::CommandPool   commandPool;
+		vk::CommandBuffer commandBuffer;
+		vk::Semaphore     swapchainSemaphore; // Signaled when image is acquired
+		vk::Semaphore     renderSemaphore;    // Signaled when rendering finishes
+		vk::Fence         renderFence;        // Signaled when GPU finishes frame execution
 	};
 
 	class Engine {
@@ -26,11 +27,15 @@ namespace brassica {
 		void Run();
 		void Cleanup();
 
-		VkDevice GetDevice() const { return device; }
+		vk::Device GetDevice() const { return device; }
 
-		VkExtent2D GetSwapchainExtent() const { return vkbSwapchain.extent; }
+		vk::Extent2D GetSwapchainExtent() const {
+			return vk::Extent2D{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
+		}
 
-		VkFormat GetSwapchainFormat() const { return vkbSwapchain.image_format; }
+		vk::Format GetSwapchainFormat() const {
+			return static_cast<vk::Format>(vkbSwapchain.image_format);
+		}
 
 	private:
 		void InitWindow();
@@ -47,17 +52,17 @@ namespace brassica {
 		FrameData                     frames[FRAME_OVERLAP];
 
 		// Vulkan Core
-		vkb::Instance            vkbInst;
-		vkb::Device              vkbDevice;
-		VkInstance               instance;
-		VkPhysicalDevice         chosenGPU;
-		VkDevice                 device;
-		VkSurfaceKHR             surface;
-		VkQueue                  graphicsQueue;
-		uint32_t                 graphicsQueueFamily;
-		vkb::Swapchain           vkbSwapchain;
-		std::vector<VkImage>     swapchainImages;
-		std::vector<VkImageView> swapchainImageViews;
+		vkb::Instance              vkbInst;
+		vkb::Device                vkbDevice;
+		vk::Instance               instance;
+		vk::PhysicalDevice         chosenGPU;
+		vk::Device                 device;
+		vk::SurfaceKHR             surface;
+		vk::Queue                  graphicsQueue;
+		uint32_t                   graphicsQueueFamily{0};
+		vkb::Swapchain             vkbSwapchain;
+		std::vector<vk::Image>     swapchainImages;
+		std::vector<vk::ImageView> swapchainImageViews;
 
 		std::unique_ptr<GradientPass> gradientPass;
 
