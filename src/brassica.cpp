@@ -11,7 +11,7 @@
 #include "glm/glm.hpp"
 
 // 3. Vulkan & Windowing
-#include "vulkan/vulkan.h"
+#include "vulkan/vulkan.hpp"
 
 #include "GLFW/glfw3.h"
 #include "vk_mem_alloc.h"
