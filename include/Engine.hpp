@@ -39,7 +39,7 @@ namespace brassica {
 
 	private:
 		void InitWindow();
-		void InitVulkan();
+		bool InitVulkan();
 		void InitSwapchain();
 		void InitCommands();
 		void InitSyncStructures();

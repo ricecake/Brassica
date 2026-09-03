@@ -102,7 +102,10 @@ namespace brassica {
 
 	void Engine::Init() {
 		InitWindow();
-		InitVulkan();
+		if (!InitVulkan()) {
+			spdlog::error("Vulkan initialization failed; engine cannot start.");
+			return;
+		}
 		InitSwapchain();
 		InitCommands();
 		InitSyncStructures();
@@ -113,15 +116,51 @@ namespace brassica {
 		spdlog::info("Brassica Engine Initialized.");
 	}
 
-	void Engine::InitVulkan() {
-		// 1. Instance (Require Vulkan 1.4)
+	bool Engine::InitVulkan() {
+		// Query maximum available Vulkan API version from the system
+		uint32_t systemVersion = VK_API_VERSION_1_0;
+		if (vk::enumerateInstanceVersion(&systemVersion) != vk::Result::eSuccess) {
+			systemVersion = VK_API_VERSION_1_0;
+		}
+
+		constexpr uint32_t targetMajor = 1;
+		constexpr uint32_t targetMinor = 4;
+		const uint32_t targetVersion = VK_MAKE_API_VERSION(0, targetMajor, targetMinor, 0);
+
+		uint32_t chosenMajor = targetMajor;
+		uint32_t chosenMinor = targetMinor;
+
+		if (systemVersion < targetVersion) {
+			chosenMajor = VK_API_VERSION_MAJOR(systemVersion);
+			chosenMinor = VK_API_VERSION_MINOR(systemVersion);
+			spdlog::warn(
+				"Requested Vulkan API version {}.{} is higher than maximum supported version {}.{}. Using version {}.{}.",
+				targetMajor,
+				targetMinor,
+				chosenMajor,
+				chosenMinor,
+				chosenMajor,
+				chosenMinor
+			);
+		}
+
+		// 1. Instance
 		vkb::InstanceBuilder builder;
 		builder.set_app_name("Brassica")
-			.require_api_version(1, 4, 0)
+			.require_api_version(chosenMajor, chosenMinor, 0)
 			.use_default_debug_messenger();
 
 		auto inst_res = builder.request_validation_layers(true).build();
-		vkbInst = inst_res ? inst_res.value() : builder.request_validation_layers(false).build().value();
+		if (!inst_res) {
+			auto fallback_res = builder.request_validation_layers(false).build();
+			if (!fallback_res) {
+				spdlog::critical("Failed to create Vulkan instance: {}", fallback_res.error().message());
+				return false;
+			}
+			vkbInst = fallback_res.value();
+		} else {
+			vkbInst = inst_res.value();
+		}
 		instance = vkbInst.instance;
 
 		VkSurfaceKHR c_surface;
@@ -142,21 +181,32 @@ namespace brassica {
 		features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
-		auto                        phys_ret = selector.set_surface(surface)
-												   .set_minimum_version(1, 4)
-												   .add_required_extension_features(features13)
-												   .add_required_extension_features(features12)
-												   .select();
+		selector.set_surface(surface)
+			.set_minimum_version(chosenMajor, chosenMinor)
+			.set_required_features_13(features13)
+			.set_required_features_12(features12);
+
+		auto phys_ret = selector.select();
+		if (!phys_ret) {
+			spdlog::critical("Failed to select physical device: {}", phys_ret.error().message());
+			return false;
+		}
+
 		chosenGPU = phys_ret.value().physical_device;
 
 		// 3. Logical Device
 		vkb::DeviceBuilder deviceBuilder{phys_ret.value()};
 		auto               dev_ret = deviceBuilder.build();
+		if (!dev_ret) {
+			spdlog::critical("Failed to create logical device: {}", dev_ret.error().message());
+			return false;
+		}
 		vkbDevice = dev_ret.value();
 		device = vkbDevice.device;
 
 		graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
 		graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+		return true;
 	}
 
 	void Engine::Run() {

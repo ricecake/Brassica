@@ -82,13 +82,27 @@ namespace brassica {
 		spdlog::info("fastgltf parser linked.");
 
 		// Test vk-bootstrap
-		vkb::InstanceBuilder builder;
-		builder.set_app_name("Brassica Test").use_default_debug_messenger();
-		auto inst_res1 = builder.request_validation_layers(true).build();
-		if (!inst_res1) {
-			auto inst_res2 = builder.request_validation_layers(false).build();
+		uint32_t systemVersion = VK_API_VERSION_1_0;
+		if (vk::enumerateInstanceVersion(&systemVersion) != vk::Result::eSuccess) {
+			systemVersion = VK_API_VERSION_1_0;
 		}
-		spdlog::info("vk-bootstrap linked.");
+		uint32_t chosenMajor = std::min(1u, static_cast<uint32_t>(VK_API_VERSION_MAJOR(systemVersion)));
+		uint32_t chosenMinor = (chosenMajor < 1) ? 0 : std::min(4u, static_cast<uint32_t>(VK_API_VERSION_MINOR(systemVersion)));
+
+		vkb::InstanceBuilder builder;
+		builder.set_app_name("Brassica Test")
+			.require_api_version(chosenMajor, chosenMinor, 0)
+			.use_default_debug_messenger();
+
+		auto inst_res = builder.request_validation_layers(true).build();
+		if (!inst_res) {
+			auto fallback_res = builder.request_validation_layers(false).build();
+			if (fallback_res) {
+				spdlog::info("vk-bootstrap linked.");
+			}
+		} else {
+			spdlog::info("vk-bootstrap linked.");
+		}
 
 		VmaAllocator vmalloc;
 	}

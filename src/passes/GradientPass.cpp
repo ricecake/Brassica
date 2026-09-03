@@ -24,6 +24,8 @@ namespace brassica {
 			barrier.setDstAccessMask(dstAccess);
 			barrier.setOldLayout(oldLayout);
 			barrier.setNewLayout(newLayout);
+			barrier.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+			barrier.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
 			barrier.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 			barrier.setImage(image);
 
