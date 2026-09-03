@@ -9,6 +9,7 @@
 namespace brassica {
 
 	class Engine;
+	class ShaderWatcher;
 
 	struct GradientPassData {
 		FrameGraphResource target;
@@ -16,10 +17,10 @@ namespace brassica {
 
 	class GradientPass {
 	public:
-		GradientPass(vk::Device device, vk::Format colorFormat);
+		GradientPass(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher = nullptr);
 		~GradientPass();
 
-		void InitPipeline(vk::Device device, vk::Format colorFormat);
+		void InitPipeline(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher = nullptr);
 		void DestroyPipeline(vk::Device device);
 
 		void RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent);
