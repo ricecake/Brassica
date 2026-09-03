@@ -7,6 +7,7 @@
 
 #include "GLFW/glfw3.h"
 #include "passes/GradientPass.hpp"
+#include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
 #include "VkBootstrap.h"
 
@@ -36,6 +37,8 @@ namespace brassica {
 		vk::Format GetSwapchainFormat() const {
 			return static_cast<vk::Format>(vkbSwapchain.image_format);
 		}
+
+		ShaderWatcher& GetShaderWatcher() { return shaderWatcher; }
 
 	private:
 		void InitWindow();
@@ -68,6 +71,7 @@ namespace brassica {
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
+		ShaderWatcher       shaderWatcher;
 		enki::TaskScheduler taskScheduler;
 	};
 

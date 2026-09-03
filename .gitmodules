@@ -61,3 +61,6 @@
 [submodule "external/fastgltf"]
 	path = external/fastgltf
 	url = https://github.com/spnda/fastgltf
+[submodule "external/efsw"]
+	path = external/efsw
+	url = https://github.com/SpartanJ/efsw

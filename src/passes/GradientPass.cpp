@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
 
 namespace brassica {
@@ -36,21 +37,112 @@ namespace brassica {
 		}
 	} // namespace
 
-	GradientPass::GradientPass(vk::Device device, vk::Format colorFormat) {
-		InitPipeline(device, colorFormat);
+	GradientPass::GradientPass(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher) {
+		InitPipeline(device, colorFormat, watcher);
 	}
 
 	GradientPass::~GradientPass() {
 		// Cleanup should be managed via DestroyPipeline
 	}
 
-	void GradientPass::InitPipeline(vk::Device device, vk::Format colorFormat) {
+	void GradientPass::InitPipeline(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher) {
 		if (!vertShader.CompileVertexFromFile(device, "shaders/gradient.vert")) {
 			spdlog::error("Failed to compile gradient.vert shader file");
 		}
 
 		if (!fragShader.CompileFragmentFromFile(device, "shaders/gradient.frag")) {
 			spdlog::error("Failed to compile gradient.frag shader file");
+		}
+
+		if (watcher) {
+			auto rebuildCb = [this, device, colorFormat]() {
+				spdlog::info("Rebuilding GradientPass pipeline due to shader change...");
+				device.waitIdle();
+				if (pipeline) {
+					device.destroyPipeline(pipeline);
+					pipeline = nullptr;
+				}
+				if (pipelineLayout) {
+					device.destroyPipelineLayout(pipelineLayout);
+					pipelineLayout = nullptr;
+				}
+
+				vk::PipelineShaderStageCreateInfo stages[2] = {
+					vertShader.GetStageCreateInfo(),
+					fragShader.GetStageCreateInfo()
+				};
+
+				vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+
+				vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+				inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
+				inputAssembly.setPrimitiveRestartEnable(VK_FALSE);
+
+				vk::PipelineViewportStateCreateInfo viewportState{};
+				viewportState.setViewportCount(1);
+				viewportState.setScissorCount(1);
+
+				vk::PipelineRasterizationStateCreateInfo rasterizer{};
+				rasterizer.setDepthClampEnable(VK_FALSE);
+				rasterizer.setRasterizerDiscardEnable(VK_FALSE);
+				rasterizer.setPolygonMode(vk::PolygonMode::eFill);
+				rasterizer.setLineWidth(1.0f);
+				rasterizer.setCullMode(vk::CullModeFlagBits::eNone);
+				rasterizer.setFrontFace(vk::FrontFace::eClockwise);
+
+				vk::PipelineMultisampleStateCreateInfo multisampling{};
+				multisampling.setSampleShadingEnable(VK_FALSE);
+				multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
+
+				vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
+				colorBlendAttachment.setColorWriteMask(
+					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+					vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+				);
+				colorBlendAttachment.setBlendEnable(VK_FALSE);
+
+				vk::PipelineColorBlendStateCreateInfo colorBlending{};
+				colorBlending.setLogicOpEnable(VK_FALSE);
+				colorBlending.setAttachments(colorBlendAttachment);
+
+				std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+				vk::PipelineDynamicStateCreateInfo dynamicState{};
+				dynamicState.setDynamicStates(dynamicStates);
+
+				vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
+				try {
+					pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
+				} catch (const vk::SystemError& err) {
+					spdlog::error("Failed to create pipeline layout on reload: {}", err.what());
+					return;
+				}
+
+				vk::PipelineRenderingCreateInfo renderingCreateInfo{};
+				renderingCreateInfo.setColorAttachmentFormats(colorFormat);
+
+				vk::GraphicsPipelineCreateInfo pipelineInfo{};
+				pipelineInfo.setPNext(&renderingCreateInfo);
+				pipelineInfo.setStages(stages);
+				pipelineInfo.setPVertexInputState(&vertexInputInfo);
+				pipelineInfo.setPInputAssemblyState(&inputAssembly);
+				pipelineInfo.setPViewportState(&viewportState);
+				pipelineInfo.setPRasterizationState(&rasterizer);
+				pipelineInfo.setPMultisampleState(&multisampling);
+				pipelineInfo.setPColorBlendState(&colorBlending);
+				pipelineInfo.setPDynamicState(&dynamicState);
+				pipelineInfo.setLayout(pipelineLayout);
+
+				auto result = device.createGraphicsPipeline(nullptr, pipelineInfo);
+				if (result.result == vk::Result::eSuccess) {
+					pipeline = result.value;
+					spdlog::info("GradientPass pipeline rebuilt successfully.");
+				} else {
+					spdlog::error("Failed to rebuild graphics pipeline for GradientPass");
+				}
+			};
+
+			watcher->RegisterShader(&vertShader, rebuildCb);
+			watcher->RegisterShader(&fragShader, rebuildCb);
 		}
 
 		vk::PipelineShaderStageCreateInfo shaderStages[2] = {
