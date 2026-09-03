@@ -49,47 +49,16 @@ namespace brassica {
 		fmt::print("Bootstrapping Brassica Engine...\n");
 		spdlog::info("Logger linked and ready.");
 
-		// Test Math & ECS (glm & entt)
-		glm::vec3      testVec(1.0f, 2.0f, 3.0f);
-		entt::registry registry;
-		auto           entity = registry.create();
-
 		// Test Threading (enkiTS)
 		enki::TaskScheduler scheduler;
 		scheduler.Initialize();
 		spdlog::info("enkiTS initialized with {} threads.", scheduler.GetNumTaskThreads());
 
-		// Test Physics Linking (Jolt)
-		JPH::RegisterDefaultAllocator();
-		JPH::Factory::sInstance = new JPH::Factory();
-		JPH::RegisterTypes();
-		spdlog::info("Jolt Physics registered.");
-
-		// Test Windowing Linking (GLFW)
-		if (glfwInit()) {
-			spdlog::info("GLFW linked and initialized.");
-			glfwTerminate();
-		}
-
-		// Test Shader Compilation Linking (shaderc)
-		shaderc::Compiler compiler;
-		if (compiler.IsValid()) {
-			spdlog::info("Shaderc compiler linked.");
-		}
-
-		// Test Asset Linking (fastgltf)
-		fastgltf::Parser parser;
-		spdlog::info("fastgltf parser linked.");
-
-		// Test vk-bootstrap
-		vkb::InstanceBuilder builder;
-		auto                 inst_ret =
-			builder.set_app_name("Brassica Test").request_validation_layers(true).use_default_debug_messenger().build();
-		if (inst_ret) {
-			spdlog::info("vk-bootstrap linked.");
-		}
-
-		VmaAllocator vmalloc;
+		// // Test Physics Linking (Jolt)
+		// JPH::RegisterDefaultAllocator();
+		// JPH::Factory::sInstance = new JPH::Factory();
+		// JPH::RegisterTypes();
+		// spdlog::info("Jolt Physics registered.");
 	}
 
 } // namespace brassica
