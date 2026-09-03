@@ -5,23 +5,6 @@
 
 namespace brassica {
 
-	namespace {
-		uint32_t FindMemoryType(
-			const vk::PhysicalDeviceMemoryProperties& memProperties,
-			uint32_t                                  typeFilter,
-			vk::MemoryPropertyFlags                   properties
-		) {
-			for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-				if ((typeFilter & (1 << i)) &&
-					(memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-					return i;
-				}
-			}
-			spdlog::error("Failed to find suitable memory type!");
-			return 0;
-		}
-	} // namespace
-
 	void Engine::InitWindow() {
 		glfwInit();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -111,6 +94,11 @@ namespace brassica {
 				device.destroyImageView(view);
 			}
 			vkb::destroy_swapchain(vkbSwapchain);
+
+			if (allocator != VK_NULL_HANDLE) {
+				vmaDestroyAllocator(allocator);
+				allocator = VK_NULL_HANDLE;
+			}
 
 			device.destroy();
 			instance.destroySurfaceKHR(surface);
@@ -243,6 +231,19 @@ namespace brassica {
 
 		graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
 		graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+
+		// Initialize VMA
+		VmaAllocatorCreateInfo allocatorInfo{};
+		allocatorInfo.physicalDevice = chosenGPU;
+		allocatorInfo.device = device;
+		allocatorInfo.instance = instance;
+		allocatorInfo.vulkanApiVersion = VK_MAKE_API_VERSION(0, chosenMajor, chosenMinor, 0);
+
+		if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
+			spdlog::critical("Failed to create Vulkan Memory Allocator.");
+			return false;
+		}
+
 		return true;
 	}
 
@@ -368,8 +369,6 @@ namespace brassica {
 		globalDescriptorPool = device.createDescriptorPool(poolInfo);
 
 		// 3. Allocate Descriptor Sets & UBO Buffers
-		vk::PhysicalDeviceMemoryProperties memProperties = chosenGPU.getMemoryProperties();
-
 		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, globalSet0Layout);
 		vk::DescriptorSetAllocateInfo allocInfo{};
 		allocInfo.setDescriptorPool(globalDescriptorPool);
@@ -380,25 +379,30 @@ namespace brassica {
 		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
 			globalDescriptorSets[i] = allocatedSets[i];
 
-			vk::BufferCreateInfo bufferInfo{};
-			bufferInfo.setSize(sizeof(FrameUBO));
-			bufferInfo.setUsage(vk::BufferUsageFlagBits::eUniformBuffer);
-			bufferInfo.setSharingMode(vk::SharingMode::eExclusive);
+			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = sizeof(FrameUBO);
+			bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-			globalUboBuffers[i] = device.createBuffer(bufferInfo);
+			VmaAllocationCreateInfo allocCreateInfo{};
+			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-			vk::MemoryRequirements memReqs = device.getBufferMemoryRequirements(globalUboBuffers[i]);
-			uint32_t memoryTypeIndex = FindMemoryType(
-				memProperties,
-				memReqs.memoryTypeBits,
-				vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-			);
+			VkBuffer          buffer = VK_NULL_HANDLE;
+			VmaAllocationInfo allocResultInfo{};
+			if (vmaCreateBuffer(
+					allocator,
+					&bufferInfo,
+					&allocCreateInfo,
+					&buffer,
+					&globalUboAllocations[i],
+					&allocResultInfo
+				) != VK_SUCCESS) {
+				spdlog::error("Failed to create Global UBO buffer with VMA");
+				return;
+			}
 
-			vk::MemoryAllocateInfo memAllocInfo{memReqs.size, memoryTypeIndex};
-			globalUboMemory[i] = device.allocateMemory(memAllocInfo);
-			device.bindBufferMemory(globalUboBuffers[i], globalUboMemory[i], 0);
-
-			globalUboMapped[i] = device.mapMemory(globalUboMemory[i], 0, sizeof(FrameUBO));
+			globalUboBuffers[i] = buffer;
+			globalUboMapped[i] = allocResultInfo.pMappedData;
 
 			vk::DescriptorBufferInfo bufferDescInfo{};
 			bufferDescInfo.setBuffer(globalUboBuffers[i]);
@@ -418,17 +422,11 @@ namespace brassica {
 
 	void Engine::CleanupGlobalUBO() {
 		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
-			if (globalUboMapped[i] && globalUboMemory[i]) {
-				device.unmapMemory(globalUboMemory[i]);
-				globalUboMapped[i] = nullptr;
-			}
-			if (globalUboBuffers[i]) {
-				device.destroyBuffer(globalUboBuffers[i]);
+			if (globalUboBuffers[i] && globalUboAllocations[i]) {
+				vmaDestroyBuffer(allocator, globalUboBuffers[i], globalUboAllocations[i]);
 				globalUboBuffers[i] = nullptr;
-			}
-			if (globalUboMemory[i]) {
-				device.freeMemory(globalUboMemory[i]);
-				globalUboMemory[i] = nullptr;
+				globalUboAllocations[i] = nullptr;
+				globalUboMapped[i] = nullptr;
 			}
 		}
 
