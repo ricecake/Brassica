@@ -21,8 +21,12 @@ namespace brassica {
 		return true;
 	}
 
-	bool
-	Shader::CompileFromSource(vk::Device device, const std::string& source, shaderc_shader_kind kind, const char* name) {
+	bool Shader::CompileFromSource(
+		vk::Device          device,
+		const std::string&  source,
+		shaderc_shader_kind kind,
+		const char*         name
+	) {
 		sourceCode = source;
 		shaderKind = kind;
 

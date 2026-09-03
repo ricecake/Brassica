@@ -54,7 +54,7 @@ namespace brassica {
 	}
 
 	void Engine::InitSyncStructures() {
-		vk::FenceCreateInfo fenceCreateInfo{vk::FenceCreateFlagBits::eSignaled};
+		vk::FenceCreateInfo     fenceCreateInfo{vk::FenceCreateFlagBits::eSignaled};
 		vk::SemaphoreCreateInfo semaphoreCreateInfo{};
 
 		for (int i = 0; i < FRAME_OVERLAP; i++) {
@@ -125,7 +125,7 @@ namespace brassica {
 
 		constexpr uint32_t targetMajor = 1;
 		constexpr uint32_t targetMinor = 3;
-		const uint32_t targetVersion = VK_MAKE_API_VERSION(0, targetMajor, targetMinor, 0);
+		const uint32_t     targetVersion = VK_MAKE_API_VERSION(0, targetMajor, targetMinor, 0);
 
 		uint32_t chosenMajor = targetMajor;
 		uint32_t chosenMinor = targetMinor;
@@ -134,7 +134,8 @@ namespace brassica {
 			chosenMajor = VK_API_VERSION_MAJOR(systemVersion);
 			chosenMinor = VK_API_VERSION_MINOR(systemVersion);
 			spdlog::warn(
-				"Requested Vulkan API version {}.{} is higher than maximum supported version {}.{}. Using version {}.{}.",
+				"Requested Vulkan API version {}.{} is higher than maximum supported version {}.{}. Using version "
+				"{}.{}.",
 				targetMajor,
 				targetMinor,
 				chosenMajor,
@@ -146,9 +147,7 @@ namespace brassica {
 
 		// 1. Instance
 		vkb::InstanceBuilder builder;
-		builder.set_app_name("Brassica")
-			.require_api_version(chosenMajor, chosenMinor, 0)
-			.use_default_debug_messenger();
+		builder.set_app_name("Brassica").require_api_version(chosenMajor, chosenMinor, 0).use_default_debug_messenger();
 
 		auto inst_res = builder.request_validation_layers(true).build();
 		if (!inst_res) {
@@ -254,11 +253,7 @@ namespace brassica {
 		vk::Extent2D extent{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
 		vk::Format   format = GetSwapchainFormat();
 
-		FrameGraphResource swapchainRes = fg.import(
-			"SwapchainImage",
-			{extent, format},
-			std::move(swapchainTexWrapper)
-		);
+		FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(swapchainTexWrapper));
 
 		gradientPass->RegisterPass(fg, swapchainRes, extent);
 

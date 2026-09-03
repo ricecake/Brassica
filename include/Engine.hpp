@@ -34,9 +34,7 @@ namespace brassica {
 			return vk::Extent2D{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
 		}
 
-		vk::Format GetSwapchainFormat() const {
-			return static_cast<vk::Format>(vkbSwapchain.image_format);
-		}
+		vk::Format GetSwapchainFormat() const { return static_cast<vk::Format>(vkbSwapchain.image_format); }
 
 		ShaderWatcher& GetShaderWatcher() { return shaderWatcher; }
 

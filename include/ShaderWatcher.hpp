@@ -14,7 +14,7 @@
 
 namespace brassica {
 
-	class ShaderWatcher : public efsw::FileWatchListener {
+	class ShaderWatcher: public efsw::FileWatchListener {
 	public:
 		using ReloadCallback = std::function<void()>;
 
@@ -48,7 +48,7 @@ namespace brassica {
 		std::set<std::string> pendingModifiedFiles;
 
 		std::unordered_map<std::string, std::vector<Shader*>>        shaderRegistry;
-		std::unordered_map<Shader*, std::vector<ReloadCallback>>    shaderCallbacks;
+		std::unordered_map<Shader*, std::vector<ReloadCallback>>     shaderCallbacks;
 		std::unordered_map<std::string, std::vector<ReloadCallback>> fileCallbacks;
 	};
 

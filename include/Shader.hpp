@@ -99,7 +99,9 @@ namespace brassica {
 		TessEvaluationShader() = default;
 		bool CompileTessEvalFromFile(vk::Device device, const std::string& filepath);
 
-		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eTessellationEvaluation; }
+		vk::ShaderStageFlagBits GetStageFlag() const override {
+			return vk::ShaderStageFlagBits::eTessellationEvaluation;
+		}
 	};
 
 } // namespace brassica

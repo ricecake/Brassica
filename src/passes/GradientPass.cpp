@@ -2,21 +2,22 @@
 
 #include <vector>
 
-#include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
+
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
 	namespace {
 		void TransitionImageLayout(
-			vk::CommandBuffer        cmd,
-			vk::Image                image,
-			vk::ImageLayout          oldLayout,
-			vk::ImageLayout          newLayout,
-			vk::PipelineStageFlags2  srcStage,
-			vk::PipelineStageFlags2  dstStage,
-			vk::AccessFlags2         srcAccess,
-			vk::AccessFlags2         dstAccess
+			vk::CommandBuffer       cmd,
+			vk::Image               image,
+			vk::ImageLayout         oldLayout,
+			vk::ImageLayout         newLayout,
+			vk::PipelineStageFlags2 srcStage,
+			vk::PipelineStageFlags2 dstStage,
+			vk::AccessFlags2        srcAccess,
+			vk::AccessFlags2        dstAccess
 		) {
 			vk::ImageMemoryBarrier2 barrier{};
 			barrier.setSrcStageMask(srcStage);
@@ -96,8 +97,8 @@ namespace brassica {
 
 				vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
 				colorBlendAttachment.setColorWriteMask(
-					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-					vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+					vk::ColorComponentFlagBits::eA
 				);
 				colorBlendAttachment.setBlendEnable(VK_FALSE);
 
@@ -174,8 +175,8 @@ namespace brassica {
 
 		vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
 		colorBlendAttachment.setColorWriteMask(
-			vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-			vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+			vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+			vk::ColorComponentFlagBits::eA
 		);
 		colorBlendAttachment.setBlendEnable(VK_FALSE);
 
@@ -183,7 +184,7 @@ namespace brassica {
 		colorBlending.setLogicOpEnable(VK_FALSE);
 		colorBlending.setAttachments(colorBlendAttachment);
 
-		std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+		std::vector<vk::DynamicState>      dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
 		vk::PipelineDynamicStateCreateInfo dynamicState{};
 		dynamicState.setDynamicStates(dynamicStates);
 
@@ -259,7 +260,9 @@ namespace brassica {
 				colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
 				colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear);
 				colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
-				colorAttachment.setClearValue(vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}});
+				colorAttachment.setClearValue(
+					vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}}
+				);
 
 				vk::RenderingInfo renderingInfo{};
 				renderingInfo.setRenderArea(vk::Rect2D({0, 0}, extent));

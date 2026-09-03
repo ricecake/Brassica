@@ -7,8 +7,7 @@
 
 namespace brassica {
 
-	ShaderWatcher::ShaderWatcher() {
-	}
+	ShaderWatcher::ShaderWatcher() {}
 
 	ShaderWatcher::~ShaderWatcher() {
 		StopWatching();
@@ -16,7 +15,7 @@ namespace brassica {
 
 	std::string ShaderWatcher::NormalizePath(const std::string& path) {
 		std::filesystem::path p(path);
-		std::string normalized = std::filesystem::weakly_canonical(p).string();
+		std::string           normalized = std::filesystem::weakly_canonical(p).string();
 		std::replace(normalized.begin(), normalized.end(), '\\', '/');
 		return normalized;
 	}
@@ -49,7 +48,8 @@ namespace brassica {
 	}
 
 	void ShaderWatcher::RegisterShader(Shader* shader, ReloadCallback onReload) {
-		if (!shader) return;
+		if (!shader)
+			return;
 		std::string filepath = shader->GetFilePath();
 		if (filepath.empty()) {
 			spdlog::warn("ShaderWatcher: Cannot register shader with empty filepath.");
@@ -66,7 +66,8 @@ namespace brassica {
 	}
 
 	void ShaderWatcher::RegisterFile(const std::string& filepath, ReloadCallback onReload) {
-		if (filepath.empty() || !onReload) return;
+		if (filepath.empty() || !onReload)
+			return;
 
 		std::string normalized = NormalizePath(filepath);
 
@@ -106,12 +107,12 @@ namespace brassica {
 		for (const auto& filepath : filesToProcess) {
 			spdlog::info("ShaderWatcher: File change detected: {}", filepath);
 
-			std::vector<Shader*> shadersToReload;
+			std::vector<Shader*>        shadersToReload;
 			std::vector<ReloadCallback> callbacksToInvoke;
 
 			{
 				std::lock_guard<std::mutex> lock(mutex);
-				auto shaderIt = shaderRegistry.find(filepath);
+				auto                        shaderIt = shaderRegistry.find(filepath);
 				if (shaderIt != shaderRegistry.end()) {
 					shadersToReload = shaderIt->second;
 				}
@@ -128,7 +129,7 @@ namespace brassica {
 				if (shader->Recompile(device)) {
 					recompiledAny = true;
 					std::lock_guard<std::mutex> lock(mutex);
-					auto cbIt = shaderCallbacks.find(shader);
+					auto                        cbIt = shaderCallbacks.find(shader);
 					if (cbIt != shaderCallbacks.end()) {
 						callbacksToInvoke.insert(callbacksToInvoke.end(), cbIt->second.begin(), cbIt->second.end());
 					}
