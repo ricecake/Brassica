@@ -4,12 +4,104 @@
 
 namespace brassica {
 
+	void Engine::InitWindow() {
+		glfwInit();
+		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+		window = glfwCreateWindow(1280, 720, "Brassica Engine", nullptr, nullptr);
+	}
+
+	void Engine::InitSwapchain() {
+		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
+		auto                  swap_ret = swapchainBuilder
+											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+											 .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+											 .set_desired_extent(1280, 720)
+											 .add_image_usage_flags(
+												 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+											 )
+											 .build();
+
+		if (!swap_ret) {
+			spdlog::error("Failed to create swapchain: {}", swap_ret.error().message());
+			return;
+		}
+
+		vkbSwapchain = swap_ret.value();
+		swapchainImages = vkbSwapchain.get_images().value();
+		swapchainImageViews = vkbSwapchain.get_image_views().value();
+	}
+
+	void Engine::InitCommands() {
+		VkCommandPoolCreateInfo commandPoolCreateInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+		commandPoolCreateInfo.queueFamilyIndex = graphicsQueueFamily;
+		commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+		for (int i = 0; i < FRAME_OVERLAP; i++) {
+			vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &frames[i].commandPool);
+
+			VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+			cmdAllocInfo.commandPool = frames[i].commandPool;
+			cmdAllocInfo.commandBufferCount = 1;
+			cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+
+			vkAllocateCommandBuffers(device, &cmdAllocInfo, &frames[i].commandBuffer);
+		}
+	}
+
+	void Engine::InitSyncStructures() {
+		VkFenceCreateInfo fenceCreateInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+		fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+		VkSemaphoreCreateInfo semaphoreCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+
+		for (int i = 0; i < FRAME_OVERLAP; i++) {
+			vkCreateFence(device, &fenceCreateInfo, nullptr, &frames[i].renderFence);
+			vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frames[i].swapchainSemaphore);
+			vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frames[i].renderSemaphore);
+		}
+	}
+
+	void Engine::Cleanup() {
+		if (device) {
+			vkDeviceWaitIdle(device);
+
+			if (gradientPass) {
+				gradientPass->DestroyPipeline(device);
+				gradientPass.reset();
+			}
+
+			for (int i = 0; i < FRAME_OVERLAP; i++) {
+				vkDestroyFence(device, frames[i].renderFence, nullptr);
+				vkDestroySemaphore(device, frames[i].swapchainSemaphore, nullptr);
+				vkDestroySemaphore(device, frames[i].renderSemaphore, nullptr);
+				vkDestroyCommandPool(device, frames[i].commandPool, nullptr);
+			}
+
+			for (auto view : swapchainImageViews) {
+				vkDestroyImageView(device, view, nullptr);
+			}
+			vkb::destroy_swapchain(vkbSwapchain);
+
+			vkDestroyDevice(device, nullptr);
+			vkDestroySurfaceKHR(instance, surface, nullptr);
+			vkb::destroy_instance(vkbInst);
+		}
+
+		if (window) {
+			glfwDestroyWindow(window);
+			glfwTerminate();
+		}
+	}
+
 	void Engine::Init() {
 		InitWindow();
 		InitVulkan();
 		InitSwapchain();
 		InitCommands();
 		InitSyncStructures();
+
+		gradientPass = std::make_unique<GradientPass>(device, vkbSwapchain.image_format);
 
 		taskScheduler.Initialize();
 		spdlog::info("Brassica Engine Initialized.");
@@ -63,6 +155,10 @@ namespace brassica {
 		while (!glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 
+			if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+				glfwSetWindowShouldClose(window, GLFW_TRUE);
+			}
+
 			// Wrap the frame in an enkiTS task so the main thread remains free
 			// for OS event pumping and window resizing.
 			enki::TaskSet frameTask(1, [this](enki::TaskSetPartition range, uint32_t threadnum) { DrawFrame(); });
@@ -96,12 +192,22 @@ namespace brassica {
 		cmdBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 		vkBeginCommandBuffer(frame.commandBuffer, &cmdBeginInfo);
 
-		// --- YOUR RENDER GRAPH GOES HERE ---
-		// Example: Transition swapchain image to color attachment optimal via Sync2
-		// Example: vkCmdBeginRendering (Dynamic Rendering)
-		// Example: vkCmdDrawIndexedIndirect
-		// Example: vkCmdEndRendering
-		// Example: Transition swapchain image to present source via Sync2
+		// FrameGraph Setup and Execution
+		FrameGraph        fg;
+		FrameGraphTexture swapchainTexWrapper{
+			swapchainImages[swapchainImageIndex],
+			swapchainImageViews[swapchainImageIndex]
+		};
+		FrameGraphResource swapchainRes = fg.import(
+			"SwapchainImage",
+			{vkbSwapchain.extent, vkbSwapchain.image_format},
+			std::move(swapchainTexWrapper)
+		);
+
+		gradientPass->RegisterPass(fg, swapchainRes, vkbSwapchain.extent);
+
+		fg.compile();
+		fg.execute(&frame.commandBuffer);
 
 		vkEndCommandBuffer(frame.commandBuffer);
 

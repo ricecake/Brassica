@@ -5,6 +5,7 @@
 #include "vulkan/vulkan.h"
 
 #include "GLFW/glfw3.h"
+#include "passes/GradientPass.hpp"
 #include "TaskScheduler.h"
 #include "VkBootstrap.h"
 
@@ -24,6 +25,12 @@ namespace brassica {
 		void Init();
 		void Run();
 		void Cleanup();
+
+		VkDevice GetDevice() const { return device; }
+
+		VkExtent2D GetSwapchainExtent() const { return vkbSwapchain.extent; }
+
+		VkFormat GetSwapchainFormat() const { return vkbSwapchain.image_format; }
 
 	private:
 		void InitWindow();
@@ -51,6 +58,8 @@ namespace brassica {
 		vkb::Swapchain           vkbSwapchain;
 		std::vector<VkImage>     swapchainImages;
 		std::vector<VkImageView> swapchainImageViews;
+
+		std::unique_ptr<GradientPass> gradientPass;
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
