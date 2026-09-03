@@ -83,9 +83,12 @@ namespace brassica {
 
 		// Test vk-bootstrap
 		vkb::InstanceBuilder builder;
-		auto                 inst_ret =
-			builder.set_app_name("Brassica Test").request_validation_layers(true).use_default_debug_messenger().build();
-		if (inst_ret) {
+		builder.set_app_name("Brassica Test").use_default_debug_messenger();
+		auto inst_res1 = builder.require_api_version(1, 4, 0).request_validation_layers(true).build();
+		auto inst_res2 = inst_res1 ? inst_res1 : builder.require_api_version(1, 4, 0).request_validation_layers(false).build();
+		auto inst_res3 = inst_res2 ? inst_res2 : builder.require_api_version(1, 3, 0).request_validation_layers(false).build();
+
+		if (inst_res3) {
 			spdlog::info("vk-bootstrap linked.");
 		}
 
