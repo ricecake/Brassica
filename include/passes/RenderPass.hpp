@@ -28,6 +28,9 @@ namespace brassica {
 		vk::Format colorFormat{vk::Format::eUndefined};
 		vk::Format depthFormat{vk::Format::eUndefined};
 
+		std::vector<vk::DescriptorSetLayout> storedSetLayouts;
+		std::vector<vk::PushConstantRange>   storedPushConstants;
+
 		GraphicsShader* vertOrMeshShader{nullptr};
 		GraphicsShader* fragShader{nullptr};
 
