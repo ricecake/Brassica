@@ -6,6 +6,8 @@ layout(triangles, max_vertices = 24, max_primitives = 12) out;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
 	float time;
+	float fov;
+	float aspectRatio;
 	uint  frameIndex;
 	uint  globalSeed;
 	uint  frameRandom;
@@ -86,8 +88,8 @@ void main() {
 	float angleZ = ubo.time * 0.5;
 	mat3 rot = rotateZ(angleZ) * rotateY(angleY) * rotateX(angleX);
 
-	float aspect = 1280.0 / 720.0;
-	float fov = 1.2;
+	float aspect = ubo.aspectRatio > 0.0 ? ubo.aspectRatio : (1280.0 / 720.0);
+	float fov = ubo.fov > 0.0 ? ubo.fov : 1.2;
 	float zNear = 0.1;
 	float zFar = 100.0;
 

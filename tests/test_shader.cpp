@@ -27,7 +27,7 @@ TEST_CASE("Vulkan-Hpp RenderResources Types") {
 }
 
 TEST_CASE("FrameUBO Struct Size and Alignment") {
-	CHECK(sizeof(brassica::FrameUBO) == 16);
+	CHECK(sizeof(brassica::FrameUBO) == 32);
 	CHECK(alignof(brassica::FrameUBO) == 16);
 }
 
@@ -176,6 +176,8 @@ layout(triangles, max_vertices = 3, max_primitives = 1) out;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
 	float time;
+	float fov;
+	float aspectRatio;
 	uint frameIndex;
 	uint globalSeed;
 	uint frameRandom;

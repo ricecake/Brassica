@@ -7,6 +7,8 @@ layout(location = 1) in vec3 inNormal;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
 	float time;
+	float fov;
+	float aspectRatio;
 	uint  frameIndex;
 	uint  globalSeed;
 	uint  frameRandom;
