@@ -73,12 +73,12 @@ namespace brassica {
 			shaderWatcher.StopWatching();
 
 			if (meshCubePass) {
-				meshCubePass->DestroyPipeline(device);
+				meshCubePass->DestroyPipeline();
 				meshCubePass.reset();
 			}
 
 			if (gradientPass) {
-				gradientPass->DestroyPipeline(device);
+				gradientPass->DestroyPipeline();
 				gradientPass.reset();
 			}
 
@@ -286,7 +286,7 @@ namespace brassica {
 		// FrameGraph Setup and Execution
 		FrameGraph           fg;
 		FrameGraphBlackboard blackboard;
-		FrameGraphTexture    swapchainTexWrapper{
+		FrameGraphTexture2D  swapchainTexWrapper{
 			swapchainImages[swapchainImageIndex],
 			swapchainImageViews[swapchainImageIndex]
 		};
@@ -312,9 +312,15 @@ namespace brassica {
 		gradientPass->RegisterPass(fg, blackboard, extent);
 		meshCubePass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame]);
 
+		RenderContext renderCtx{
+			.commandBuffer = frame.commandBuffer,
+			.allocator = allocator,
+			.device = device
+		};
+
 		fg.compile();
 		vk::CommandBuffer rawCmd = frame.commandBuffer;
-		fg.execute(&rawCmd);
+		fg.execute(&rawCmd, &renderCtx);
 
 		frame.commandBuffer.end();
 
