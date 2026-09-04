@@ -72,6 +72,11 @@ namespace brassica {
 
 			shaderWatcher.StopWatching();
 
+			if (deferredPass) {
+				deferredPass->DestroyPipeline();
+				deferredPass.reset();
+			}
+
 			if (meshCubePass) {
 				meshCubePass->DestroyPipeline();
 				meshCubePass.reset();
@@ -130,8 +135,9 @@ namespace brassica {
 
 		shaderWatcher.WatchDirectory("shaders");
 
-		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
-		gradientPass = std::make_unique<GradientPass>(device, GetSwapchainFormat(), &shaderWatcher);
+		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher);
+		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR8G8B8A8Unorm, &shaderWatcher);
+		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 
 		taskScheduler.Initialize();
 		spdlog::info("Brassica Engine Initialized.");
@@ -311,6 +317,7 @@ namespace brassica {
 
 		gradientPass->RegisterPass(fg, blackboard, extent);
 		meshCubePass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame]);
+		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame]);
 
 		RenderContext renderCtx{
 			.commandBuffer = frame.commandBuffer,

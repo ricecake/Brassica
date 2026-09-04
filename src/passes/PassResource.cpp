@@ -315,14 +315,23 @@ namespace brassica {
 	void FrameGraphSSBO::preRead(const Desc& desc, uint32_t flags, void* context) {
 		if (!context) return;
 		auto* rc = static_cast<RenderContext*>(context);
+
+		vk::PipelineStageFlags2 dstStage = vk::PipelineStageFlagBits2::eAllCommands;
+		vk::AccessFlags2        dstAccess = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead;
+
+		if (flags & static_cast<uint32_t>(BufferUsage::Indirect)) {
+			dstStage |= vk::PipelineStageFlagBits2::eDrawIndirect;
+			dstAccess |= vk::AccessFlagBits2::eIndirectCommandRead;
+		}
+
 		BufferBarrier(
 			rc->commandBuffer,
 			buffer,
 			desc.size,
 			vk::PipelineStageFlagBits2::eAllCommands,
-			vk::PipelineStageFlagBits2::eAllCommands,
+			dstStage,
 			vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eTransferWrite,
-			vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead
+			dstAccess
 		);
 	}
 

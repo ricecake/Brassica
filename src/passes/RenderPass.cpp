@@ -5,7 +5,14 @@
 namespace brassica {
 
 	RenderPass::RenderPass(std::string name, vk::Device dev, vk::Format colorFmt, vk::Format depthFmt)
-		: Pass(std::move(name), dev), colorFormat(colorFmt), depthFormat(depthFmt) {}
+		: Pass(std::move(name), dev), depthFormat(depthFmt) {
+		if (colorFmt != vk::Format::eUndefined) {
+			colorFormats.push_back(colorFmt);
+		}
+	}
+
+	RenderPass::RenderPass(std::string name, vk::Device dev, std::span<const vk::Format> colorFmts, vk::Format depthFmt)
+		: Pass(std::move(name), dev), colorFormats(colorFmts.begin(), colorFmts.end()), depthFormat(depthFmt) {}
 
 	RenderPass::~RenderPass() {
 		DestroyPipeline();
@@ -21,10 +28,33 @@ namespace brassica {
 		vk::Format                              depthFmt,
 		std::span<const vk::DescriptorSetLayout> setLayouts,
 		std::span<const vk::PushConstantRange>   pushConstants,
-		ShaderWatcher*                          watcher
+		ShaderWatcher*                          watcher,
+		bool                                    enableDepthTest,
+		bool                                    enableDepthWrite,
+		vk::CompareOp                           depthCompareOp
 	) {
-		colorFormat = colorFmt;
+		std::vector<vk::Format> fmts;
+		if (colorFmt != vk::Format::eUndefined) {
+			fmts.push_back(colorFmt);
+		}
+		InitRenderPipeline(fmts, depthFmt, setLayouts, pushConstants, watcher, enableDepthTest, enableDepthWrite, depthCompareOp);
+	}
+
+	void RenderPass::InitRenderPipeline(
+		std::span<const vk::Format>              colorFmts,
+		vk::Format                              depthFmt,
+		std::span<const vk::DescriptorSetLayout> setLayouts,
+		std::span<const vk::PushConstantRange>   pushConstants,
+		ShaderWatcher*                          watcher,
+		bool                                    enableDepthTest,
+		bool                                    enableDepthWrite,
+		vk::CompareOp                           depthCompareOp
+	) {
+		colorFormats.assign(colorFmts.begin(), colorFmts.end());
 		depthFormat = depthFmt;
+		depthTestEnable = enableDepthTest;
+		depthWriteEnable = enableDepthWrite;
+		this->depthCompareOp = depthCompareOp;
 
 		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
 		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
@@ -82,24 +112,33 @@ namespace brassica {
 			multisampling.setSampleShadingEnable(VK_FALSE);
 			multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
 
-			vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
-			colorBlendAttachment.setColorWriteMask(
-				vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
-				vk::ColorComponentFlagBits::eA
-			);
-			colorBlendAttachment.setBlendEnable(VK_FALSE);
+			std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments(colorFormats.size());
+			for (size_t i = 0; i < colorFormats.size(); ++i) {
+				colorBlendAttachments[i].setColorWriteMask(
+					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+					vk::ColorComponentFlagBits::eA
+				);
+				colorBlendAttachments[i].setBlendEnable(VK_FALSE);
+			}
 
 			vk::PipelineColorBlendStateCreateInfo colorBlending{};
 			colorBlending.setLogicOpEnable(VK_FALSE);
-			colorBlending.setAttachments(colorBlendAttachment);
+			colorBlending.setAttachments(colorBlendAttachments);
+
+			vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+			depthStencil.setDepthTestEnable(depthTestEnable ? VK_TRUE : VK_FALSE);
+			depthStencil.setDepthWriteEnable(depthWriteEnable ? VK_TRUE : VK_FALSE);
+			depthStencil.setDepthCompareOp(this->depthCompareOp);
+			depthStencil.setDepthBoundsTestEnable(VK_FALSE);
+			depthStencil.setStencilTestEnable(VK_FALSE);
 
 			std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
 			vk::PipelineDynamicStateCreateInfo dynamicState{};
 			dynamicState.setDynamicStates(dynamicStates);
 
 			vk::PipelineRenderingCreateInfo renderingCreateInfo{};
-			if (colorFormat != vk::Format::eUndefined) {
-				renderingCreateInfo.setColorAttachmentFormats(colorFormat);
+			if (!colorFormats.empty()) {
+				renderingCreateInfo.setColorAttachmentFormats(colorFormats);
 			}
 			if (depthFormat != vk::Format::eUndefined) {
 				renderingCreateInfo.setDepthAttachmentFormat(depthFormat);
@@ -114,6 +153,7 @@ namespace brassica {
 			pipelineInfo.setPRasterizationState(&rasterizer);
 			pipelineInfo.setPMultisampleState(&multisampling);
 			pipelineInfo.setPColorBlendState(&colorBlending);
+			pipelineInfo.setPDepthStencilState(&depthStencil);
 			pipelineInfo.setPDynamicState(&dynamicState);
 			pipelineInfo.setLayout(pipelineLayout);
 
@@ -137,6 +177,37 @@ namespace brassica {
 		}
 
 		buildPipeline();
+	}
+
+	void RenderPass::DrawMeshTasksIndirectEXT(
+		vk::CommandBuffer                cmd,
+		vk::Buffer                       buffer,
+		vk::DeviceSize                   offset,
+		uint32_t                         drawCount,
+		uint32_t                         stride,
+		const vk::DispatchLoaderDynamic& dls
+	) const {
+		cmd.drawMeshTasksIndirectEXT(buffer, offset, drawCount, stride, dls);
+	}
+
+	void RenderPass::DrawIndexedIndirect(
+		vk::CommandBuffer cmd,
+		vk::Buffer        buffer,
+		vk::DeviceSize    offset,
+		uint32_t          drawCount,
+		uint32_t          stride
+	) const {
+		cmd.drawIndexedIndirect(buffer, offset, drawCount, stride);
+	}
+
+	void RenderPass::DrawIndirect(
+		vk::CommandBuffer cmd,
+		vk::Buffer        buffer,
+		vk::DeviceSize    offset,
+		uint32_t          drawCount,
+		uint32_t          stride
+	) const {
+		cmd.drawIndirect(buffer, offset, drawCount, stride);
 	}
 
 	void RenderPass::BeginRendering(

@@ -7,37 +7,33 @@
 #include "passes/RenderPass.hpp"
 #include "passes/RenderResources.hpp"
 #include "Shader.hpp"
-#include "types/ubo/FrameUBO.hpp"
 
 namespace brassica {
 
 	class ShaderWatcher;
 
-	struct MeshCubePassData {
-		FrameGraphResource positionTarget;
-		FrameGraphResource normalTarget;
-		FrameGraphResource albedoTarget;
-		FrameGraphResource depthTarget;
+	struct DeferredPassData {
+		FrameGraphResource target;
 	};
 
-	class MeshCubePass : public RenderPass {
+	class DeferredPass : public RenderPass {
 	public:
-		MeshCubePass(
-			vk::Instance            instance,
+		DeferredPass(
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
+			vk::Format              colorFormat,
 			ShaderWatcher*          watcher = nullptr
 		);
-		~MeshCubePass() override = default;
+		~DeferredPass() override;
 
 		void InitPipeline(
-			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
+			vk::Format              colorFormat,
 			ShaderWatcher*          watcher = nullptr
 		);
 
-		void RegisterPass(
+		FrameGraphResource RegisterPass(
 			FrameGraph&           fg,
 			FrameGraphBlackboard& blackboard,
 			vk::Extent2D          extent,
@@ -45,10 +41,16 @@ namespace brassica {
 		);
 
 	private:
-		vk::DispatchLoaderDynamic dls;
-
-		MeshShader     meshShader;
+		VertexShader   vertShader;
 		FragmentShader fragShader;
+
+		vk::DescriptorSetLayout gbufferSetLayout{nullptr};
+		vk::DescriptorPool      descriptorPool{nullptr};
+		vk::DescriptorSet       gbufferDescriptorSet{nullptr};
+		vk::Sampler             sampler{nullptr};
+
+		void CreateDescriptorResources(vk::Device device);
+		void CleanupDescriptorResources();
 	};
 
 } // namespace brassica

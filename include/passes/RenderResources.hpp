@@ -10,4 +10,11 @@ namespace brassica {
 		FrameGraphResource target;
 	};
 
+	struct GBufferData {
+		FrameGraphResource positionTarget; // eR16G16B16A16Sfloat
+		FrameGraphResource normalTarget;   // eR16G16B16A16Sfloat
+		FrameGraphResource albedoTarget;   // eR8G8B8A8Unorm
+		FrameGraphResource depthTarget;    // eD32Sfloat
+	};
+
 } // namespace brassica

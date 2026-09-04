@@ -26,12 +26,19 @@ namespace brassica {
 	}
 
 	FrameGraphResource GradientPass::RegisterPass(FrameGraph& fg, FrameGraphBlackboard& blackboard, vk::Extent2D extent) {
-		const auto& swapchainData = blackboard.get<SwapchainData>();
 		const auto& passData = fg.addCallbackPass<GradientPassData>(
 			"GradientPass",
 			[&](FrameGraph::Builder& builder, GradientPassData& data) {
+				data.target = builder.create<FrameGraphTexture2D>(
+					"GradientBackground",
+					FrameGraphTexture2D::Desc{
+						.extent = extent,
+						.format = vk::Format::eR8G8B8A8Unorm,
+						.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
+					}
+				);
 				data.target = builder.write(
-					swapchainData.target,
+					data.target,
 					static_cast<uint32_t>(TextureUsage::ColorAttachment)
 				);
 				builder.setSideEffect();
