@@ -2,33 +2,30 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "fg/Blackboard.hpp"
 #include "fg/FrameGraph.hpp"
+#include "passes/RenderPass.hpp"
 #include "passes/RenderResources.hpp"
 #include "Shader.hpp"
 
 namespace brassica {
 
-	class Engine;
 	class ShaderWatcher;
 
 	struct GradientPassData {
 		FrameGraphResource target;
 	};
 
-	class GradientPass {
+	class GradientPass : public RenderPass {
 	public:
 		GradientPass(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher = nullptr);
-		~GradientPass();
+		~GradientPass() override = default;
 
 		void InitPipeline(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher = nullptr);
-		void DestroyPipeline(vk::Device device);
 
-		FrameGraphResource RegisterPass(FrameGraph& fg, FrameGraphResource swapchainImageResource, vk::Extent2D extent);
+		FrameGraphResource RegisterPass(FrameGraph& fg, FrameGraphBlackboard& blackboard, vk::Extent2D extent);
 
 	private:
-		vk::Pipeline       pipeline{nullptr};
-		vk::PipelineLayout pipelineLayout{nullptr};
-
 		VertexShader   vertShader;
 		FragmentShader fragShader;
 	};

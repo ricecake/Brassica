@@ -2,7 +2,9 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "fg/Blackboard.hpp"
 #include "fg/FrameGraph.hpp"
+#include "passes/RenderPass.hpp"
 #include "passes/RenderResources.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -15,7 +17,7 @@ namespace brassica {
 		FrameGraphResource target;
 	};
 
-	class MeshCubePass {
+	class MeshCubePass : public RenderPass {
 	public:
 		MeshCubePass(
 			vk::Instance            instance,
@@ -24,7 +26,7 @@ namespace brassica {
 			vk::Format              colorFormat,
 			ShaderWatcher*          watcher = nullptr
 		);
-		~MeshCubePass();
+		~MeshCubePass() override = default;
 
 		void InitPipeline(
 			vk::Instance            instance,
@@ -33,19 +35,16 @@ namespace brassica {
 			vk::Format              colorFormat,
 			ShaderWatcher*          watcher = nullptr
 		);
-		void DestroyPipeline(vk::Device device);
 
 		FrameGraphResource RegisterPass(
-			FrameGraph&        fg,
-			FrameGraphResource inputResource,
-			vk::Extent2D       extent,
-			vk::DescriptorSet  globalDescriptorSet
+			FrameGraph&           fg,
+			FrameGraphBlackboard& blackboard,
+			vk::Extent2D          extent,
+			vk::DescriptorSet     globalDescriptorSet
 		);
 
 	private:
 		vk::DispatchLoaderDynamic dls;
-		vk::Pipeline              pipeline{nullptr};
-		vk::PipelineLayout        pipelineLayout{nullptr};
 
 		MeshShader     meshShader;
 		FragmentShader fragShader;
