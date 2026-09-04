@@ -6,11 +6,55 @@
 
 namespace brassica {
 
+	void Engine::OnFramebufferResize(int width, int height) {
+		windowResized = true;
+		if (inputHandler) {
+			inputHandler->OnFramebufferSize(window, width, height);
+		}
+	}
+
 	void Engine::InitWindow() {
 		glfwInit();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 		window = glfwCreateWindow(1280, 720, "Brassica Engine", nullptr, nullptr);
+
+		glfwSetWindowUserPointer(window, this);
+
+		glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int width, int height) {
+			auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(w));
+			if (engine) {
+				engine->OnFramebufferResize(width, height);
+			}
+		});
+
+		glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
+			auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(w));
+			if (engine && engine->GetInputHandler()) {
+				engine->GetInputHandler()->OnKey(w, key, scancode, action, mods);
+			}
+		});
+
+		glfwSetMouseButtonCallback(window, [](GLFWwindow* w, int button, int action, int mods) {
+			auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(w));
+			if (engine && engine->GetInputHandler()) {
+				engine->GetInputHandler()->OnMouseButton(w, button, action, mods);
+			}
+		});
+
+		glfwSetCursorPosCallback(window, [](GLFWwindow* w, double xpos, double ypos) {
+			auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(w));
+			if (engine && engine->GetInputHandler()) {
+				engine->GetInputHandler()->OnCursorPos(w, xpos, ypos);
+			}
+		});
+
+		glfwSetScrollCallback(window, [](GLFWwindow* w, double xoffset, double yoffset) {
+			auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(w));
+			if (engine && engine->GetInputHandler()) {
+				engine->GetInputHandler()->OnScroll(w, xoffset, yoffset);
+			}
+		});
 	}
 
 	void Engine::InitSwapchain() {
@@ -36,6 +80,50 @@ namespace brassica {
 
 		auto raw_image_views = vkbSwapchain.get_image_views().value();
 		swapchainImageViews.assign(raw_image_views.begin(), raw_image_views.end());
+	}
+
+	void Engine::RecreateSwapchain() {
+		int width = 0, height = 0;
+		glfwGetFramebufferSize(window, &width, &height);
+		while (width == 0 || height == 0) {
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();
+		}
+
+		device.waitIdle();
+
+		for (auto view : swapchainImageViews) {
+			device.destroyImageView(view);
+		}
+		swapchainImageViews.clear();
+		swapchainImages.clear();
+
+		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
+		auto                  swap_ret = swapchainBuilder
+											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+											 .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+											 .set_desired_extent(static_cast<uint32_t>(width), static_cast<uint32_t>(height))
+											 .set_old_swapchain(vkbSwapchain)
+											 .add_image_usage_flags(
+												 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+											 )
+											 .build();
+
+		if (!swap_ret) {
+			spdlog::error("Failed to recreate swapchain: {}", swap_ret.error().message());
+			return;
+		}
+
+		vkb::destroy_swapchain(vkbSwapchain);
+		vkbSwapchain = swap_ret.value();
+
+		auto raw_images = vkbSwapchain.get_images().value();
+		swapchainImages.assign(raw_images.begin(), raw_images.end());
+
+		auto raw_image_views = vkbSwapchain.get_image_views().value();
+		swapchainImageViews.assign(raw_image_views.begin(), raw_image_views.end());
+
+		windowResized = false;
 	}
 
 	void Engine::InitCommands() {
@@ -113,6 +201,10 @@ namespace brassica {
 	}
 
 	void Engine::Init() {
+		if (!inputHandler) {
+			inputHandler = CreateDefaultInputHandler();
+		}
+
 		InitWindow();
 		if (!InitVulkan()) {
 			spdlog::error("Vulkan initialization failed; engine cannot start.");
@@ -252,10 +344,6 @@ namespace brassica {
 		while (!glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 
-			if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-				glfwSetWindowShouldClose(window, GLFW_TRUE);
-			}
-
 			// Wrap the frame in an enkiTS task so the main thread remains free
 			// for OS event pumping and window resizing.
 			enki::TaskSet frameTask(1, [this](enki::TaskSetPartition range, uint32_t threadnum) { DrawFrame(); });
@@ -266,16 +354,28 @@ namespace brassica {
 	}
 
 	void Engine::DrawFrame() {
+		if (windowResized) {
+			RecreateSwapchain();
+		}
+
 		shaderWatcher.ProcessPendingReloads(device);
 
 		FrameData& frame = GetCurrentFrame();
 
 		// 1. Wait for GPU to finish the last time this frame context was used
 		(void)device.waitForFences(frame.renderFence, VK_TRUE, 1000000000);
-		device.resetFences(frame.renderFence);
 
 		// 2. Acquire Swapchain Image
 		auto acquireResult = device.acquireNextImageKHR(vkbSwapchain.swapchain, 1000000000, frame.swapchainSemaphore);
+		if (acquireResult.result == vk::Result::eErrorOutOfDateKHR) {
+			RecreateSwapchain();
+			return;
+		} else if (acquireResult.result != vk::Result::eSuccess && acquireResult.result != vk::Result::eSuboptimalKHR) {
+			spdlog::error("Failed to acquire swapchain image!");
+			return;
+		}
+
+		device.resetFences(frame.renderFence);
 		uint32_t swapchainImageIndex = acquireResult.value;
 
 		// 3. Record Commands
@@ -299,8 +399,15 @@ namespace brassica {
 
 		uint32_t activeFrame = frameNumber % FRAME_OVERLAP;
 
+		float aspect = 16.0f / 9.0f;
+		if (extent.height > 0) {
+			aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
+		}
+
 		FrameUBO ubo{};
 		ubo.time = static_cast<float>(glfwGetTime());
+		ubo.fov = cameraFov;
+		ubo.aspectRatio = aspect;
 		ubo.frameIndex = frameNumber;
 		ubo.globalSeed = globalSeed;
 		ubo.frameRandom = static_cast<uint32_t>(rng());
@@ -350,7 +457,11 @@ namespace brassica {
 		presentInfo.setSwapchains(swapchain);
 		presentInfo.setImageIndices(swapchainImageIndex);
 
-		(void)graphicsQueue.presentKHR(presentInfo);
+		vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
+		if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || windowResized) {
+			windowResized = false;
+			RecreateSwapchain();
+		}
 
 		frameNumber++;
 	}
