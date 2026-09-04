@@ -56,10 +56,23 @@ namespace brassica {
 			return;
 		}
 
-		std::string normalized = NormalizePath(filepath);
-
 		std::lock_guard<std::mutex> lock(mutex);
-		shaderRegistry[normalized].push_back(shader);
+
+		auto addPathToRegistry = [this, shader](const std::string& path) {
+			if (path.empty())
+				return;
+			std::string normalized = NormalizePath(path);
+			auto&       vec = shaderRegistry[normalized];
+			if (std::find(vec.begin(), vec.end(), shader) == vec.end()) {
+				vec.push_back(shader);
+			}
+		};
+
+		addPathToRegistry(filepath);
+		for (const auto& incFile : shader->GetIncludedFiles()) {
+			addPathToRegistry(incFile);
+		}
+
 		if (onReload) {
 			shaderCallbacks[shader].push_back(onReload);
 		}
@@ -124,12 +137,26 @@ namespace brassica {
 			}
 
 			bool recompiledAny = false;
+			std::set<Shader*> processedShaders;
 			for (Shader* shader : shadersToReload) {
+				if (!shader || processedShaders.count(shader))
+					continue;
+				processedShaders.insert(shader);
+
 				spdlog::info("ShaderWatcher: Recompiling shader for file: {}", filepath);
 				if (shader->Recompile(device)) {
 					recompiledAny = true;
 					std::lock_guard<std::mutex> lock(mutex);
-					auto                        cbIt = shaderCallbacks.find(shader);
+
+					for (const auto& incFile : shader->GetIncludedFiles()) {
+						std::string normalized = NormalizePath(incFile);
+						auto&       vec = shaderRegistry[normalized];
+						if (std::find(vec.begin(), vec.end(), shader) == vec.end()) {
+							vec.push_back(shader);
+						}
+					}
+
+					auto cbIt = shaderCallbacks.find(shader);
 					if (cbIt != shaderCallbacks.end()) {
 						callbacksToInvoke.insert(callbacksToInvoke.end(), cbIt->second.begin(), cbIt->second.end());
 					}
