@@ -1,5 +1,8 @@
 #include "Shader.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -7,17 +10,215 @@
 
 namespace brassica {
 
+	namespace {
+
+		std::string normalizePath(const std::string& path) {
+			namespace fs = std::filesystem;
+			try {
+				fs::path p(path);
+				std::string normalized = fs::weakly_canonical(p).string();
+				std::replace(normalized.begin(), normalized.end(), '\\', '/');
+				return normalized;
+			} catch (...) {
+				std::string normalized = path;
+				std::replace(normalized.begin(), normalized.end(), '\\', '/');
+				return normalized;
+			}
+		}
+
+		std::string generateIncludeGuard(const std::string& path) {
+			std::string guard = "G";
+			for (char c : path) {
+				if (std::isalnum(static_cast<unsigned char>(c))) {
+					guard += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+				} else if (!guard.empty() && guard.back() != '_') {
+					guard += '_';
+				}
+			}
+			while (!guard.empty() && guard.back() == '_') {
+				guard.pop_back();
+			}
+			return guard;
+		}
+
+		std::string loadFileRaw(const std::string& path) {
+			std::ifstream file(path, std::ios::in | std::ios::binary);
+			if (!file.is_open()) {
+				return "";
+			}
+			std::stringstream buffer;
+			buffer << file.rdbuf();
+			return buffer.str();
+		}
+
+		std::string loadShaderSourceInternal(
+			const std::string& path,
+			std::set<std::string>& includedFiles,
+			const std::string& stageDefine = ""
+		) {
+			namespace fs = std::filesystem;
+			fs::path p(path);
+			std::string normalizedPath = normalizePath(path);
+
+			bool isTopLevel = includedFiles.empty();
+
+			if (includedFiles.count(normalizedPath)) {
+				// Prevent circular inclusion and ensure single inclusion
+				return "";
+			}
+
+			std::string sourceCode = loadFileRaw(normalizedPath);
+			if (sourceCode.empty() && !loadFileRaw(path).empty()) {
+				sourceCode = loadFileRaw(path);
+			}
+
+			if (sourceCode.empty()) {
+				if (!isTopLevel) {
+					spdlog::error("Shader include file not found or empty: {}", path);
+				}
+				return "";
+			}
+
+			includedFiles.insert(normalizedPath);
+
+			std::string guard = generateIncludeGuard(normalizedPath);
+			std::string versionLine;
+			std::istringstream iss(sourceCode);
+			std::string line;
+
+			std::string preVersionContent;
+			std::string postVersionContent;
+			bool foundVersion = false;
+
+			while (std::getline(iss, line)) {
+				std::string trimmed = line;
+				size_t firstNonWhitespace = trimmed.find_first_not_of(" \t\r\n");
+				if (firstNonWhitespace != std::string::npos) {
+					trimmed.erase(0, firstNonWhitespace);
+				}
+
+				if (trimmed.substr(0, 8) == "#include") {
+					size_t firstQuote = line.find('"');
+					size_t lastQuote = line.rfind('"');
+					if (firstQuote != std::string::npos && lastQuote != std::string::npos && firstQuote < lastQuote) {
+						std::string includePath = line.substr(firstQuote + 1, lastQuote - firstQuote - 1);
+
+						std::vector<fs::path> searchPaths;
+						if (includePath != path) {
+							searchPaths.push_back(p.parent_path() / includePath);
+						}
+						searchPaths.push_back(fs::path("shaders") / includePath);
+						searchPaths.push_back(fs::path("external") / includePath);
+						searchPaths.push_back(fs::path(includePath));
+
+						std::string fullPathStr = "";
+						for (const auto& candidate : searchPaths) {
+							if (fs::exists(candidate) && !fs::is_directory(candidate)) {
+								fullPathStr = candidate.string();
+								break;
+							}
+						}
+
+						if (!fullPathStr.empty()) {
+							std::string includedSource = loadShaderSourceInternal(fullPathStr, includedFiles);
+							std::string commentStart = "//START " + fullPathStr + "\n";
+							std::string commentEnd = "//END " + fullPathStr + " (returning to " + normalizedPath + ")\n";
+
+							if (foundVersion) {
+								postVersionContent += commentStart + includedSource;
+								if (!includedSource.empty() && includedSource.back() != '\n')
+									postVersionContent += "\n";
+								postVersionContent += commentEnd;
+							} else {
+								preVersionContent += commentStart + includedSource;
+								if (!includedSource.empty() && includedSource.back() != '\n')
+									preVersionContent += "\n";
+								preVersionContent += commentEnd;
+							}
+						} else {
+							spdlog::error("Shader #include error: file not found for {}", includePath);
+						}
+						continue;
+					}
+				}
+
+				if (!foundVersion) {
+					if (trimmed.substr(0, 8) == "#version") {
+						versionLine = line + "\n";
+						foundVersion = true;
+						continue;
+					}
+					preVersionContent += line + "\n";
+				} else {
+					postVersionContent += line + "\n";
+				}
+			}
+
+			if (!foundVersion) {
+				postVersionContent = preVersionContent;
+				preVersionContent = "";
+			}
+
+			std::string shaderStageDefine = stageDefine;
+			if (isTopLevel && shaderStageDefine.empty()) {
+				std::string ext = p.extension().string();
+				if (ext == ".vert") shaderStageDefine = "VERTEX_SHADER";
+				else if (ext == ".frag") shaderStageDefine = "FRAGMENT_SHADER";
+				else if (ext == ".geom") shaderStageDefine = "GEOMETRY_SHADER";
+				else if (ext == ".comp") shaderStageDefine = "COMPUTE_SHADER";
+				else if (ext == ".tcs" || ext == ".tesc") shaderStageDefine = "TESS_CONTROL_SHADER";
+				else if (ext == ".tes" || ext == ".tese") shaderStageDefine = "TESS_EVALUATION_SHADER";
+				else if (ext == ".mesh") shaderStageDefine = "MESH_SHADER";
+				else if (ext == ".task") shaderStageDefine = "TASK_SHADER";
+			}
+
+			std::string finalSource = versionLine;
+			if (isTopLevel && !shaderStageDefine.empty()) {
+				finalSource += "#define " + shaderStageDefine + "\n";
+			}
+			finalSource += "#ifndef " + guard + "\n";
+			finalSource += "#define " + guard + "\n";
+			finalSource += preVersionContent;
+			finalSource += postVersionContent;
+			finalSource += "#endif // " + guard + "\n";
+
+			for (auto const& [placeholder, value] : Shader::GetReplacements()) {
+				size_t pos = 0;
+				while ((pos = finalSource.find(placeholder, pos)) != std::string::npos) {
+					finalSource.replace(pos, placeholder.length(), value);
+					pos += value.length();
+				}
+			}
+
+			return finalSource;
+		}
+
+	} // namespace
+
+	std::unordered_map<std::string, std::string>& Shader::GetReplacements() {
+		static std::unordered_map<std::string, std::string> replacements;
+		return replacements;
+	}
+
+	void Shader::RegisterConstant(const std::string& name, const std::string& value) {
+		GetReplacements()["[[" + name + "]]"] = value;
+	}
+
+	void Shader::ClearConstants() {
+		GetReplacements().clear();
+	}
+
 	bool Shader::LoadFromFile(const std::string& filepath) {
 		this->filePath = filepath;
-		std::ifstream file(filepath, std::ios::in | std::ios::binary);
-		if (!file.is_open()) {
-			spdlog::error("Failed to open shader file: {}", filepath);
+		this->includedFiles.clear();
+
+		std::string processedSource = loadShaderSourceInternal(filepath, this->includedFiles);
+		if (processedSource.empty()) {
+			spdlog::error("Failed to load or process shader file: {}", filepath);
 			return false;
 		}
 
-		std::stringstream buffer;
-		buffer << file.rdbuf();
-		sourceCode = buffer.str();
+		this->sourceCode = processedSource;
 		return true;
 	}
 
@@ -48,11 +249,13 @@ namespace brassica {
 		createInfo.setCodeSize(spirvCode.size() * sizeof(uint32_t));
 		createInfo.setPCode(spirvCode.data());
 
-		try {
-			shaderModule = device.createShaderModule(createInfo);
-		} catch (const vk::SystemError& err) {
-			spdlog::error("Failed to create Vulkan shader module for {}: {}", name, err.what());
-			return false;
+		if (device) {
+			try {
+				shaderModule = device.createShaderModule(createInfo);
+			} catch (const vk::SystemError& err) {
+				spdlog::error("Failed to create Vulkan shader module for {}: {}", name, err.what());
+				return false;
+			}
 		}
 
 		return true;
@@ -71,15 +274,12 @@ namespace brassica {
 			return false;
 		}
 
-		std::ifstream file(filePath, std::ios::in | std::ios::binary);
-		if (!file.is_open()) {
-			spdlog::error("Failed to open shader file for recompile: {}", filePath);
+		std::set<std::string> newIncludedFiles;
+		std::string newSource = loadShaderSourceInternal(filePath, newIncludedFiles);
+		if (newSource.empty()) {
+			spdlog::error("Failed to load shader file for recompile: {}", filePath);
 			return false;
 		}
-
-		std::stringstream buffer;
-		buffer << file.rdbuf();
-		std::string newSource = buffer.str();
 
 		shaderc::Compiler       compiler;
 		shaderc::CompileOptions options;
@@ -100,15 +300,18 @@ namespace brassica {
 		createInfo.setPCode(newSpirv.data());
 
 		vk::ShaderModule newModule{nullptr};
-		try {
-			newModule = device.createShaderModule(createInfo);
-		} catch (const vk::SystemError& err) {
-			spdlog::error("Failed to create Vulkan shader module during recompile for {}: {}", filePath, err.what());
-			return false;
+		if (device) {
+			try {
+				newModule = device.createShaderModule(createInfo);
+			} catch (const vk::SystemError& err) {
+				spdlog::error("Failed to create Vulkan shader module during recompile for {}: {}", filePath, err.what());
+				return false;
+			}
 		}
 
 		Destroy(device);
 		sourceCode = std::move(newSource);
+		includedFiles = std::move(newIncludedFiles);
 		spirvCode = std::move(newSpirv);
 		shaderModule = newModule;
 		return true;

@@ -1,6 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <filesystem>
+#include <fstream>
+
 #include "Shader.hpp"
 #include "passes/RenderResources.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -89,6 +92,79 @@ void main() {
 	CHECK(result.GetCompilationStatus() == shaderc_compilation_status_success);
 	std::vector<uint32_t> spirv(result.cbegin(), result.cend());
 	CHECK(!spirv.empty());
+}
+
+TEST_CASE("Shader Constants Registration") {
+	brassica::Shader::ClearConstants();
+	brassica::Shader::RegisterConstant("MAX_LIGHTS", "128");
+	brassica::Shader::RegisterConstant("SCALE", 4.5f);
+
+	auto& replacements = brassica::Shader::GetReplacements();
+	CHECK(replacements["[[MAX_LIGHTS]]"] == "128");
+	CHECK(!replacements["[[SCALE]]"].empty());
+
+	brassica::Shader::ClearConstants();
+	CHECK(brassica::Shader::GetReplacements().empty());
+}
+
+TEST_CASE("Shader Recursive Include Processing, Guards, Comments, and Interpolation") {
+	std::filesystem::path testDir = std::filesystem::current_path() / "test_includes_dir";
+	std::filesystem::create_directories(testDir);
+
+	std::filesystem::path incCommon = testDir / "inc_common.glsl";
+	{
+		std::ofstream out(incCommon);
+		out << "vec3 getConstantColor() { return vec3(1.0, 0.0, 0.0); }\n";
+	}
+
+	std::filesystem::path incHelper = testDir / "inc_helper.glsl";
+	{
+		std::ofstream out(incHelper);
+		out << "#include \"inc_common.glsl\"\n";
+		out << "float getFactor() { return [[FACTOR_VAL]]; }\n";
+	}
+
+	std::filesystem::path mainVert = testDir / "main_test.vert";
+	{
+		std::ofstream out(mainVert);
+		out << "#version 460\n";
+		out << "#include \"inc_common.glsl\"\n";
+		out << "#include \"inc_helper.glsl\"\n";
+		out << "void main() { vec3 c = getConstantColor(); float f = getFactor(); }\n";
+	}
+
+	brassica::Shader::ClearConstants();
+	brassica::Shader::RegisterConstant("FACTOR_VAL", "2.5");
+
+	brassica::Shader shader;
+	REQUIRE(shader.LoadFromFile(mainVert.string()));
+
+	std::string source = shader.GetSource();
+
+	// Check #version and stage define
+	CHECK(source.find("#version 460") != std::string::npos);
+	CHECK(source.find("#define VERTEX_SHADER") != std::string::npos);
+
+	// Check comment indicators
+	CHECK(source.find("//START ") != std::string::npos);
+	CHECK(source.find("//END ") != std::string::npos);
+
+	// Check variable interpolation
+	CHECK(source.find("2.5") != std::string::npos);
+	CHECK(source.find("[[FACTOR_VAL]]") == std::string::npos);
+
+	// Check single inclusion rule: vec3 getConstantColor() definition should appear coarse-grained exactly once
+	size_t pos1 = source.find("vec3 getConstantColor()");
+	CHECK(pos1 != std::string::npos);
+	size_t pos2 = source.find("vec3 getConstantColor()", pos1 + 1);
+	CHECK(pos2 == std::string::npos);
+
+	// Check tracked included files
+	const auto& incFiles = shader.GetIncludedFiles();
+	CHECK(incFiles.size() == 3);
+
+	brassica::Shader::ClearConstants();
+	std::filesystem::remove_all(testDir);
 }
 
 TEST_CASE("GLSL 4.6 Mesh Shader Compilation with Shaderc") {
