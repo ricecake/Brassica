@@ -43,7 +43,7 @@ bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 		float len = length(planes[i].xyz);
 		vec4 normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
 
-		if (dot(normPlane.xyz, pVertex) + normPlane.w < -1.0) {
+		if (dot(normPlane.xyz, pVertex) + normPlane.w < 0.0) {
 			return false;
 		}
 	}
@@ -63,8 +63,9 @@ void main() {
 		uint col = meshletID % meshletsPerRow;
 
 		float meshletSize = 32.0; // 32 world units base size per meshlet
-		vec3 minB = vec3((float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -10.0, (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
-		vec3 maxB = minB + vec3(meshletSize, 20.0, meshletSize);
+		vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
+		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -50.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+		vec3 maxB = minB + vec3(meshletSize, 100.0, meshletSize);
 
 		visible = isAABBVisible(minB, maxB, params.viewProj);
 

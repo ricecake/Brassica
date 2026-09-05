@@ -636,7 +636,7 @@ namespace brassica {
 		TerrainPushConstants terrainPush{};
 		terrainPush.viewProj = camera.viewProjMatrix;
 		terrainPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
-		terrainPush.gridParams = glm::uvec4(terrainClipmap.GetNumLODs(), 16, 256, 0);
+		terrainPush.gridParams = glm::uvec4(terrainClipmap.GetNumLODs(), 64, 4096, 0);
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
 		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], activeFrame);

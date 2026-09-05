@@ -188,8 +188,8 @@ namespace brassica {
 			vk::PipelineRasterizationStateCreateInfo rasterizer{};
 			rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 			rasterizer.setLineWidth(1.0f);
-			rasterizer.setCullMode(vk::CullModeFlagBits::eNone); // Render terrain double-sided / front
-			rasterizer.setFrontFace(vk::FrontFace::eCounterClockwise);
+			rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
+			rasterizer.setFrontFace(vk::FrontFace::eClockwise);
 
 			vk::PipelineMultisampleStateCreateInfo multisampling{};
 			multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);

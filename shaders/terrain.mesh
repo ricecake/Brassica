@@ -53,7 +53,8 @@ void main() {
 	uint col = meshletID % meshletsPerRow;
 
 	float meshletSize = 32.0;
-	vec3 meshletMin = vec3((float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+	vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
+	vec3 meshletMin = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
 
 	vec2 localPos = vec2(float(lx) / 7.0, float(ly) / 7.0) * meshletSize;
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);

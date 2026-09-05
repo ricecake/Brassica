@@ -71,6 +71,46 @@ TEST_CASE("Terrain Clipmap Generation and Level Scaling") {
 	CHECK(height <= 10.0f);
 }
 
+TEST_CASE("Top Plane Frustum Culling and Terrain Elevation") {
+	glm::vec3 cameraPos(0.0f, 15.0f, 30.0f);
+	glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 3000.0f);
+	proj[1][1] *= -1.0f; // Vulkan inverted Y
+	glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, -50.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+	glm::mat4 viewProj = proj * view;
+
+	auto frustumPlanes = brassica::AABB::ExtractFrustumPlanes(viewProj);
+
+	// AABB in front of camera at elevation [ -10, 10 ]
+	brassica::AABB elevatedTerrain(glm::vec3(-16.0f, -10.0f, -100.0f), glm::vec3(16.0f, 10.0f, -68.0f));
+	CHECK(elevatedTerrain.IntersectsFrustum(frustumPlanes));
+
+	// AABB far above top frustum plane should be culled
+	brassica::AABB wayAbove(glm::vec3(-16.0f, 500.0f, -100.0f), glm::vec3(16.0f, 600.0f, -68.0f));
+	CHECK_FALSE(wayAbove.IntersectsFrustum(frustumPlanes));
+}
+
+TEST_CASE("Long Distance Terrain Meshlet Grid Snapping and Coverage") {
+	float meshletSize = 32.0f;
+	glm::vec3 cameraPos(1234.5f, 20.0f, -567.8f);
+
+	glm::vec2 cameraSnap = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / meshletSize) * meshletSize;
+
+	// Grid should snap to multi-units of meshletSize (32.0f)
+	CHECK(std::fmod(cameraSnap.x, meshletSize) == doctest::Approx(0.0f));
+	CHECK(std::fmod(cameraSnap.y, meshletSize) == doctest::Approx(0.0f));
+
+	uint32_t meshletsPerRow = 64;
+	float halfExtent = (static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize; // 1024 world units
+
+	glm::vec3 gridMin(cameraSnap.x - halfExtent, -50.0f, cameraSnap.y - halfExtent);
+	glm::vec3 gridMax(cameraSnap.x + halfExtent, 50.0f, cameraSnap.y + halfExtent);
+
+	brassica::AABB gridAABB(gridMin, gridMax);
+
+	// Camera position should be well inside the grid's XZ extents
+	CHECK(gridAABB.DistanceToPoint(cameraPos) == doctest::Approx(0.0f));
+}
+
 TEST_CASE("AsyncTerrainUploader Initial State") {
 	brassica::AsyncTerrainUploader uploader;
 	CHECK_FALSE(uploader.HasInFlightUploads());
