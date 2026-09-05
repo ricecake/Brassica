@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -9,6 +10,7 @@
 #include "GLFW/glfw3.h"
 #include <random>
 
+#include "InputHandler.hpp"
 #include "passes/GradientPass.hpp"
 #include "passes/MeshCubePass.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -44,6 +46,31 @@ namespace brassica {
 
 		ShaderWatcher& GetShaderWatcher() { return shaderWatcher; }
 
+		void SetFov(float fov) { cameraFov = fov; }
+		float GetFov() const { return cameraFov; }
+
+		void SetInputHandler(std::shared_ptr<IInputHandler> handler) {
+			inputHandler = std::move(handler);
+		}
+
+		template <InputHandlerConcept T, typename... Args>
+		void SetInputHandler(Args&&... args) {
+			if constexpr (std::derived_from<T, IInputHandler>) {
+				inputHandler = std::make_shared<T>(std::forward<Args>(args)...);
+			} else {
+				inputHandler = std::make_shared<InputHandlerAdapter<T>>(T(std::forward<Args>(args)...));
+			}
+		}
+
+		std::shared_ptr<IInputHandler> GetInputHandler() const { return inputHandler; }
+
+		template <InputHandlerConcept T, typename... Args>
+		static void SetDefaultInputHandlerType(Args&&... args) {
+			brassica::SetDefaultInputHandlerType<T>(std::forward<Args>(args)...);
+		}
+
+		void OnFramebufferResize(int width, int height);
+
 	private:
 		void InitWindow();
 		bool InitVulkan();
@@ -51,6 +78,7 @@ namespace brassica {
 		void InitCommands();
 		void InitSyncStructures();
 
+		void RecreateSwapchain();
 		void DrawFrame();
 
 		GLFWwindow*                   window{nullptr};
@@ -70,6 +98,11 @@ namespace brassica {
 		vkb::Swapchain             vkbSwapchain;
 		std::vector<vk::Image>     swapchainImages;
 		std::vector<vk::ImageView> swapchainImageViews;
+
+		bool  windowResized{false};
+		float cameraFov{1.2f};
+
+		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
 		std::unique_ptr<GradientPass> gradientPass;
 		std::unique_ptr<MeshCubePass> meshCubePass;
