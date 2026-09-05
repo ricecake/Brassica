@@ -136,7 +136,7 @@ namespace brassica {
 		shaderWatcher.WatchDirectory("shaders");
 
 		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher);
-		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR8G8B8A8Unorm, &shaderWatcher);
+		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher);
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 
 		taskScheduler.Initialize();

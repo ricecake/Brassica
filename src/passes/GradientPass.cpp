@@ -33,7 +33,7 @@ namespace brassica {
 					"GradientBackground",
 					FrameGraphTexture2D::Desc{
 						.extent = extent,
-						.format = vk::Format::eR8G8B8A8Unorm,
+						.format = vk::Format::eR16G16B16A16Sfloat,
 						.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
 					}
 				);
