@@ -368,7 +368,7 @@ namespace brassica {
 		layoutBinding.setBinding(0);
 		layoutBinding.setDescriptorType(vk::DescriptorType::eUniformBuffer);
 		layoutBinding.setDescriptorCount(1);
-		layoutBinding.setStageFlags(vk::ShaderStageFlagBits::eAllGraphics | vk::ShaderStageFlagBits::eCompute);
+		layoutBinding.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(layoutBinding);

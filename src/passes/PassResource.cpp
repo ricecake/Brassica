@@ -110,14 +110,16 @@ namespace brassica {
 		if (!context) return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
-		if (imageView) {
-			rc.device.destroyImageView(imageView);
-			imageView = nullptr;
-		}
-		if (image && allocation) {
-			vmaDestroyImage(rc.allocator, image, allocation);
-			image = nullptr;
-			allocation = VK_NULL_HANDLE;
+		if (allocation != VK_NULL_HANDLE) {
+			if (imageView) {
+				rc.device.destroyImageView(imageView);
+				imageView = nullptr;
+			}
+			if (image) {
+				vmaDestroyImage(rc.allocator, image, allocation);
+				image = nullptr;
+				allocation = VK_NULL_HANDLE;
+			}
 		}
 	}
 
