@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
+#include "vk_mem_alloc.h"
 
 #include "fg/Blackboard.hpp"
 #include "fg/FrameGraph.hpp"
@@ -28,7 +29,7 @@ namespace brassica {
 			vk::DescriptorSetLayout globalSet0Layout,
 			ShaderWatcher*          watcher = nullptr
 		);
-		~MeshCubePass() override = default;
+		~MeshCubePass() override;
 
 		void InitPipeline(
 			vk::Instance            instance,
@@ -41,7 +42,8 @@ namespace brassica {
 			FrameGraph&           fg,
 			FrameGraphBlackboard& blackboard,
 			vk::Extent2D          extent,
-			vk::DescriptorSet     globalDescriptorSet
+			vk::DescriptorSet     globalDescriptorSet,
+			VmaAllocator          allocator = VK_NULL_HANDLE
 		);
 
 	private:
@@ -49,6 +51,22 @@ namespace brassica {
 
 		MeshShader     meshShader;
 		FragmentShader fragShader;
+
+		struct TextureResource {
+			vk::Image     image{nullptr};
+			vk::ImageView imageView{nullptr};
+			VmaAllocation allocation{VK_NULL_HANDLE};
+		};
+
+		VmaAllocator    lastAllocator{VK_NULL_HANDLE};
+		vk::Extent2D    currentExtent{0, 0};
+		TextureResource posTex;
+		TextureResource normTex;
+		TextureResource albTex;
+		TextureResource depthTex;
+
+		void CreateGBufferTextures(vk::Extent2D extent, VmaAllocator allocator);
+		void DestroyGBufferTextures(VmaAllocator allocator);
 	};
 
 } // namespace brassica

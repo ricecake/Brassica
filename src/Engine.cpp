@@ -315,8 +315,8 @@ namespace brassica {
 			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
 		}
 
-		gradientPass->RegisterPass(fg, blackboard, extent);
-		meshCubePass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame]);
+		gradientPass->RegisterPass(fg, blackboard, extent, allocator);
+		meshCubePass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], allocator);
 		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame]);
 
 		RenderContext renderCtx{
