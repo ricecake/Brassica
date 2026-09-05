@@ -19,11 +19,25 @@ namespace brassica {
 
 	void DefaultInputHandler::OnKey(GLFWwindow* window, int key, int scancode, int action, int mods) {
 		if (key >= 0 && static_cast<size_t>(key) < keys.size()) {
-			keys[key] = (action != GLFW_RELEASE);
+			if (action == GLFW_PRESS) {
+				keys[key] = true;
+				justPressedKeys[key] = true;
+			} else if (action == GLFW_RELEASE) {
+				keys[key] = false;
+			}
 		}
 		if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && window) {
 			glfwSetWindowShouldClose(window, GLFW_TRUE);
 		}
+	}
+
+	bool DefaultInputHandler::IsKeyJustPressed(int key) {
+		if (key >= 0 && static_cast<size_t>(key) < justPressedKeys.size()) {
+			bool val = justPressedKeys[key];
+			justPressedKeys[key] = false;
+			return val;
+		}
+		return false;
 	}
 
 	void DefaultInputHandler::OnMouseButton(GLFWwindow* window, int button, int action, int mods) {
