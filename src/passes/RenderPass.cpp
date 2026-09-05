@@ -26,7 +26,10 @@ namespace brassica {
 		colorFormat = colorFmt;
 		depthFormat = depthFmt;
 
-		auto buildPipeline = [this, setLayouts, pushConstants]() {
+		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
+		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
+
+		auto buildPipeline = [this]() {
 			if (!vertOrMeshShader || !fragShader) {
 				spdlog::error("Cannot build RenderPass pipeline for {}: shaders not set.", name);
 				return;
@@ -42,8 +45,8 @@ namespace brassica {
 			}
 
 			vk::PipelineLayoutCreateInfo layoutInfo{};
-			layoutInfo.setSetLayouts(setLayouts);
-			layoutInfo.setPushConstantRanges(pushConstants);
+			layoutInfo.setSetLayouts(storedSetLayouts);
+			layoutInfo.setPushConstantRanges(storedPushConstants);
 
 			try {
 				pipelineLayout = device.createPipelineLayout(layoutInfo);
@@ -72,8 +75,8 @@ namespace brassica {
 			rasterizer.setRasterizerDiscardEnable(VK_FALSE);
 			rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 			rasterizer.setLineWidth(1.0f);
-			rasterizer.setCullMode(vk::CullModeFlagBits::eNone);
-			rasterizer.setFrontFace(vk::FrontFace::eClockwise);
+			rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
+			rasterizer.setFrontFace(vk::FrontFace::eCounterClockwise);
 
 			vk::PipelineMultisampleStateCreateInfo multisampling{};
 			multisampling.setSampleShadingEnable(VK_FALSE);

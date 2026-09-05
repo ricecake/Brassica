@@ -24,6 +24,9 @@ namespace brassica {
 		void Dispatch(vk::CommandBuffer cmd, uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1) const;
 
 	protected:
+		std::vector<vk::DescriptorSetLayout> storedSetLayouts;
+		std::vector<vk::PushConstantRange>   storedPushConstants;
+
 		ComputeShader* computeShader{nullptr};
 	};
 

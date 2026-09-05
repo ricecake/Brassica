@@ -20,7 +20,10 @@ namespace brassica {
 		std::span<const vk::PushConstantRange>   pushConstants,
 		ShaderWatcher*                          watcher
 	) {
-		auto buildPipeline = [this, setLayouts, pushConstants]() {
+		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
+		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
+
+		auto buildPipeline = [this]() {
 			if (!computeShader) {
 				spdlog::error("Cannot build ComputePass pipeline for {}: compute shader not set.", name);
 				return;
@@ -36,8 +39,8 @@ namespace brassica {
 			}
 
 			vk::PipelineLayoutCreateInfo layoutInfo{};
-			layoutInfo.setSetLayouts(setLayouts);
-			layoutInfo.setPushConstantRanges(pushConstants);
+			layoutInfo.setSetLayouts(storedSetLayouts);
+			layoutInfo.setPushConstantRanges(storedPushConstants);
 
 			try {
 				pipelineLayout = device.createPipelineLayout(layoutInfo);
