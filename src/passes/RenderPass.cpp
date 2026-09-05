@@ -37,13 +37,14 @@ namespace brassica {
 		ShaderWatcher*                          watcher,
 		bool                                    enableDepthTest,
 		bool                                    enableDepthWrite,
-		vk::CompareOp                           depthCompareOp
+		vk::CompareOp                           depthCompareOp,
+		vk::CullModeFlags                       cullMode
 	) {
 		std::vector<vk::Format> fmts;
 		if (colorFmt != vk::Format::eUndefined) {
 			fmts.push_back(colorFmt);
 		}
-		InitRenderPipeline(fmts, depthFmt, setLayouts, pushConstants, watcher, enableDepthTest, enableDepthWrite, depthCompareOp);
+		InitRenderPipeline(fmts, depthFmt, setLayouts, pushConstants, watcher, enableDepthTest, enableDepthWrite, depthCompareOp, cullMode);
 	}
 
 	void RenderPass::InitRenderPipeline(
@@ -54,13 +55,15 @@ namespace brassica {
 		ShaderWatcher*                          watcher,
 		bool                                    enableDepthTest,
 		bool                                    enableDepthWrite,
-		vk::CompareOp                           depthCompareOp
+		vk::CompareOp                           depthCompareOp,
+		vk::CullModeFlags                       cullMode
 	) {
 		colorFormats.assign(colorFmts.begin(), colorFmts.end());
 		depthFormat = depthFmt;
 		depthTestEnable = enableDepthTest;
 		depthWriteEnable = enableDepthWrite;
 		this->depthCompareOp = depthCompareOp;
+		this->cullMode = cullMode;
 
 		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
 		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
@@ -111,7 +114,7 @@ namespace brassica {
 			rasterizer.setRasterizerDiscardEnable(VK_FALSE);
 			rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 			rasterizer.setLineWidth(1.0f);
-			rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
+			rasterizer.setCullMode(this->cullMode);
 			rasterizer.setFrontFace(vk::FrontFace::eCounterClockwise);
 
 			vk::PipelineMultisampleStateCreateInfo multisampling{};

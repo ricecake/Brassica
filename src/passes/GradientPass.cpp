@@ -40,7 +40,7 @@ namespace brassica {
 		}
 
 		SetShaders(&vertShader, &fragShader);
-		InitRenderPipeline(colorFmt, vk::Format::eUndefined, {}, {}, watcher);
+		InitRenderPipeline(colorFmt, vk::Format::eUndefined, {}, {}, watcher, false, false, vk::CompareOp::eLess, vk::CullModeFlagBits::eNone);
 	}
 
 	FrameGraphResource GradientPass::RegisterPass(

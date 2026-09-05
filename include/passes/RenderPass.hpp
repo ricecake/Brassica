@@ -25,7 +25,8 @@ namespace brassica {
 			ShaderWatcher*                           watcher = nullptr,
 			bool                                     enableDepthTest = false,
 			bool                                     enableDepthWrite = false,
-			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess
+			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess,
+			vk::CullModeFlags                        cullMode = vk::CullModeFlagBits::eBack
 		);
 
 		void InitRenderPipeline(
@@ -36,7 +37,8 @@ namespace brassica {
 			ShaderWatcher*                           watcher = nullptr,
 			bool                                     enableDepthTest = false,
 			bool                                     enableDepthWrite = false,
-			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess
+			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess,
+			vk::CullModeFlags                        cullMode = vk::CullModeFlagBits::eBack
 		);
 
 		// MDI / AZDO execution helpers
@@ -71,6 +73,7 @@ namespace brassica {
 		bool                    depthTestEnable{false};
 		bool                    depthWriteEnable{false};
 		vk::CompareOp           depthCompareOp{vk::CompareOp::eLess};
+		vk::CullModeFlags       cullMode{vk::CullModeFlagBits::eBack};
 
 		std::vector<vk::DescriptorSetLayout> storedSetLayouts;
 		std::vector<vk::PushConstantRange>   storedPushConstants;

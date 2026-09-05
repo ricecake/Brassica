@@ -101,7 +101,7 @@ namespace brassica {
 		SetShaders(&vertShader, &fragShader);
 
 		std::array<vk::DescriptorSetLayout, 2> setLayouts = {globalSet0Layout, gbufferSetLayout};
-		InitRenderPipeline(colorFmt, vk::Format::eUndefined, setLayouts, {}, watcher);
+		InitRenderPipeline(colorFmt, vk::Format::eUndefined, setLayouts, {}, watcher, false, false, vk::CompareOp::eLess, vk::CullModeFlagBits::eNone);
 	}
 
 	FrameGraphResource DeferredPass::RegisterPass(
