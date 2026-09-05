@@ -17,4 +17,7 @@ TEST_CASE("Engine Headless Render Initialization and Execution") {
 
 	engine.Run();
 	engine.Cleanup();
+
+	CHECK(engine.GetValidationErrorCount() == 0);
+	CHECK(engine.GetValidationWarningCount() == 0);
 }

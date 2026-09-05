@@ -24,6 +24,7 @@ jobs:
             build-essential \
             libvulkan-dev \
             vulkan-tools \
+            vulkan-validationlayers \
             mesa-vulkan-drivers \
             libgl1-mesa-dev \
             libx11-dev \

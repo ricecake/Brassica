@@ -7,6 +7,29 @@
 
 namespace brassica {
 
+	VKAPI_ATTR VkBool32 VKAPI_CALL Engine::VulkanDebugCallback(
+		VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+		VkDebugUtilsMessageTypeFlagsEXT             messageType,
+		const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+		void*                                       pUserData
+	) {
+		auto* engine = static_cast<Engine*>(pUserData);
+
+		if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+			spdlog::error("[Vulkan Validation Error] {}", pCallbackData->pMessage);
+			if (engine) engine->validationErrorCount++;
+		} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+			spdlog::warn("[Vulkan Validation Warning] {}", pCallbackData->pMessage);
+			if (engine) engine->validationWarningCount++;
+		} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+			spdlog::info("[Vulkan Validation Info] {}", pCallbackData->pMessage);
+		} else {
+			spdlog::debug("[Vulkan Validation Debug] {}", pCallbackData->pMessage);
+		}
+
+		return VK_FALSE;
+	}
+
 	void Engine::InitWindow() {
 		if (options.headless) {
 			window = nullptr;
@@ -203,7 +226,10 @@ namespace brassica {
 
 		// 1. Instance
 		vkb::InstanceBuilder builder;
-		builder.set_app_name("Brassica").require_api_version(chosenMajor, chosenMinor, 0).use_default_debug_messenger();
+		builder.set_app_name("Brassica")
+			.require_api_version(chosenMajor, chosenMinor, 0)
+			.set_debug_callback(Engine::VulkanDebugCallback)
+			.set_debug_callback_user_data_pointer(this);
 
 		if (options.headless) {
 			builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);

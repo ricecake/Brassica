@@ -68,6 +68,16 @@ namespace brassica {
 
 		const EngineOptions& GetOptions() const { return options; }
 
+		uint32_t GetValidationErrorCount() const { return validationErrorCount; }
+		uint32_t GetValidationWarningCount() const { return validationWarningCount; }
+
+		static VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugCallback(
+			VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+			VkDebugUtilsMessageTypeFlagsEXT             messageType,
+			const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+			void*                                       pUserData
+		);
+
 		vk::Device GetDevice() const { return device; }
 		VmaAllocator GetAllocator() const { return allocator; }
 
@@ -131,6 +141,8 @@ namespace brassica {
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
 		EngineOptions       options{};
+		uint32_t            validationErrorCount{0};
+		uint32_t            validationWarningCount{0};
 		ShaderWatcher       shaderWatcher;
 		enki::TaskScheduler taskScheduler;
 	};
