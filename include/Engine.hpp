@@ -71,6 +71,7 @@ namespace brassica {
 		vkb::Swapchain             vkbSwapchain;
 		std::vector<vk::Image>     swapchainImages;
 		std::vector<vk::ImageView> swapchainImageViews;
+		std::vector<vk::Semaphore> swapchainRenderSemaphores;
 
 		std::unique_ptr<GradientPass> gradientPass;
 		std::unique_ptr<MeshCubePass> meshCubePass;

@@ -16,6 +16,12 @@ namespace brassica {
 
 	RenderPass::~RenderPass() {
 		DestroyPipeline();
+		if (vertOrMeshShader && device) {
+			vertOrMeshShader->Destroy(device);
+		}
+		if (fragShader && device) {
+			fragShader->Destroy(device);
+		}
 	}
 
 	void RenderPass::SetShaders(GraphicsShader* vertexOrMesh, GraphicsShader* fragment) {

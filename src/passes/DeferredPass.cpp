@@ -40,19 +40,24 @@ namespace brassica {
 		// Pool
 		vk::DescriptorPoolSize poolSize{};
 		poolSize.setType(vk::DescriptorType::eCombinedImageSampler);
-		poolSize.setDescriptorCount(4);
+		poolSize.setDescriptorCount(4 * FRAME_OVERLAP);
 
 		vk::DescriptorPoolCreateInfo poolInfo{};
-		poolInfo.setMaxSets(1);
+		poolInfo.setMaxSets(FRAME_OVERLAP);
 		poolInfo.setPoolSizes(poolSize);
 		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
 		descriptorPool = dev.createDescriptorPool(poolInfo);
 
-		// Allocate Set
+		// Allocate Sets
+		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, gbufferSetLayout);
 		vk::DescriptorSetAllocateInfo allocInfo{};
 		allocInfo.setDescriptorPool(descriptorPool);
-		allocInfo.setSetLayouts(gbufferSetLayout);
-		gbufferDescriptorSet = dev.allocateDescriptorSets(allocInfo).front();
+		allocInfo.setSetLayouts(layouts);
+
+		auto allocatedSets = dev.allocateDescriptorSets(allocInfo);
+		for (size_t i = 0; i < FRAME_OVERLAP; ++i) {
+			gbufferDescriptorSets[i] = allocatedSets[i];
+		}
 
 		// Sampler
 		vk::SamplerCreateInfo samplerInfo{};
@@ -103,7 +108,8 @@ namespace brassica {
 		FrameGraph&           fg,
 		FrameGraphBlackboard& blackboard,
 		vk::Extent2D          extent,
-		vk::DescriptorSet     globalDescriptorSet
+		vk::DescriptorSet     globalDescriptorSet,
+		uint32_t              activeFrame
 	) {
 		const auto& gbufferData = blackboard.get<GBufferData>();
 		const auto& gradientData = blackboard.get<GradientPassData>();
@@ -120,7 +126,7 @@ namespace brassica {
 				data.target = builder.write(swapchainData.target, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				builder.setSideEffect();
 			},
-			[this, extent, globalDescriptorSet, gbufferData, gradientData](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
+			[this, extent, globalDescriptorSet, gbufferData, gradientData, activeFrame](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
 				auto& posTex = resources.get<FrameGraphTexture2D>(gbufferData.positionTarget);
@@ -128,6 +134,8 @@ namespace brassica {
 				auto& albTex = resources.get<FrameGraphTexture2D>(gbufferData.albedoTarget);
 				auto& bgTex = resources.get<FrameGraphTexture2D>(gradientData.target);
 				auto& targetTex = resources.get<FrameGraphTexture2D>(data.target);
+
+				vk::DescriptorSet currentGbufferSet = gbufferDescriptorSets[activeFrame % FRAME_OVERLAP];
 
 				std::array<vk::DescriptorImageInfo, 4> imageInfos{};
 				imageInfos[0].setSampler(sampler).setImageView(posTex.imageView).setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -137,7 +145,7 @@ namespace brassica {
 
 				std::array<vk::WriteDescriptorSet, 4> descriptorWrites{};
 				for (uint32_t i = 0; i < 4; ++i) {
-					descriptorWrites[i].setDstSet(gbufferDescriptorSet);
+					descriptorWrites[i].setDstSet(currentGbufferSet);
 					descriptorWrites[i].setDstBinding(i);
 					descriptorWrites[i].setDstArrayElement(0);
 					descriptorWrites[i].setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
@@ -158,7 +166,7 @@ namespace brassica {
 				if (globalDescriptorSet) {
 					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, globalDescriptorSet, nullptr);
 				}
-				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, gbufferDescriptorSet, nullptr);
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, currentGbufferSet, nullptr);
 
 				cmd.draw(3, 1, 0, 0);
 

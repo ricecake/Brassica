@@ -37,17 +37,19 @@ namespace brassica {
 			FrameGraph&           fg,
 			FrameGraphBlackboard& blackboard,
 			vk::Extent2D          extent,
-			vk::DescriptorSet     globalDescriptorSet
+			vk::DescriptorSet     globalDescriptorSet,
+			uint32_t              activeFrame = 0
 		);
 
 	private:
 		VertexShader   vertShader;
 		FragmentShader fragShader;
 
-		vk::DescriptorSetLayout gbufferSetLayout{nullptr};
-		vk::DescriptorPool      descriptorPool{nullptr};
-		vk::DescriptorSet       gbufferDescriptorSet{nullptr};
-		vk::Sampler             sampler{nullptr};
+		static constexpr uint32_t FRAME_OVERLAP = 2;
+		vk::DescriptorSetLayout   gbufferSetLayout{nullptr};
+		vk::DescriptorPool        descriptorPool{nullptr};
+		vk::DescriptorSet         gbufferDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
+		vk::Sampler               sampler{nullptr};
 
 		void CreateDescriptorResources(vk::Device device);
 		void CleanupDescriptorResources();

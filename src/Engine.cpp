@@ -36,6 +36,16 @@ namespace brassica {
 
 		auto raw_image_views = vkbSwapchain.get_image_views().value();
 		swapchainImageViews.assign(raw_image_views.begin(), raw_image_views.end());
+
+		for (auto sem : swapchainRenderSemaphores) {
+			if (sem) device.destroySemaphore(sem);
+		}
+		swapchainRenderSemaphores.clear();
+
+		vk::SemaphoreCreateInfo semaphoreCreateInfo{};
+		for (size_t i = 0; i < swapchainImages.size(); i++) {
+			swapchainRenderSemaphores.push_back(device.createSemaphore(semaphoreCreateInfo));
+		}
 	}
 
 	void Engine::InitCommands() {
@@ -62,7 +72,6 @@ namespace brassica {
 		for (int i = 0; i < FRAME_OVERLAP; i++) {
 			frames[i].renderFence = device.createFence(fenceCreateInfo);
 			frames[i].swapchainSemaphore = device.createSemaphore(semaphoreCreateInfo);
-			frames[i].renderSemaphore = device.createSemaphore(semaphoreCreateInfo);
 		}
 	}
 
@@ -92,9 +101,13 @@ namespace brassica {
 			for (int i = 0; i < FRAME_OVERLAP; i++) {
 				device.destroyFence(frames[i].renderFence);
 				device.destroySemaphore(frames[i].swapchainSemaphore);
-				device.destroySemaphore(frames[i].renderSemaphore);
 				device.destroyCommandPool(frames[i].commandPool);
 			}
+
+			for (auto sem : swapchainRenderSemaphores) {
+				if (sem) device.destroySemaphore(sem);
+			}
+			swapchainRenderSemaphores.clear();
 
 			for (auto view : swapchainImageViews) {
 				device.destroyImageView(view);
@@ -317,7 +330,7 @@ namespace brassica {
 
 		gradientPass->RegisterPass(fg, blackboard, extent, allocator);
 		meshCubePass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], allocator);
-		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame]);
+		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], activeFrame);
 
 		RenderContext renderCtx{
 			.commandBuffer = frame.commandBuffer,
@@ -328,6 +341,21 @@ namespace brassica {
 		fg.compile();
 		vk::CommandBuffer rawCmd = frame.commandBuffer;
 		fg.execute(&rawCmd, &renderCtx);
+
+		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation
+		vk::ImageMemoryBarrier2 presentBarrier{};
+		presentBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+		presentBarrier.setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite);
+		presentBarrier.setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe);
+		presentBarrier.setDstAccessMask(vk::AccessFlagBits2::eNone);
+		presentBarrier.setOldLayout(vk::ImageLayout::eColorAttachmentOptimal);
+		presentBarrier.setNewLayout(vk::ImageLayout::ePresentSrcKHR);
+		presentBarrier.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+		presentBarrier.setImage(swapchainImages[swapchainImageIndex]);
+
+		vk::DependencyInfo presentDepInfo{};
+		presentDepInfo.setImageMemoryBarriers(presentBarrier);
+		frame.commandBuffer.pipelineBarrier2(presentDepInfo);
 
 		frame.commandBuffer.end();
 
@@ -340,7 +368,7 @@ namespace brassica {
 		waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 
 		vk::SemaphoreSubmitInfo signalInfo{};
-		signalInfo.setSemaphore(frame.renderSemaphore);
+		signalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
 		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
 
 		vk::SubmitInfo2 submitInfo{};
@@ -352,7 +380,7 @@ namespace brassica {
 
 		// 5. Present
 		vk::PresentInfoKHR presentInfo{};
-		presentInfo.setWaitSemaphores(frame.renderSemaphore);
+		presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
 		vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
 		presentInfo.setSwapchains(swapchain);
 		presentInfo.setImageIndices(swapchainImageIndex);
