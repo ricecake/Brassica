@@ -39,7 +39,8 @@ namespace brassica {
 		StorageRead = 1 << 1,
 		StorageWrite = 1 << 2,
 		TransferSrc = 1 << 3,
-		TransferDst = 1 << 4
+		TransferDst = 1 << 4,
+		Indirect = 1 << 5
 	};
 
 	inline BufferUsage operator|(BufferUsage a, BufferUsage b) {

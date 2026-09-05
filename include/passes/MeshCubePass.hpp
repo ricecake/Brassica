@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
+#include "vk_mem_alloc.h"
 
 #include "fg/Blackboard.hpp"
 #include "fg/FrameGraph.hpp"
@@ -14,7 +15,10 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct MeshCubePassData {
-		FrameGraphResource target;
+		FrameGraphResource positionTarget;
+		FrameGraphResource normalTarget;
+		FrameGraphResource albedoTarget;
+		FrameGraphResource depthTarget;
 	};
 
 	class MeshCubePass : public RenderPass {
@@ -23,24 +27,23 @@ namespace brassica {
 			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
-			vk::Format              colorFormat,
 			ShaderWatcher*          watcher = nullptr
 		);
-		~MeshCubePass() override = default;
+		~MeshCubePass() override;
 
 		void InitPipeline(
 			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
-			vk::Format              colorFormat,
 			ShaderWatcher*          watcher = nullptr
 		);
 
-		FrameGraphResource RegisterPass(
+		void RegisterPass(
 			FrameGraph&           fg,
 			FrameGraphBlackboard& blackboard,
 			vk::Extent2D          extent,
-			vk::DescriptorSet     globalDescriptorSet
+			vk::DescriptorSet     globalDescriptorSet,
+			VmaAllocator          allocator = VK_NULL_HANDLE
 		);
 
 	private:
@@ -48,6 +51,22 @@ namespace brassica {
 
 		MeshShader     meshShader;
 		FragmentShader fragShader;
+
+		struct TextureResource {
+			vk::Image     image{nullptr};
+			vk::ImageView imageView{nullptr};
+			VmaAllocation allocation{VK_NULL_HANDLE};
+		};
+
+		VmaAllocator    lastAllocator{VK_NULL_HANDLE};
+		vk::Extent2D    currentExtent{0, 0};
+		TextureResource posTex;
+		TextureResource normTex;
+		TextureResource albTex;
+		TextureResource depthTex;
+
+		void CreateGBufferTextures(vk::Extent2D extent, VmaAllocator allocator);
+		void DestroyGBufferTextures(VmaAllocator allocator);
 	};
 
 } // namespace brassica

@@ -9,6 +9,7 @@
 #include "GLFW/glfw3.h"
 #include <random>
 
+#include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
 #include "passes/MeshCubePass.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -70,9 +71,11 @@ namespace brassica {
 		vkb::Swapchain             vkbSwapchain;
 		std::vector<vk::Image>     swapchainImages;
 		std::vector<vk::ImageView> swapchainImageViews;
+		std::vector<vk::Semaphore> swapchainRenderSemaphores;
 
 		std::unique_ptr<GradientPass> gradientPass;
 		std::unique_ptr<MeshCubePass> meshCubePass;
+		std::unique_ptr<DeferredPass> deferredPass;
 
 		uint32_t      globalSeed{0};
 		std::mt19937  rng;
