@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "vulkan/vulkan.hpp"
@@ -19,6 +20,37 @@
 
 namespace brassica {
 
+	struct EngineOptions {
+		bool     headless{false};
+		uint32_t maxFrames{0};
+
+		static EngineOptions FromArgs(int argc, char** argv) {
+			EngineOptions opts;
+			for (int i = 1; i < argc; ++i) {
+				std::string arg = argv[i];
+				if (arg == "--headless" || arg == "-headless") {
+					opts.headless = true;
+					if (i + 1 < argc && argv[i + 1][0] != '-') {
+						try {
+							opts.maxFrames = static_cast<uint32_t>(std::stoul(argv[i + 1]));
+							i++;
+						} catch (...) {
+						}
+					}
+				} else if (arg == "--frames" || arg == "-frames") {
+					if (i + 1 < argc) {
+						try {
+							opts.maxFrames = static_cast<uint32_t>(std::stoul(argv[i + 1]));
+							i++;
+						} catch (...) {
+						}
+					}
+				}
+			}
+			return opts;
+		}
+	};
+
 	// Double-buffering data to prevent CPU/GPU stalling
 	struct FrameData {
 		vk::CommandPool   commandPool;
@@ -30,9 +62,21 @@ namespace brassica {
 
 	class Engine {
 	public:
-		void Init();
+		void Init(const EngineOptions& opts = {});
 		void Run();
 		void Cleanup();
+
+		const EngineOptions& GetOptions() const { return options; }
+
+		uint32_t GetValidationErrorCount() const { return validationErrorCount; }
+		uint32_t GetValidationWarningCount() const { return validationWarningCount; }
+
+		static VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugCallback(
+			VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+			VkDebugUtilsMessageTypeFlagsEXT             messageType,
+			const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+			void*                                       pUserData
+		);
 
 		vk::Device GetDevice() const { return device; }
 		VmaAllocator GetAllocator() const { return allocator; }
@@ -96,6 +140,9 @@ namespace brassica {
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
+		EngineOptions       options{};
+		uint32_t            validationErrorCount{0};
+		uint32_t            validationWarningCount{0};
 		ShaderWatcher       shaderWatcher;
 		enki::TaskScheduler taskScheduler;
 	};

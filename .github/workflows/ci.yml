@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            libvulkan-dev \
+            vulkan-tools \
+            vulkan-validationlayers \
+            mesa-vulkan-drivers \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev
+
+      - name: Sync shaderc dependencies
+        run: |
+          cd external/shaderc
+          python3 utils/git-sync-deps
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+
+      - name: Build tests and executables
+        run: |
+          cmake --build build --target tests -j$(nproc)
+          cmake --build build -j$(nproc)
+
+      - name: Run CTest
+        run: |
+          ctest --test-dir build --output-on-failure
+
+      - name: Run Sandbox App in Headless Mode
+        run: |
+          ./build/bin/sandbox --headless 10
