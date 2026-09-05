@@ -1,6 +1,7 @@
 #include "Engine.hpp"
 
 #include <cstring>
+#include <filesystem>
 #include "fg/Blackboard.hpp"
 #include "spdlog/spdlog.h"
 
@@ -13,7 +14,34 @@ namespace brassica {
 		}
 	}
 
+	VKAPI_ATTR VkBool32 VKAPI_CALL Engine::VulkanDebugCallback(
+		VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+		VkDebugUtilsMessageTypeFlagsEXT             messageType,
+		const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+		void*                                       pUserData
+	) {
+		auto* engine = static_cast<Engine*>(pUserData);
+
+		if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+			spdlog::error("[Vulkan Validation Error] {}", pCallbackData->pMessage);
+			if (engine) engine->validationErrorCount++;
+		} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+			spdlog::warn("[Vulkan Validation Warning] {}", pCallbackData->pMessage);
+			if (engine) engine->validationWarningCount++;
+		} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+			spdlog::info("[Vulkan Validation Info] {}", pCallbackData->pMessage);
+		} else {
+			spdlog::debug("[Vulkan Validation Debug] {}", pCallbackData->pMessage);
+		}
+
+		return VK_FALSE;
+	}
+
 	void Engine::InitWindow() {
+		if (options.headless) {
+			window = nullptr;
+			return;
+		}
 		glfwInit();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -218,11 +246,12 @@ namespace brassica {
 		}
 	}
 
-	void Engine::Init() {
+	void Engine::Init(const EngineOptions& opts) {
 		if (!inputHandler) {
 			inputHandler = CreateDefaultInputHandler();
 		}
 
+		options = opts;
 		InitWindow();
 		if (!InitVulkan()) {
 			spdlog::error("Vulkan initialization failed; engine cannot start.");
@@ -238,14 +267,24 @@ namespace brassica {
 
 		InitGlobalUBO();
 
-		shaderWatcher.WatchDirectory("shaders");
+		std::string shaderDir = "shaders";
+		if (!std::filesystem::exists(shaderDir)) {
+			if (std::filesystem::exists("bin/shaders")) {
+				shaderDir = "bin/shaders";
+			} else if (std::filesystem::exists(std::string(BRASSICA_BUILD_DIR) + "/bin/shaders")) {
+				shaderDir = std::string(BRASSICA_BUILD_DIR) + "/bin/shaders";
+			} else if (std::filesystem::exists(std::string(BRASSICA_BUILD_DIR) + "/../shaders")) {
+				shaderDir = std::string(BRASSICA_BUILD_DIR) + "/../shaders";
+			}
+		}
+		shaderWatcher.WatchDirectory(shaderDir);
 
 		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher);
 		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher);
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 
 		taskScheduler.Initialize();
-		spdlog::info("Brassica Engine Initialized.");
+		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
 	}
 
 	bool Engine::InitVulkan() {
@@ -279,7 +318,14 @@ namespace brassica {
 
 		// 1. Instance
 		vkb::InstanceBuilder builder;
-		builder.set_app_name("Brassica").require_api_version(chosenMajor, chosenMinor, 0).use_default_debug_messenger();
+		builder.set_app_name("Brassica")
+			.require_api_version(chosenMajor, chosenMinor, 0)
+			.set_debug_callback(Engine::VulkanDebugCallback)
+			.set_debug_callback_user_data_pointer(this);
+
+		if (options.headless) {
+			builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+		}
 
 		auto inst_res = builder.request_validation_layers(true).build();
 		if (!inst_res) {
@@ -294,9 +340,28 @@ namespace brassica {
 		}
 		instance = vkbInst.instance;
 
-		VkSurfaceKHR c_surface;
-		glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
-		surface = c_surface;
+		if (options.headless) {
+			auto vkCreateHeadlessSurfaceEXT = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+				vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT")
+			);
+			if (!vkCreateHeadlessSurfaceEXT) {
+				spdlog::critical("Failed to load vkCreateHeadlessSurfaceEXT function pointer.");
+				return false;
+			}
+			VkHeadlessSurfaceCreateInfoEXT createInfo{};
+			createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
+			VkResult res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
+			if (res != VK_SUCCESS) {
+				spdlog::critical("Failed to create headless surface: {}", static_cast<int>(res));
+				return false;
+			}
+			surface = c_surface;
+		} else {
+			VkSurfaceKHR c_surface;
+			glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
+			surface = c_surface;
+		}
 
 		// 2. Physical Device (Enable Dynamic Rendering & Sync2)
 		VkPhysicalDeviceVulkan13Features features13{};
@@ -360,7 +425,20 @@ namespace brassica {
 	}
 
 	void Engine::Run() {
-		while (!glfwWindowShouldClose(window)) {
+		if (options.headless || options.maxFrames > 0) {
+			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
+			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
+			for (uint32_t i = 0; i < targetFrames; ++i) {
+				enki::TaskSet frameTask(1, [this](enki::TaskSetPartition range, uint32_t threadnum) { DrawFrame(); });
+
+				taskScheduler.AddTaskSetToPipe(&frameTask);
+				taskScheduler.WaitforTask(&frameTask);
+			}
+			spdlog::info("Completed {} frames.", targetFrames);
+			return;
+		}
+
+		while (window && !glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 
 			// Wrap the frame in an enkiTS task so the main thread remains free

@@ -43,12 +43,30 @@ namespace brassica {
 
 		std::string loadFileRaw(const std::string& path) {
 			std::ifstream file(path, std::ios::in | std::ios::binary);
-			if (!file.is_open()) {
-				return "";
+			if (file.is_open()) {
+				std::stringstream buffer;
+				buffer << file.rdbuf();
+				return buffer.str();
 			}
-			std::stringstream buffer;
-			buffer << file.rdbuf();
-			return buffer.str();
+
+			// Try fallback locations if relative path wasn't found directly
+			std::vector<std::string> fallbacks = {
+				"bin/" + path,
+				std::string(BRASSICA_BUILD_DIR) + "/bin/" + path,
+				std::string(BRASSICA_BUILD_DIR) + "/" + path,
+				std::string(BRASSICA_BUILD_DIR) + "/../" + path
+			};
+
+			for (const auto& fb : fallbacks) {
+				std::ifstream fbFile(fb, std::ios::in | std::ios::binary);
+				if (fbFile.is_open()) {
+					std::stringstream buffer;
+					buffer << fbFile.rdbuf();
+					return buffer.str();
+				}
+			}
+
+			return "";
 		}
 
 		std::string loadShaderSourceInternal(

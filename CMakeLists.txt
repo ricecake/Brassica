@@ -162,9 +162,11 @@ endif()
 
 # Asset Sync Post-Build Rule
 add_custom_command(TARGET brassica POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/assets
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/assets
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
