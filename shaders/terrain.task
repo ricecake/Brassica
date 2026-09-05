@@ -1,0 +1,95 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_KHR_shader_subgroup_ballot : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform FrameUBO {
+	float time;
+	uint  frameIndex;
+	uint  globalSeed;
+	uint  frameRandom;
+} ubo;
+
+layout(push_constant) uniform TerrainPushConstants {
+	mat4  viewProj;
+	vec4  cameraPos; // cameraPos.xyz, cameraPos.w = baseTexelSize
+	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = padding
+} params;
+
+struct TaskPayload {
+	uint meshletIDs[32];
+	uint lodLevels[32];
+};
+
+taskPayloadSharedEXT TaskPayload payload;
+
+// Check AABB against frustum plane
+bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
+	vec4 planes[6];
+	planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]); // Left
+	planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]); // Right
+	planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]); // Bottom
+	planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]); // Top
+	planes[4] = vec4(vp[0][3] + vp[0][2], vp[1][3] + vp[1][2], vp[2][3] + vp[2][2], vp[3][3] + vp[3][2]); // Near
+	planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]); // Far
+
+	for (int i = 0; i < 6; i++) {
+		vec3 pVertex = minB;
+		if (planes[i].x >= 0.0) pVertex.x = maxB.x;
+		if (planes[i].y >= 0.0) pVertex.y = maxB.y;
+		if (planes[i].z >= 0.0) pVertex.z = maxB.z;
+
+		float len = length(planes[i].xyz);
+		vec4 normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
+
+		if (dot(normPlane.xyz, pVertex) + normPlane.w < -1.0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void main() {
+	uint threadID = gl_LocalInvocationID.x;
+	uint meshletID = gl_WorkGroupID.x * 32 + threadID;
+
+	bool visible = false;
+	uint lodLevel = 0;
+
+	if (meshletID < params.gridParams.z) {
+		uint meshletsPerRow = params.gridParams.y;
+		uint row = meshletID / meshletsPerRow;
+		uint col = meshletID % meshletsPerRow;
+
+		float meshletSize = 32.0; // 32 world units base size per meshlet
+		vec3 minB = vec3((float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -10.0, (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+		vec3 maxB = minB + vec3(meshletSize, 20.0, meshletSize);
+
+		visible = isAABBVisible(minB, maxB, params.viewProj);
+
+		if (visible) {
+			vec3 center = (minB + maxB) * 0.5;
+			float dist = distance(center, params.cameraPos.xyz);
+			float baseTexel = params.cameraPos.w;
+			float lod0Dist = baseTexel * 128.0;
+
+			if (dist >= lod0Dist && lod0Dist > 0.0) {
+				lodLevel = uint(clamp(floor(log2(dist / lod0Dist)) + 1.0, 0.0, float(params.gridParams.x - 1)));
+			}
+		}
+	}
+
+	uvec4 ballot = subgroupBallot(visible);
+	uint visibleCount = subgroupBallotBitCount(ballot);
+	uint index = subgroupBallotExclusiveBitCount(ballot);
+
+	if (visible) {
+		payload.meshletIDs[index] = meshletID;
+		payload.lodLevels[index] = lodLevel;
+	}
+
+	if (threadID == 0) {
+		EmitMeshTasksEXT(visibleCount, 1, 1);
+	}
+}
