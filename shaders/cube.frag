@@ -1,9 +1,8 @@
 #version 460
 
-layout(location = 0) out vec4 outColor;
-
-layout(location = 0) in vec4 inColor;
+layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec4 inAlbedo;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
 	float time;
@@ -14,10 +13,12 @@ layout(set = 0, binding = 0) uniform FrameUBO {
 	uint  frameRandom;
 } ubo;
 
-void main() {
-	vec3 lightDir = normalize(vec3(sin(ubo.time), sin(ubo.time * 0.5)*0.5+0.5, -cos(ubo.time)));
-	vec3 norm = normalize(inNormal);
-	float diff = max(dot(norm, lightDir), 0.1);
+layout(location = 0) out vec4 gPosition;
+layout(location = 1) out vec4 gNormal;
+layout(location = 2) out vec4 gAlbedo;
 
-	outColor = vec4(inColor.rgb * diff, 1.0);
+void main() {
+	gPosition = vec4(inPosition, 1.0);
+	gNormal = vec4(normalize(inNormal), 0.0);
+	gAlbedo = inAlbedo;
 }

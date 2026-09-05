@@ -12,21 +12,68 @@ namespace brassica {
 	class RenderPass : public Pass {
 	public:
 		RenderPass(std::string name, vk::Device device, vk::Format colorFormat, vk::Format depthFormat = vk::Format::eUndefined);
+		RenderPass(std::string name, vk::Device device, std::span<const vk::Format> colorFormats, vk::Format depthFormat = vk::Format::eUndefined);
 		~RenderPass() override;
 
 		void SetShaders(GraphicsShader* vertexOrMesh, GraphicsShader* fragment);
 
 		void InitRenderPipeline(
-			vk::Format                        colorFormat,
-			vk::Format                        depthFormat = vk::Format::eUndefined,
+			std::span<const vk::Format>              colorFormats,
+			vk::Format                               depthFormat = vk::Format::eUndefined,
 			std::span<const vk::DescriptorSetLayout> setLayouts = {},
 			std::span<const vk::PushConstantRange>   pushConstants = {},
-			ShaderWatcher*                    watcher = nullptr
+			ShaderWatcher*                           watcher = nullptr,
+			bool                                     enableDepthTest = false,
+			bool                                     enableDepthWrite = false,
+			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess,
+			vk::CullModeFlags                        cullMode = vk::CullModeFlagBits::eBack
 		);
 
+		void InitRenderPipeline(
+			vk::Format                               colorFormat,
+			vk::Format                               depthFormat = vk::Format::eUndefined,
+			std::span<const vk::DescriptorSetLayout> setLayouts = {},
+			std::span<const vk::PushConstantRange>   pushConstants = {},
+			ShaderWatcher*                           watcher = nullptr,
+			bool                                     enableDepthTest = false,
+			bool                                     enableDepthWrite = false,
+			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess,
+			vk::CullModeFlags                        cullMode = vk::CullModeFlagBits::eBack
+		);
+
+		// MDI / AZDO execution helpers
+		void DrawMeshTasksIndirectEXT(
+			vk::CommandBuffer                cmd,
+			vk::Buffer                       buffer,
+			vk::DeviceSize                   offset,
+			uint32_t                         drawCount,
+			uint32_t                         stride,
+			const vk::DispatchLoaderDynamic& dls
+		) const;
+
+		void DrawIndexedIndirect(
+			vk::CommandBuffer cmd,
+			vk::Buffer        buffer,
+			vk::DeviceSize    offset,
+			uint32_t          drawCount,
+			uint32_t          stride
+		) const;
+
+		void DrawIndirect(
+			vk::CommandBuffer cmd,
+			vk::Buffer        buffer,
+			vk::DeviceSize    offset,
+			uint32_t          drawCount,
+			uint32_t          stride
+		) const;
+
 	protected:
-		vk::Format colorFormat{vk::Format::eUndefined};
-		vk::Format depthFormat{vk::Format::eUndefined};
+		std::vector<vk::Format> colorFormats;
+		vk::Format              depthFormat{vk::Format::eUndefined};
+		bool                    depthTestEnable{false};
+		bool                    depthWriteEnable{false};
+		vk::CompareOp           depthCompareOp{vk::CompareOp::eLess};
+		vk::CullModeFlags       cullMode{vk::CullModeFlagBits::eBack};
 
 		std::vector<vk::DescriptorSetLayout> storedSetLayouts;
 		std::vector<vk::PushConstantRange>   storedPushConstants;
