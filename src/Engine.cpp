@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <filesystem>
+#include <glm/gtc/matrix_transform.hpp>
 #include "fg/Blackboard.hpp"
 #include "spdlog/spdlog.h"
 
@@ -202,6 +203,14 @@ namespace brassica {
 				deferredPass.reset();
 			}
 
+			if (terrainPass) {
+				terrainPass->DestroyPipeline();
+				terrainPass.reset();
+			}
+
+			terrainUploader.Cleanup();
+			terrainClipmap.Cleanup();
+
 			if (meshCubePass) {
 				meshCubePass->DestroyPipeline();
 				meshCubePass.reset();
@@ -281,7 +290,18 @@ namespace brassica {
 
 		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher);
 		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher);
+		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher);
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
+
+		terrainClipmap.Init(device, allocator, 4, 0.5f);
+		terrainUploader.Init(device, allocator, graphicsQueueFamily, 8);
+
+		// Async upload initial heightmaps
+		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
+			auto mapData = TerrainClipmap::GenerateSineWaveMap(l, terrainClipmap.GetBaseTexelSize());
+			terrainUploader.UploadLevelAsync(l, mapData, terrainClipmap.GetImage(), TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, graphicsQueue);
+		}
+		terrainPass->UpdateClipmapDescriptor(terrainClipmap.GetImageView(), terrainClipmap.GetSampler());
 
 		taskScheduler.Initialize();
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
@@ -514,7 +534,20 @@ namespace brassica {
 		}
 
 		gradientPass->RegisterPass(fg, blackboard, extent, allocator);
-		meshCubePass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], allocator);
+
+		terrainUploader.Poll();
+
+		glm::mat4 proj = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 500.0f);
+		proj[1][1] *= -1.0f; // Vulkan inverted Y
+		glm::vec3 camPos(0.0f, 15.0f, 30.0f);
+		glm::mat4 view = glm::lookAt(camPos, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+		TerrainPushConstants terrainPush{};
+		terrainPush.viewProj = proj * view;
+		terrainPush.cameraPos = glm::vec4(camPos, terrainClipmap.GetBaseTexelSize());
+		terrainPush.gridParams = glm::uvec4(terrainClipmap.GetNumLODs(), 16, 256, 0);
+
+		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
 		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], activeFrame);
 
 		RenderContext renderCtx{
