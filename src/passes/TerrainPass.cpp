@@ -130,14 +130,16 @@ namespace brassica {
 		DestroyAccelerationStructures();
 
 		// Helper to create Vulkan memory buffer with device address flag
-		auto createBuffer = [this, allocator](vk::DeviceSize size, vk::BufferUsageFlags usage, BufferResource& res) {
+		auto createBuffer = [this, allocator](vk::DeviceSize size, vk::BufferUsageFlags usage, BufferResource& res, bool hostMapped = false) {
 			VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 			bufInfo.size = size;
 			bufInfo.usage = static_cast<VkBufferUsageFlags>(usage | vk::BufferUsageFlagBits::eShaderDeviceAddress);
 
 			VmaAllocationCreateInfo allocInfo{};
 			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-			allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			if (hostMapped) {
+				allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			}
 
 			VkBuffer vkBuf = VK_NULL_HANDLE;
 			VmaAllocationInfo allocResInfo{};
@@ -153,7 +155,7 @@ namespace brassica {
 
 		// 1. Upload AABBs to GPU Buffer
 		vk::DeviceSize aabbBufferSize = sizeof(VkAabbPositionsKHR) * aabbs.size();
-		void* aabbMapped = createBuffer(aabbBufferSize, vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR, aabbBuffer);
+		void* aabbMapped = createBuffer(aabbBufferSize, vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR, aabbBuffer, true);
 		if (aabbMapped) {
 			std::memcpy(aabbMapped, aabbs.data(), aabbBufferSize);
 		}
@@ -186,7 +188,7 @@ namespace brassica {
 			dls
 		);
 
-		createBuffer(blasSizeInfo.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR, blasBuffer);
+		createBuffer(blasSizeInfo.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR, blasBuffer, false);
 
 		vk::AccelerationStructureCreateInfoKHR blasCreateInfo{};
 		blasCreateInfo.setBuffer(blasBuffer.buffer);
@@ -212,7 +214,7 @@ namespace brassica {
 		instanceData.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 		instanceData.accelerationStructureReference = blasAddress;
 
-		void* instMapped = createBuffer(sizeof(VkAccelerationStructureInstanceKHR), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR, instanceBuffer);
+		void* instMapped = createBuffer(sizeof(VkAccelerationStructureInstanceKHR), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR, instanceBuffer, true);
 		if (instMapped) {
 			std::memcpy(instMapped, &instanceData, sizeof(VkAccelerationStructureInstanceKHR));
 		}
@@ -243,7 +245,7 @@ namespace brassica {
 			dls
 		);
 
-		createBuffer(tlasSizeInfo.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR, tlasBuffer);
+		createBuffer(tlasSizeInfo.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR, tlasBuffer, false);
 
 		vk::AccelerationStructureCreateInfoKHR tlasCreateInfo{};
 		tlasCreateInfo.setBuffer(tlasBuffer.buffer);
@@ -253,7 +255,7 @@ namespace brassica {
 
 		// Allocate Scratch Buffer for build commands
 		vk::DeviceSize scratchSize = std::max(blasSizeInfo.buildScratchSize, tlasSizeInfo.buildScratchSize);
-		createBuffer(scratchSize, vk::BufferUsageFlagBits::eStorageBuffer, scratchBuffer);
+		createBuffer(scratchSize, vk::BufferUsageFlagBits::eStorageBuffer, scratchBuffer, false);
 
 		// Execute Acceleration Structure Build Commands using Command Pool / Queue
 		vk::CommandPoolCreateInfo poolInfo{};

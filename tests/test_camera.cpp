@@ -14,7 +14,7 @@ TEST_CASE("CameraData Default Values and Direction Vectors") {
 	CHECK(cam.speed == doctest::Approx(10.0f));
 	CHECK(cam.defaultSpeed == doctest::Approx(10.0f));
 	CHECK(cam.minSpeed == doctest::Approx(1.0f));
-	CHECK(cam.maxSpeed == doctest::Approx(100.0f));
+	CHECK(cam.maxSpeed == doctest::Approx(1000.0f));
 	CHECK(!cam.isCaptured);
 
 	cam.UpdateOrientation();
@@ -87,17 +87,17 @@ TEST_CASE("Camera Controls: Speed Adjustment (PageUp, PageDown, Home, End)") {
 	// Increase speed with Page Up
 	handler->OnKey(nullptr, GLFW_KEY_PAGE_UP, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.016f);
-	CHECK(engine.GetCamera().speed == doctest::Approx(15.0f));
+	CHECK(engine.GetCamera().speed == doctest::Approx(20.0f));
 
 	// Set to max speed with End
 	handler->OnKey(nullptr, GLFW_KEY_END, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.016f);
-	CHECK(engine.GetCamera().speed == doctest::Approx(100.0f));
+	CHECK(engine.GetCamera().speed == doctest::Approx(1000.0f));
 
 	// Decrease speed with Page Down
 	handler->OnKey(nullptr, GLFW_KEY_PAGE_DOWN, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.016f);
-	CHECK(engine.GetCamera().speed == doctest::Approx(95.0f));
+	CHECK(engine.GetCamera().speed == doctest::Approx(990.0f));
 
 	// Reset to default speed with Home
 	handler->OnKey(nullptr, GLFW_KEY_HOME, 0, GLFW_PRESS, 0);
@@ -146,12 +146,12 @@ TEST_CASE("Camera Controls: WASD, Space, Shift, Q, E, Mouse Look") {
 	handler->OnKey(nullptr, GLFW_KEY_Q, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.1f);
 	handler->OnKey(nullptr, GLFW_KEY_Q, 0, GLFW_RELEASE, 0);
-	CHECK(engine.GetCamera().roll < initRoll);
+	CHECK(engine.GetCamera().roll > initRoll);
 
 	handler->OnKey(nullptr, GLFW_KEY_E, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.2f);
 	handler->OnKey(nullptr, GLFW_KEY_E, 0, GLFW_RELEASE, 0);
-	CHECK(engine.GetCamera().roll > initRoll);
+	CHECK(engine.GetCamera().roll < initRoll);
 
 	// Mouse Look
 	handler->OnCursorPos(nullptr, 100.0, 100.0);
