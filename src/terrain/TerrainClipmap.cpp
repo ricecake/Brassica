@@ -79,10 +79,12 @@ namespace brassica {
 				};
 
 				for (uint32_t z = 0; z < TERRAIN_MAP_DIM; ++z) {
+					int localGridZ = (static_cast<int>(z) - info.gridOffset.y + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM);
+					float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(localGridZ) * texelSize;
+
 					for (uint32_t x = 0; x < stripWidth; ++x) {
 						int colIdx = (deltaX > 0) ? (TERRAIN_MAP_DIM - stripWidth + x) : x;
 						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
-						float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(z) * texelSize;
 
 						float h = heightFunc(worldX, worldZ);
 						float eps = texelSize;
@@ -158,7 +160,8 @@ namespace brassica {
 					float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(rowIdx) * texelSize;
 
 					for (uint32_t x = 0; x < TERRAIN_MAP_DIM; ++x) {
-						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(x) * texelSize;
+						int localGridX = (static_cast<int>(x) - info.gridOffset.x + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM);
+						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(localGridX) * texelSize;
 
 						float h = heightFunc(worldX, worldZ);
 						float eps = texelSize;
