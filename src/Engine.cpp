@@ -636,8 +636,8 @@ namespace brassica {
 		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
 
 		uint32_t lods = terrainClipmap.GetNumLODs();
-		uint32_t meshletsPerRow = 16;
-		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
+		uint32_t meshletsPerRow = 64;
+		uint32_t totalMeshlets = meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
 		terrainPush.viewProj = camera.viewProjMatrix;

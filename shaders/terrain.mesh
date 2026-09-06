@@ -66,14 +66,11 @@ void main() {
 	uint vertexIndex = ly * 8 + lx;
 
 	uint meshletsPerRow = params.gridParams.y;
-	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-	uint localID = meshletID % totalPerLOD;
+	uint row = meshletID / meshletsPerRow;
+	uint col = meshletID % meshletsPerRow;
 
-	uint row = localID / meshletsPerRow;
-	uint col = localID % meshletsPerRow;
-
-	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+	float baseMeshletSize = 64.0;
+	float meshletSize = baseMeshletSize;
 
 	vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
 	vec3 meshletMin = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);

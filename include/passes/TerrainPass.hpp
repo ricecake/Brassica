@@ -24,7 +24,7 @@ namespace brassica {
 	struct TerrainPushConstants {
 		glm::mat4  viewProj{1.0f};
 		glm::vec4  cameraPos{0.0f, 10.0f, 20.0f, 0.5f}; // xyz = camera position, w = baseTexelSize
-		glm::uvec4 gridParams{7, 16, 1792, 0};          // x = numLODs, y = meshletsPerRow, z = totalMeshlets
+		glm::uvec4 gridParams{7, 64, 4096, 0};          // x = numLODs, y = meshletsPerRow, z = totalMeshlets
 		glm::uvec4 lodOffsets0_3{0u};                   // Packed level centers for LOD 0-3
 		glm::uvec4 lodOffsets4_7{0u};                   // Packed level centers for LOD 4-7
 	};
