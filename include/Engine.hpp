@@ -18,6 +18,7 @@
 #include "passes/TerrainPass.hpp"
 #include "terrain/TerrainClipmap.hpp"
 #include "terrain/AsyncTerrainUploader.hpp"
+#include "types/CameraData.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
@@ -94,8 +95,13 @@ namespace brassica {
 
 		ShaderWatcher& GetShaderWatcher() { return shaderWatcher; }
 
-		void SetFov(float fov) { cameraFov = fov; }
-		float GetFov() const { return cameraFov; }
+		void SetFov(float fov) { camera.fov = fov; }
+		float GetFov() const { return camera.fov; }
+
+		CameraData& GetCamera() { return camera; }
+		const CameraData& GetCamera() const { return camera; }
+
+		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) {
 			inputHandler = std::move(handler);
@@ -148,8 +154,12 @@ namespace brassica {
 		std::vector<vk::ImageView> swapchainImageViews;
 		std::vector<vk::Semaphore> swapchainRenderSemaphores;
 
-		bool  windowResized{false};
-		float cameraFov{1.2f};
+		bool       windowResized{false};
+		CameraData camera{};
+		double     lastFrameTime{0.0};
+		double     lastMouseX{0.0};
+		double     lastMouseY{0.0};
+		bool       firstMouse{true};
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 

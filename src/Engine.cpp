@@ -293,7 +293,7 @@ namespace brassica {
 		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher);
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 
-		terrainClipmap.Init(device, allocator, 4, 0.5f);
+		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 8);
 
 		// Async upload initial heightmaps
@@ -304,7 +304,91 @@ namespace brassica {
 		terrainPass->UpdateClipmapDescriptor(terrainClipmap.GetImageView(), terrainClipmap.GetSampler());
 
 		taskScheduler.Initialize();
+		camera.UpdateMatrices(16.0f / 9.0f);
+		lastFrameTime = glfwGetTime();
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
+	}
+
+	void Engine::UpdateCamera(float deltaTime) {
+		auto* defaultHandler = dynamic_cast<DefaultInputHandler*>(inputHandler.get());
+
+		if (defaultHandler) {
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_0)) {
+				camera.isCaptured = !camera.isCaptured;
+				if (window) {
+					glfwSetInputMode(window, GLFW_CURSOR, camera.isCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+				}
+				firstMouse = true;
+			}
+
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_PAGE_UP)) {
+				camera.speed = std::min(camera.maxSpeed, camera.speed + camera.speedStep);
+			}
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_PAGE_DOWN)) {
+				camera.speed = std::max(camera.minSpeed, camera.speed - camera.speedStep);
+			}
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_HOME)) {
+				camera.speed = camera.defaultSpeed;
+			}
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_END)) {
+				camera.speed = camera.maxSpeed;
+			}
+		}
+
+		if (camera.isCaptured && defaultHandler) {
+			auto [mx, my] = defaultHandler->GetCursorPos();
+			if (firstMouse) {
+				lastMouseX = mx;
+				lastMouseY = my;
+				firstMouse = false;
+			}
+			double dx = mx - lastMouseX;
+			double dy = my - lastMouseY;
+			lastMouseX = mx;
+			lastMouseY = my;
+
+			constexpr float sensitivity = 0.002f;
+			camera.yaw -= static_cast<float>(dx) * sensitivity;
+			camera.pitch -= static_cast<float>(dy) * sensitivity;
+			camera.pitch = std::clamp(camera.pitch, -1.55f, 1.55f);
+
+			constexpr float rollSpeed = 1.5f;
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_Q)) {
+				camera.roll -= rollSpeed * deltaTime;
+			}
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_E)) {
+				camera.roll += rollSpeed * deltaTime;
+			}
+
+			glm::vec3 moveDir{0.0f};
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_W)) {
+				moveDir += camera.GetForward();
+			}
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_S)) {
+				moveDir -= camera.GetForward();
+			}
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_A)) {
+				moveDir -= camera.GetRight();
+			}
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_D)) {
+				moveDir += camera.GetRight();
+			}
+
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_SPACE)) {
+				moveDir += glm::vec3(0.0f, 1.0f, 0.0f);
+			}
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT)) {
+				moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
+			}
+
+			if (glm::length(moveDir) > 0.0001f) {
+				camera.position += glm::normalize(moveDir) * camera.speed * deltaTime;
+			}
+		} else if (defaultHandler) {
+			auto [mx, my] = defaultHandler->GetCursorPos();
+			lastMouseX = mx;
+			lastMouseY = my;
+		}
 	}
 
 	bool Engine::InitVulkan() {
@@ -344,6 +428,8 @@ namespace brassica {
 			.set_debug_callback_user_data_pointer(this);
 
 		if (options.headless) {
+			builder.set_headless(true);
+			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
 			builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
 		}
 
@@ -395,6 +481,7 @@ namespace brassica {
 		features12.descriptorIndexing = VK_TRUE;
 		features12.descriptorBindingPartiallyBound = VK_TRUE;
 		features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+		features12.timelineSemaphore = VK_TRUE;
 
 		VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
 		meshFeatures.meshShader = VK_TRUE;
@@ -516,15 +603,25 @@ namespace brassica {
 
 		uint32_t activeFrame = frameNumber % FRAME_OVERLAP;
 
+		double currentTime = glfwGetTime();
+		float  deltaTime = static_cast<float>(currentTime - lastFrameTime);
+		if (lastFrameTime == 0.0 || deltaTime <= 0.0f || deltaTime > 1.0f) {
+			deltaTime = 1.0f / 60.0f;
+		}
+		lastFrameTime = currentTime;
+
 		float aspect = 16.0f / 9.0f;
 		if (extent.height > 0) {
 			aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
 		}
 
+		UpdateCamera(deltaTime);
+		camera.UpdateMatrices(aspect);
+
 		FrameUBO ubo{};
-		ubo.time = static_cast<float>(glfwGetTime());
-		ubo.fov = cameraFov;
-		ubo.aspectRatio = aspect;
+		ubo.time = static_cast<float>(currentTime);
+		ubo.fov = camera.fov;
+		ubo.aspectRatio = camera.aspectRatio;
 		ubo.frameIndex = frameNumber;
 		ubo.globalSeed = globalSeed;
 		ubo.frameRandom = static_cast<uint32_t>(rng());
@@ -537,15 +634,33 @@ namespace brassica {
 
 		terrainUploader.Poll();
 
-		glm::mat4 proj = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 500.0f);
-		proj[1][1] *= -1.0f; // Vulkan inverted Y
-		glm::vec3 camPos(0.0f, 15.0f, 30.0f);
-		glm::mat4 view = glm::lookAt(camPos, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
+
+		uint32_t lods = terrainClipmap.GetNumLODs();
+		uint32_t meshletsPerRow = 16;
+		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
-		terrainPush.viewProj = proj * view;
-		terrainPush.cameraPos = glm::vec4(camPos, terrainClipmap.GetBaseTexelSize());
-		terrainPush.gridParams = glm::uvec4(terrainClipmap.GetNumLODs(), 16, 256, 0);
+		terrainPush.viewProj = camera.viewProjMatrix;
+		terrainPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
+		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, 0);
+
+		glm::uvec4 offsets0_3{0u};
+		glm::uvec4 offsets4_7{0u};
+
+		for (uint32_t i = 0; i < terrainClipmap.GetNumLODs(); ++i) {
+			const auto& info = terrainClipmap.GetLevelInfo(i);
+			uint32_t packed = (static_cast<uint32_t>(info.gridOffset.x) & 0xFFFFu) |
+			                  ((static_cast<uint32_t>(info.gridOffset.y) & 0xFFFFu) << 16u);
+			if (i < 4) {
+				offsets0_3[i] = packed;
+			} else if (i < 8) {
+				offsets4_7[i - 4] = packed;
+			}
+		}
+		terrainPush.lodOffsets0_3 = offsets0_3;
+		terrainPush.lodOffsets4_7 = offsets4_7;
+
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
 		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], activeFrame);
@@ -581,16 +696,20 @@ namespace brassica {
 		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
 		cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
+		auto waitInfos = terrainUploader.GetWaitSemaphores();
+
 		vk::SemaphoreSubmitInfo waitInfo{};
 		waitInfo.setSemaphore(frame.swapchainSemaphore);
 		waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+
+		waitInfos.push_back(waitInfo);
 
 		vk::SemaphoreSubmitInfo signalInfo{};
 		signalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
 		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
 
 		vk::SubmitInfo2 submitInfo{};
-		submitInfo.setWaitSemaphoreInfos(waitInfo);
+		submitInfo.setWaitSemaphoreInfos(waitInfos);
 		submitInfo.setSignalSemaphoreInfos(signalInfo);
 		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
 

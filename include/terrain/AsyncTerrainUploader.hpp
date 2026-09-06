@@ -16,6 +16,7 @@ namespace brassica {
 		VmaAllocation     stagingAllocation{VK_NULL_HANDLE};
 		uint32_t          levelIndex{0};
 		bool              inFlight{false};
+		uint64_t targetTimelineValue = 0;
 	};
 
 	class AsyncTerrainUploader {
@@ -41,6 +42,17 @@ namespace brassica {
 			vk::Queue transferQueue
 		);
 
+		// Non-blocking upload request for sub-regions of a clipmap layer using vk::BufferImageCopy
+		bool UploadRegionAsync(
+			uint32_t levelIndex,
+			std::span<const glm::vec4> data,
+			std::span<const vk::BufferImageCopy> regions,
+			vk::Image targetImage,
+			vk::Queue transferQueue
+		);
+
+		std::vector<vk::SemaphoreSubmitInfo> GetWaitSemaphores() const;
+
 		// Non-blocking poll to reclaim finished staging buffers and fences
 		void Poll();
 
@@ -51,6 +63,8 @@ namespace brassica {
 		vk::Device      device{nullptr};
 		VmaAllocator    allocator{VK_NULL_HANDLE};
 		vk::CommandPool commandPool{nullptr};
+		vk::Semaphore timelineSemaphore;
+		uint64_t currentTimelineCounter = 0;
 
 		std::vector<PendingUploadRequest> requests;
 	};

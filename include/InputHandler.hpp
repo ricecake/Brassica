@@ -58,12 +58,14 @@ namespace brassica {
 		void OnFramebufferSize(GLFWwindow* window, int width, int height) override;
 
 		bool IsKeyPressed(int key) const;
+		bool IsKeyJustPressed(int key);
 		bool IsMouseButtonPressed(int button) const;
 		std::pair<double, double> GetCursorPos() const;
 		std::pair<double, double> GetScrollOffset() const;
 
 	private:
 		std::array<bool, 512> keys{};
+		std::array<bool, 512> justPressedKeys{};
 		std::array<bool, 16>  mouseButtons{};
 		double                mouseX{0.0};
 		double                mouseY{0.0};

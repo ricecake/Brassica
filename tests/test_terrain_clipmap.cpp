@@ -40,11 +40,11 @@ TEST_CASE("AABB Tools and Frustum Culling") {
 	CHECK(lodFar == 3);
 }
 
-TEST_CASE("Terrain Clipmap Generation and Level Scaling") {
-	uint32_t numLODs = 4;
+TEST_CASE("Terrain Clipmap Generation and 7 Level Scaling") {
+	uint32_t numLODs = 7;
 	float baseTexel = 0.5f;
 
-	// Verify clipmap level spatial scaling
+	// Verify clipmap level spatial scaling for 7 LODs
 	for (uint32_t l = 0; l < numLODs; ++l) {
 		float expectedTexelSize = baseTexel * static_cast<float>(1 << l);
 		float expectedExtent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * expectedTexelSize;
@@ -52,6 +52,10 @@ TEST_CASE("Terrain Clipmap Generation and Level Scaling") {
 		CHECK(doctest::Approx(expectedTexelSize) == baseTexel * std::pow(2.0f, static_cast<float>(l)));
 		CHECK(doctest::Approx(expectedExtent) == 1024.0f * expectedTexelSize);
 	}
+
+	// LOD 6 extent should cover over 32,000 world units
+	float lod6Extent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * (baseTexel * static_cast<float>(1 << 6));
+	CHECK(lod6Extent == doctest::Approx(32768.0f));
 
 	// Generate 1024x1024 height and normal map for Level 0
 	auto mapData = brassica::TerrainClipmap::GenerateSineWaveMap(0, baseTexel, glm::vec2(0.0f), 0.0f);
@@ -69,6 +73,63 @@ TEST_CASE("Terrain Clipmap Generation and Level Scaling") {
 	// Height from sine wave combination should be within reasonable shallow bounds [-10, 10]
 	CHECK(height >= -10.0f);
 	CHECK(height <= 10.0f);
+}
+
+TEST_CASE("Top Plane Frustum Culling and Terrain Elevation") {
+	glm::vec3 cameraPos(0.0f, 15.0f, 30.0f);
+	glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 3000.0f);
+	proj[1][1] *= -1.0f; // Vulkan inverted Y
+	glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, -50.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+	glm::mat4 viewProj = proj * view;
+
+	auto frustumPlanes = brassica::AABB::ExtractFrustumPlanes(viewProj);
+
+	// AABB in front of camera at elevation [ -10, 10 ]
+	brassica::AABB elevatedTerrain(glm::vec3(-16.0f, -10.0f, -100.0f), glm::vec3(16.0f, 10.0f, -68.0f));
+	CHECK(elevatedTerrain.IntersectsFrustum(frustumPlanes));
+
+	// AABB far above top frustum plane should be culled
+	brassica::AABB wayAbove(glm::vec3(-16.0f, 500.0f, -100.0f), glm::vec3(16.0f, 600.0f, -68.0f));
+	CHECK_FALSE(wayAbove.IntersectsFrustum(frustumPlanes));
+}
+
+TEST_CASE("Toroidal Mapping Offset Calculation") {
+	int dim = 1024;
+	int offset = 0;
+
+	// Camera moves right by 10 texels
+	int deltaX = 10;
+	offset = (offset + deltaX) % dim;
+	if (offset < 0) offset += dim;
+	CHECK(offset == 10);
+
+	// Camera moves left by 25 texels
+	int deltaX2 = -25;
+	offset = (offset + deltaX2) % dim;
+	if (offset < 0) offset += dim;
+	CHECK(offset == 1009);
+}
+
+TEST_CASE("Long Distance Terrain Meshlet Grid Snapping and Coverage") {
+	float meshletSize = 32.0f;
+	glm::vec3 cameraPos(1234.5f, 20.0f, -567.8f);
+
+	glm::vec2 cameraSnap = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / meshletSize) * meshletSize;
+
+	// Grid should snap to multi-units of meshletSize (32.0f)
+	CHECK(std::fmod(cameraSnap.x, meshletSize) == doctest::Approx(0.0f));
+	CHECK(std::fmod(cameraSnap.y, meshletSize) == doctest::Approx(0.0f));
+
+	uint32_t meshletsPerRow = 64;
+	float halfExtent = (static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize; // 1024 world units
+
+	glm::vec3 gridMin(cameraSnap.x - halfExtent, -50.0f, cameraSnap.y - halfExtent);
+	glm::vec3 gridMax(cameraSnap.x + halfExtent, 50.0f, cameraSnap.y + halfExtent);
+
+	brassica::AABB gridAABB(gridMin, gridMax);
+
+	// Camera position should be well inside the grid's XZ extents
+	CHECK(gridAABB.DistanceToPoint(cameraPos) == doctest::Approx(0.0f));
 }
 
 TEST_CASE("AsyncTerrainUploader Initial State") {
