@@ -430,7 +430,19 @@ namespace brassica {
 		if (options.headless) {
 			builder.set_headless(true);
 			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
-			builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+
+			uint32_t count = 0;
+			if (vk::enumerateInstanceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess && count > 0) {
+				std::vector<vk::ExtensionProperties> exts(count);
+				if (vk::enumerateInstanceExtensionProperties(nullptr, &count, exts.data()) == vk::Result::eSuccess) {
+					for (const auto& ext : exts) {
+						if (std::string(ext.extensionName.data()) == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
+							builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+							break;
+						}
+					}
+				}
+			}
 		}
 
 		auto inst_res = builder.request_validation_layers(true).build();
@@ -534,6 +546,7 @@ namespace brassica {
 		allocatorInfo.device = device;
 		allocatorInfo.instance = instance;
 		allocatorInfo.vulkanApiVersion = VK_MAKE_API_VERSION(0, chosenMajor, chosenMinor, 0);
+		allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
 		if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
 			spdlog::critical("Failed to create Vulkan Memory Allocator.");
