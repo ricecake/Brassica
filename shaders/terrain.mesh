@@ -17,7 +17,24 @@ layout(push_constant) uniform TerrainPushConstants {
 	mat4  viewProj;
 	vec4  cameraPos;
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets
+	uvec4 lodOffsets0_3;
+	uvec4 lodOffsets4_7;
 } params;
+
+vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
+	float baseTexelSize = params.cameraPos.w;
+	float texelSize = baseTexelSize * pow(2.0, float(level));
+	vec2 center = floor(params.cameraPos.xz / texelSize) * texelSize;
+	float worldExtent = 1024.0 * texelSize;
+
+	vec2 linearUV = (worldXZ - (center - vec2(worldExtent * 0.5))) / worldExtent;
+
+	uvec4 offsets = (level < 4) ? params.lodOffsets0_3 : params.lodOffsets4_7;
+	uint packed = offsets[level % 4];
+	vec2 offsetFraction = vec2(float(packed & 0xFFFFu), float((packed >> 16u) & 0xFFFFu)) / 1024.0;
+
+	return fract(linearUV + offsetFraction);
+}
 
 struct TaskPayload {
 	uint meshletIDs[32];
@@ -49,29 +66,50 @@ void main() {
 	uint vertexIndex = ly * 8 + lx;
 
 	uint meshletsPerRow = params.gridParams.y;
-	uint row = meshletID / meshletsPerRow;
-	uint col = meshletID % meshletsPerRow;
+	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
+	uint localID = meshletID % totalPerLOD;
 
-	float meshletSize = 32.0;
+	uint row = localID / meshletsPerRow;
+	uint col = localID % meshletsPerRow;
+
+	float baseMeshletSize = 32.0;
+	float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+
 	vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
 	vec3 meshletMin = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
 
 	vec2 localPos = vec2(float(lx) / 7.0, float(ly) / 7.0) * meshletSize;
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
 
-	// Texel size doubles per LOD level
-	float baseTexelSize = params.cameraPos.w;
-	float texelSize = baseTexelSize * pow(2.0, float(lodLevel));
-	float worldExtent = 1024.0 * texelSize;
-
-	// Calculate UVs for texture array layer
-	vec2 uv = (worldPos.xz + vec2(worldExtent * 0.5)) / worldExtent;
-	uv = clamp(uv, vec2(0.0), vec2(1.0));
-
+	vec2 uv = sampleToroidalUV(worldPos.xz, lodLevel);
 	vec4 texSample = texture(terrainClipmap, vec3(uv, float(lodLevel)));
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
+
+	// LOD Morphing / Blending across transitions
+	float dist = distance(worldPos, params.cameraPos.xyz);
+	float baseTexel = params.cameraPos.w;
+	float lod0Dist = baseTexel * 128.0;
+
+	if (lodLevel < params.gridParams.x - 1 && lod0Dist > 0.0) {
+		float lodStart = lod0Dist * pow(2.0, float(lodLevel));
+		float morphStart = lodStart * 0.7;
+		float morphEnd = lodStart;
+
+		if (dist > morphStart) {
+			float alpha = clamp((dist - morphStart) / max(morphEnd - morphStart, 0.001), 0.0, 1.0);
+			vec2 uvNext = sampleToroidalUV(worldPos.xz, lodLevel + 1);
+			vec4 texNext = texture(terrainClipmap, vec3(uvNext, float(lodLevel + 1)));
+			float nextHeight = texNext.r;
+			vec3 nextNormal = texNext.gba;
+
+			height = mix(height, nextHeight, alpha);
+			if (length(nextNormal) >= 0.1) {
+				normal = normalize(mix(normal, nextNormal, alpha));
+			}
+		}
+	}
 
 	worldPos.y = height;
 

@@ -43,7 +43,8 @@ bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 		float len = length(planes[i].xyz);
 		vec4 normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
 
-		if (dot(normPlane.xyz, pVertex) + normPlane.w < 0.0) {
+		// Conservative view buffer: 32 world units safety margin
+		if (dot(normPlane.xyz, pVertex) + normPlane.w < -32.0) {
 			return false;
 		}
 	}
@@ -59,24 +60,31 @@ void main() {
 
 	if (meshletID < params.gridParams.z) {
 		uint meshletsPerRow = params.gridParams.y;
-		uint row = meshletID / meshletsPerRow;
-		uint col = meshletID % meshletsPerRow;
+		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
+		lodLevel = min(meshletID / totalPerLOD, params.gridParams.x - 1);
+		uint localID = meshletID % totalPerLOD;
 
-		float meshletSize = 32.0; // 32 world units base size per meshlet
+		uint row = localID / meshletsPerRow;
+		uint col = localID % meshletsPerRow;
+
+		float baseMeshletSize = 32.0;
+		float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+
 		vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
-		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -50.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
-		vec3 maxB = minB + vec3(meshletSize, 100.0, meshletSize);
+		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -100.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+		vec3 maxB = minB + vec3(meshletSize, 200.0, meshletSize);
 
 		visible = isAABBVisible(minB, maxB, params.viewProj);
 
-		if (visible) {
-			vec3 center = (minB + maxB) * 0.5;
-			float dist = distance(center, params.cameraPos.xyz);
-			float baseTexel = params.cameraPos.w;
-			float lod0Dist = baseTexel * 128.0;
+		// Clipmap Isotropic Radial Ring Punching:
+		// For lodLevel > 0, cull meshlets inside the inner radius covered by lodLevel - 1
+		if (visible && lodLevel > 0) {
+			vec2 centerXZ = (minB.xz + maxB.xz) * 0.5;
+			float distToCam = length(centerXZ - params.cameraPos.xz);
+			float innerRadius = 240.0 * pow(2.0, float(lodLevel - 1));
 
-			if (dist >= lod0Dist && lod0Dist > 0.0) {
-				lodLevel = uint(clamp(floor(log2(dist / lod0Dist)) + 1.0, 0.0, float(params.gridParams.x - 1)));
+			if (distToCam < innerRadius) {
+				visible = false;
 			}
 		}
 	}

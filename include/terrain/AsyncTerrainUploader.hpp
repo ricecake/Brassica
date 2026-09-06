@@ -41,6 +41,15 @@ namespace brassica {
 			vk::Queue transferQueue
 		);
 
+		// Non-blocking upload request for sub-regions of a clipmap layer using vk::BufferImageCopy
+		bool UploadRegionAsync(
+			uint32_t levelIndex,
+			std::span<const glm::vec4> data,
+			std::span<const vk::BufferImageCopy> regions,
+			vk::Image targetImage,
+			vk::Queue transferQueue
+		);
+
 		// Non-blocking poll to reclaim finished staging buffers and fences
 		void Poll();
 

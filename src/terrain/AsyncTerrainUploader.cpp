@@ -196,4 +196,96 @@ namespace brassica {
 		return true;
 	}
 
+	bool AsyncTerrainUploader::UploadRegionAsync(
+		uint32_t levelIndex,
+		std::span<const glm::vec4> data,
+		std::span<const vk::BufferImageCopy> regions,
+		vk::Image targetImage,
+		vk::Queue transferQueue
+	) {
+		Poll();
+
+		PendingUploadRequest* slot = nullptr;
+		for (auto& req : requests) {
+			if (!req.inFlight) {
+				slot = &req;
+				break;
+			}
+		}
+
+		if (!slot) {
+			spdlog::warn("AsyncTerrainUploader: No available upload slot for LOD region upload level {}", levelIndex);
+			return false;
+		}
+
+		VkDeviceSize bufferSize = data.size_bytes();
+
+		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		bufferInfo.size = bufferSize;
+		bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+		VmaAllocationCreateInfo allocInfo{};
+		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer vkBuf = VK_NULL_HANDLE;
+		VmaAllocationInfo resultAllocInfo{};
+		if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &vkBuf, &slot->stagingAllocation, &resultAllocInfo) != VK_SUCCESS) {
+			spdlog::error("Failed to create staging buffer for region upload.");
+			return false;
+		}
+		slot->stagingBuffer = vkBuf;
+
+		std::memcpy(resultAllocInfo.pMappedData, data.data(), bufferSize);
+
+		slot->commandBuffer.reset();
+		vk::CommandBufferBeginInfo cmdBegin{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+		slot->commandBuffer.begin(cmdBegin);
+
+		vk::ImageMemoryBarrier2 barrier1{};
+		barrier1.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+		barrier1.setSrcAccessMask(vk::AccessFlagBits2::eShaderRead);
+		barrier1.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier1.setDstAccessMask(vk::AccessFlagBits2::eTransferWrite);
+		barrier1.setOldLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+		barrier1.setNewLayout(vk::ImageLayout::eTransferDstOptimal);
+		barrier1.setImage(targetImage);
+		barrier1.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, levelIndex, 1));
+
+		vk::DependencyInfo depInfo1{};
+		depInfo1.setImageMemoryBarriers(barrier1);
+		slot->commandBuffer.pipelineBarrier2(depInfo1);
+
+		slot->commandBuffer.copyBufferToImage(slot->stagingBuffer, targetImage, vk::ImageLayout::eTransferDstOptimal, regions);
+
+		vk::ImageMemoryBarrier2 barrier2{};
+		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
+		barrier2.setDstStageMask(vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eTaskShaderEXT | vk::PipelineStageFlagBits2::eFragmentShader);
+		barrier2.setDstAccessMask(vk::AccessFlagBits2::eShaderRead);
+		barrier2.setOldLayout(vk::ImageLayout::eTransferDstOptimal);
+		barrier2.setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+		barrier2.setImage(targetImage);
+		barrier2.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, levelIndex, 1));
+
+		vk::DependencyInfo depInfo2{};
+		depInfo2.setImageMemoryBarriers(barrier2);
+		slot->commandBuffer.pipelineBarrier2(depInfo2);
+
+		slot->commandBuffer.end();
+
+		vk::CommandBufferSubmitInfo cmdSubmit{};
+		cmdSubmit.setCommandBuffer(slot->commandBuffer);
+
+		vk::SubmitInfo2 submitInfo{};
+		submitInfo.setCommandBufferInfos(cmdSubmit);
+
+		slot->levelIndex = levelIndex;
+		slot->inFlight = true;
+
+		transferQueue.submit2(submitInfo, slot->fence);
+
+		return true;
+	}
+
 } // namespace brassica

@@ -189,7 +189,7 @@ namespace brassica {
 			rasterizer.setPolygonMode(vk::PolygonMode::eFill);
 			rasterizer.setLineWidth(1.0f);
 			rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
-			rasterizer.setFrontFace(vk::FrontFace::eClockwise);
+			rasterizer.setFrontFace(vk::FrontFace::eCounterClockwise);
 
 			vk::PipelineMultisampleStateCreateInfo multisampling{};
 			multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);

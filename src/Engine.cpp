@@ -293,7 +293,7 @@ namespace brassica {
 		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher);
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 
-		terrainClipmap.Init(device, allocator, 4, 0.5f);
+		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 8);
 
 		// Async upload initial heightmaps
@@ -633,10 +633,33 @@ namespace brassica {
 
 		terrainUploader.Poll();
 
+		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
+
+		uint32_t lods = terrainClipmap.GetNumLODs();
+		uint32_t meshletsPerRow = 16;
+		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
+
 		TerrainPushConstants terrainPush{};
 		terrainPush.viewProj = camera.viewProjMatrix;
 		terrainPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
-		terrainPush.gridParams = glm::uvec4(terrainClipmap.GetNumLODs(), 64, 4096, 0);
+		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, 0);
+
+		glm::uvec4 offsets0_3{0u};
+		glm::uvec4 offsets4_7{0u};
+
+		for (uint32_t i = 0; i < terrainClipmap.GetNumLODs(); ++i) {
+			const auto& info = terrainClipmap.GetLevelInfo(i);
+			uint32_t packed = (static_cast<uint32_t>(info.gridOffset.x) & 0xFFFFu) |
+			                  ((static_cast<uint32_t>(info.gridOffset.y) & 0xFFFFu) << 16u);
+			if (i < 4) {
+				offsets0_3[i] = packed;
+			} else if (i < 8) {
+				offsets4_7[i - 4] = packed;
+			}
+		}
+		terrainPush.lodOffsets0_3 = offsets0_3;
+		terrainPush.lodOffsets4_7 = offsets4_7;
+
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
 		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], activeFrame);
