@@ -354,10 +354,10 @@ namespace brassica {
 
 			constexpr float rollSpeed = 1.5f;
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_Q)) {
-				camera.roll -= rollSpeed * deltaTime;
+				camera.roll += rollSpeed * deltaTime;
 			}
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_E)) {
-				camera.roll += rollSpeed * deltaTime;
+				camera.roll -= rollSpeed * deltaTime;
 			}
 
 			glm::vec3 moveDir{0.0f};
