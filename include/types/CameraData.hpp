@@ -20,7 +20,7 @@ namespace brassica {
 		// FOV data and frustum settings
 		float fov{1.2f};           // vertical FOV in radians (~68.75 deg)
 		float nearPlane{0.1f};
-		float farPlane{500.0f};
+		float farPlane{15000.0f};
 		float aspectRatio{16.0f / 9.0f};
 
 		// Speed and speed limits

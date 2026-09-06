@@ -8,7 +8,7 @@
 namespace brassica {
 
 	constexpr uint32_t TERRAIN_MAP_DIM = 1024;
-	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 4;
+	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 7;
 
 	struct ClipmapLevelInfo {
 		uint32_t level{0};
@@ -16,15 +16,20 @@ namespace brassica {
 		float    texelSize{0.5f}; // texelSize = baseTexelSize * 2^level
 		float    worldExtent{512.0f}; // 1024 * texelSize
 		glm::vec2 centerWorldPos{0.0f};
+		glm::ivec2 gridOffset{0}; // Toroidal grid cell offset in texels
 	};
+
+	class AsyncTerrainUploader;
 
 	class TerrainClipmap {
 	public:
 		TerrainClipmap() = default;
 		~TerrainClipmap();
 
-		void Init(vk::Device device, VmaAllocator allocator, uint32_t numLODs = DEFAULT_CLIPMAP_LODS, float baseTexelSize = 0.5f);
+		void Init(vk::Device device, VmaAllocator allocator, uint32_t numLODs = DEFAULT_CLIPMAP_LODS, float baseTexelSize = 0.5f, float maxDistance = 15000.0f);
 		void Cleanup();
+
+		void UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue);
 
 		// CPU Terrain Generator function for a 1024x1024 grid at a specific clipmap level
 		static std::vector<glm::vec4> GenerateSineWaveMap(
