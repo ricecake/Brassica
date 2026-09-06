@@ -82,6 +82,11 @@ namespace brassica {
 		if (allocator == VK_NULL_HANDLE) return;
 		lastAllocator = allocator;
 
+		if (tlas && glm::distance(cameraPos, lastASCameraPos) < 16.0f) {
+			return; // Rebuild AS only when camera moves across a grid cell threshold
+		}
+		lastASCameraPos = cameraPos;
+
 		// Generate distance-aware AABBs for the terrain grid chunks.
 		// For points/AABBs close to the camera, resolution is finer (e.g., 32 world units per AABB).
 		// For points/AABBs further from the camera (shadow caster point distance), resolution is coarser (64, 128, etc.).
@@ -203,11 +208,9 @@ namespace brassica {
 
 		// 3. Build TLAS Instance
 		VkAccelerationStructureInstanceKHR instanceData{};
-		instanceData.transform = VkTransformMatrixKHR{
-			1.0f, 0.0f, 0.0f, 0.0f,
-			0.0f, 1.0f, 0.0f, 0.0f,
-			0.0f, 0.0f, 1.0f, 0.0f
-		};
+		instanceData.transform.matrix[0][0] = 1.0f;
+		instanceData.transform.matrix[1][1] = 1.0f;
+		instanceData.transform.matrix[2][2] = 1.0f;
 		instanceData.instanceCustomIndex = 0;
 		instanceData.mask = 0xFF;
 		instanceData.instanceShaderBindingTableRecordOffset = 0;

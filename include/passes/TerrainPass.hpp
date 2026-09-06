@@ -97,6 +97,7 @@ namespace brassica {
 		BufferResource        tlasBuffer;
 		vk::AccelerationStructureKHR tlas{nullptr};
 		BufferResource        scratchBuffer;
+		glm::vec3             lastASCameraPos{1e9f, 1e9f, 1e9f};
 
 		void CreateGBufferTextures(vk::Extent2D extent, VmaAllocator allocator);
 		void DestroyGBufferTextures(VmaAllocator allocator);
