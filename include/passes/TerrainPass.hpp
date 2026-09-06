@@ -57,6 +57,8 @@ namespace brassica {
 			VmaAllocator          allocator = VK_NULL_HANDLE
 		);
 
+		vk::AccelerationStructureKHR GetTLAS() const { return tlas; }
+
 	private:
 		vk::DispatchLoaderDynamic dls;
 
@@ -74,6 +76,12 @@ namespace brassica {
 			VmaAllocation allocation{VK_NULL_HANDLE};
 		};
 
+		struct BufferResource {
+			vk::Buffer    buffer{nullptr};
+			VmaAllocation allocation{VK_NULL_HANDLE};
+			vk::DeviceAddress deviceAddress{0};
+		};
+
 		VmaAllocator    lastAllocator{VK_NULL_HANDLE};
 		vk::Extent2D    currentExtent{0, 0};
 		TextureResource posTex;
@@ -81,8 +89,19 @@ namespace brassica {
 		TextureResource albTex;
 		TextureResource depthTex;
 
+		// Acceleration structure resources
+		BufferResource        aabbBuffer;
+		BufferResource        blasBuffer;
+		vk::AccelerationStructureKHR blas{nullptr};
+		BufferResource        instanceBuffer;
+		BufferResource        tlasBuffer;
+		vk::AccelerationStructureKHR tlas{nullptr};
+		BufferResource        scratchBuffer;
+
 		void CreateGBufferTextures(vk::Extent2D extent, VmaAllocator allocator);
 		void DestroyGBufferTextures(VmaAllocator allocator);
+		void BuildOrUpdateAccelerationStructure(VmaAllocator allocator, const glm::vec3& cameraPos, float baseTexelSize, uint32_t numLODs);
+		void DestroyAccelerationStructures();
 		void InitPipelineCustom(
 			vk::Instance            instance,
 			vk::Device              dev,
