@@ -299,12 +299,12 @@ namespace brassica {
 		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher);
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 
-		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f);
+		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 8);
 
 		// Async upload initial heightmaps
 		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
-			auto mapData = TerrainClipmap::GenerateSineWaveMap(l, terrainClipmap.GetBaseTexelSize());
+			auto mapData = terrainClipmap.GenerateLevelMap(l);
 			terrainUploader.UploadLevelAsync(
 				l,
 				mapData,
@@ -587,6 +587,11 @@ namespace brassica {
 	}
 
 	void Engine::Run() {
+		if (!device) {
+			spdlog::warn("Engine::Run called but Vulkan device is null.");
+			return;
+		}
+
 		if (options.headless || options.maxFrames > 0) {
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
