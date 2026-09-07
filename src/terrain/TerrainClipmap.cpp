@@ -11,6 +11,48 @@
 
 namespace brassica {
 
+	glm::vec4 terrainNoise(float worldX, float worldZ, float lodLevel, float texelSize, float height = 50.0f) {
+		auto heightFunc = [texelSize, lodLevel, height](float x, float z) -> float {
+			// auto hDiv = Simplex::dfBm(texelSize*glm::vec2(x, z), 10.0f - lodLevel, 1.78f);
+			// Simplex::iqfBm(glm::vec2(x, z));
+			// hDiv *= height;
+
+			int octaves = std::min(4, int(lodLevel));
+			float gain = 0.5f;
+			float lacunarity = 2.0f;
+
+			glm::vec2 v{x, z};
+			v *= texelSize;
+			float sum	= Simplex::worleyfBm(v);
+			float amp	= 0.5;
+			float dx	= 0.0;
+			float dy	= 0.0;
+			float freq	= 1.0;
+			for( uint8_t i = 0; i < octaves; i++ ) {
+				glm::vec3 d = Simplex::dnoise( v * freq );
+				dx += d.y;
+				dy += d.y;
+				sum += amp * d.x / ( 1.0f + dx*dx + dy*dy );
+				freq *= lacunarity;
+				amp *= gain;
+				gain *= (lodLevel-i)/lodLevel;
+			}
+
+			return sum * height;
+		};
+
+
+		float h = heightFunc(worldX, worldZ);
+		float eps = texelSize;
+		float hL = heightFunc(worldX - eps, worldZ);
+		float hR = heightFunc(worldX + eps, worldZ);
+		float hD = heightFunc(worldX, worldZ - eps);
+		float hU = heightFunc(worldX, worldZ + eps);
+
+		glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
+		return glm::vec4(h, normal.x, normal.y, normal.z);
+	}
+
 	TerrainClipmap::~TerrainClipmap() {
 		Cleanup();
 	}
@@ -95,8 +137,8 @@ namespace brassica {
 						int   colIdx = (deltaX > 0) ? (TERRAIN_MAP_DIM - stripWidth + x) : x;
 						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
 
-						auto hDiv = Simplex::dfBm(texelSize*glm::vec2(worldX, worldZ), 10.0f - info.level, 1.78f);
-						hDiv *= 50.0f;
+
+						glm::vec3 hDiv = terrainNoise(worldX, worldZ, info.level, texelSize);
 						stripData[z * stripWidth + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
 					}
 				}
@@ -174,8 +216,7 @@ namespace brassica {
 							static_cast<int>(TERRAIN_MAP_DIM);
 						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(localGridX) * texelSize;
 
-						auto hDiv = Simplex::dfBm(texelSize*glm::vec2(worldX, worldZ), 10.0f - info.level, 1.78f);
-						hDiv *= 50.0f;
+						glm::vec3 hDiv = terrainNoise(worldX, worldZ, info.level, texelSize);
 						stripData[z * TERRAIN_MAP_DIM + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
 					}
 				}
@@ -323,8 +364,7 @@ namespace brassica {
 				float worldX = centerWorldPos.x - halfExtent + static_cast<float>(x) * texelSize;
 				float worldZ = centerWorldPos.y - halfExtent + static_cast<float>(z) * texelSize;
 
-				auto hDiv = Simplex::dfBm(texelSize*glm::vec2(worldX, worldZ), 10.0f - levelIndex, 1.78f);
-				hDiv *= 50.0f;
+				glm::vec3 hDiv = terrainNoise(worldX, worldZ, levelIndex, texelSize);
 				data[z * TERRAIN_MAP_DIM + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
 			}
 		}
