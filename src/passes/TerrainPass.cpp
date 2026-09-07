@@ -132,6 +132,9 @@ namespace brassica {
 
 		if (aabbs.empty()) return;
 
+		// Ensure GPU has finished reading/using previous TLAS before destroying or updating
+		device.waitIdle();
+
 		DestroyAccelerationStructures();
 
 		// Helper to create Vulkan memory buffer with device address flag
