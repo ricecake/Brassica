@@ -733,13 +733,16 @@ namespace brassica {
 
 		waitInfos.push_back(waitInfo);
 
-		vk::SemaphoreSubmitInfo signalInfo{};
-		signalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
-		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
-
 		vk::SubmitInfo2 submitInfo{};
 		submitInfo.setWaitSemaphoreInfos(waitInfos);
-		submitInfo.setSignalSemaphoreInfos(signalInfo);
+
+		vk::SemaphoreSubmitInfo signalInfo{};
+		if (!options.headless && swapchainImageIndex < swapchainRenderSemaphores.size()) {
+			signalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
+			signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+			submitInfo.setSignalSemaphoreInfos(signalInfo);
+		}
+
 		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
 
 		graphicsQueue.submit2(submitInfo, frame.renderFence);
