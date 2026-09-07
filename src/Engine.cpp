@@ -39,13 +39,12 @@ namespace brassica {
 	}
 
 	void Engine::InitWindow() {
-		if (options.headless) {
-			window = nullptr;
-			return;
-		}
 		glfwInit();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+		if (options.headless) {
+			glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+		}
 		window = glfwCreateWindow(1280, 720, "Brassica Engine", nullptr, nullptr);
 
 		glfwSetWindowUserPointer(window, this);
@@ -354,10 +353,10 @@ namespace brassica {
 
 			constexpr float rollSpeed = 1.5f;
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_Q)) {
-				camera.roll += rollSpeed * deltaTime;
+				camera.roll -= rollSpeed * deltaTime;
 			}
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_E)) {
-				camera.roll -= rollSpeed * deltaTime;
+				camera.roll += rollSpeed * deltaTime;
 			}
 
 			glm::vec3 moveDir{0.0f};
@@ -427,10 +426,33 @@ namespace brassica {
 			.set_debug_callback(Engine::VulkanDebugCallback)
 			.set_debug_callback_user_data_pointer(this);
 
-		if (options.headless) {
+		uint32_t extCount = 0;
+		(void)vk::enumerateInstanceExtensionProperties(nullptr, &extCount, nullptr);
+		std::vector<vk::ExtensionProperties> extProps(extCount);
+		if (extCount > 0) {
+			(void)vk::enumerateInstanceExtensionProperties(nullptr, &extCount, extProps.data());
+		}
+
+		bool hasHeadlessExt = false;
+		for (const auto& ext : extProps) {
+			if (std::strcmp(ext.extensionName, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) == 0) {
+				hasHeadlessExt = true;
+				break;
+			}
+		}
+
+		if (options.headless && hasHeadlessExt) {
 			builder.set_headless(true);
 			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
 			builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+		} else if (window) {
+			uint32_t glfwExtCount = 0;
+			const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
+			if (glfwExts) {
+				for (uint32_t i = 0; i < glfwExtCount; ++i) {
+					builder.enable_extension(glfwExts[i]);
+				}
+			}
 		}
 
 		auto inst_res = builder.request_validation_layers(true).build();
@@ -446,25 +468,22 @@ namespace brassica {
 		}
 		instance = vkbInst.instance;
 
-		if (options.headless) {
+		if (options.headless && hasHeadlessExt) {
 			auto vkCreateHeadlessSurfaceEXT = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
 				vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT")
 			);
-			if (!vkCreateHeadlessSurfaceEXT) {
-				spdlog::critical("Failed to load vkCreateHeadlessSurfaceEXT function pointer.");
-				return false;
+			if (vkCreateHeadlessSurfaceEXT) {
+				VkHeadlessSurfaceCreateInfoEXT createInfo{};
+				createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+				VkSurfaceKHR c_surface = VK_NULL_HANDLE;
+				if (vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface) == VK_SUCCESS) {
+					surface = c_surface;
+				}
 			}
-			VkHeadlessSurfaceCreateInfoEXT createInfo{};
-			createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+		}
+
+		if (!surface && window) {
 			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
-			VkResult res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
-			if (res != VK_SUCCESS) {
-				spdlog::critical("Failed to create headless surface: {}", static_cast<int>(res));
-				return false;
-			}
-			surface = c_surface;
-		} else {
-			VkSurfaceKHR c_surface;
 			glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
 			surface = c_surface;
 		}
@@ -532,6 +551,11 @@ namespace brassica {
 	}
 
 	void Engine::Run() {
+		if (!device) {
+			spdlog::error("Engine::Run called without valid Vulkan device.");
+			return;
+		}
+
 		if (options.headless || options.maxFrames > 0) {
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
@@ -581,6 +605,11 @@ namespace brassica {
 
 		device.resetFences(frame.renderFence);
 		uint32_t swapchainImageIndex = acquireResult.value;
+
+		if (swapchainImages.empty() || swapchainImageIndex >= swapchainImages.size()) {
+			spdlog::error("Invalid swapchain image index {} (total images: {})", swapchainImageIndex, swapchainImages.size());
+			return;
+		}
 
 		// 3. Record Commands
 		frame.commandBuffer.reset();
@@ -704,28 +733,35 @@ namespace brassica {
 
 		waitInfos.push_back(waitInfo);
 
-		vk::SemaphoreSubmitInfo signalInfo{};
-		signalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
-		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
-
 		vk::SubmitInfo2 submitInfo{};
 		submitInfo.setWaitSemaphoreInfos(waitInfos);
-		submitInfo.setSignalSemaphoreInfos(signalInfo);
+
+		vk::SemaphoreSubmitInfo signalInfo{};
+		if (!options.headless && swapchainImageIndex < swapchainRenderSemaphores.size()) {
+			signalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
+			signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+			submitInfo.setSignalSemaphoreInfos(signalInfo);
+		}
+
 		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
 
 		graphicsQueue.submit2(submitInfo, frame.renderFence);
 
-		// 5. Present
-		vk::PresentInfoKHR presentInfo{};
-		presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
-		vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
-		presentInfo.setSwapchains(swapchain);
-		presentInfo.setImageIndices(swapchainImageIndex);
+		// 5. Present (skip in headless mode)
+		if (!options.headless) {
+			vk::PresentInfoKHR presentInfo{};
+			presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
+			vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
+			presentInfo.setSwapchains(swapchain);
+			presentInfo.setImageIndices(swapchainImageIndex);
 
-		vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
-		if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || windowResized) {
-			windowResized = false;
-			RecreateSwapchain();
+			vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
+			if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || windowResized) {
+				windowResized = false;
+				RecreateSwapchain();
+			}
+		} else {
+			(void)device.waitForFences(frame.renderFence, VK_TRUE, 1000000000);
 		}
 
 		frameNumber++;

@@ -1,0 +1,163 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 64, max_primitives = 124) out;
+
+struct GltfVertex {
+    vec3 position;
+    float pad0;
+    vec3 normal;
+    float pad1;
+    vec4 tangent;
+    vec2 texcoord;
+    uvec4 joints;
+    vec4 weights;
+};
+
+struct GltfMeshlet {
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+    vec3 center;
+    float radius;
+};
+
+struct GltfPrimitiveGPU {
+    uint firstMeshlet;
+    uint meshletCount;
+    uint materialIndex;
+    uint firstVertex;
+    uint vertexCount;
+    uint pad0, pad1, pad2;
+};
+
+struct GltfMaterialGPU {
+    vec4 baseColorFactor;
+    float metallicFactor;
+    float roughnessFactor;
+    int baseColorTextureIndex;
+    int normalTextureIndex;
+    int metallicRoughnessTextureIndex;
+    int pad0, pad1, pad2;
+};
+
+struct VisibleInstanceGPUData {
+    mat4 worldMatrix;
+    uint primitiveIndex;
+    uint materialIndex;
+    uint jointMatrixOffset;
+    uint jointCount;
+};
+
+// Set 0: Global Frame UBO (provided by Engine)
+layout(set = 0, binding = 0) uniform FrameUBO {
+    float time;
+    float fov;
+    float aspectRatio;
+    uint frameIndex;
+    uint globalSeed;
+    uint frameRandom;
+} u_Frame;
+
+// Set 1: Model Mesh Geometry Buffers
+layout(std430, set = 1, binding = 0) readonly buffer VertexBuffer {
+    GltfVertex vertices[];
+};
+
+layout(std430, set = 1, binding = 1) readonly buffer MeshletBuffer {
+    GltfMeshlet meshlets[];
+};
+
+layout(std430, set = 1, binding = 2) readonly buffer MeshletVerticesBuffer {
+    uint meshletVertices[];
+};
+
+layout(std430, set = 1, binding = 3) readonly buffer MeshletTrianglesBuffer {
+    uint meshletTriangles[]; // packed uint8 bytes
+};
+
+layout(std430, set = 1, binding = 4) readonly buffer PrimitiveBuffer {
+    GltfPrimitiveGPU primitives[];
+};
+
+layout(std430, set = 1, binding = 5) readonly buffer MaterialBuffer {
+    GltfMaterialGPU materials[];
+};
+
+layout(std430, set = 1, binding = 6) readonly buffer VisibleInstanceBuffer {
+    VisibleInstanceGPUData visibleInstances[];
+};
+
+layout(std430, set = 1, binding = 7) readonly buffer JointMatrixBuffer {
+    mat4 jointMatrices[];
+};
+
+layout(push_constant) uniform PushConstants {
+    mat4 viewProj;
+} pc;
+
+layout(location = 0) out vec3 outWorldPos[];
+layout(location = 1) out vec3 outNormal[];
+layout(location = 2) out vec2 outUV[];
+layout(location = 3) flat out uint outMaterialIndex[];
+
+uint getMeshletTriangleByte(uint offset) {
+    uint uintIndex = offset / 4u;
+    uint byteOffset = offset % 4u;
+    uint packedValue = meshletTriangles[uintIndex];
+    return (packedValue >> (byteOffset * 8u)) & 0xFFu;
+}
+
+void main() {
+    uint drawID = gl_DrawID;
+    VisibleInstanceGPUData vis = visibleInstances[drawID];
+    GltfPrimitiveGPU prim = primitives[vis.primitiveIndex];
+
+    uint meshletID = prim.firstMeshlet + gl_WorkGroupID.x;
+    GltfMeshlet meshlet = meshlets[meshletID];
+
+    SetMeshOutputsEXT(meshlet.vertexCount, meshlet.triangleCount);
+
+    uint threadID = gl_LocalInvocationID.x;
+
+    // Process Vertices
+    if (threadID < meshlet.vertexCount) {
+        uint vertIdx = meshletVertices[meshlet.vertexOffset + threadID];
+        GltfVertex v = vertices[vertIdx];
+
+        vec4 worldPos;
+        vec3 worldNorm;
+
+        if (vis.jointCount > 0 && (v.weights.x + v.weights.y + v.weights.z + v.weights.w) > 0.0001) {
+            mat4 skinMat = v.weights.x * jointMatrices[vis.jointMatrixOffset + v.joints.x] +
+                           v.weights.y * jointMatrices[vis.jointMatrixOffset + v.joints.y] +
+                           v.weights.z * jointMatrices[vis.jointMatrixOffset + v.joints.z] +
+                           v.weights.w * jointMatrices[vis.jointMatrixOffset + v.joints.w];
+
+            worldPos = vis.worldMatrix * skinMat * vec4(v.position, 1.0);
+            worldNorm = mat3(vis.worldMatrix * skinMat) * v.normal;
+        } else {
+            worldPos = vis.worldMatrix * vec4(v.position, 1.0);
+            worldNorm = mat3(vis.worldMatrix) * v.normal;
+        }
+
+        gl_MeshVerticesEXT[threadID].gl_Position = pc.viewProj * worldPos;
+        outWorldPos[threadID] = worldPos.xyz;
+        outNormal[threadID] = normalize(worldNorm);
+        outUV[threadID] = v.texcoord;
+        outMaterialIndex[threadID] = vis.materialIndex;
+    }
+
+    // Process Triangles
+    if (threadID < meshlet.triangleCount) {
+        uint triByteOffset = meshlet.triangleOffset + threadID * 3u;
+        uint i0 = getMeshletTriangleByte(triByteOffset + 0u);
+        uint i1 = getMeshletTriangleByte(triByteOffset + 1u);
+        uint i2 = getMeshletTriangleByte(triByteOffset + 2u);
+
+        gl_PrimitiveTriangleIndicesEXT[threadID] = uvec3(i0, i1, i2);
+    }
+}
