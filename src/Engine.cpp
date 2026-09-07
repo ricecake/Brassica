@@ -587,6 +587,10 @@ namespace brassica {
 	}
 
 	void Engine::Run() {
+		if (!device) {
+			spdlog::warn("Engine::Run called without a valid Vulkan device; aborting execution.");
+			return;
+		}
 		if (options.headless || options.maxFrames > 0) {
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
