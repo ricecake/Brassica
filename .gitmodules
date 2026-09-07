@@ -64,3 +64,7 @@
 [submodule "external/efsw"]
 	path = external/efsw
 	url = https://github.com/SpartanJ/efsw
+[submodule "external/boidish"]
+	path = external/boidish
+	url = https://github.com/ricecake/boidsish.git
+	branch = wtf-omg-why
