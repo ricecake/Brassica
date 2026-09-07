@@ -68,3 +68,6 @@
 	path = external/boidish
 	url = https://github.com/ricecake/boidsish.git
 	branch = wtf-omg-why
+	fetchRecurseSubmodules = false
+	ignore = all
+	update = none
