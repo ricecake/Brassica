@@ -1,0 +1,97 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct InstanceGPUData {
+    mat4 worldMatrix;
+    uint modelIndex;
+    uint primitiveIndex;
+    uint jointMatrixOffset;
+    uint jointCount;
+};
+
+struct PrimitiveGPU {
+    uint firstMeshlet;
+    uint meshletCount;
+    uint materialIndex;
+    uint firstVertex;
+    uint vertexCount;
+    uint pad0, pad1, pad2;
+};
+
+struct DrawMeshTasksIndirectCommand {
+    uint groupCountX;
+    uint groupCountY;
+    uint groupCountZ;
+};
+
+struct VisibleInstanceGPUData {
+    mat4 worldMatrix;
+    uint primitiveIndex;
+    uint materialIndex;
+    uint jointMatrixOffset;
+    uint jointCount;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer InstanceBuffer {
+    InstanceGPUData instances[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer PrimitiveBuffer {
+    PrimitiveGPU primitives[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer IndirectDrawBuffer {
+    DrawMeshTasksIndirectCommand indirectDraws[];
+};
+
+layout(std430, set = 0, binding = 3) writeonly buffer VisibleInstanceBuffer {
+    VisibleInstanceGPUData visibleInstances[];
+};
+
+layout(std430, set = 0, binding = 4) buffer DrawCountBuffer {
+    uint drawCount;
+};
+
+layout(push_constant) uniform PushConstants {
+    mat4 viewProj;
+    vec4 frustumPlanes[6];
+    uint totalInstances;
+} pc;
+
+void main() {
+    uint gID = gl_GlobalInvocationID.x;
+    if (gID >= pc.totalInstances) return;
+
+    InstanceGPUData inst = instances[gID];
+    PrimitiveGPU prim = primitives[inst.primitiveIndex];
+
+    // Simple Frustum Culling on instance position (center of worldMatrix)
+    vec3 instPos = inst.worldMatrix[3].xyz;
+    bool visible = true;
+    for (int i = 0; i < 6; ++i) {
+        if (dot(pc.frustumPlanes[i].xyz, instPos) + pc.frustumPlanes[i].w < -20.0) {
+            visible = false;
+            break;
+        }
+    }
+
+    if (visible) {
+        uint drawIndex = atomicAdd(drawCount, 1);
+
+        DrawMeshTasksIndirectCommand cmd;
+        cmd.groupCountX = prim.meshletCount;
+        cmd.groupCountY = 1;
+        cmd.groupCountZ = 1;
+        indirectDraws[drawIndex] = cmd;
+
+        VisibleInstanceGPUData vis;
+        vis.worldMatrix = inst.worldMatrix;
+        vis.primitiveIndex = inst.primitiveIndex;
+        vis.materialIndex = prim.materialIndex;
+        vis.jointMatrixOffset = inst.jointMatrixOffset;
+        vis.jointCount = inst.jointCount;
+        visibleInstances[drawIndex] = vis;
+    }
+}

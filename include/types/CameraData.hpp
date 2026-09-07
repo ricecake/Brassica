@@ -27,8 +27,8 @@ namespace brassica {
 		float speed{10.0f};
 		float defaultSpeed{10.0f};
 		float minSpeed{1.0f};
-		float maxSpeed{1000.0f};
-		float speedStep{10.0f};
+		float maxSpeed{100.0f};
+		float speedStep{5.0f};
 
 		// Control state
 		bool isCaptured{false};
