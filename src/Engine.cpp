@@ -606,6 +606,11 @@ namespace brassica {
 		device.resetFences(frame.renderFence);
 		uint32_t swapchainImageIndex = acquireResult.value;
 
+		if (swapchainImages.empty() || swapchainImageIndex >= swapchainImages.size()) {
+			spdlog::error("Invalid swapchain image index {} (total images: {})", swapchainImageIndex, swapchainImages.size());
+			return;
+		}
+
 		// 3. Record Commands
 		frame.commandBuffer.reset();
 		vk::CommandBufferBeginInfo cmdBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
@@ -739,17 +744,21 @@ namespace brassica {
 
 		graphicsQueue.submit2(submitInfo, frame.renderFence);
 
-		// 5. Present
-		vk::PresentInfoKHR presentInfo{};
-		presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
-		vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
-		presentInfo.setSwapchains(swapchain);
-		presentInfo.setImageIndices(swapchainImageIndex);
+		// 5. Present (skip in headless mode)
+		if (!options.headless) {
+			vk::PresentInfoKHR presentInfo{};
+			presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
+			vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
+			presentInfo.setSwapchains(swapchain);
+			presentInfo.setImageIndices(swapchainImageIndex);
 
-		vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
-		if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || windowResized) {
-			windowResized = false;
-			RecreateSwapchain();
+			vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
+			if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || windowResized) {
+				windowResized = false;
+				RecreateSwapchain();
+			}
+		} else {
+			(void)device.waitForFences(frame.renderFence, VK_TRUE, 1000000000);
 		}
 
 		frameNumber++;
