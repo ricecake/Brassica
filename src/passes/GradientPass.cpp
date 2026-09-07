@@ -3,12 +3,13 @@
 #include <vector>
 
 #include "spdlog/spdlog.h"
+
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
 
-	GradientPass::GradientPass(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher)
-		: RenderPass("GradientPass", dev, colorFmt) {
+	GradientPass::GradientPass(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher):
+		RenderPass("GradientPass", dev, colorFmt) {
 		InitPipeline(dev, colorFmt, watcher);
 	}
 
@@ -40,7 +41,17 @@ namespace brassica {
 		}
 
 		SetShaders(&vertShader, &fragShader);
-		InitRenderPipeline(colorFmt, vk::Format::eUndefined, {}, {}, watcher, false, false, vk::CompareOp::eLess, vk::CullModeFlagBits::eNone);
+		InitRenderPipeline(
+			colorFmt,
+			vk::Format::eUndefined,
+			{},
+			{},
+			watcher,
+			false,
+			false,
+			vk::CompareOp::eLess,
+			vk::CullModeFlagBits::eNone
+		);
 	}
 
 	FrameGraphResource GradientPass::RegisterPass(
@@ -86,15 +97,16 @@ namespace brassica {
 		}
 
 		FrameGraphTexture2D texWrapper{bgImage, bgImageView};
-		FrameGraphResource importedBg = fg.import("GradientBackground", {extent, vk::Format::eR16G16B16A16Sfloat}, std::move(texWrapper));
+		FrameGraphResource  importedBg = fg.import(
+			"GradientBackground",
+			{extent, vk::Format::eR16G16B16A16Sfloat},
+			std::move(texWrapper)
+		);
 
 		const auto& passData = fg.addCallbackPass<GradientPassData>(
 			"GradientPass",
 			[&](FrameGraph::Builder& builder, GradientPassData& data) {
-				data.target = builder.write(
-					importedBg,
-					static_cast<uint32_t>(TextureUsage::ColorAttachment)
-				);
+				data.target = builder.write(importedBg, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				builder.setSideEffect();
 			},
 			[this, extent](const GradientPassData& data, FrameGraphPassResources& resources, void* ctx) {

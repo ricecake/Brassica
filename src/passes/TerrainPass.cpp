@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "spdlog/spdlog.h"
+
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
@@ -13,10 +14,15 @@ namespace brassica {
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		ShaderWatcher*          watcher
-	) : RenderPass(
+	):
+		RenderPass(
 			"TerrainPass",
 			dev,
-			std::array<vk::Format, 3>{vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16B16A16Sfloat, vk::Format::eR8G8B8A8Unorm},
+			std::array<vk::Format, 3>{
+				vk::Format::eR16G16B16A16Sfloat,
+				vk::Format::eR16G16B16A16Sfloat,
+				vk::Format::eR8G8B8A8Unorm
+			},
 			vk::Format::eD32Sfloat
 		) {
 		dls.init(instance, dev);
@@ -42,7 +48,8 @@ namespace brassica {
 	}
 
 	void TerrainPass::DestroyAccelerationStructures() {
-		if (!lastAllocator) return;
+		if (!lastAllocator)
+			return;
 
 		auto destroyAS = [this](vk::AccelerationStructureKHR& as, BufferResource& buf) {
 			if (as) {
@@ -74,12 +81,13 @@ namespace brassica {
 	}
 
 	void TerrainPass::BuildOrUpdateAccelerationStructure(
-		VmaAllocator allocator,
+		VmaAllocator     allocator,
 		const glm::vec3& cameraPos,
-		float baseTexelSize,
-		uint32_t numLODs
+		float            baseTexelSize,
+		uint32_t         numLODs
 	) {
-		if (allocator == VK_NULL_HANDLE) return;
+		if (allocator == VK_NULL_HANDLE)
+			return;
 		lastAllocator = allocator;
 
 		if (tlas && glm::distance(cameraPos, lastASCameraPos) < 16.0f) {
@@ -89,29 +97,32 @@ namespace brassica {
 
 		// Generate distance-aware AABBs for the terrain grid chunks.
 		// For points/AABBs close to the camera, resolution is finer (e.g., 32 world units per AABB).
-		// For points/AABBs further from the camera (shadow caster point distance), resolution is coarser (64, 128, etc.).
+		// For points/AABBs further from the camera (shadow caster point distance), resolution is coarser (64, 128,
+		// etc.).
 		std::vector<VkAabbPositionsKHR> aabbs;
 
 		uint32_t meshletsPerRow = 16;
 		for (uint32_t lod = 0; lod < numLODs; ++lod) {
-			float baseMeshletSize = 32.0f;
-			float meshletSize = baseMeshletSize * std::pow(2.0f, std::min(0.0f, static_cast<float>(lod-1)));
+			float     baseMeshletSize = 32.0f;
+			float     meshletSize = baseMeshletSize * std::pow(2.0f, std::min(0.0f, static_cast<float>(lod - 1)));
 			glm::vec2 cameraSnap = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / meshletSize) * meshletSize;
 
 			for (uint32_t row = 0; row < meshletsPerRow; ++row) {
 				for (uint32_t col = 0; col < meshletsPerRow; ++col) {
 					glm::vec3 minB(
-						cameraSnap.x + (static_cast<float>(col) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize,
+						cameraSnap.x +
+							(static_cast<float>(col) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize,
 						-200.0f,
-						cameraSnap.y + (static_cast<float>(row) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize
+						cameraSnap.y +
+							(static_cast<float>(row) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize
 					);
 					glm::vec3 maxB = minB + glm::vec3(meshletSize, 400.0f, meshletSize);
 
 					// Radial ring check matching task shader to only generate AABBs for active LOD regions
 					if (lod > 0) {
 						glm::vec2 centerXZ = (glm::vec2(minB.x, minB.z) + glm::vec2(maxB.x, maxB.z)) * 0.5f;
-						float distToCam = glm::length(centerXZ - glm::vec2(cameraPos.x, cameraPos.z));
-						float innerRadius = 240.0f * std::pow(2.0f, static_cast<float>(lod - 1));
+						float     distToCam = glm::length(centerXZ - glm::vec2(cameraPos.x, cameraPos.z));
+						float     innerRadius = 240.0f * std::pow(2.0f, static_cast<float>(lod - 1));
 						if (distToCam < innerRadius) {
 							continue; // Region covered by finer LOD
 						}
@@ -130,7 +141,8 @@ namespace brassica {
 			}
 		}
 
-		if (aabbs.empty()) return;
+		if (aabbs.empty())
+			return;
 
 		// Ensure GPU has finished reading/using previous TLAS before destroying or updating
 		device.waitIdle();
@@ -138,32 +150,41 @@ namespace brassica {
 		DestroyAccelerationStructures();
 
 		// Helper to create Vulkan memory buffer with device address flag
-		auto createBuffer = [this, allocator](vk::DeviceSize size, vk::BufferUsageFlags usage, BufferResource& res, bool hostMapped = false) {
-			VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-			bufInfo.size = size;
-			bufInfo.usage = static_cast<VkBufferUsageFlags>(usage | vk::BufferUsageFlagBits::eShaderDeviceAddress);
+		auto createBuffer =
+			[this,
+			 allocator](vk::DeviceSize size, vk::BufferUsageFlags usage, BufferResource& res, bool hostMapped = false) {
+				VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+				bufInfo.size = size;
+				bufInfo.usage = static_cast<VkBufferUsageFlags>(usage | vk::BufferUsageFlagBits::eShaderDeviceAddress);
 
-			VmaAllocationCreateInfo allocInfo{};
-			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-			if (hostMapped) {
-				allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-			}
+				VmaAllocationCreateInfo allocInfo{};
+				allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+				if (hostMapped) {
+					allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+						VMA_ALLOCATION_CREATE_MAPPED_BIT;
+				}
 
-			VkBuffer vkBuf = VK_NULL_HANDLE;
-			VmaAllocationInfo allocResInfo{};
-			if (vmaCreateBuffer(allocator, &bufInfo, &allocInfo, &vkBuf, &res.allocation, &allocResInfo) == VK_SUCCESS) {
-				res.buffer = vkBuf;
-				vk::BufferDeviceAddressInfo addrInfo{};
-				addrInfo.setBuffer(res.buffer);
-				res.deviceAddress = device.getBufferAddress(addrInfo);
-				return allocResInfo.pMappedData;
-			}
-			return static_cast<void*>(nullptr);
-		};
+				VkBuffer          vkBuf = VK_NULL_HANDLE;
+				VmaAllocationInfo allocResInfo{};
+				if (vmaCreateBuffer(allocator, &bufInfo, &allocInfo, &vkBuf, &res.allocation, &allocResInfo) ==
+				    VK_SUCCESS) {
+					res.buffer = vkBuf;
+					vk::BufferDeviceAddressInfo addrInfo{};
+					addrInfo.setBuffer(res.buffer);
+					res.deviceAddress = device.getBufferAddress(addrInfo);
+					return allocResInfo.pMappedData;
+				}
+				return static_cast<void*>(nullptr);
+			};
 
 		// 1. Upload AABBs to GPU Buffer
 		vk::DeviceSize aabbBufferSize = sizeof(VkAabbPositionsKHR) * aabbs.size();
-		void* aabbMapped = createBuffer(aabbBufferSize, vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR, aabbBuffer, true);
+		void*          aabbMapped = createBuffer(
+			aabbBufferSize,
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			aabbBuffer,
+			true
+		);
 		if (aabbMapped) {
 			std::memcpy(aabbMapped, aabbs.data(), aabbBufferSize);
 		}
@@ -186,7 +207,7 @@ namespace brassica {
 		blasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
 		blasBuildInfo.setGeometries(geometry);
 
-		uint32_t primitiveCount = static_cast<uint32_t>(aabbs.size());
+		uint32_t                                   primitiveCount = static_cast<uint32_t>(aabbs.size());
 		vk::AccelerationStructureBuildSizesInfoKHR blasSizeInfo{};
 		device.getAccelerationStructureBuildSizesKHR(
 			vk::AccelerationStructureBuildTypeKHR::eDevice,
@@ -196,7 +217,12 @@ namespace brassica {
 			dls
 		);
 
-		createBuffer(blasSizeInfo.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR, blasBuffer, false);
+		createBuffer(
+			blasSizeInfo.accelerationStructureSize,
+			vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR,
+			blasBuffer,
+			false
+		);
 
 		vk::AccelerationStructureCreateInfoKHR blasCreateInfo{};
 		blasCreateInfo.setBuffer(blasBuffer.buffer);
@@ -220,7 +246,12 @@ namespace brassica {
 		instanceData.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 		instanceData.accelerationStructureReference = blasAddress;
 
-		void* instMapped = createBuffer(sizeof(VkAccelerationStructureInstanceKHR), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR, instanceBuffer, true);
+		void* instMapped = createBuffer(
+			sizeof(VkAccelerationStructureInstanceKHR),
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			instanceBuffer,
+			true
+		);
 		if (instMapped) {
 			std::memcpy(instMapped, &instanceData, sizeof(VkAccelerationStructureInstanceKHR));
 		}
@@ -241,7 +272,7 @@ namespace brassica {
 		tlasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
 		tlasBuildInfo.setGeometries(tlasGeometry);
 
-		uint32_t tlasInstanceCount = 1;
+		uint32_t                                   tlasInstanceCount = 1;
 		vk::AccelerationStructureBuildSizesInfoKHR tlasSizeInfo{};
 		device.getAccelerationStructureBuildSizesKHR(
 			vk::AccelerationStructureBuildTypeKHR::eDevice,
@@ -251,7 +282,12 @@ namespace brassica {
 			dls
 		);
 
-		createBuffer(tlasSizeInfo.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR, tlasBuffer, false);
+		createBuffer(
+			tlasSizeInfo.accelerationStructureSize,
+			vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR,
+			tlasBuffer,
+			false
+		);
 
 		vk::AccelerationStructureCreateInfoKHR tlasCreateInfo{};
 		tlasCreateInfo.setBuffer(tlasBuffer.buffer);
@@ -297,7 +333,9 @@ namespace brassica {
 			vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR,
 			vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR,
 			vk::DependencyFlags{},
-			barrier, nullptr, nullptr
+			barrier,
+			nullptr,
+			nullptr
 		);
 
 		// Build TLAS
@@ -316,7 +354,7 @@ namespace brassica {
 		cmd.end();
 
 		// Submit command buffer synchronously
-		vk::Queue queue = device.getQueue(0, 0);
+		vk::Queue      queue = device.getQueue(0, 0);
 		vk::SubmitInfo submitInfo{};
 		submitInfo.setCommandBuffers(cmd);
 		queue.submit(submitInfo, nullptr);
@@ -348,39 +386,62 @@ namespace brassica {
 		DestroyGBufferTextures(allocator);
 		currentExtent = extent;
 
-		auto createTex = [this, allocator, extent](vk::Format format, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect, TextureResource& tex) {
-			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-			imageInfo.imageType = VK_IMAGE_TYPE_2D;
-			imageInfo.extent = VkExtent3D{extent.width, extent.height, 1};
-			imageInfo.mipLevels = 1;
-			imageInfo.arrayLayers = 1;
-			imageInfo.format = static_cast<VkFormat>(format);
-			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			imageInfo.usage = static_cast<VkImageUsageFlags>(usage);
-			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		auto createTex =
+			[this,
+			 allocator,
+			 extent](vk::Format format, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect, TextureResource& tex) {
+				VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+				imageInfo.imageType = VK_IMAGE_TYPE_2D;
+				imageInfo.extent = VkExtent3D{extent.width, extent.height, 1};
+				imageInfo.mipLevels = 1;
+				imageInfo.arrayLayers = 1;
+				imageInfo.format = static_cast<VkFormat>(format);
+				imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+				imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+				imageInfo.usage = static_cast<VkImageUsageFlags>(usage);
+				imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+				imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-			VmaAllocationCreateInfo allocInfo{};
-			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+				VmaAllocationCreateInfo allocInfo{};
+				allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-			VkImage vkImg = VK_NULL_HANDLE;
-			if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &vkImg, &tex.allocation, nullptr) == VK_SUCCESS) {
-				tex.image = vkImg;
+				VkImage vkImg = VK_NULL_HANDLE;
+				if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &vkImg, &tex.allocation, nullptr) == VK_SUCCESS) {
+					tex.image = vkImg;
 
-				vk::ImageViewCreateInfo viewInfo{};
-				viewInfo.setImage(tex.image);
-				viewInfo.setViewType(vk::ImageViewType::e2D);
-				viewInfo.setFormat(format);
-				viewInfo.setSubresourceRange(vk::ImageSubresourceRange(aspect, 0, 1, 0, 1));
-				tex.imageView = device.createImageView(viewInfo);
-			}
-		};
+					vk::ImageViewCreateInfo viewInfo{};
+					viewInfo.setImage(tex.image);
+					viewInfo.setViewType(vk::ImageViewType::e2D);
+					viewInfo.setFormat(format);
+					viewInfo.setSubresourceRange(vk::ImageSubresourceRange(aspect, 0, 1, 0, 1));
+					tex.imageView = device.createImageView(viewInfo);
+				}
+			};
 
-		createTex(vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor, posTex);
-		createTex(vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor, normTex);
-		createTex(vk::Format::eR8G8B8A8Unorm, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor, albTex);
-		createTex(vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eDepth, depthTex);
+		createTex(
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eColor,
+			posTex
+		);
+		createTex(
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eColor,
+			normTex
+		);
+		createTex(
+			vk::Format::eR8G8B8A8Unorm,
+			vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eColor,
+			albTex
+		);
+		createTex(
+			vk::Format::eD32Sfloat,
+			vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eDepth,
+			depthTex
+		);
 	}
 
 	void TerrainPass::InitPipeline(
@@ -396,7 +457,9 @@ namespace brassica {
 		samplerBinding.setBinding(0);
 		samplerBinding.setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
 		samplerBinding.setDescriptorCount(1);
-		samplerBinding.setStageFlags(vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eFragment);
+		samplerBinding.setStageFlags(
+			vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eFragment
+		);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(samplerBinding);
@@ -440,7 +503,7 @@ namespace brassica {
 		RenderPass::fragShader = &this->fragShader;
 
 		std::array<vk::DescriptorSetLayout, 2> setLayouts = {globalSet0Layout, terrainSet1Layout};
-		vk::PushConstantRange pushConstantRange{};
+		vk::PushConstantRange                  pushConstantRange{};
 		pushConstantRange.setStageFlags(vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT);
 		pushConstantRange.setOffset(0);
 		pushConstantRange.setSize(sizeof(TerrainPushConstants));
@@ -449,21 +512,20 @@ namespace brassica {
 		storedPushConstants.assign({pushConstantRange});
 
 		auto buildPipeline = [this]() {
-			if (pipeline) device.destroyPipeline(pipeline);
-			if (pipelineLayout) device.destroyPipelineLayout(pipelineLayout);
+			if (pipeline)
+				device.destroyPipeline(pipeline);
+			if (pipelineLayout)
+				device.destroyPipelineLayout(pipelineLayout);
 
 			vk::PipelineLayoutCreateInfo layoutInfo{};
 			layoutInfo.setSetLayouts(storedSetLayouts);
 			layoutInfo.setPushConstantRanges(storedPushConstants);
 			pipelineLayout = device.createPipelineLayout(layoutInfo);
 
-			std::vector<vk::PipelineShaderStageCreateInfo> stages = {
-				taskShader.GetStageCreateInfo(),
-				meshShader.GetStageCreateInfo(),
-				fragShader.GetStageCreateInfo()
-			};
+			std::vector<vk::PipelineShaderStageCreateInfo> stages =
+				{taskShader.GetStageCreateInfo(), meshShader.GetStageCreateInfo(), fragShader.GetStageCreateInfo()};
 
-			vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+			vk::PipelineVertexInputStateCreateInfo   vertexInputInfo{};
 			vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
 			inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
 
@@ -483,7 +545,8 @@ namespace brassica {
 			std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments(colorFormats.size());
 			for (size_t i = 0; i < colorFormats.size(); ++i) {
 				colorBlendAttachments[i].setColorWriteMask(
-					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
+					vk::ColorComponentFlagBits::eA
 				);
 			}
 
@@ -540,7 +603,8 @@ namespace brassica {
 	}
 
 	void TerrainPass::UpdateClipmapDescriptor(vk::ImageView clipmapImageView, vk::Sampler clipmapSampler) {
-		if (!terrainDescriptorSet || !clipmapImageView || !clipmapSampler) return;
+		if (!terrainDescriptorSet || !clipmapImageView || !clipmapSampler)
+			return;
 
 		vk::DescriptorImageInfo imageInfo{};
 		imageInfo.setImageView(clipmapImageView);
@@ -557,12 +621,12 @@ namespace brassica {
 	}
 
 	void TerrainPass::RegisterPass(
-		FrameGraph&           fg,
-		FrameGraphBlackboard& blackboard,
-		vk::Extent2D          extent,
-		vk::DescriptorSet     globalDescriptorSet,
+		FrameGraph&                 fg,
+		FrameGraphBlackboard&       blackboard,
+		vk::Extent2D                extent,
+		vk::DescriptorSet           globalDescriptorSet,
 		const TerrainPushConstants& pushConstants,
-		VmaAllocator          allocator
+		VmaAllocator                allocator
 	) {
 		if (allocator != VK_NULL_HANDLE) {
 			lastAllocator = allocator;
@@ -573,13 +637,34 @@ namespace brassica {
 		}
 
 		if (allocator != VK_NULL_HANDLE) {
-			BuildOrUpdateAccelerationStructure(allocator, glm::vec3(pushConstants.cameraPos), pushConstants.cameraPos.w, pushConstants.gridParams.x);
+			BuildOrUpdateAccelerationStructure(
+				allocator,
+				glm::vec3(pushConstants.cameraPos),
+				pushConstants.cameraPos.w,
+				pushConstants.gridParams.x
+			);
 		}
 
-		FrameGraphResource importedPos = fg.import("GBuffer_Position", {extent, vk::Format::eR16G16B16A16Sfloat}, FrameGraphTexture2D{posTex.image, posTex.imageView});
-		FrameGraphResource importedNorm = fg.import("GBuffer_Normal", {extent, vk::Format::eR16G16B16A16Sfloat}, FrameGraphTexture2D{normTex.image, normTex.imageView});
-		FrameGraphResource importedAlb = fg.import("GBuffer_Albedo", {extent, vk::Format::eR8G8B8A8Unorm}, FrameGraphTexture2D{albTex.image, albTex.imageView});
-		FrameGraphResource importedDepth = fg.import("GBuffer_Depth", {extent, vk::Format::eD32Sfloat}, FrameGraphTexture2D{depthTex.image, depthTex.imageView});
+		FrameGraphResource importedPos = fg.import(
+			"GBuffer_Position",
+			{extent, vk::Format::eR16G16B16A16Sfloat},
+			FrameGraphTexture2D{posTex.image, posTex.imageView}
+		);
+		FrameGraphResource importedNorm = fg.import(
+			"GBuffer_Normal",
+			{extent, vk::Format::eR16G16B16A16Sfloat},
+			FrameGraphTexture2D{normTex.image, normTex.imageView}
+		);
+		FrameGraphResource importedAlb = fg.import(
+			"GBuffer_Albedo",
+			{extent, vk::Format::eR8G8B8A8Unorm},
+			FrameGraphTexture2D{albTex.image, albTex.imageView}
+		);
+		FrameGraphResource importedDepth = fg.import(
+			"GBuffer_Depth",
+			{extent, vk::Format::eD32Sfloat},
+			FrameGraphTexture2D{depthTex.image, depthTex.imageView}
+		);
 
 		const auto& passData = fg.addCallbackPass<TerrainPassData>(
 			"TerrainPass",
@@ -587,11 +672,17 @@ namespace brassica {
 				data.positionTarget = builder.write(importedPos, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				data.normalTarget = builder.write(importedNorm, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				data.albedoTarget = builder.write(importedAlb, static_cast<uint32_t>(TextureUsage::ColorAttachment));
-				data.depthTarget = builder.write(importedDepth, static_cast<uint32_t>(TextureUsage::DepthStencilAttachment));
+				data.depthTarget = builder.write(
+					importedDepth,
+					static_cast<uint32_t>(TextureUsage::DepthStencilAttachment)
+				);
 
 				builder.setSideEffect();
 			},
-			[this, extent, globalDescriptorSet, pushConstants](const TerrainPassData& data, FrameGraphPassResources& resources, void* ctx) {
+			[this,
+			 extent,
+			 globalDescriptorSet,
+			 pushConstants](const TerrainPassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
 				auto& posTexture = resources.get<FrameGraphTexture2D>(data.positionTarget);
@@ -605,7 +696,9 @@ namespace brassica {
 					colorAttachments[i].setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
 					colorAttachments[i].setLoadOp(vk::AttachmentLoadOp::eClear);
 					colorAttachments[i].setStoreOp(vk::AttachmentStoreOp::eStore);
-					colorAttachments[i].setClearValue(vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}});
+					colorAttachments[i].setClearValue(
+						vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}}
+					);
 				}
 
 				colorAttachments[0].setImageView(posTexture.imageView);
@@ -622,13 +715,31 @@ namespace brassica {
 				BeginRendering(cmd, extent, colorAttachments, &depthAttachmentInfo);
 
 				if (globalDescriptorSet) {
-					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, globalDescriptorSet, nullptr);
+					cmd.bindDescriptorSets(
+						vk::PipelineBindPoint::eGraphics,
+						pipelineLayout,
+						0,
+						globalDescriptorSet,
+						nullptr
+					);
 				}
 				if (terrainDescriptorSet) {
-					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, terrainDescriptorSet, nullptr);
+					cmd.bindDescriptorSets(
+						vk::PipelineBindPoint::eGraphics,
+						pipelineLayout,
+						1,
+						terrainDescriptorSet,
+						nullptr
+					);
 				}
 
-				cmd.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT, 0, sizeof(TerrainPushConstants), &pushConstants);
+				cmd.pushConstants(
+					pipelineLayout,
+					vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+					0,
+					sizeof(TerrainPushConstants),
+					&pushConstants
+				);
 
 				// Dispatch task groups: ceil(totalMeshlets / 32)
 				uint32_t taskGroupCount = (pushConstants.gridParams.z + 31) / 32;

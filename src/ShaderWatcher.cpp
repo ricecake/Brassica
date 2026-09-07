@@ -136,7 +136,7 @@ namespace brassica {
 				}
 			}
 
-			bool recompiledAny = false;
+			bool              recompiledAny = false;
 			std::set<Shader*> processedShaders;
 			for (Shader* shader : shadersToReload) {
 				if (!shader || processedShaders.count(shader))

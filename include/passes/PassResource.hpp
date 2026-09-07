@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+
 #include "vulkan/vulkan.hpp"
+
 #include "vk_mem_alloc.h"
 
 namespace brassica {
@@ -9,7 +11,7 @@ namespace brassica {
 	struct RenderContext {
 		vk::CommandBuffer commandBuffer{nullptr};
 		VmaAllocator      allocator{VK_NULL_HANDLE};
-		vk::Device         device{nullptr};
+		vk::Device        device{nullptr};
 	};
 
 	// Helper usage flags encoding stages and layout/access for preRead/preWrite
@@ -57,7 +59,7 @@ namespace brassica {
 	};
 
 	// 2D Texture Resource for FrameGraph
-	struct FrameGraphTexture2D : public PassResource {
+	struct FrameGraphTexture2D: public PassResource {
 		struct Desc {
 			vk::Extent2D        extent{0, 0};
 			vk::Format          format{vk::Format::eUndefined};
@@ -70,11 +72,12 @@ namespace brassica {
 		vk::ImageLayout currentLayout{vk::ImageLayout::eUndefined};
 
 		FrameGraphTexture2D() = default;
-		FrameGraphTexture2D(vk::Image img, vk::ImageView view, vk::ImageLayout layout = vk::ImageLayout::eUndefined)
-			: image(img), imageView(view), currentLayout(layout) {}
 
-		FrameGraphTexture2D(FrameGraphTexture2D&& o) noexcept
-			: image(o.image), imageView(o.imageView), allocation(o.allocation), currentLayout(o.currentLayout) {
+		FrameGraphTexture2D(vk::Image img, vk::ImageView view, vk::ImageLayout layout = vk::ImageLayout::eUndefined):
+			image(img), imageView(view), currentLayout(layout) {}
+
+		FrameGraphTexture2D(FrameGraphTexture2D&& o) noexcept:
+			image(o.image), imageView(o.imageView), allocation(o.allocation), currentLayout(o.currentLayout) {
 			o.image = nullptr;
 			o.imageView = nullptr;
 			o.allocation = VK_NULL_HANDLE;
@@ -101,7 +104,7 @@ namespace brassica {
 	};
 
 	// 3D Texture Resource for FrameGraph
-	struct FrameGraphTexture3D : public PassResource {
+	struct FrameGraphTexture3D: public PassResource {
 		struct Desc {
 			vk::Extent3D        extent{0, 0, 0};
 			vk::Format          format{vk::Format::eUndefined};
@@ -114,11 +117,12 @@ namespace brassica {
 		vk::ImageLayout currentLayout{vk::ImageLayout::eUndefined};
 
 		FrameGraphTexture3D() = default;
-		FrameGraphTexture3D(vk::Image img, vk::ImageView view, vk::ImageLayout layout = vk::ImageLayout::eUndefined)
-			: image(img), imageView(view), currentLayout(layout) {}
 
-		FrameGraphTexture3D(FrameGraphTexture3D&& o) noexcept
-			: image(o.image), imageView(o.imageView), allocation(o.allocation), currentLayout(o.currentLayout) {
+		FrameGraphTexture3D(vk::Image img, vk::ImageView view, vk::ImageLayout layout = vk::ImageLayout::eUndefined):
+			image(img), imageView(view), currentLayout(layout) {}
+
+		FrameGraphTexture3D(FrameGraphTexture3D&& o) noexcept:
+			image(o.image), imageView(o.imageView), allocation(o.allocation), currentLayout(o.currentLayout) {
 			o.image = nullptr;
 			o.imageView = nullptr;
 			o.allocation = VK_NULL_HANDLE;
@@ -145,7 +149,7 @@ namespace brassica {
 	};
 
 	// Storage Buffer (SSBO) Resource for FrameGraph
-	struct FrameGraphSSBO : public PassResource {
+	struct FrameGraphSSBO: public PassResource {
 		struct Desc {
 			vk::DeviceSize       size{0};
 			vk::BufferUsageFlags usage{vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst};
@@ -156,11 +160,12 @@ namespace brassica {
 		void*         mappedData{nullptr};
 
 		FrameGraphSSBO() = default;
-		FrameGraphSSBO(vk::Buffer buf, VmaAllocation alloc = VK_NULL_HANDLE, void* mapped = nullptr)
-			: buffer(buf), allocation(alloc), mappedData(mapped) {}
 
-		FrameGraphSSBO(FrameGraphSSBO&& o) noexcept
-			: buffer(o.buffer), allocation(o.allocation), mappedData(o.mappedData) {
+		FrameGraphSSBO(vk::Buffer buf, VmaAllocation alloc = VK_NULL_HANDLE, void* mapped = nullptr):
+			buffer(buf), allocation(alloc), mappedData(mapped) {}
+
+		FrameGraphSSBO(FrameGraphSSBO&& o) noexcept:
+			buffer(o.buffer), allocation(o.allocation), mappedData(o.mappedData) {
 			o.buffer = nullptr;
 			o.allocation = VK_NULL_HANDLE;
 			o.mappedData = nullptr;
@@ -186,7 +191,7 @@ namespace brassica {
 	};
 
 	// Uniform Buffer (UBO) Resource for FrameGraph
-	struct FrameGraphUBO : public PassResource {
+	struct FrameGraphUBO: public PassResource {
 		struct Desc {
 			vk::DeviceSize       size{0};
 			vk::BufferUsageFlags usage{vk::BufferUsageFlagBits::eUniformBuffer};
@@ -197,11 +202,12 @@ namespace brassica {
 		void*         mappedData{nullptr};
 
 		FrameGraphUBO() = default;
-		FrameGraphUBO(vk::Buffer buf, VmaAllocation alloc = VK_NULL_HANDLE, void* mapped = nullptr)
-			: buffer(buf), allocation(alloc), mappedData(mapped) {}
 
-		FrameGraphUBO(FrameGraphUBO&& o) noexcept
-			: buffer(o.buffer), allocation(o.allocation), mappedData(o.mappedData) {
+		FrameGraphUBO(vk::Buffer buf, VmaAllocation alloc = VK_NULL_HANDLE, void* mapped = nullptr):
+			buffer(buf), allocation(alloc), mappedData(mapped) {}
+
+		FrameGraphUBO(FrameGraphUBO&& o) noexcept:
+			buffer(o.buffer), allocation(o.allocation), mappedData(o.mappedData) {
 			o.buffer = nullptr;
 			o.allocation = VK_NULL_HANDLE;
 			o.mappedData = nullptr;

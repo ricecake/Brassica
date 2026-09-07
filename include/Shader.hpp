@@ -21,7 +21,7 @@ namespace brassica {
 			RegisterConstant(name, std::string(value));
 		}
 
-		template<typename T>
+		template <typename T>
 		static void RegisterConstant(const std::string& name, T value) {
 			RegisterConstant(name, std::to_string(value));
 		}
@@ -69,6 +69,7 @@ namespace brassica {
 	class ComputeShader: public Shader {
 	public:
 		ComputeShader() { shaderKind = shaderc_glsl_compute_shader; }
+
 		bool                              CompileComputeFromFile(vk::Device device, const std::string& filepath);
 		vk::PipelineShaderStageCreateInfo GetStageCreateInfo() const;
 	};
@@ -85,6 +86,7 @@ namespace brassica {
 	class VertexShader: public GraphicsShader {
 	public:
 		VertexShader() { shaderKind = shaderc_glsl_vertex_shader; }
+
 		bool CompileVertexFromFile(vk::Device device, const std::string& filepath);
 
 		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eVertex; }
@@ -93,6 +95,7 @@ namespace brassica {
 	class FragmentShader: public GraphicsShader {
 	public:
 		FragmentShader() { shaderKind = shaderc_glsl_fragment_shader; }
+
 		bool CompileFragmentFromFile(vk::Device device, const std::string& filepath);
 
 		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eFragment; }
@@ -101,6 +104,7 @@ namespace brassica {
 	class GeometryShader: public GraphicsShader {
 	public:
 		GeometryShader() { shaderKind = shaderc_glsl_geometry_shader; }
+
 		bool CompileGeometryFromFile(vk::Device device, const std::string& filepath);
 
 		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eGeometry; }
@@ -109,6 +113,7 @@ namespace brassica {
 	class TessControlShader: public GraphicsShader {
 	public:
 		TessControlShader() { shaderKind = shaderc_glsl_tess_control_shader; }
+
 		bool CompileTessControlFromFile(vk::Device device, const std::string& filepath);
 
 		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eTessellationControl; }
@@ -117,6 +122,7 @@ namespace brassica {
 	class TessEvaluationShader: public GraphicsShader {
 	public:
 		TessEvaluationShader() { shaderKind = shaderc_glsl_tess_evaluation_shader; }
+
 		bool CompileTessEvalFromFile(vk::Device device, const std::string& filepath);
 
 		vk::ShaderStageFlagBits GetStageFlag() const override {
@@ -127,6 +133,7 @@ namespace brassica {
 	class MeshShader: public GraphicsShader {
 	public:
 		MeshShader() { shaderKind = shaderc_glsl_mesh_shader; }
+
 		bool CompileMeshFromFile(vk::Device device, const std::string& filepath);
 
 		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eMeshEXT; }
@@ -135,6 +142,7 @@ namespace brassica {
 	class TaskShader: public GraphicsShader {
 	public:
 		TaskShader() { shaderKind = shaderc_glsl_task_shader; }
+
 		bool CompileTaskFromFile(vk::Device device, const std::string& filepath);
 
 		vk::ShaderStageFlagBits GetStageFlag() const override { return vk::ShaderStageFlagBits::eTaskEXT; }

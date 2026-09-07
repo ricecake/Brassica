@@ -1,7 +1,6 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
-#include "vk_mem_alloc.h"
 
 #include "fg/Blackboard.hpp"
 #include "fg/FrameGraph.hpp"
@@ -9,6 +8,7 @@
 #include "passes/RenderResources.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
+#include "vk_mem_alloc.h"
 
 namespace brassica {
 
@@ -21,7 +21,7 @@ namespace brassica {
 		FrameGraphResource depthTarget;
 	};
 
-	class MeshCubePass : public RenderPass {
+	class MeshCubePass: public RenderPass {
 	public:
 		MeshCubePass(
 			vk::Instance            instance,

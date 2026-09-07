@@ -16,7 +16,7 @@ namespace brassica {
 		FrameGraphResource target;
 	};
 
-	class DeferredPass : public RenderPass {
+	class DeferredPass: public RenderPass {
 	public:
 		DeferredPass(
 			vk::Device              device,
@@ -34,13 +34,13 @@ namespace brassica {
 		);
 
 		FrameGraphResource RegisterPass(
-			FrameGraph&           fg,
-			FrameGraphBlackboard& blackboard,
-			vk::Extent2D          extent,
-			vk::DescriptorSet     globalDescriptorSet,
-			uint32_t              activeFrame = 0,
-			vk::ImageView         clipmapImageView = nullptr,
-			vk::Sampler           clipmapSampler = nullptr,
+			FrameGraph&                  fg,
+			FrameGraphBlackboard&        blackboard,
+			vk::Extent2D                 extent,
+			vk::DescriptorSet            globalDescriptorSet,
+			uint32_t                     activeFrame = 0,
+			vk::ImageView                clipmapImageView = nullptr,
+			vk::Sampler                  clipmapSampler = nullptr,
 			vk::AccelerationStructureKHR tlas = nullptr
 		);
 

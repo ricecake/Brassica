@@ -4,8 +4,9 @@
 #include <vector>
 
 #include "spdlog/spdlog.h"
-#include "ShaderWatcher.hpp"
+
 #include "passes/GradientPass.hpp"
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
@@ -14,7 +15,8 @@ namespace brassica {
 		vk::DescriptorSetLayout globalSet0Layout,
 		vk::Format              colorFmt,
 		ShaderWatcher*          watcher
-	) : RenderPass("DeferredPass", dev, colorFmt) {
+	):
+		RenderPass("DeferredPass", dev, colorFmt) {
 		CreateDescriptorResources(dev);
 		InitPipeline(dev, globalSet0Layout, colorFmt, watcher);
 	}
@@ -60,7 +62,7 @@ namespace brassica {
 
 		// Allocate Sets
 		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, gbufferSetLayout);
-		vk::DescriptorSetAllocateInfo allocInfo{};
+		vk::DescriptorSetAllocateInfo        allocInfo{};
 		allocInfo.setDescriptorPool(descriptorPool);
 		allocInfo.setSetLayouts(layouts);
 
@@ -111,17 +113,27 @@ namespace brassica {
 		SetShaders(&vertShader, &fragShader);
 
 		std::array<vk::DescriptorSetLayout, 2> setLayouts = {globalSet0Layout, gbufferSetLayout};
-		InitRenderPipeline(colorFmt, vk::Format::eUndefined, setLayouts, {}, watcher, false, false, vk::CompareOp::eLess, vk::CullModeFlagBits::eNone);
+		InitRenderPipeline(
+			colorFmt,
+			vk::Format::eUndefined,
+			setLayouts,
+			{},
+			watcher,
+			false,
+			false,
+			vk::CompareOp::eLess,
+			vk::CullModeFlagBits::eNone
+		);
 	}
 
 	FrameGraphResource DeferredPass::RegisterPass(
-		FrameGraph&           fg,
-		FrameGraphBlackboard& blackboard,
-		vk::Extent2D          extent,
-		vk::DescriptorSet     globalDescriptorSet,
-		uint32_t              activeFrame,
-		vk::ImageView         clipmapImageView,
-		vk::Sampler           clipmapSampler,
+		FrameGraph&                  fg,
+		FrameGraphBlackboard&        blackboard,
+		vk::Extent2D                 extent,
+		vk::DescriptorSet            globalDescriptorSet,
+		uint32_t                     activeFrame,
+		vk::ImageView                clipmapImageView,
+		vk::Sampler                  clipmapSampler,
 		vk::AccelerationStructureKHR tlas
 	) {
 		const auto& gbufferData = blackboard.get<GBufferData>();
@@ -139,7 +151,15 @@ namespace brassica {
 				data.target = builder.write(swapchainData.target, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				builder.setSideEffect();
 			},
-			[this, extent, globalDescriptorSet, gbufferData, gradientData, activeFrame, clipmapImageView, clipmapSampler, tlas](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
+			[this,
+			 extent,
+			 globalDescriptorSet,
+			 gbufferData,
+			 gradientData,
+			 activeFrame,
+			 clipmapImageView,
+			 clipmapSampler,
+			 tlas](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
 				auto& posTex = resources.get<FrameGraphTexture2D>(gbufferData.positionTarget);
@@ -151,14 +171,29 @@ namespace brassica {
 				vk::DescriptorSet currentGbufferSet = gbufferDescriptorSets[activeFrame % FRAME_OVERLAP];
 
 				std::array<vk::DescriptorImageInfo, 5> imageInfos{};
-				imageInfos[0].setSampler(sampler).setImageView(posTex.imageView).setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-				imageInfos[1].setSampler(sampler).setImageView(normTex.imageView).setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-				imageInfos[2].setSampler(sampler).setImageView(albTex.imageView).setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-				imageInfos[3].setSampler(sampler).setImageView(bgTex.imageView).setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				imageInfos[0]
+					.setSampler(sampler)
+					.setImageView(posTex.imageView)
+					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				imageInfos[1]
+					.setSampler(sampler)
+					.setImageView(normTex.imageView)
+					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				imageInfos[2]
+					.setSampler(sampler)
+					.setImageView(albTex.imageView)
+					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				imageInfos[3]
+					.setSampler(sampler)
+					.setImageView(bgTex.imageView)
+					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 
-				vk::Sampler clipSampler = clipmapSampler ? clipmapSampler : sampler;
+				vk::Sampler   clipSampler = clipmapSampler ? clipmapSampler : sampler;
 				vk::ImageView clipView = clipmapImageView ? clipmapImageView : posTex.imageView;
-				imageInfos[4].setSampler(clipSampler).setImageView(clipView).setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				imageInfos[4]
+					.setSampler(clipSampler)
+					.setImageView(clipView)
+					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 
 				std::array<vk::WriteDescriptorSet, 6> descriptorWrites{};
 				for (uint32_t i = 0; i < 5; ++i) {
@@ -188,12 +223,20 @@ namespace brassica {
 				colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
 				colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear);
 				colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
-				colorAttachment.setClearValue(vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}});
+				colorAttachment.setClearValue(
+					vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}}
+				);
 
 				BeginRendering(cmd, extent, std::span(&colorAttachment, 1));
 
 				if (globalDescriptorSet) {
-					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, globalDescriptorSet, nullptr);
+					cmd.bindDescriptorSets(
+						vk::PipelineBindPoint::eGraphics,
+						pipelineLayout,
+						0,
+						globalDescriptorSet,
+						nullptr
+					);
 				}
 				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, currentGbufferSet, nullptr);
 

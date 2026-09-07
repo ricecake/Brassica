@@ -1,4 +1,5 @@
 #include "types/AABB.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -43,9 +44,12 @@ namespace brassica {
 		for (const auto& plane : planes) {
 			// Find positive vertex (p-vertex) relative to plane normal
 			glm::vec3 pVertex = minBound;
-			if (plane.x >= 0.0f) pVertex.x = maxBound.x;
-			if (plane.y >= 0.0f) pVertex.y = maxBound.y;
-			if (plane.z >= 0.0f) pVertex.z = maxBound.z;
+			if (plane.x >= 0.0f)
+				pVertex.x = maxBound.x;
+			if (plane.y >= 0.0f)
+				pVertex.y = maxBound.y;
+			if (plane.z >= 0.0f)
+				pVertex.z = maxBound.z;
 
 			// If p-vertex is outside plane (distance < 0), AABB is completely outside frustum
 			if (glm::dot(glm::vec3(plane), pVertex) + plane.w < 0.0f) {
@@ -56,7 +60,8 @@ namespace brassica {
 	}
 
 	uint32_t AABB::CalculateLOD(const glm::vec3& cameraPos, float baseTexelSize, uint32_t maxLODs) const {
-		if (maxLODs <= 1) return 0;
+		if (maxLODs <= 1)
+			return 0;
 
 		float dist = DistanceToPoint(cameraPos);
 		// Scale threshold distance with baseTexelSize
@@ -66,7 +71,7 @@ namespace brassica {
 			return 0;
 		}
 
-		float lodLevel = std::log2(dist / lod0Distance);
+		float    lodLevel = std::log2(dist / lod0Distance);
 		uint32_t lodIndex = static_cast<uint32_t>(std::floor(lodLevel)) + 1;
 		return std::min(lodIndex, maxLODs - 1);
 	}

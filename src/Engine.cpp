@@ -2,9 +2,11 @@
 
 #include <cstring>
 #include <filesystem>
-#include <glm/gtc/matrix_transform.hpp>
-#include "fg/Blackboard.hpp"
+
 #include "spdlog/spdlog.h"
+
+#include "fg/Blackboard.hpp"
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace brassica {
 
@@ -25,10 +27,12 @@ namespace brassica {
 
 		if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
 			spdlog::error("[Vulkan Validation Error] {}", pCallbackData->pMessage);
-			if (engine) engine->validationErrorCount++;
+			if (engine)
+				engine->validationErrorCount++;
 		} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 			spdlog::warn("[Vulkan Validation Warning] {}", pCallbackData->pMessage);
-			if (engine) engine->validationWarningCount++;
+			if (engine)
+				engine->validationWarningCount++;
 		} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
 			spdlog::info("[Vulkan Validation Info] {}", pCallbackData->pMessage);
 		} else {
@@ -111,7 +115,8 @@ namespace brassica {
 		swapchainImageViews.assign(raw_image_views.begin(), raw_image_views.end());
 
 		for (auto sem : swapchainRenderSemaphores) {
-			if (sem) device.destroySemaphore(sem);
+			if (sem)
+				device.destroySemaphore(sem);
 		}
 		swapchainRenderSemaphores.clear();
 
@@ -230,7 +235,8 @@ namespace brassica {
 			}
 
 			for (auto sem : swapchainRenderSemaphores) {
-				if (sem) device.destroySemaphore(sem);
+				if (sem)
+					device.destroySemaphore(sem);
 			}
 			swapchainRenderSemaphores.clear();
 
@@ -299,7 +305,14 @@ namespace brassica {
 		// Async upload initial heightmaps
 		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
 			auto mapData = TerrainClipmap::GenerateSineWaveMap(l, terrainClipmap.GetBaseTexelSize());
-			terrainUploader.UploadLevelAsync(l, mapData, terrainClipmap.GetImage(), TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, graphicsQueue);
+			terrainUploader.UploadLevelAsync(
+				l,
+				mapData,
+				terrainClipmap.GetImage(),
+				TERRAIN_MAP_DIM,
+				TERRAIN_MAP_DIM,
+				graphicsQueue
+			);
 		}
 		terrainPass->UpdateClipmapDescriptor(terrainClipmap.GetImageView(), terrainClipmap.GetSampler());
 
@@ -316,7 +329,11 @@ namespace brassica {
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_0)) {
 				camera.isCaptured = !camera.isCaptured;
 				if (window) {
-					glfwSetInputMode(window, GLFW_CURSOR, camera.isCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+					glfwSetInputMode(
+						window,
+						GLFW_CURSOR,
+						camera.isCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL
+					);
 				}
 				firstMouse = true;
 			}
@@ -377,7 +394,8 @@ namespace brassica {
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_SPACE)) {
 				moveDir += glm::vec3(0.0f, 1.0f, 0.0f);
 			}
-			if (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT)) {
+			if (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ||
+			    defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT)) {
 				moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
 			}
 
@@ -432,7 +450,8 @@ namespace brassica {
 			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
 
 			uint32_t count = 0;
-			if (vk::enumerateInstanceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess && count > 0) {
+			if (vk::enumerateInstanceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess &&
+			    count > 0) {
 				std::vector<vk::ExtensionProperties> exts(count);
 				if (vk::enumerateInstanceExtensionProperties(nullptr, &count, exts.data()) == vk::Result::eSuccess) {
 					for (const auto& ext : exts) {
@@ -469,7 +488,7 @@ namespace brassica {
 			VkHeadlessSurfaceCreateInfoEXT createInfo{};
 			createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
 			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
-			VkResult res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
+			VkResult     res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
 			if (res != VK_SUCCESS) {
 				spdlog::critical("Failed to create headless surface: {}", static_cast<int>(res));
 				return false;
@@ -501,13 +520,17 @@ namespace brassica {
 		meshFeatures.taskShader = VK_TRUE;
 		meshFeatures.primitiveFragmentShadingRateMeshShader = VK_TRUE;
 
-		VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+		VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{
+			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
+		};
 		asFeatures.accelerationStructure = VK_TRUE;
 
 		VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
 		rqFeatures.rayQuery = VK_TRUE;
 
-		VkPhysicalDeviceFragmentShadingRateFeaturesKHR variableShadingRate{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+		VkPhysicalDeviceFragmentShadingRateFeaturesKHR variableShadingRate{
+			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR
+		};
 		variableShadingRate.primitiveFragmentShadingRate = VK_TRUE;
 		variableShadingRate.attachmentFragmentShadingRate = VK_TRUE;
 
@@ -524,8 +547,7 @@ namespace brassica {
 			.add_required_extension_features(meshFeatures)
 			.add_required_extension_features(asFeatures)
 			.add_required_extension_features(rqFeatures)
-			.add_required_extension_features(variableShadingRate)
-			;
+			.add_required_extension_features(variableShadingRate);
 
 		auto phys_ret = selector.select();
 		if (!phys_ret) {
@@ -683,8 +705,8 @@ namespace brassica {
 
 		for (uint32_t i = 0; i < terrainClipmap.GetNumLODs(); ++i) {
 			const auto& info = terrainClipmap.GetLevelInfo(i);
-			uint32_t packed = (static_cast<uint32_t>(info.gridOffset.x) & 0xFFFFu) |
-			                  ((static_cast<uint32_t>(info.gridOffset.y) & 0xFFFFu) << 16u);
+			uint32_t    packed = (static_cast<uint32_t>(info.gridOffset.x) & 0xFFFFu) |
+				((static_cast<uint32_t>(info.gridOffset.y) & 0xFFFFu) << 16u);
 			if (i < 4) {
 				offsets0_3[i] = packed;
 			} else if (i < 8) {
@@ -693,7 +715,6 @@ namespace brassica {
 		}
 		terrainPush.lodOffsets0_3 = offsets0_3;
 		terrainPush.lodOffsets4_7 = offsets4_7;
-
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
 		deferredPass->RegisterPass(
@@ -707,11 +728,7 @@ namespace brassica {
 			terrainPass->GetTLAS()
 		);
 
-		RenderContext renderCtx{
-			.commandBuffer = frame.commandBuffer,
-			.allocator = allocator,
-			.device = device
-		};
+		RenderContext renderCtx{.commandBuffer = frame.commandBuffer, .allocator = allocator, .device = device};
 
 		fg.compile();
 		vk::CommandBuffer rawCmd = frame.commandBuffer;
@@ -765,7 +782,8 @@ namespace brassica {
 		presentInfo.setImageIndices(swapchainImageIndex);
 
 		vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
-		if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || windowResized) {
+		if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR ||
+		    windowResized) {
 			windowResized = false;
 			RecreateSwapchain();
 		}
@@ -797,7 +815,7 @@ namespace brassica {
 
 		// 3. Allocate Descriptor Sets & UBO Buffers
 		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, globalSet0Layout);
-		vk::DescriptorSetAllocateInfo allocInfo{};
+		vk::DescriptorSetAllocateInfo        allocInfo{};
 		allocInfo.setDescriptorPool(globalDescriptorPool);
 		allocInfo.setSetLayouts(layouts);
 
@@ -812,7 +830,8 @@ namespace brassica {
 
 			VmaAllocationCreateInfo allocCreateInfo{};
 			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+				VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 			VkBuffer          buffer = VK_NULL_HANDLE;
 			VmaAllocationInfo allocResultInfo{};

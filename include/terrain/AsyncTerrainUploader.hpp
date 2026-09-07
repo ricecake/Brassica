@@ -1,10 +1,12 @@
 #pragma once
 
+#include <memory>
 #include <span>
 #include <vector>
-#include <memory>
-#include <glm/glm.hpp>
+
 #include "vulkan/vulkan.hpp"
+#include <glm/glm.hpp>
+
 #include "vk_mem_alloc.h"
 
 namespace brassica {
@@ -16,7 +18,7 @@ namespace brassica {
 		VmaAllocation     stagingAllocation{VK_NULL_HANDLE};
 		uint32_t          levelIndex{0};
 		bool              inFlight{false};
-		uint64_t targetTimelineValue = 0;
+		uint64_t          targetTimelineValue = 0;
 	};
 
 	class AsyncTerrainUploader {
@@ -24,31 +26,26 @@ namespace brassica {
 		AsyncTerrainUploader() = default;
 		~AsyncTerrainUploader();
 
-		void Init(
-			vk::Device dev,
-			VmaAllocator alloc,
-			uint32_t queueFamilyIdx,
-			uint32_t maxConcurrentUploads = 8
-		);
+		void Init(vk::Device dev, VmaAllocator alloc, uint32_t queueFamilyIdx, uint32_t maxConcurrentUploads = 8);
 		void Cleanup();
 
 		// Non-blocking upload request for a clipmap layer
 		bool UploadLevelAsync(
-			uint32_t levelIndex,
+			uint32_t                   levelIndex,
 			std::span<const glm::vec4> data,
-			vk::Image targetImage,
-			uint32_t width,
-			uint32_t height,
-			vk::Queue transferQueue
+			vk::Image                  targetImage,
+			uint32_t                   width,
+			uint32_t                   height,
+			vk::Queue                  transferQueue
 		);
 
 		// Non-blocking upload request for sub-regions of a clipmap layer using vk::BufferImageCopy
 		bool UploadRegionAsync(
-			uint32_t levelIndex,
-			std::span<const glm::vec4> data,
+			uint32_t                             levelIndex,
+			std::span<const glm::vec4>           data,
 			std::span<const vk::BufferImageCopy> regions,
-			vk::Image targetImage,
-			vk::Queue transferQueue
+			vk::Image                            targetImage,
+			vk::Queue                            transferQueue
 		);
 
 		std::vector<vk::SemaphoreSubmitInfo> GetWaitSemaphores() const;
@@ -63,8 +60,8 @@ namespace brassica {
 		vk::Device      device{nullptr};
 		VmaAllocator    allocator{VK_NULL_HANDLE};
 		vk::CommandPool commandPool{nullptr};
-		vk::Semaphore timelineSemaphore;
-		uint64_t currentTimelineCounter = 0;
+		vk::Semaphore   timelineSemaphore;
+		uint64_t        currentTimelineCounter = 0;
 
 		std::vector<PendingUploadRequest> requests;
 	};

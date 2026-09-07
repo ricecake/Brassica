@@ -1,11 +1,12 @@
 #include "passes/ComputeTestPass.hpp"
-#include "ShaderWatcher.hpp"
+
 #include "spdlog/spdlog.h"
+
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
-	ComputeTestPass::ComputeTestPass(vk::Device dev, ShaderWatcher* watcher)
-		: ComputePass("ComputeTestPass", dev) {
+	ComputeTestPass::ComputeTestPass(vk::Device dev, ShaderWatcher* watcher): ComputePass("ComputeTestPass", dev) {
 		InitPipeline(dev, watcher);
 	}
 
@@ -19,9 +20,9 @@ namespace brassica {
 	}
 
 	ComputeTestPassData ComputeTestPass::RegisterPass(
-		FrameGraph&          fg,
+		FrameGraph&           fg,
 		FrameGraphBlackboard& blackboard,
-		vk::Extent3D         texExtent,
+		vk::Extent3D          texExtent,
 		vk::DeviceSize        ssboSize
 	) {
 		const auto& passData = fg.addCallbackPass<ComputeTestPassData>(
@@ -31,12 +32,12 @@ namespace brassica {
 					"Volume3D",
 					FrameGraphTexture3D::Desc{.extent = texExtent, .format = vk::Format::eR8G8B8A8Unorm}
 				);
-				data.outputTexture3D = builder.write(data.outputTexture3D, static_cast<uint32_t>(TextureUsage::StorageWrite));
-
-				data.outputSSBO = builder.create<FrameGraphSSBO>(
-					"BufferSSBO",
-					FrameGraphSSBO::Desc{.size = ssboSize}
+				data.outputTexture3D = builder.write(
+					data.outputTexture3D,
+					static_cast<uint32_t>(TextureUsage::StorageWrite)
 				);
+
+				data.outputSSBO = builder.create<FrameGraphSSBO>("BufferSSBO", FrameGraphSSBO::Desc{.size = ssboSize});
 				data.outputSSBO = builder.write(data.outputSSBO, static_cast<uint32_t>(BufferUsage::StorageWrite));
 			},
 			[this, texExtent](const ComputeTestPassData& data, FrameGraphPassResources& resources, void* ctx) {

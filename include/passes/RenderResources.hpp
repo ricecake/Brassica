@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
+
 #include "fg/FrameGraphResource.hpp"
 #include "passes/PassResource.hpp"
 

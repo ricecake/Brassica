@@ -1,5 +1,7 @@
 #include "terrain/AsyncTerrainUploader.hpp"
+
 #include <cstring>
+
 #include "spdlog/spdlog.h"
 
 namespace brassica {
@@ -9,10 +11,10 @@ namespace brassica {
 	}
 
 	void AsyncTerrainUploader::Init(
-		vk::Device dev,
+		vk::Device   dev,
 		VmaAllocator alloc,
-		uint32_t queueFamilyIdx,
-		uint32_t maxConcurrentUploads
+		uint32_t     queueFamilyIdx,
+		uint32_t     maxConcurrentUploads
 	) {
 		device = dev;
 		allocator = alloc;
@@ -46,7 +48,8 @@ namespace brassica {
 	}
 
 	void AsyncTerrainUploader::Cleanup() {
-		if (!device) return;
+		if (!device)
+			return;
 
 		// Wait for any remaining fences before cleanup
 		for (auto& req : requests) {
@@ -69,7 +72,7 @@ namespace brassica {
 			commandPool = nullptr;
 		}
 
-		if(timelineSemaphore) {
+		if (timelineSemaphore) {
 			device.destroySemaphore(timelineSemaphore);
 			timelineSemaphore = nullptr;
 		}
@@ -77,7 +80,7 @@ namespace brassica {
 
 	std::vector<vk::SemaphoreSubmitInfo> AsyncTerrainUploader::GetWaitSemaphores() const {
 		std::vector<vk::SemaphoreSubmitInfo> waits;
-		uint64_t highestWaitValue = 0;
+		uint64_t                             highestWaitValue = 0;
 
 		for (const auto& req : requests) {
 			if (req.inFlight && req.targetTimelineValue > highestWaitValue) {
@@ -89,7 +92,9 @@ namespace brassica {
 			vk::SemaphoreSubmitInfo waitInfo{};
 			waitInfo.setSemaphore(timelineSemaphore);
 			waitInfo.setValue(highestWaitValue);
-			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eFragmentShader);
+			waitInfo.setStageMask(
+				vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eFragmentShader
+			);
 			waits.push_back(waitInfo);
 		}
 		return waits;
@@ -97,7 +102,8 @@ namespace brassica {
 
 	void AsyncTerrainUploader::Poll() {
 		for (auto& req : requests) {
-			if (!req.inFlight) continue;
+			if (!req.inFlight)
+				continue;
 
 			vk::Result status = device.getFenceStatus(req.fence);
 			if (status == vk::Result::eSuccess) {
@@ -115,18 +121,19 @@ namespace brassica {
 
 	bool AsyncTerrainUploader::HasInFlightUploads() const {
 		for (const auto& req : requests) {
-			if (req.inFlight) return true;
+			if (req.inFlight)
+				return true;
 		}
 		return false;
 	}
 
 	bool AsyncTerrainUploader::UploadLevelAsync(
-		uint32_t levelIndex,
+		uint32_t                   levelIndex,
 		std::span<const glm::vec4> data,
-		vk::Image targetImage,
-		uint32_t width,
-		uint32_t height,
-		vk::Queue transferQueue
+		vk::Image                  targetImage,
+		uint32_t                   width,
+		uint32_t                   height,
+		vk::Queue                  transferQueue
 	) {
 		Poll(); // Reclaim completed uploads first
 
@@ -155,9 +162,10 @@ namespace brassica {
 		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-		VkBuffer vkBuf = VK_NULL_HANDLE;
+		VkBuffer          vkBuf = VK_NULL_HANDLE;
 		VmaAllocationInfo resultAllocInfo{};
-		if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &vkBuf, &slot->stagingAllocation, &resultAllocInfo) != VK_SUCCESS) {
+		if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &vkBuf, &slot->stagingAllocation, &resultAllocInfo) !=
+		    VK_SUCCESS) {
 			spdlog::error("Failed to create staging buffer for terrain upload.");
 			return false;
 		}
@@ -195,13 +203,17 @@ namespace brassica {
 		copyRegion.setImageOffset(vk::Offset3D{0, 0, 0});
 		copyRegion.setImageExtent(vk::Extent3D{width, height, 1});
 
-		slot->commandBuffer.copyBufferToImage(slot->stagingBuffer, targetImage, vk::ImageLayout::eTransferDstOptimal, copyRegion);
+		slot->commandBuffer
+			.copyBufferToImage(slot->stagingBuffer, targetImage, vk::ImageLayout::eTransferDstOptimal, copyRegion);
 
 		// Transition target image layer to SHADER_READ_ONLY_OPTIMAL
 		vk::ImageMemoryBarrier2 barrier2{};
 		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
 		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
-		barrier2.setDstStageMask(vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eTaskShaderEXT | vk::PipelineStageFlagBits2::eFragmentShader);
+		barrier2.setDstStageMask(
+			vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eTaskShaderEXT |
+			vk::PipelineStageFlagBits2::eFragmentShader
+		);
 		barrier2.setDstAccessMask(vk::AccessFlagBits2::eShaderRead);
 		barrier2.setOldLayout(vk::ImageLayout::eTransferDstOptimal);
 		barrier2.setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -237,11 +249,11 @@ namespace brassica {
 	}
 
 	bool AsyncTerrainUploader::UploadRegionAsync(
-		uint32_t levelIndex,
-		std::span<const glm::vec4> data,
+		uint32_t                             levelIndex,
+		std::span<const glm::vec4>           data,
 		std::span<const vk::BufferImageCopy> regions,
-		vk::Image targetImage,
-		vk::Queue transferQueue
+		vk::Image                            targetImage,
+		vk::Queue                            transferQueue
 	) {
 		Poll();
 
@@ -268,9 +280,10 @@ namespace brassica {
 		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-		VkBuffer vkBuf = VK_NULL_HANDLE;
+		VkBuffer          vkBuf = VK_NULL_HANDLE;
 		VmaAllocationInfo resultAllocInfo{};
-		if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &vkBuf, &slot->stagingAllocation, &resultAllocInfo) != VK_SUCCESS) {
+		if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &vkBuf, &slot->stagingAllocation, &resultAllocInfo) !=
+		    VK_SUCCESS) {
 			spdlog::error("Failed to create staging buffer for region upload.");
 			return false;
 		}
@@ -296,12 +309,16 @@ namespace brassica {
 		depInfo1.setImageMemoryBarriers(barrier1);
 		slot->commandBuffer.pipelineBarrier2(depInfo1);
 
-		slot->commandBuffer.copyBufferToImage(slot->stagingBuffer, targetImage, vk::ImageLayout::eTransferDstOptimal, regions);
+		slot->commandBuffer
+			.copyBufferToImage(slot->stagingBuffer, targetImage, vk::ImageLayout::eTransferDstOptimal, regions);
 
 		vk::ImageMemoryBarrier2 barrier2{};
 		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
 		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
-		barrier2.setDstStageMask(vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eTaskShaderEXT | vk::PipelineStageFlagBits2::eFragmentShader);
+		barrier2.setDstStageMask(
+			vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eTaskShaderEXT |
+			vk::PipelineStageFlagBits2::eFragmentShader
+		);
 		barrier2.setDstAccessMask(vk::AccessFlagBits2::eShaderRead);
 		barrier2.setOldLayout(vk::ImageLayout::eTransferDstOptimal);
 		barrier2.setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal);

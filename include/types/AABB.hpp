@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+
 #include <glm/glm.hpp>
+
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace brassica {
@@ -11,9 +13,11 @@ namespace brassica {
 		glm::vec3 maxBound{0.0f};
 
 		AABB() = default;
-		AABB(const glm::vec3& minB, const glm::vec3& maxB) : minBound(minB), maxBound(maxB) {}
+
+		AABB(const glm::vec3& minB, const glm::vec3& maxB): minBound(minB), maxBound(maxB) {}
 
 		glm::vec3 Center() const { return (minBound + maxBound) * 0.5f; }
+
 		glm::vec3 Extents() const { return (maxBound - minBound) * 0.5f; }
 
 		AABB Transform(const glm::mat4& transform) const;

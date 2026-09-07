@@ -2,26 +2,25 @@
 
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
 #include "vulkan/vulkan.hpp"
-#include "vk_mem_alloc.h"
 
 #include "GLFW/glfw3.h"
-#include <random>
-
 #include "InputHandler.hpp"
 #include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
 #include "passes/MeshCubePass.hpp"
 #include "passes/TerrainPass.hpp"
-#include "terrain/TerrainClipmap.hpp"
-#include "terrain/AsyncTerrainUploader.hpp"
-#include "types/CameraData.hpp"
-#include "types/ubo/FrameUBO.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
+#include "terrain/AsyncTerrainUploader.hpp"
+#include "terrain/TerrainClipmap.hpp"
+#include "types/CameraData.hpp"
+#include "types/ubo/FrameUBO.hpp"
+#include "vk_mem_alloc.h"
 #include "VkBootstrap.h"
 
 namespace brassica {
@@ -75,6 +74,7 @@ namespace brassica {
 		const EngineOptions& GetOptions() const { return options; }
 
 		uint32_t GetValidationErrorCount() const { return validationErrorCount; }
+
 		uint32_t GetValidationWarningCount() const { return validationWarningCount; }
 
 		static VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugCallback(
@@ -85,6 +85,7 @@ namespace brassica {
 		);
 
 		vk::Device GetDevice() const { return device; }
+
 		VmaAllocator GetAllocator() const { return allocator; }
 
 		vk::Extent2D GetSwapchainExtent() const {
@@ -96,16 +97,16 @@ namespace brassica {
 		ShaderWatcher& GetShaderWatcher() { return shaderWatcher; }
 
 		void SetFov(float fov) { camera.fov = fov; }
+
 		float GetFov() const { return camera.fov; }
 
 		CameraData& GetCamera() { return camera; }
+
 		const CameraData& GetCamera() const { return camera; }
 
 		void UpdateCamera(float deltaTime);
 
-		void SetInputHandler(std::shared_ptr<IInputHandler> handler) {
-			inputHandler = std::move(handler);
-		}
+		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
 
 		template <InputHandlerConcept T, typename... Args>
 		void SetInputHandler(Args&&... args) {
@@ -171,8 +172,8 @@ namespace brassica {
 		TerrainClipmap       terrainClipmap;
 		AsyncTerrainUploader terrainUploader;
 
-		uint32_t      globalSeed{0};
-		std::mt19937  rng;
+		uint32_t     globalSeed{0};
+		std::mt19937 rng;
 
 		// Vulkan Memory Allocator
 		VmaAllocator allocator{VK_NULL_HANDLE};

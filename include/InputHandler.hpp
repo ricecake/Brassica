@@ -46,7 +46,7 @@ namespace brassica {
 	};
 
 	// Default implementation wrapping GLFW key and mouse events
-	class DefaultInputHandler : public IInputHandler {
+	class DefaultInputHandler: public IInputHandler {
 	public:
 		DefaultInputHandler() = default;
 		~DefaultInputHandler() override = default;
@@ -57,9 +57,9 @@ namespace brassica {
 		void OnScroll(GLFWwindow* window, double xoffset, double yoffset) override;
 		void OnFramebufferSize(GLFWwindow* window, int width, int height) override;
 
-		bool IsKeyPressed(int key) const;
-		bool IsKeyJustPressed(int key);
-		bool IsMouseButtonPressed(int button) const;
+		bool                      IsKeyPressed(int key) const;
+		bool                      IsKeyJustPressed(int key);
+		bool                      IsMouseButtonPressed(int button) const;
 		std::pair<double, double> GetCursorPos() const;
 		std::pair<double, double> GetScrollOffset() const;
 
@@ -75,27 +75,32 @@ namespace brassica {
 
 	// Adapter for any type T that satisfies InputHandlerConcept but does not inherit from IInputHandler
 	template <InputHandlerConcept T>
-	class InputHandlerAdapter : public IInputHandler {
+	class InputHandlerAdapter: public IInputHandler {
 	public:
-		explicit InputHandlerAdapter(T handler) : instance(std::move(handler)) {}
+		explicit InputHandlerAdapter(T handler): instance(std::move(handler)) {}
 
 		void OnKey(GLFWwindow* window, int key, int scancode, int action, int mods) override {
 			instance.OnKey(window, key, scancode, action, mods);
 		}
+
 		void OnMouseButton(GLFWwindow* window, int button, int action, int mods) override {
 			instance.OnMouseButton(window, button, action, mods);
 		}
+
 		void OnCursorPos(GLFWwindow* window, double xpos, double ypos) override {
 			instance.OnCursorPos(window, xpos, ypos);
 		}
+
 		void OnScroll(GLFWwindow* window, double xoffset, double yoffset) override {
 			instance.OnScroll(window, xoffset, yoffset);
 		}
+
 		void OnFramebufferSize(GLFWwindow* window, int width, int height) override {
 			instance.OnFramebufferSize(window, width, height);
 		}
 
 		T& GetInstance() { return instance; }
+
 		const T& GetInstance() const { return instance; }
 
 	private:
@@ -110,15 +115,20 @@ namespace brassica {
 
 	template <InputHandlerConcept T, typename... Args>
 	void SetDefaultInputHandlerType(Args&&... args) {
-		SetDefaultInputHandlerFactory([args = std::make_tuple(std::forward<Args>(args)...)]() -> std::shared_ptr<IInputHandler> {
-			return std::apply([](auto&&... a) {
-				if constexpr (std::derived_from<T, IInputHandler>) {
-					return std::make_shared<T>(std::forward<decltype(a)>(a)...);
-				} else {
-					return std::make_shared<InputHandlerAdapter<T>>(T(std::forward<decltype(a)>(a)...));
-				}
-			}, args);
-		});
+		SetDefaultInputHandlerFactory(
+			[args = std::make_tuple(std::forward<Args>(args)...)]() -> std::shared_ptr<IInputHandler> {
+				return std::apply(
+					[](auto&&... a) {
+						if constexpr (std::derived_from<T, IInputHandler>) {
+							return std::make_shared<T>(std::forward<decltype(a)>(a)...);
+						} else {
+							return std::make_shared<InputHandlerAdapter<T>>(T(std::forward<decltype(a)>(a)...));
+						}
+					},
+					args
+				);
+			}
+		);
 	}
 
 } // namespace brassica

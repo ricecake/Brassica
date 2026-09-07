@@ -1,8 +1,11 @@
 #include "terrain/TerrainClipmap.hpp"
-#include "terrain/AsyncTerrainUploader.hpp"
+
 #include <cmath>
-#include <glm/gtc/matrix_transform.hpp>
+
 #include "spdlog/spdlog.h"
+
+#include "terrain/AsyncTerrainUploader.hpp"
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace brassica {
 
@@ -16,7 +19,7 @@ namespace brassica {
 		baseTexelSize = baseTexel;
 
 		if (maxDist > 0.0f) {
-			float baseLevelExtent = static_cast<float>(TERRAIN_MAP_DIM) * baseTexelSize;
+			float    baseLevelExtent = static_cast<float>(TERRAIN_MAP_DIM) * baseTexelSize;
 			uint32_t derivedLODs = static_cast<uint32_t>(std::ceil(std::log2(maxDist / baseLevelExtent))) + 1;
 			numLODs = std::clamp(derivedLODs, 1u, 8u);
 		} else {
@@ -36,7 +39,8 @@ namespace brassica {
 		CreateSampler();
 	}
 
-	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue) {
+	void
+	TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue) {
 		for (uint32_t l = 0; l < numLODs; ++l) {
 			auto& info = levelInfos[l];
 			float texelSize = info.texelSize;
@@ -47,9 +51,11 @@ namespace brassica {
 			int deltaX = static_cast<int>(std::round(diff.x / texelSize));
 			int deltaZ = static_cast<int>(std::round(diff.y / texelSize));
 
-			if (deltaX == 0 && deltaZ == 0) continue;
+			if (deltaX == 0 && deltaZ == 0)
+				continue;
 
-			if (std::abs(deltaX) >= static_cast<int>(TERRAIN_MAP_DIM) || std::abs(deltaZ) >= static_cast<int>(TERRAIN_MAP_DIM)) {
+			if (std::abs(deltaX) >= static_cast<int>(TERRAIN_MAP_DIM) ||
+			    std::abs(deltaZ) >= static_cast<int>(TERRAIN_MAP_DIM)) {
 				info.centerWorldPos = newCenter;
 				info.gridOffset = glm::ivec2(0);
 				auto mapData = GenerateSineWaveMap(l, baseTexelSize, info.centerWorldPos);
@@ -59,17 +65,17 @@ namespace brassica {
 
 			info.centerWorldPos = newCenter;
 
-			std::vector<glm::vec4> updateBuffer;
+			std::vector<glm::vec4>           updateBuffer;
 			std::vector<vk::BufferImageCopy> copyRegions;
 
 			if (deltaX != 0) {
 				uint32_t stripWidth = std::abs(deltaX);
-				int startDstX = (deltaX > 0)
-					? info.gridOffset.x
-					: ((info.gridOffset.x + deltaX + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM));
+				int      startDstX = (deltaX > 0) ? info.gridOffset.x
+												  : ((info.gridOffset.x + deltaX + static_cast<int>(TERRAIN_MAP_DIM)) %
+												     static_cast<int>(TERRAIN_MAP_DIM));
 
 				std::vector<glm::vec4> stripData(stripWidth * TERRAIN_MAP_DIM);
-				float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
+				float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
 				auto heightFunc = [](float x, float z) -> float {
 					float wave1 = std::sin(0.05f * x) * 2.5f;
@@ -79,11 +85,12 @@ namespace brassica {
 				};
 
 				for (uint32_t z = 0; z < TERRAIN_MAP_DIM; ++z) {
-					int localGridZ = (static_cast<int>(z) - info.gridOffset.y + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM);
+					int localGridZ = (static_cast<int>(z) - info.gridOffset.y + static_cast<int>(TERRAIN_MAP_DIM)) %
+						static_cast<int>(TERRAIN_MAP_DIM);
 					float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(localGridZ) * texelSize;
 
 					for (uint32_t x = 0; x < stripWidth; ++x) {
-						int colIdx = (deltaX > 0) ? (TERRAIN_MAP_DIM - stripWidth + x) : x;
+						int   colIdx = (deltaX > 0) ? (TERRAIN_MAP_DIM - stripWidth + x) : x;
 						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
 
 						float h = heightFunc(worldX, worldZ);
@@ -106,7 +113,9 @@ namespace brassica {
 					copyRegion.setBufferOffset(baseOffset);
 					copyRegion.setBufferRowLength(stripWidth);
 					copyRegion.setBufferImageHeight(TERRAIN_MAP_DIM);
-					copyRegion.setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1));
+					copyRegion.setImageSubresource(
+						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
+					);
 					copyRegion.setImageOffset(vk::Offset3D{startDstX, 0, 0});
 					copyRegion.setImageExtent(vk::Extent3D{stripWidth, TERRAIN_MAP_DIM, 1});
 
@@ -119,7 +128,9 @@ namespace brassica {
 					copyRegion1.setBufferOffset(baseOffset);
 					copyRegion1.setBufferRowLength(stripWidth);
 					copyRegion1.setBufferImageHeight(TERRAIN_MAP_DIM);
-					copyRegion1.setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1));
+					copyRegion1.setImageSubresource(
+						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
+					);
 					copyRegion1.setImageOffset(vk::Offset3D{startDstX, 0, 0});
 					copyRegion1.setImageExtent(vk::Extent3D{w1, TERRAIN_MAP_DIM, 1});
 
@@ -127,7 +138,9 @@ namespace brassica {
 					copyRegion2.setBufferOffset(baseOffset + static_cast<size_t>(w1) * sizeof(glm::vec4));
 					copyRegion2.setBufferRowLength(stripWidth);
 					copyRegion2.setBufferImageHeight(TERRAIN_MAP_DIM);
-					copyRegion2.setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1));
+					copyRegion2.setImageSubresource(
+						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
+					);
 					copyRegion2.setImageOffset(vk::Offset3D{0, 0, 0});
 					copyRegion2.setImageExtent(vk::Extent3D{w2, TERRAIN_MAP_DIM, 1});
 
@@ -136,17 +149,18 @@ namespace brassica {
 				}
 
 				info.gridOffset.x = (info.gridOffset.x + deltaX) % static_cast<int>(TERRAIN_MAP_DIM);
-				if (info.gridOffset.x < 0) info.gridOffset.x += static_cast<int>(TERRAIN_MAP_DIM);
+				if (info.gridOffset.x < 0)
+					info.gridOffset.x += static_cast<int>(TERRAIN_MAP_DIM);
 			}
 
 			if (deltaZ != 0) {
 				uint32_t stripHeight = std::abs(deltaZ);
-				int startDstZ = (deltaZ > 0)
-					? info.gridOffset.y
-					: ((info.gridOffset.y + deltaZ + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM));
+				int      startDstZ = (deltaZ > 0) ? info.gridOffset.y
+												  : ((info.gridOffset.y + deltaZ + static_cast<int>(TERRAIN_MAP_DIM)) %
+												     static_cast<int>(TERRAIN_MAP_DIM));
 
 				std::vector<glm::vec4> stripData(TERRAIN_MAP_DIM * stripHeight);
-				float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
+				float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
 				auto heightFunc = [](float x, float z) -> float {
 					float wave1 = std::sin(0.05f * x) * 2.5f;
@@ -156,11 +170,12 @@ namespace brassica {
 				};
 
 				for (uint32_t z = 0; z < stripHeight; ++z) {
-					int rowIdx = (deltaZ > 0) ? (TERRAIN_MAP_DIM - stripHeight + z) : z;
+					int   rowIdx = (deltaZ > 0) ? (TERRAIN_MAP_DIM - stripHeight + z) : z;
 					float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(rowIdx) * texelSize;
 
 					for (uint32_t x = 0; x < TERRAIN_MAP_DIM; ++x) {
-						int localGridX = (static_cast<int>(x) - info.gridOffset.x + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM);
+						int localGridX = (static_cast<int>(x) - info.gridOffset.x + static_cast<int>(TERRAIN_MAP_DIM)) %
+							static_cast<int>(TERRAIN_MAP_DIM);
 						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(localGridX) * texelSize;
 
 						float h = heightFunc(worldX, worldZ);
@@ -183,7 +198,9 @@ namespace brassica {
 					copyRegion.setBufferOffset(baseOffset);
 					copyRegion.setBufferRowLength(TERRAIN_MAP_DIM);
 					copyRegion.setBufferImageHeight(stripHeight);
-					copyRegion.setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1));
+					copyRegion.setImageSubresource(
+						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
+					);
 					copyRegion.setImageOffset(vk::Offset3D{0, startDstZ, 0});
 					copyRegion.setImageExtent(vk::Extent3D{TERRAIN_MAP_DIM, stripHeight, 1});
 
@@ -196,15 +213,21 @@ namespace brassica {
 					copyRegion1.setBufferOffset(baseOffset);
 					copyRegion1.setBufferRowLength(TERRAIN_MAP_DIM);
 					copyRegion1.setBufferImageHeight(stripHeight);
-					copyRegion1.setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1));
+					copyRegion1.setImageSubresource(
+						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
+					);
 					copyRegion1.setImageOffset(vk::Offset3D{0, startDstZ, 0});
 					copyRegion1.setImageExtent(vk::Extent3D{TERRAIN_MAP_DIM, h1, 1});
 
 					vk::BufferImageCopy copyRegion2{};
-					copyRegion2.setBufferOffset(baseOffset + static_cast<size_t>(h1) * TERRAIN_MAP_DIM * sizeof(glm::vec4));
+					copyRegion2.setBufferOffset(
+						baseOffset + static_cast<size_t>(h1) * TERRAIN_MAP_DIM * sizeof(glm::vec4)
+					);
 					copyRegion2.setBufferRowLength(TERRAIN_MAP_DIM);
 					copyRegion2.setBufferImageHeight(stripHeight);
-					copyRegion2.setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1));
+					copyRegion2.setImageSubresource(
+						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
+					);
 					copyRegion2.setImageOffset(vk::Offset3D{0, 0, 0});
 					copyRegion2.setImageExtent(vk::Extent3D{TERRAIN_MAP_DIM, h2, 1});
 
@@ -213,7 +236,8 @@ namespace brassica {
 				}
 
 				info.gridOffset.y = (info.gridOffset.y + deltaZ) % static_cast<int>(TERRAIN_MAP_DIM);
-				if (info.gridOffset.y < 0) info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
+				if (info.gridOffset.y < 0)
+					info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
 			}
 
 			if (!updateBuffer.empty() && !copyRegions.empty()) {
@@ -267,9 +291,7 @@ namespace brassica {
 		viewInfo.setImage(image);
 		viewInfo.setViewType(vk::ImageViewType::e2DArray);
 		viewInfo.setFormat(vk::Format::eR32G32B32A32Sfloat);
-		viewInfo.setSubresourceRange(
-			vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLODs)
-		);
+		viewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLODs));
 		imageView = device.createImageView(viewInfo);
 	}
 
@@ -290,18 +312,18 @@ namespace brassica {
 	}
 
 	std::vector<glm::vec4> TerrainClipmap::GenerateSineWaveMap(
-		uint32_t levelIndex,
-		float baseTexelSize,
+		uint32_t         levelIndex,
+		float            baseTexelSize,
 		const glm::vec2& centerWorldPos,
-		float time
+		float            time
 	) {
 		std::vector<glm::vec4> data(TERRAIN_MAP_DIM * TERRAIN_MAP_DIM);
-		float texelSize = baseTexelSize * static_cast<float>(1 << levelIndex);
-		float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
+		float                  texelSize = baseTexelSize * static_cast<float>(1 << levelIndex);
+		float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
 		auto heightFunc = [](float x, float z) -> float {
-			float wave1 = std::sin(0.05f * x ) * 2.5f;
-			float wave2 = std::cos(0.05f * z ) * 2.5f;
+			float wave1 = std::sin(0.05f * x) * 2.5f;
+			float wave2 = std::cos(0.05f * z) * 2.5f;
 			float wave3 = std::sin(0.02f * (x + z)) * 1.5f;
 			return wave1 + wave2 + wave3;
 		};

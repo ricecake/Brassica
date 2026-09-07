@@ -1,8 +1,10 @@
 #pragma once
 
 #include <vector>
-#include <glm/glm.hpp>
+
 #include "vulkan/vulkan.hpp"
+#include <glm/glm.hpp>
+
 #include "vk_mem_alloc.h"
 
 namespace brassica {
@@ -11,11 +13,11 @@ namespace brassica {
 	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 7;
 
 	struct ClipmapLevelInfo {
-		uint32_t level{0};
-		float    baseTexelSize{0.5f};
-		float    texelSize{0.5f}; // texelSize = baseTexelSize * 2^level
-		float    worldExtent{512.0f}; // 1024 * texelSize
-		glm::vec2 centerWorldPos{0.0f};
+		uint32_t   level{0};
+		float      baseTexelSize{0.5f};
+		float      texelSize{0.5f};     // texelSize = baseTexelSize * 2^level
+		float      worldExtent{512.0f}; // 1024 * texelSize
+		glm::vec2  centerWorldPos{0.0f};
 		glm::ivec2 gridOffset{0}; // Toroidal grid cell offset in texels
 	};
 
@@ -26,31 +28,42 @@ namespace brassica {
 		TerrainClipmap() = default;
 		~TerrainClipmap();
 
-		void Init(vk::Device device, VmaAllocator allocator, uint32_t numLODs = DEFAULT_CLIPMAP_LODS, float baseTexelSize = 0.5f, float maxDistance = 15000.0f);
+		void Init(
+			vk::Device   device,
+			VmaAllocator allocator,
+			uint32_t     numLODs = DEFAULT_CLIPMAP_LODS,
+			float        baseTexelSize = 0.5f,
+			float        maxDistance = 15000.0f
+		);
 		void Cleanup();
 
 		void UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue);
 
 		// CPU Terrain Generator function for a 1024x1024 grid at a specific clipmap level
 		static std::vector<glm::vec4> GenerateSineWaveMap(
-			uint32_t levelIndex,
-			float baseTexelSize,
+			uint32_t         levelIndex,
+			float            baseTexelSize,
 			const glm::vec2& centerWorldPos = glm::vec2(0.0f),
-			float time = 0.0f
+			float            time = 0.0f
 		);
 
 		vk::Image GetImage() const { return image; }
+
 		vk::ImageView GetImageView() const { return imageView; }
+
 		vk::Sampler GetSampler() const { return sampler; }
+
 		uint32_t GetNumLODs() const { return numLODs; }
+
 		float GetBaseTexelSize() const { return baseTexelSize; }
+
 		const ClipmapLevelInfo& GetLevelInfo(uint32_t lod) const { return levelInfos[lod]; }
 
 	private:
-		vk::Device    device{nullptr};
-		VmaAllocator  allocator{VK_NULL_HANDLE};
-		uint32_t      numLODs{DEFAULT_CLIPMAP_LODS};
-		float         baseTexelSize{0.5f};
+		vk::Device   device{nullptr};
+		VmaAllocator allocator{VK_NULL_HANDLE};
+		uint32_t     numLODs{DEFAULT_CLIPMAP_LODS};
+		float        baseTexelSize{0.5f};
 
 		vk::Image     image{nullptr};
 		vk::ImageView imageView{nullptr};

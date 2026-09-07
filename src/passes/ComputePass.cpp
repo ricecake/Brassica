@@ -1,11 +1,12 @@
 #include "passes/ComputePass.hpp"
-#include "ShaderWatcher.hpp"
+
 #include "spdlog/spdlog.h"
+
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
-	ComputePass::ComputePass(std::string name, vk::Device dev)
-		: Pass(std::move(name), dev) {}
+	ComputePass::ComputePass(std::string name, vk::Device dev): Pass(std::move(name), dev) {}
 
 	ComputePass::~ComputePass() {
 		DestroyPipeline();
@@ -18,7 +19,7 @@ namespace brassica {
 	void ComputePass::InitComputePipeline(
 		std::span<const vk::DescriptorSetLayout> setLayouts,
 		std::span<const vk::PushConstantRange>   pushConstants,
-		ShaderWatcher*                          watcher
+		ShaderWatcher*                           watcher
 	) {
 		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
 		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
@@ -74,7 +75,12 @@ namespace brassica {
 		buildPipeline();
 	}
 
-	void ComputePass::Dispatch(vk::CommandBuffer cmd, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) const {
+	void ComputePass::Dispatch(
+		vk::CommandBuffer cmd,
+		uint32_t          groupCountX,
+		uint32_t          groupCountY,
+		uint32_t          groupCountZ
+	) const {
 		if (pipeline) {
 			cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
 			cmd.dispatch(groupCountX, groupCountY, groupCountZ);

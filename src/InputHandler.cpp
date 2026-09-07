@@ -1,11 +1,11 @@
 #include "InputHandler.hpp"
+
 #include "GLFW/glfw3.h"
 
 namespace brassica {
 
-	static std::function<std::shared_ptr<IInputHandler>()> s_defaultInputHandlerFactory = []() -> std::shared_ptr<IInputHandler> {
-		return std::make_shared<DefaultInputHandler>();
-	};
+	static std::function<std::shared_ptr<IInputHandler>()> s_defaultInputHandlerFactory =
+		[]() -> std::shared_ptr<IInputHandler> { return std::make_shared<DefaultInputHandler>(); };
 
 	void SetDefaultInputHandlerFactory(std::function<std::shared_ptr<IInputHandler>()> factory) {
 		if (factory) {
@@ -56,8 +56,7 @@ namespace brassica {
 		scrollY += yoffset;
 	}
 
-	void DefaultInputHandler::OnFramebufferSize(GLFWwindow* window, int width, int height) {
-	}
+	void DefaultInputHandler::OnFramebufferSize(GLFWwindow* window, int width, int height) {}
 
 	bool DefaultInputHandler::IsKeyPressed(int key) const {
 		if (key >= 0 && static_cast<size_t>(key) < keys.size()) {

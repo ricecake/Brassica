@@ -15,7 +15,7 @@ namespace brassica {
 		std::string normalizePath(const std::string& path) {
 			namespace fs = std::filesystem;
 			try {
-				fs::path p(path);
+				fs::path    p(path);
 				std::string normalized = fs::weakly_canonical(p).string();
 				std::replace(normalized.begin(), normalized.end(), '\\', '/');
 				return normalized;
@@ -70,12 +70,12 @@ namespace brassica {
 		}
 
 		std::string loadShaderSourceInternal(
-			const std::string& path,
+			const std::string&     path,
 			std::set<std::string>& includedFiles,
-			const std::string& stageDefine = ""
+			const std::string&     stageDefine = ""
 		) {
 			namespace fs = std::filesystem;
-			fs::path p(path);
+			fs::path    p(path);
 			std::string normalizedPath = normalizePath(path);
 
 			bool isTopLevel = includedFiles.empty();
@@ -99,18 +99,18 @@ namespace brassica {
 
 			includedFiles.insert(normalizedPath);
 
-			std::string guard = generateIncludeGuard(normalizedPath);
-			std::string versionLine;
+			std::string        guard = generateIncludeGuard(normalizedPath);
+			std::string        versionLine;
 			std::istringstream iss(sourceCode);
-			std::string line;
+			std::string        line;
 
 			std::string preVersionContent;
 			std::string postVersionContent;
-			bool foundVersion = false;
+			bool        foundVersion = false;
 
 			while (std::getline(iss, line)) {
 				std::string trimmed = line;
-				size_t firstNonWhitespace = trimmed.find_first_not_of(" \t\r\n");
+				size_t      firstNonWhitespace = trimmed.find_first_not_of(" \t\r\n");
 				if (firstNonWhitespace != std::string::npos) {
 					trimmed.erase(0, firstNonWhitespace);
 				}
@@ -140,7 +140,8 @@ namespace brassica {
 						if (!fullPathStr.empty()) {
 							std::string includedSource = loadShaderSourceInternal(fullPathStr, includedFiles);
 							std::string commentStart = "//START " + fullPathStr + "\n";
-							std::string commentEnd = "//END " + fullPathStr + " (returning to " + normalizedPath + ")\n";
+							std::string commentEnd = "//END " + fullPathStr + " (returning to " + normalizedPath +
+								")\n";
 
 							if (foundVersion) {
 								postVersionContent += commentStart + includedSource;
@@ -180,14 +181,22 @@ namespace brassica {
 			std::string shaderStageDefine = stageDefine;
 			if (isTopLevel && shaderStageDefine.empty()) {
 				std::string ext = p.extension().string();
-				if (ext == ".vert") shaderStageDefine = "VERTEX_SHADER";
-				else if (ext == ".frag") shaderStageDefine = "FRAGMENT_SHADER";
-				else if (ext == ".geom") shaderStageDefine = "GEOMETRY_SHADER";
-				else if (ext == ".comp") shaderStageDefine = "COMPUTE_SHADER";
-				else if (ext == ".tcs" || ext == ".tesc") shaderStageDefine = "TESS_CONTROL_SHADER";
-				else if (ext == ".tes" || ext == ".tese") shaderStageDefine = "TESS_EVALUATION_SHADER";
-				else if (ext == ".mesh") shaderStageDefine = "MESH_SHADER";
-				else if (ext == ".task") shaderStageDefine = "TASK_SHADER";
+				if (ext == ".vert")
+					shaderStageDefine = "VERTEX_SHADER";
+				else if (ext == ".frag")
+					shaderStageDefine = "FRAGMENT_SHADER";
+				else if (ext == ".geom")
+					shaderStageDefine = "GEOMETRY_SHADER";
+				else if (ext == ".comp")
+					shaderStageDefine = "COMPUTE_SHADER";
+				else if (ext == ".tcs" || ext == ".tesc")
+					shaderStageDefine = "TESS_CONTROL_SHADER";
+				else if (ext == ".tes" || ext == ".tese")
+					shaderStageDefine = "TESS_EVALUATION_SHADER";
+				else if (ext == ".mesh")
+					shaderStageDefine = "MESH_SHADER";
+				else if (ext == ".task")
+					shaderStageDefine = "TASK_SHADER";
 			}
 
 			std::string finalSource = versionLine;
@@ -293,7 +302,7 @@ namespace brassica {
 		}
 
 		std::set<std::string> newIncludedFiles;
-		std::string newSource = loadShaderSourceInternal(filePath, newIncludedFiles);
+		std::string           newSource = loadShaderSourceInternal(filePath, newIncludedFiles);
 		if (newSource.empty()) {
 			spdlog::error("Failed to load shader file for recompile: {}", filePath);
 			return false;
@@ -322,7 +331,11 @@ namespace brassica {
 			try {
 				newModule = device.createShaderModule(createInfo);
 			} catch (const vk::SystemError& err) {
-				spdlog::error("Failed to create Vulkan shader module during recompile for {}: {}", filePath, err.what());
+				spdlog::error(
+					"Failed to create Vulkan shader module during recompile for {}: {}",
+					filePath,
+					err.what()
+				);
 				return false;
 			}
 		}

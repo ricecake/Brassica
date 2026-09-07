@@ -1,18 +1,25 @@
 #include "passes/RenderPass.hpp"
-#include "ShaderWatcher.hpp"
+
 #include "spdlog/spdlog.h"
+
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
-	RenderPass::RenderPass(std::string name, vk::Device dev, vk::Format colorFmt, vk::Format depthFmt)
-		: Pass(std::move(name), dev), depthFormat(depthFmt) {
+	RenderPass::RenderPass(std::string name, vk::Device dev, vk::Format colorFmt, vk::Format depthFmt):
+		Pass(std::move(name), dev), depthFormat(depthFmt) {
 		if (colorFmt != vk::Format::eUndefined) {
 			colorFormats.push_back(colorFmt);
 		}
 	}
 
-	RenderPass::RenderPass(std::string name, vk::Device dev, std::span<const vk::Format> colorFmts, vk::Format depthFmt)
-		: Pass(std::move(name), dev), colorFormats(colorFmts.begin(), colorFmts.end()), depthFormat(depthFmt) {}
+	RenderPass::RenderPass(
+		std::string                 name,
+		vk::Device                  dev,
+		std::span<const vk::Format> colorFmts,
+		vk::Format                  depthFmt
+	):
+		Pass(std::move(name), dev), colorFormats(colorFmts.begin(), colorFmts.end()), depthFormat(depthFmt) {}
 
 	RenderPass::~RenderPass() {
 		DestroyPipeline();
@@ -30,33 +37,43 @@ namespace brassica {
 	}
 
 	void RenderPass::InitRenderPipeline(
-		vk::Format                              colorFmt,
-		vk::Format                              depthFmt,
+		vk::Format                               colorFmt,
+		vk::Format                               depthFmt,
 		std::span<const vk::DescriptorSetLayout> setLayouts,
 		std::span<const vk::PushConstantRange>   pushConstants,
-		ShaderWatcher*                          watcher,
-		bool                                    enableDepthTest,
-		bool                                    enableDepthWrite,
-		vk::CompareOp                           depthCompareOp,
-		vk::CullModeFlags                       cullMode
+		ShaderWatcher*                           watcher,
+		bool                                     enableDepthTest,
+		bool                                     enableDepthWrite,
+		vk::CompareOp                            depthCompareOp,
+		vk::CullModeFlags                        cullMode
 	) {
 		std::vector<vk::Format> fmts;
 		if (colorFmt != vk::Format::eUndefined) {
 			fmts.push_back(colorFmt);
 		}
-		InitRenderPipeline(fmts, depthFmt, setLayouts, pushConstants, watcher, enableDepthTest, enableDepthWrite, depthCompareOp, cullMode);
+		InitRenderPipeline(
+			fmts,
+			depthFmt,
+			setLayouts,
+			pushConstants,
+			watcher,
+			enableDepthTest,
+			enableDepthWrite,
+			depthCompareOp,
+			cullMode
+		);
 	}
 
 	void RenderPass::InitRenderPipeline(
 		std::span<const vk::Format>              colorFmts,
-		vk::Format                              depthFmt,
+		vk::Format                               depthFmt,
 		std::span<const vk::DescriptorSetLayout> setLayouts,
 		std::span<const vk::PushConstantRange>   pushConstants,
-		ShaderWatcher*                          watcher,
-		bool                                    enableDepthTest,
-		bool                                    enableDepthWrite,
-		vk::CompareOp                           depthCompareOp,
-		vk::CullModeFlags                       cullMode
+		ShaderWatcher*                           watcher,
+		bool                                     enableDepthTest,
+		bool                                     enableDepthWrite,
+		vk::CompareOp                            depthCompareOp,
+		vk::CullModeFlags                        cullMode
 	) {
 		colorFormats.assign(colorFmts.begin(), colorFmts.end());
 		depthFormat = depthFmt;
@@ -248,14 +265,8 @@ namespace brassica {
 			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
 		}
 
-		vk::Viewport viewport{
-			0.0f,
-			0.0f,
-			static_cast<float>(extent.width),
-			static_cast<float>(extent.height),
-			0.0f,
-			1.0f
-		};
+		vk::Viewport
+			viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 		cmd.setViewport(0, viewport);
 
 		vk::Rect2D scissor{{0, 0}, extent};

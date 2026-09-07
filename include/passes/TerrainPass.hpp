@@ -1,14 +1,14 @@
 #pragma once
 
-#include <glm/glm.hpp>
 #include "vulkan/vulkan.hpp"
-#include "vk_mem_alloc.h"
+#include <glm/glm.hpp>
 
 #include "fg/Blackboard.hpp"
 #include "fg/FrameGraph.hpp"
 #include "passes/RenderPass.hpp"
 #include "passes/RenderResources.hpp"
 #include "Shader.hpp"
+#include "vk_mem_alloc.h"
 
 namespace brassica {
 
@@ -29,7 +29,7 @@ namespace brassica {
 		glm::uvec4 lodOffsets4_7{0u};                   // Toroidal offsets for LOD 4-7
 	};
 
-	class TerrainPass : public RenderPass {
+	class TerrainPass: public RenderPass {
 	public:
 		TerrainPass(
 			vk::Instance            instance,
@@ -49,12 +49,12 @@ namespace brassica {
 		void UpdateClipmapDescriptor(vk::ImageView clipmapImageView, vk::Sampler clipmapSampler);
 
 		void RegisterPass(
-			FrameGraph&           fg,
-			FrameGraphBlackboard& blackboard,
-			vk::Extent2D          extent,
-			vk::DescriptorSet     globalDescriptorSet,
+			FrameGraph&                 fg,
+			FrameGraphBlackboard&       blackboard,
+			vk::Extent2D                extent,
+			vk::DescriptorSet           globalDescriptorSet,
 			const TerrainPushConstants& pushConstants,
-			VmaAllocator          allocator = VK_NULL_HANDLE
+			VmaAllocator                allocator = VK_NULL_HANDLE
 		);
 
 		vk::AccelerationStructureKHR GetTLAS() const { return tlas; }
@@ -77,8 +77,8 @@ namespace brassica {
 		};
 
 		struct BufferResource {
-			vk::Buffer    buffer{nullptr};
-			VmaAllocation allocation{VK_NULL_HANDLE};
+			vk::Buffer        buffer{nullptr};
+			VmaAllocation     allocation{VK_NULL_HANDLE};
 			vk::DeviceAddress deviceAddress{0};
 		};
 
@@ -90,18 +90,23 @@ namespace brassica {
 		TextureResource depthTex;
 
 		// Acceleration structure resources
-		BufferResource        aabbBuffer;
-		BufferResource        blasBuffer;
+		BufferResource               aabbBuffer;
+		BufferResource               blasBuffer;
 		vk::AccelerationStructureKHR blas{nullptr};
-		BufferResource        instanceBuffer;
-		BufferResource        tlasBuffer;
+		BufferResource               instanceBuffer;
+		BufferResource               tlasBuffer;
 		vk::AccelerationStructureKHR tlas{nullptr};
-		BufferResource        scratchBuffer;
-		glm::vec3             lastASCameraPos{1e9f, 1e9f, 1e9f};
+		BufferResource               scratchBuffer;
+		glm::vec3                    lastASCameraPos{1e9f, 1e9f, 1e9f};
 
 		void CreateGBufferTextures(vk::Extent2D extent, VmaAllocator allocator);
 		void DestroyGBufferTextures(VmaAllocator allocator);
-		void BuildOrUpdateAccelerationStructure(VmaAllocator allocator, const glm::vec3& cameraPos, float baseTexelSize, uint32_t numLODs);
+		void BuildOrUpdateAccelerationStructure(
+			VmaAllocator     allocator,
+			const glm::vec3& cameraPos,
+			float            baseTexelSize,
+			uint32_t         numLODs
+		);
 		void DestroyAccelerationStructures();
 		void InitPipelineCustom(
 			vk::Instance            instance,

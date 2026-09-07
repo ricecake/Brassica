@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <vector>
+
 #include "passes/Pass.hpp"
 #include "Shader.hpp"
 
@@ -9,10 +10,20 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	class RenderPass : public Pass {
+	class RenderPass: public Pass {
 	public:
-		RenderPass(std::string name, vk::Device device, vk::Format colorFormat, vk::Format depthFormat = vk::Format::eUndefined);
-		RenderPass(std::string name, vk::Device device, std::span<const vk::Format> colorFormats, vk::Format depthFormat = vk::Format::eUndefined);
+		RenderPass(
+			std::string name,
+			vk::Device  device,
+			vk::Format  colorFormat,
+			vk::Format  depthFormat = vk::Format::eUndefined
+		);
+		RenderPass(
+			std::string                 name,
+			vk::Device                  device,
+			std::span<const vk::Format> colorFormats,
+			vk::Format                  depthFormat = vk::Format::eUndefined
+		);
 		~RenderPass() override;
 
 		void SetShaders(GraphicsShader* vertexOrMesh, GraphicsShader* fragment);
@@ -82,8 +93,8 @@ namespace brassica {
 		GraphicsShader* fragShader{nullptr};
 
 		void BeginRendering(
-			vk::CommandBuffer        cmd,
-			vk::Extent2D             extent,
+			vk::CommandBuffer                            cmd,
+			vk::Extent2D                                 extent,
 			std::span<const vk::RenderingAttachmentInfo> colorAttachments,
 			const vk::RenderingAttachmentInfo*           depthAttachment = nullptr
 		) const;

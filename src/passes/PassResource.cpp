@@ -1,4 +1,5 @@
 #include "passes/PassResource.hpp"
+
 #include "spdlog/spdlog.h"
 
 namespace brassica {
@@ -62,7 +63,8 @@ namespace brassica {
 
 	// FrameGraphTexture2D implementation
 	void FrameGraphTexture2D::create(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -88,7 +90,8 @@ namespace brassica {
 		image = vkImg;
 
 		vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor;
-		if (desc.format == vk::Format::eD32Sfloat || desc.format == vk::Format::eD24UnormS8Uint || desc.format == vk::Format::eD16Unorm) {
+		if (desc.format == vk::Format::eD32Sfloat || desc.format == vk::Format::eD24UnormS8Uint ||
+		    desc.format == vk::Format::eD16Unorm) {
 			aspect = vk::ImageAspectFlagBits::eDepth;
 		}
 
@@ -107,7 +110,8 @@ namespace brassica {
 	}
 
 	void FrameGraphTexture2D::destroy(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		if (allocation != VK_NULL_HANDLE) {
@@ -124,8 +128,9 @@ namespace brassica {
 	}
 
 	void FrameGraphTexture2D::preRead(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
-		auto* rc = static_cast<RenderContext*>(context);
+		if (!context)
+			return;
+		auto*             rc = static_cast<RenderContext*>(context);
 		vk::CommandBuffer cmd = rc->commandBuffer;
 
 		vk::ImageLayout targetLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -149,8 +154,9 @@ namespace brassica {
 	}
 
 	void FrameGraphTexture2D::preWrite(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
-		auto* rc = static_cast<RenderContext*>(context);
+		if (!context)
+			return;
+		auto*             rc = static_cast<RenderContext*>(context);
 		vk::CommandBuffer cmd = rc->commandBuffer;
 
 		vk::ImageLayout targetLayout = vk::ImageLayout::eColorAttachmentOptimal;
@@ -183,7 +189,8 @@ namespace brassica {
 
 	// FrameGraphTexture3D implementation
 	void FrameGraphTexture3D::create(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -223,7 +230,8 @@ namespace brassica {
 	}
 
 	void FrameGraphTexture3D::destroy(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		if (imageView) {
@@ -238,8 +246,9 @@ namespace brassica {
 	}
 
 	void FrameGraphTexture3D::preRead(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
-		auto* rc = static_cast<RenderContext*>(context);
+		if (!context)
+			return;
+		auto*             rc = static_cast<RenderContext*>(context);
 		vk::CommandBuffer cmd = rc->commandBuffer;
 
 		vk::ImageLayout targetLayout = vk::ImageLayout::eGeneral;
@@ -259,8 +268,9 @@ namespace brassica {
 	}
 
 	void FrameGraphTexture3D::preWrite(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
-		auto* rc = static_cast<RenderContext*>(context);
+		if (!context)
+			return;
+		auto*             rc = static_cast<RenderContext*>(context);
 		vk::CommandBuffer cmd = rc->commandBuffer;
 
 		vk::ImageLayout targetLayout = vk::ImageLayout::eGeneral;
@@ -281,7 +291,8 @@ namespace brassica {
 
 	// FrameGraphSSBO implementation
 	void FrameGraphSSBO::create(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -290,11 +301,13 @@ namespace brassica {
 
 		VmaAllocationCreateInfo allocCreateInfo{};
 		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+			VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 		VkBuffer          vkBuf = VK_NULL_HANDLE;
 		VmaAllocationInfo allocResultInfo{};
-		if (vmaCreateBuffer(rc.allocator, &bufferInfo, &allocCreateInfo, &vkBuf, &allocation, &allocResultInfo) != VK_SUCCESS) {
+		if (vmaCreateBuffer(rc.allocator, &bufferInfo, &allocCreateInfo, &vkBuf, &allocation, &allocResultInfo) !=
+		    VK_SUCCESS) {
 			spdlog::error("Failed to create FrameGraphSSBO buffer via VMA");
 			return;
 		}
@@ -303,7 +316,8 @@ namespace brassica {
 	}
 
 	void FrameGraphSSBO::destroy(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		if (buffer && allocation) {
@@ -315,7 +329,8 @@ namespace brassica {
 	}
 
 	void FrameGraphSSBO::preRead(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto* rc = static_cast<RenderContext*>(context);
 
 		vk::PipelineStageFlags2 dstStage = vk::PipelineStageFlagBits2::eAllCommands;
@@ -338,7 +353,8 @@ namespace brassica {
 	}
 
 	void FrameGraphSSBO::preWrite(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto* rc = static_cast<RenderContext*>(context);
 		BufferBarrier(
 			rc->commandBuffer,
@@ -353,7 +369,8 @@ namespace brassica {
 
 	// FrameGraphUBO implementation
 	void FrameGraphUBO::create(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -362,11 +379,13 @@ namespace brassica {
 
 		VmaAllocationCreateInfo allocCreateInfo{};
 		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+			VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 		VkBuffer          vkBuf = VK_NULL_HANDLE;
 		VmaAllocationInfo allocResultInfo{};
-		if (vmaCreateBuffer(rc.allocator, &bufferInfo, &allocCreateInfo, &vkBuf, &allocation, &allocResultInfo) != VK_SUCCESS) {
+		if (vmaCreateBuffer(rc.allocator, &bufferInfo, &allocCreateInfo, &vkBuf, &allocation, &allocResultInfo) !=
+		    VK_SUCCESS) {
 			spdlog::error("Failed to create FrameGraphUBO buffer via VMA");
 			return;
 		}
@@ -375,7 +394,8 @@ namespace brassica {
 	}
 
 	void FrameGraphUBO::destroy(const Desc& desc, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto& rc = *static_cast<RenderContext*>(context);
 
 		if (buffer && allocation) {
@@ -387,7 +407,8 @@ namespace brassica {
 	}
 
 	void FrameGraphUBO::preRead(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto* rc = static_cast<RenderContext*>(context);
 		BufferBarrier(
 			rc->commandBuffer,
@@ -401,7 +422,8 @@ namespace brassica {
 	}
 
 	void FrameGraphUBO::preWrite(const Desc& desc, uint32_t flags, void* context) {
-		if (!context) return;
+		if (!context)
+			return;
 		auto* rc = static_cast<RenderContext*>(context);
 		BufferBarrier(
 			rc->commandBuffer,

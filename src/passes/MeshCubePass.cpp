@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "spdlog/spdlog.h"
+
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
@@ -13,10 +14,15 @@ namespace brassica {
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		ShaderWatcher*          watcher
-	) : RenderPass(
+	):
+		RenderPass(
 			"MeshCubePass",
 			dev,
-			std::array<vk::Format, 3>{vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16B16A16Sfloat, vk::Format::eR8G8B8A8Unorm},
+			std::array<vk::Format, 3>{
+				vk::Format::eR16G16B16A16Sfloat,
+				vk::Format::eR16G16B16A16Sfloat,
+				vk::Format::eR8G8B8A8Unorm
+			},
 			vk::Format::eD32Sfloat
 		) {
 		InitPipeline(instance, dev, globalSet0Layout, watcher);
@@ -51,39 +57,62 @@ namespace brassica {
 		DestroyGBufferTextures(allocator);
 		currentExtent = extent;
 
-		auto createTex = [this, allocator, extent](vk::Format format, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect, TextureResource& tex) {
-			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-			imageInfo.imageType = VK_IMAGE_TYPE_2D;
-			imageInfo.extent = VkExtent3D{extent.width, extent.height, 1};
-			imageInfo.mipLevels = 1;
-			imageInfo.arrayLayers = 1;
-			imageInfo.format = static_cast<VkFormat>(format);
-			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			imageInfo.usage = static_cast<VkImageUsageFlags>(usage);
-			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		auto createTex =
+			[this,
+			 allocator,
+			 extent](vk::Format format, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect, TextureResource& tex) {
+				VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+				imageInfo.imageType = VK_IMAGE_TYPE_2D;
+				imageInfo.extent = VkExtent3D{extent.width, extent.height, 1};
+				imageInfo.mipLevels = 1;
+				imageInfo.arrayLayers = 1;
+				imageInfo.format = static_cast<VkFormat>(format);
+				imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+				imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+				imageInfo.usage = static_cast<VkImageUsageFlags>(usage);
+				imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+				imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-			VmaAllocationCreateInfo allocInfo{};
-			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+				VmaAllocationCreateInfo allocInfo{};
+				allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-			VkImage vkImg = VK_NULL_HANDLE;
-			if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &vkImg, &tex.allocation, nullptr) == VK_SUCCESS) {
-				tex.image = vkImg;
+				VkImage vkImg = VK_NULL_HANDLE;
+				if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &vkImg, &tex.allocation, nullptr) == VK_SUCCESS) {
+					tex.image = vkImg;
 
-				vk::ImageViewCreateInfo viewInfo{};
-				viewInfo.setImage(tex.image);
-				viewInfo.setViewType(vk::ImageViewType::e2D);
-				viewInfo.setFormat(format);
-				viewInfo.setSubresourceRange(vk::ImageSubresourceRange(aspect, 0, 1, 0, 1));
-				tex.imageView = device.createImageView(viewInfo);
-			}
-		};
+					vk::ImageViewCreateInfo viewInfo{};
+					viewInfo.setImage(tex.image);
+					viewInfo.setViewType(vk::ImageViewType::e2D);
+					viewInfo.setFormat(format);
+					viewInfo.setSubresourceRange(vk::ImageSubresourceRange(aspect, 0, 1, 0, 1));
+					tex.imageView = device.createImageView(viewInfo);
+				}
+			};
 
-		createTex(vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor, posTex);
-		createTex(vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor, normTex);
-		createTex(vk::Format::eR8G8B8A8Unorm, vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eColor, albTex);
-		createTex(vk::Format::eD32Sfloat, vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled, vk::ImageAspectFlagBits::eDepth, depthTex);
+		createTex(
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eColor,
+			posTex
+		);
+		createTex(
+			vk::Format::eR16G16B16A16Sfloat,
+			vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eColor,
+			normTex
+		);
+		createTex(
+			vk::Format::eR8G8B8A8Unorm,
+			vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eColor,
+			albTex
+		);
+		createTex(
+			vk::Format::eD32Sfloat,
+			vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
+			vk::ImageAspectFlagBits::eDepth,
+			depthTex
+		);
 	}
 
 	void MeshCubePass::InitPipeline(
@@ -104,11 +133,8 @@ namespace brassica {
 
 		SetShaders(&meshShader, &fragShader);
 
-		std::array<vk::Format, 3> colorFmts = {
-			vk::Format::eR16G16B16A16Sfloat,
-			vk::Format::eR16G16B16A16Sfloat,
-			vk::Format::eR8G8B8A8Unorm
-		};
+		std::array<vk::Format, 3> colorFmts =
+			{vk::Format::eR16G16B16A16Sfloat, vk::Format::eR16G16B16A16Sfloat, vk::Format::eR8G8B8A8Unorm};
 
 		InitRenderPipeline(
 			colorFmts,
@@ -116,8 +142,8 @@ namespace brassica {
 			std::span(&globalSet0Layout, 1),
 			{},
 			watcher,
-			true,  // depthTestEnable
-			true,  // depthWriteEnable
+			true, // depthTestEnable
+			true, // depthWriteEnable
 			vk::CompareOp::eLess
 		);
 	}
@@ -137,10 +163,26 @@ namespace brassica {
 			CreateGBufferTextures(extent, allocator);
 		}
 
-		FrameGraphResource importedPos = fg.import("GBuffer_Position", {extent, vk::Format::eR16G16B16A16Sfloat}, FrameGraphTexture2D{posTex.image, posTex.imageView});
-		FrameGraphResource importedNorm = fg.import("GBuffer_Normal", {extent, vk::Format::eR16G16B16A16Sfloat}, FrameGraphTexture2D{normTex.image, normTex.imageView});
-		FrameGraphResource importedAlb = fg.import("GBuffer_Albedo", {extent, vk::Format::eR8G8B8A8Unorm}, FrameGraphTexture2D{albTex.image, albTex.imageView});
-		FrameGraphResource importedDepth = fg.import("GBuffer_Depth", {extent, vk::Format::eD32Sfloat}, FrameGraphTexture2D{depthTex.image, depthTex.imageView});
+		FrameGraphResource importedPos = fg.import(
+			"GBuffer_Position",
+			{extent, vk::Format::eR16G16B16A16Sfloat},
+			FrameGraphTexture2D{posTex.image, posTex.imageView}
+		);
+		FrameGraphResource importedNorm = fg.import(
+			"GBuffer_Normal",
+			{extent, vk::Format::eR16G16B16A16Sfloat},
+			FrameGraphTexture2D{normTex.image, normTex.imageView}
+		);
+		FrameGraphResource importedAlb = fg.import(
+			"GBuffer_Albedo",
+			{extent, vk::Format::eR8G8B8A8Unorm},
+			FrameGraphTexture2D{albTex.image, albTex.imageView}
+		);
+		FrameGraphResource importedDepth = fg.import(
+			"GBuffer_Depth",
+			{extent, vk::Format::eD32Sfloat},
+			FrameGraphTexture2D{depthTex.image, depthTex.imageView}
+		);
 
 		const auto& passData = fg.addCallbackPass<MeshCubePassData>(
 			"MeshCubePass",
@@ -148,11 +190,16 @@ namespace brassica {
 				data.positionTarget = builder.write(importedPos, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				data.normalTarget = builder.write(importedNorm, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				data.albedoTarget = builder.write(importedAlb, static_cast<uint32_t>(TextureUsage::ColorAttachment));
-				data.depthTarget = builder.write(importedDepth, static_cast<uint32_t>(TextureUsage::DepthStencilAttachment));
+				data.depthTarget = builder.write(
+					importedDepth,
+					static_cast<uint32_t>(TextureUsage::DepthStencilAttachment)
+				);
 
 				builder.setSideEffect();
 			},
-			[this, extent, globalDescriptorSet](const MeshCubePassData& data, FrameGraphPassResources& resources, void* ctx) {
+			[this,
+			 extent,
+			 globalDescriptorSet](const MeshCubePassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
 				auto& posTexture = resources.get<FrameGraphTexture2D>(data.positionTarget);
@@ -167,7 +214,9 @@ namespace brassica {
 					colorAttachments[i].setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
 					colorAttachments[i].setLoadOp(vk::AttachmentLoadOp::eClear);
 					colorAttachments[i].setStoreOp(vk::AttachmentStoreOp::eStore);
-					colorAttachments[i].setClearValue(vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}});
+					colorAttachments[i].setClearValue(
+						vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}}}
+					);
 				}
 
 				colorAttachments[0].setImageView(posTexture.imageView);
@@ -184,7 +233,13 @@ namespace brassica {
 				BeginRendering(cmd, extent, colorAttachments, &depthAttachmentInfo);
 
 				if (globalDescriptorSet) {
-					cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, globalDescriptorSet, nullptr);
+					cmd.bindDescriptorSets(
+						vk::PipelineBindPoint::eGraphics,
+						pipelineLayout,
+						0,
+						globalDescriptorSet,
+						nullptr
+					);
 				}
 
 				cmd.drawMeshTasksEXT(1, 1, 1, dls);

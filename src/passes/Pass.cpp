@@ -2,8 +2,7 @@
 
 namespace brassica {
 
-	Pass::Pass(std::string passName, vk::Device dev)
-		: name(std::move(passName)), device(dev) {}
+	Pass::Pass(std::string passName, vk::Device dev): name(std::move(passName)), device(dev) {}
 
 	Pass::~Pass() {
 		// Pipeline destruction should be called explicitly or by derived classes
