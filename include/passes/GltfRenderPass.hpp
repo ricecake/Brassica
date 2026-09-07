@@ -52,6 +52,7 @@ namespace brassica {
 
 	private:
 		vk::DispatchLoaderDynamic dls;
+		TaskShader taskShader;
 		MeshShader meshShader;
 		FragmentShader fragShader;
 

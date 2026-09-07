@@ -10,6 +10,7 @@
 
 #include "GLFW/glfw3.h"
 #include <random>
+#include <entt/entt.hpp>
 
 #include "InputHandler.hpp"
 #include "passes/DeferredPass.hpp"
@@ -18,6 +19,8 @@
 #include "passes/TerrainPass.hpp"
 #include "terrain/TerrainClipmap.hpp"
 #include "terrain/AsyncTerrainUploader.hpp"
+#include "gltf/GltfTextureManager.hpp"
+#include "gltf/GltfModelSystem.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "ShaderWatcher.hpp"
@@ -101,6 +104,12 @@ namespace brassica {
 		CameraData& GetCamera() { return camera; }
 		const CameraData& GetCamera() const { return camera; }
 
+		entt::registry& GetRegistry() { return registry; }
+		const entt::registry& GetRegistry() const { return registry; }
+
+		GltfTextureManager& GetTextureManager() { return gltfTextureManager; }
+		GltfModelSystem& GetGltfModelSystem() { return *gltfModelSystem; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) {
@@ -162,6 +171,10 @@ namespace brassica {
 		bool       firstMouse{true};
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
+
+		entt::registry registry;
+		GltfTextureManager gltfTextureManager;
+		std::unique_ptr<GltfModelSystem> gltfModelSystem;
 
 		std::unique_ptr<GradientPass> gradientPass;
 		std::unique_ptr<MeshCubePass> meshCubePass;

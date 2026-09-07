@@ -102,7 +102,7 @@ layout(push_constant) uniform PushConstants {
 layout(location = 0) out vec3 outWorldPos[];
 layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec2 outUV[];
-layout(location = 3) flat out uint outMaterialIndex[];
+layout(location = 3) flat out perprimitiveEXT uint outMaterialIndex[];
 
 uint getMeshletTriangleByte(uint offset) {
     uint uintIndex = offset / 4u;
@@ -112,7 +112,7 @@ uint getMeshletTriangleByte(uint offset) {
 }
 
 void main() {
-    uint drawID = gl_DrawID;
+    uint drawID = 0;
     VisibleInstanceGPUData vis = visibleInstances[drawID];
     GltfPrimitiveGPU prim = primitives[vis.primitiveIndex];
 
@@ -148,7 +148,6 @@ void main() {
         outWorldPos[threadID] = worldPos.xyz;
         outNormal[threadID] = normalize(worldNorm);
         outUV[threadID] = v.texcoord;
-        outMaterialIndex[threadID] = vis.materialIndex;
     }
 
     // Process Triangles
@@ -159,5 +158,6 @@ void main() {
         uint i2 = getMeshletTriangleByte(triByteOffset + 2u);
 
         gl_PrimitiveTriangleIndicesEXT[threadID] = uvec3(i0, i1, i2);
+        outMaterialIndex[threadID] = vis.materialIndex;
     }
 }

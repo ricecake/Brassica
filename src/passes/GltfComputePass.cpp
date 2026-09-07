@@ -1,6 +1,7 @@
 #include "passes/GltfComputePass.hpp"
 #include "spdlog/spdlog.h"
 #include <array>
+#include <string>
 
 namespace brassica {
 
@@ -52,9 +53,13 @@ namespace brassica {
 		size_t indirectDrawSize,
 		size_t visibleInstanceSize
 	) {
-		FrameGraphResource importedIndirect = fg.import("GLTF_IndirectDraws", {indirectDrawSize}, FrameGraphSSBO{indirectDrawBuf});
-		FrameGraphResource importedVisible = fg.import("GLTF_VisibleInstances", {visibleInstanceSize}, FrameGraphSSBO{visibleInstanceBuf});
-		FrameGraphResource importedCount = fg.import("GLTF_DrawCount", {sizeof(uint32_t)}, FrameGraphSSBO{drawCountBuf});
+		std::string indirectName = "GLTF_IndirectDraws_" + std::to_string(reinterpret_cast<uint64_t>(static_cast<VkBuffer>(indirectDrawBuf)));
+		std::string visibleName = "GLTF_VisibleInstances_" + std::to_string(reinterpret_cast<uint64_t>(static_cast<VkBuffer>(visibleInstanceBuf)));
+		std::string countName = "GLTF_DrawCount_" + std::to_string(reinterpret_cast<uint64_t>(static_cast<VkBuffer>(drawCountBuf)));
+
+		FrameGraphResource importedIndirect = fg.import(indirectName, {indirectDrawSize}, FrameGraphSSBO{indirectDrawBuf});
+		FrameGraphResource importedVisible = fg.import(visibleName, {visibleInstanceSize}, FrameGraphSSBO{visibleInstanceBuf});
+		FrameGraphResource importedCount = fg.import(countName, {sizeof(uint32_t)}, FrameGraphSSBO{drawCountBuf});
 
 		const auto& passData = fg.addCallbackPass<GltfComputePassData>(
 			"GltfComputePass",

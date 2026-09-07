@@ -465,11 +465,13 @@ namespace brassica {
 	}
 
 	void GltfModel::CreateGpuBuffers() {
-		auto createBuffer = [this](size_t bufferSize, vk::BufferUsageFlags usage, const void* data, vk::Buffer& outBuffer, VmaAllocation& outAlloc) {
-			if (bufferSize == 0) return;
+		auto createBuffer = [this](size_t dataBytes, vk::BufferUsageFlags usage, const void* data, vk::Buffer& outBuffer, VmaAllocation& outAlloc) {
+			if (dataBytes == 0) return;
+
+			size_t allocSize = std::max(size_t(64), (dataBytes + 15) & ~size_t(15));
 
 			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-			bufferInfo.size = bufferSize;
+			bufferInfo.size = allocSize;
 			bufferInfo.usage = static_cast<VkBufferUsageFlags>(usage);
 
 			VmaAllocationCreateInfo allocCreateInfo{};
@@ -478,17 +480,19 @@ namespace brassica {
 
 			VkBuffer rawBuffer = VK_NULL_HANDLE;
 			VmaAllocationInfo allocResultInfo{};
-			if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &outAlloc, &allocResultInfo) == VK_SUCCESS) {
+			VkResult res = vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &outAlloc, &allocResultInfo);
+			if (res == VK_SUCCESS) {
 				outBuffer = rawBuffer;
 				if (data && allocResultInfo.pMappedData) {
-					std::memcpy(allocResultInfo.pMappedData, data, bufferSize);
+					std::memset(allocResultInfo.pMappedData, 0, allocSize);
+					std::memcpy(allocResultInfo.pMappedData, data, dataBytes);
 				}
 			} else {
-				spdlog::error("Failed to allocate glTF GPU buffer of size {}", bufferSize);
+				spdlog::error("Failed to allocate glTF GPU buffer of size {}, VkResult: {}", allocSize, static_cast<int>(res));
 			}
 		};
 
-		vk::BufferUsageFlags ssboUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress;
+		vk::BufferUsageFlags ssboUsage = vk::BufferUsageFlagBits::eStorageBuffer;
 
 		createBuffer(vertices.size() * sizeof(GltfVertex), ssboUsage, vertices.data(), vertexBuffer, vertexAllocation);
 		createBuffer(meshlets.size() * sizeof(GltfMeshlet), ssboUsage, meshlets.data(), meshletBuffer, meshletAllocation);
