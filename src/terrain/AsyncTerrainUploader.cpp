@@ -25,7 +25,6 @@ namespace brassica {
 		commandPool = device.createCommandPool(poolInfo);
 
 		requests.resize(maxConcurrentUploads);
-		vk::FenceCreateInfo fenceInfo{};
 
 		vk::SemaphoreTypeCreateInfo typeInfo{};
 		typeInfo.setSemaphoreType(vk::SemaphoreType::eTimeline);
@@ -36,8 +35,6 @@ namespace brassica {
 		timelineSemaphore = device.createSemaphore(semInfo);
 
 		for (auto& req : requests) {
-			req.fence = device.createFence(fenceInfo);
-
 			vk::CommandBufferAllocateInfo cmdInfo{};
 			cmdInfo.setCommandPool(commandPool);
 			cmdInfo.setLevel(vk::CommandBufferLevel::ePrimary);
@@ -51,19 +48,18 @@ namespace brassica {
 		if (!device)
 			return;
 
-		// Wait for any remaining fences before cleanup
+		if (timelineSemaphore && currentTimelineCounter > 0) {
+			vk::SemaphoreWaitInfo waitInfo{};
+			waitInfo.setSemaphores(timelineSemaphore);
+			waitInfo.setValues(currentTimelineCounter);
+			(void)device.waitSemaphores(waitInfo, 100000000);
+		}
+
 		for (auto& req : requests) {
-			if (req.inFlight && req.fence) {
-				(void)device.waitForFences(req.fence, VK_TRUE, 100000000);
-			}
 			if (req.stagingBuffer && req.stagingAllocation) {
 				vmaDestroyBuffer(allocator, req.stagingBuffer, req.stagingAllocation);
 				req.stagingBuffer = nullptr;
 				req.stagingAllocation = VK_NULL_HANDLE;
-			}
-			if (req.fence) {
-				device.destroyFence(req.fence);
-				req.fence = nullptr;
 			}
 		}
 
@@ -101,14 +97,16 @@ namespace brassica {
 	}
 
 	void AsyncTerrainUploader::Poll() {
+		if (!timelineSemaphore)
+			return;
+
+		uint64_t completedValue = device.getSemaphoreCounterValue(timelineSemaphore);
+
 		for (auto& req : requests) {
 			if (!req.inFlight)
 				continue;
 
-			vk::Result status = device.getFenceStatus(req.fence);
-			if (status == vk::Result::eSuccess) {
-				// Upload completed without blocking
-				device.resetFences(req.fence);
+			if (completedValue >= req.targetTimelineValue) {
 				if (req.stagingBuffer && req.stagingAllocation) {
 					vmaDestroyBuffer(allocator, req.stagingBuffer, req.stagingAllocation);
 					req.stagingBuffer = nullptr;
@@ -243,7 +241,7 @@ namespace brassica {
 		slot->levelIndex = levelIndex;
 		slot->inFlight = true;
 
-		transferQueue.submit2(submitInfo, slot->fence);
+		transferQueue.submit2(submitInfo, nullptr);
 
 		return true;
 	}
@@ -347,7 +345,7 @@ namespace brassica {
 		slot->levelIndex = levelIndex;
 		slot->inFlight = true;
 
-		transferQueue.submit2(submitInfo, slot->fence);
+		transferQueue.submit2(submitInfo, nullptr);
 
 		return true;
 	}

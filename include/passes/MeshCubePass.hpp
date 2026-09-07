@@ -27,7 +27,8 @@ namespace brassica {
 			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 		~MeshCubePass() override;
 
@@ -35,7 +36,8 @@ namespace brassica {
 			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 
 		void RegisterPass(

@@ -107,16 +107,17 @@ namespace brassica {
 		}
 	}
 
-	void ShaderWatcher::ProcessPendingReloads(vk::Device device) {
+	bool ShaderWatcher::ProcessPendingReloads(vk::Device device) {
 		std::set<std::string> filesToProcess;
 		{
 			std::lock_guard<std::mutex> lock(mutex);
 			if (pendingModifiedFiles.empty()) {
-				return;
+				return false;
 			}
 			filesToProcess.swap(pendingModifiedFiles);
 		}
 
+		bool reloadedAny = false;
 		for (const auto& filepath : filesToProcess) {
 			spdlog::info("ShaderWatcher: File change detected: {}", filepath);
 
@@ -165,12 +166,18 @@ namespace brassica {
 				}
 			}
 
+			if (!callbacksToInvoke.empty()) {
+				reloadedAny = true;
+			}
+
 			for (const auto& callback : callbacksToInvoke) {
 				if (callback) {
 					callback();
 				}
 			}
 		}
+
+		return reloadedAny;
 	}
 
 } // namespace brassica

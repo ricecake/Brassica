@@ -19,10 +19,20 @@ namespace brassica {
 
 	class GradientPass: public RenderPass {
 	public:
-		GradientPass(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher = nullptr);
+		GradientPass(
+			vk::Device        device,
+			vk::Format        colorFormat,
+			ShaderWatcher*    watcher = nullptr,
+			vk::PipelineCache pCache = nullptr
+		);
 		~GradientPass() override;
 
-		void InitPipeline(vk::Device device, vk::Format colorFormat, ShaderWatcher* watcher = nullptr);
+		void InitPipeline(
+			vk::Device        device,
+			vk::Format        colorFormat,
+			ShaderWatcher*    watcher = nullptr,
+			vk::PipelineCache pCache = nullptr
+		);
 
 		FrameGraphResource RegisterPass(
 			FrameGraph&           fg,
