@@ -499,12 +499,17 @@ namespace brassica {
 		VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
 		meshFeatures.meshShader = VK_TRUE;
 		meshFeatures.taskShader = VK_TRUE;
+		meshFeatures.primitiveFragmentShadingRateMeshShader = VK_TRUE;
 
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
 		asFeatures.accelerationStructure = VK_TRUE;
 
 		VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
 		rqFeatures.rayQuery = VK_TRUE;
+
+		VkPhysicalDeviceFragmentShadingRateFeaturesKHR variableShadingRate{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+		variableShadingRate.primitiveFragmentShadingRate = VK_TRUE;
+		variableShadingRate.attachmentFragmentShadingRate = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
@@ -514,10 +519,13 @@ namespace brassica {
 			.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
 			.add_required_extension_features(meshFeatures)
 			.add_required_extension_features(asFeatures)
-			.add_required_extension_features(rqFeatures);
+			.add_required_extension_features(rqFeatures)
+			.add_required_extension_features(variableShadingRate)
+			;
 
 		auto phys_ret = selector.select();
 		if (!phys_ret) {

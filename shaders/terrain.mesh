@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
+#extension GL_EXT_fragment_shading_rate : require
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 98) out;
@@ -122,6 +123,17 @@ void main() {
 	vec3 lodColor = LOD_COLORS[min(lodLevel, 3)];
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
+	// Determine rate based on clipmap LOD before the quad loop
+	int shadingRate = 0; // Default 1x1
+
+	if (lodLevel >= 4) {
+		// 4x4 shading rate for far distance
+		shadingRate = gl_ShadingRateFlag4HorizontalPixelsEXT | gl_ShadingRateFlag4VerticalPixelsEXT;
+	} else if (lodLevel >= 2) {
+		// 2x2 shading rate for mid-distance
+		shadingRate = gl_ShadingRateFlag2HorizontalPixelsEXT | gl_ShadingRateFlag2VerticalPixelsEXT;
+	}
+
 	// Generate 7x7 quad primitives (98 triangles)
 	if (lx < 7 && ly < 7) {
 		uint quadIdx = ly * 7 + lx;
@@ -132,5 +144,9 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
+
+		// Apply the shading rate to both triangles in the quad
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 	}
 }
