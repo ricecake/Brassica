@@ -45,7 +45,8 @@ namespace brassica {
 		bool                                     enableDepthTest,
 		bool                                     enableDepthWrite,
 		vk::CompareOp                            depthCompareOp,
-		vk::CullModeFlags                        cullMode
+		vk::CullModeFlags                        cullMode,
+		vk::PipelineCache                        pCache
 	) {
 		std::vector<vk::Format> fmts;
 		if (colorFmt != vk::Format::eUndefined) {
@@ -60,7 +61,8 @@ namespace brassica {
 			enableDepthTest,
 			enableDepthWrite,
 			depthCompareOp,
-			cullMode
+			cullMode,
+			pCache
 		);
 	}
 
@@ -73,7 +75,8 @@ namespace brassica {
 		bool                                     enableDepthTest,
 		bool                                     enableDepthWrite,
 		vk::CompareOp                            depthCompareOp,
-		vk::CullModeFlags                        cullMode
+		vk::CullModeFlags                        cullMode,
+		vk::PipelineCache                        pCache
 	) {
 		colorFormats.assign(colorFmts.begin(), colorFmts.end());
 		depthFormat = depthFmt;
@@ -81,6 +84,7 @@ namespace brassica {
 		depthWriteEnable = enableDepthWrite;
 		this->depthCompareOp = depthCompareOp;
 		this->cullMode = cullMode;
+		this->pipelineCache = pCache;
 
 		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
 		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
@@ -192,7 +196,7 @@ namespace brassica {
 			pipelineInfo.setPDynamicState(&dynamicState);
 			pipelineInfo.setLayout(pipelineLayout);
 
-			auto result = device.createGraphicsPipeline(nullptr, pipelineInfo);
+			auto result = device.createGraphicsPipeline(this->pipelineCache, pipelineInfo);
 			if (result.result == vk::Result::eSuccess) {
 				pipeline = result.value;
 				spdlog::info("RenderPass '{}' pipeline created/rebuilt successfully.", name);

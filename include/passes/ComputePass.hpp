@@ -19,7 +19,8 @@ namespace brassica {
 		void InitComputePipeline(
 			std::span<const vk::DescriptorSetLayout> setLayouts = {},
 			std::span<const vk::PushConstantRange>   pushConstants = {},
-			ShaderWatcher*                           watcher = nullptr
+			ShaderWatcher*                           watcher = nullptr,
+			vk::PipelineCache                        pipelineCache = nullptr
 		);
 
 		void
@@ -29,7 +30,8 @@ namespace brassica {
 		std::vector<vk::DescriptorSetLayout> storedSetLayouts;
 		std::vector<vk::PushConstantRange>   storedPushConstants;
 
-		ComputeShader* computeShader{nullptr};
+		ComputeShader*    computeShader{nullptr};
+		vk::PipelineCache pipelineCache{nullptr};
 	};
 
 } // namespace brassica

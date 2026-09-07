@@ -14,11 +14,12 @@ namespace brassica {
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		vk::Format              colorFmt,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	):
 		RenderPass("DeferredPass", dev, colorFmt) {
 		CreateDescriptorResources(dev);
-		InitPipeline(dev, globalSet0Layout, colorFmt, watcher);
+		InitPipeline(dev, globalSet0Layout, colorFmt, watcher, pCache);
 	}
 
 	DeferredPass::~DeferredPass() {
@@ -100,7 +101,8 @@ namespace brassica {
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		vk::Format              colorFmt,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	) {
 		if (!vertShader.CompileVertexFromFile(dev, "shaders/deferred.vert")) {
 			spdlog::error("Failed to compile deferred.vert shader file");
@@ -122,7 +124,8 @@ namespace brassica {
 			false,
 			false,
 			vk::CompareOp::eLess,
-			vk::CullModeFlagBits::eNone
+			vk::CullModeFlagBits::eNone,
+			pCache
 		);
 	}
 

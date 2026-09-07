@@ -22,7 +22,8 @@ namespace brassica {
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
 			vk::Format              colorFormat,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 		~DeferredPass() override;
 
@@ -30,7 +31,8 @@ namespace brassica {
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
 			vk::Format              colorFormat,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 
 		FrameGraphResource RegisterPass(

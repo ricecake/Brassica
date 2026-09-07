@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 
 #include "spdlog/spdlog.h"
 
@@ -94,7 +95,9 @@ namespace brassica {
 		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
 		auto                  swap_ret = swapchainBuilder
 											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-											 .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+											 .set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
+											 .add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
+											 .add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
 											 .set_desired_extent(1280, 720)
 											 .add_image_usage_flags(
 												 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
@@ -145,7 +148,9 @@ namespace brassica {
 		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
 		auto                  swap_ret = swapchainBuilder
 											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-											 .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+											 .set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
+											 .add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
+											 .add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
 											 .set_desired_extent(static_cast<uint32_t>(width), static_cast<uint32_t>(height))
 											 .set_old_swapchain(vkbSwapchain)
 											 .add_image_usage_flags(
@@ -168,6 +173,7 @@ namespace brassica {
 		swapchainImageViews.assign(raw_image_views.begin(), raw_image_views.end());
 
 		windowResized = false;
+		fgCacheState.Invalidate();
 	}
 
 	void Engine::InitCommands() {
@@ -188,11 +194,17 @@ namespace brassica {
 	}
 
 	void Engine::InitSyncStructures() {
-		vk::FenceCreateInfo     fenceCreateInfo{vk::FenceCreateFlagBits::eSignaled};
+		vk::SemaphoreTypeCreateInfo typeInfo{};
+		typeInfo.setSemaphoreType(vk::SemaphoreType::eTimeline);
+		typeInfo.setInitialValue(0);
+
+		vk::SemaphoreCreateInfo timelineCreateInfo{};
+		timelineCreateInfo.setPNext(&typeInfo);
+		frameTimelineSemaphore = device.createSemaphore(timelineCreateInfo);
+
 		vk::SemaphoreCreateInfo semaphoreCreateInfo{};
 
 		for (int i = 0; i < FRAME_OVERLAP; i++) {
-			frames[i].renderFence = device.createFence(fenceCreateInfo);
 			frames[i].swapchainSemaphore = device.createSemaphore(semaphoreCreateInfo);
 		}
 	}
@@ -229,9 +241,13 @@ namespace brassica {
 			CleanupGlobalUBO();
 
 			for (int i = 0; i < FRAME_OVERLAP; i++) {
-				device.destroyFence(frames[i].renderFence);
 				device.destroySemaphore(frames[i].swapchainSemaphore);
 				device.destroyCommandPool(frames[i].commandPool);
+			}
+
+			if (frameTimelineSemaphore) {
+				device.destroySemaphore(frameTimelineSemaphore);
+				frameTimelineSemaphore = nullptr;
 			}
 
 			for (auto sem : swapchainRenderSemaphores) {
@@ -248,6 +264,22 @@ namespace brassica {
 			if (allocator != VK_NULL_HANDLE) {
 				vmaDestroyAllocator(allocator);
 				allocator = VK_NULL_HANDLE;
+			}
+
+			if (pipelineCache) {
+				size_t cacheSize = 0;
+				if (device.getPipelineCacheData(pipelineCache, &cacheSize, nullptr) == vk::Result::eSuccess && cacheSize > 0) {
+					std::vector<char> cacheData(cacheSize);
+					if (device.getPipelineCacheData(pipelineCache, &cacheSize, cacheData.data()) == vk::Result::eSuccess) {
+						std::ofstream outFile("pipeline_cache.bin", std::ios::binary);
+						if (outFile.is_open()) {
+							outFile.write(cacheData.data(), static_cast<std::streamsize>(cacheData.size()));
+							spdlog::info("Saved pipeline cache data ({} bytes).", cacheSize);
+						}
+					}
+				}
+				device.destroyPipelineCache(pipelineCache);
+				pipelineCache = nullptr;
 			}
 
 			device.destroy();
@@ -294,10 +326,10 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher);
-		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher);
-		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher);
-		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
+		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
+		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
+		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
+		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher, GetPipelineCache());
 
 		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 8);
@@ -583,6 +615,28 @@ namespace brassica {
 			return false;
 		}
 
+		// Initialize Pipeline Cache
+		std::vector<char> pipelineCacheData;
+		std::ifstream cacheFile("pipeline_cache.bin", std::ios::binary | std::ios::ate);
+		if (cacheFile.is_open()) {
+			std::streamsize size = cacheFile.tellg();
+			cacheFile.seekg(0, std::ios::beg);
+			pipelineCacheData.resize(static_cast<size_t>(size));
+			if (cacheFile.read(pipelineCacheData.data(), size)) {
+				spdlog::info("Loaded pipeline cache data ({} bytes).", size);
+			} else {
+				pipelineCacheData.clear();
+			}
+		}
+
+		vk::PipelineCacheCreateInfo cacheCreateInfo{};
+		if (!pipelineCacheData.empty()) {
+			cacheCreateInfo.setInitialDataSize(pipelineCacheData.size());
+			cacheCreateInfo.setPInitialData(pipelineCacheData.data());
+		}
+
+		pipelineCache = device.createPipelineCache(cacheCreateInfo);
+
 		return true;
 	}
 
@@ -622,12 +676,20 @@ namespace brassica {
 			RecreateSwapchain();
 		}
 
-		shaderWatcher.ProcessPendingReloads(device);
+		if (shaderWatcher.ProcessPendingReloads(device)) {
+			fgCacheState.Invalidate();
+		}
 
 		FrameData& frame = GetCurrentFrame();
 
 		// 1. Wait for GPU to finish the last time this frame context was used
-		(void)device.waitForFences(frame.renderFence, VK_TRUE, 1000000000);
+		if (frameNumber >= FRAME_OVERLAP) {
+			uint64_t waitValue = frameNumber - FRAME_OVERLAP + 1;
+			vk::SemaphoreWaitInfo waitInfo{};
+			waitInfo.setSemaphores(frameTimelineSemaphore);
+			waitInfo.setValues(waitValue);
+			(void)device.waitSemaphores(waitInfo, 1000000000);
+		}
 
 		// 2. Acquire Swapchain Image
 		auto acquireResult = device.acquireNextImageKHR(vkbSwapchain.swapchain, 1000000000, frame.swapchainSemaphore);
@@ -638,8 +700,6 @@ namespace brassica {
 			spdlog::error("Failed to acquire swapchain image!");
 			return;
 		}
-
-		device.resetFences(frame.renderFence);
 		uint32_t swapchainImageIndex = acquireResult.value;
 
 		// 3. Record Commands
@@ -660,6 +720,24 @@ namespace brassica {
 
 		FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(swapchainTexWrapper));
 		blackboard.add<SwapchainData>() = SwapchainData{.target = swapchainRes};
+
+		if (fgCacheState.cachedExtent != extent ||
+		    fgCacheState.cachedFormat != format ||
+		    fgCacheState.cachedClipmapView != terrainClipmap.GetImageView() ||
+		    fgCacheState.cachedClipmapSampler != terrainClipmap.GetSampler() ||
+		    fgCacheState.cachedTLAS != terrainPass->GetTLAS()) {
+			fgCacheState.Invalidate();
+		}
+
+		if (fgCacheState.isDirty) {
+			spdlog::debug("FrameGraph graph cache invalidated; updating cached configuration.");
+			fgCacheState.cachedExtent = extent;
+			fgCacheState.cachedFormat = format;
+			fgCacheState.cachedClipmapView = terrainClipmap.GetImageView();
+			fgCacheState.cachedClipmapSampler = terrainClipmap.GetSampler();
+			fgCacheState.cachedTLAS = terrainPass->GetTLAS();
+			fgCacheState.isDirty = false;
+		}
 
 		uint32_t activeFrame = frameNumber % FRAME_OVERLAP;
 
@@ -768,16 +846,25 @@ namespace brassica {
 
 		waitInfos.push_back(waitInfo);
 
-		vk::SemaphoreSubmitInfo signalInfo{};
-		signalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
-		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+		std::vector<vk::SemaphoreSubmitInfo> signalInfos;
+
+		vk::SemaphoreSubmitInfo renderSignalInfo{};
+		renderSignalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
+		renderSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+		signalInfos.push_back(renderSignalInfo);
+
+		vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
+		frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
+		frameTimelineSignalInfo.setValue(frameNumber + 1);
+		frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+		signalInfos.push_back(frameTimelineSignalInfo);
 
 		vk::SubmitInfo2 submitInfo{};
 		submitInfo.setWaitSemaphoreInfos(waitInfos);
-		submitInfo.setSignalSemaphoreInfos(signalInfo);
+		submitInfo.setSignalSemaphoreInfos(signalInfos);
 		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
 
-		graphicsQueue.submit2(submitInfo, frame.renderFence);
+		graphicsQueue.submit2(submitInfo, nullptr);
 
 		// 5. Present
 		vk::PresentInfoKHR presentInfo{};

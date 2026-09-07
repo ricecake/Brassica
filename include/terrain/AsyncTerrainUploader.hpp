@@ -13,7 +13,6 @@ namespace brassica {
 
 	struct PendingUploadRequest {
 		vk::CommandBuffer commandBuffer{nullptr};
-		vk::Fence         fence{nullptr};
 		vk::Buffer        stagingBuffer{nullptr};
 		VmaAllocation     stagingAllocation{VK_NULL_HANDLE};
 		uint32_t          levelIndex{0};
