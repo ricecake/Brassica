@@ -430,7 +430,19 @@ namespace brassica {
 		if (options.headless) {
 			builder.set_headless(true);
 			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
-			builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+
+			uint32_t count = 0;
+			if (vk::enumerateInstanceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess && count > 0) {
+				std::vector<vk::ExtensionProperties> exts(count);
+				if (vk::enumerateInstanceExtensionProperties(nullptr, &count, exts.data()) == vk::Result::eSuccess) {
+					for (const auto& ext : exts) {
+						if (std::string(ext.extensionName.data()) == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
+							builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
+							break;
+						}
+					}
+				}
+			}
 		}
 
 		auto inst_res = builder.request_validation_layers(true).build();
@@ -482,10 +494,17 @@ namespace brassica {
 		features12.descriptorBindingPartiallyBound = VK_TRUE;
 		features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
 		features12.timelineSemaphore = VK_TRUE;
+		features12.bufferDeviceAddress = VK_TRUE;
 
 		VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
 		meshFeatures.meshShader = VK_TRUE;
 		meshFeatures.taskShader = VK_TRUE;
+
+		VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+		asFeatures.accelerationStructure = VK_TRUE;
+
+		VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+		rqFeatures.rayQuery = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
@@ -493,7 +512,12 @@ namespace brassica {
 			.set_required_features_13(features13)
 			.set_required_features_12(features12)
 			.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
-			.add_required_extension_features(meshFeatures);
+			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
+			.add_required_extension_features(meshFeatures)
+			.add_required_extension_features(asFeatures)
+			.add_required_extension_features(rqFeatures);
 
 		auto phys_ret = selector.select();
 		if (!phys_ret) {
@@ -522,6 +546,7 @@ namespace brassica {
 		allocatorInfo.device = device;
 		allocatorInfo.instance = instance;
 		allocatorInfo.vulkanApiVersion = VK_MAKE_API_VERSION(0, chosenMajor, chosenMinor, 0);
+		allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
 		if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
 			spdlog::critical("Failed to create Vulkan Memory Allocator.");
@@ -663,7 +688,16 @@ namespace brassica {
 
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
-		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], activeFrame);
+		deferredPass->RegisterPass(
+			fg,
+			blackboard,
+			extent,
+			globalDescriptorSets[activeFrame],
+			activeFrame,
+			terrainClipmap.GetImageView(),
+			terrainClipmap.GetSampler(),
+			terrainPass->GetTLAS()
+		);
 
 		RenderContext renderCtx{
 			.commandBuffer = frame.commandBuffer,
