@@ -57,6 +57,12 @@ shared uint meshletCount;
 
 void main() {
 	uint threadID = gl_LocalInvocationID.x;
+
+	if (threadID == 0) {
+		meshletCount = 0;
+	}
+	barrier();
+
 	uint meshletID = gl_WorkGroupID.x * 32 + threadID;
 
 	bool visible = false;
@@ -80,24 +86,27 @@ void main() {
 
 		visible = isAABBVisible(minB, maxB, params.viewProj);
 
-		// Clipmap Isotropic Radial Ring Punching:
 		if (visible && lodLevel > 0) {
-			vec2 centerXZ = (minB.xz + maxB.xz) * 0.5;
-			float distToCam = length(centerXZ - params.cameraPos.xz);
-			float innerRadius = 240.0 * pow(2.0, float(lodLevel - 1));
+			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
+			vec2 prevCameraSnap = floor(params.cameraPos.xz / prevMeshletSize) * prevMeshletSize;
+			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
-			if (distToCam < innerRadius) {
+			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
+			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
+
+			// Cull the meshlet ONLY if its entire bounding box is inside the previous LOD's extent
+			if (insideX && insideZ) {
 				visible = false;
 			}
 		}
 	}
 
-	uint index = atomicAdd(meshletCount, 1u);
-
 	if (visible) {
+		uint index = atomicAdd(meshletCount, 1u);
 		payload.meshletIDs[index] = meshletID;
 		payload.lodLevels[index] = lodLevel;
 	}
+	barrier();
 
 	if (threadID == 0) {
 		EmitMeshTasksEXT(meshletCount, 1, 1);

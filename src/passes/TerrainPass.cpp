@@ -120,10 +120,14 @@ namespace brassica {
 
 					// Radial ring check matching task shader to only generate AABBs for active LOD regions
 					if (lod > 0) {
-						glm::vec2 centerXZ = (glm::vec2(minB.x, minB.z) + glm::vec2(maxB.x, maxB.z)) * 0.5f;
-						float     distToCam = glm::length(centerXZ - glm::vec2(cameraPos.x, cameraPos.z));
-						float     innerRadius = 240.0f * std::pow(2.0f, static_cast<float>(lod - 1));
-						if (distToCam < innerRadius) {
+						float prevMeshletSize = baseMeshletSize * std::pow(2.0f, static_cast<float>(lod - 1));
+						float safeInnerRadius = (static_cast<float>(meshletsPerRow) * 0.5f - 1.0f) * prevMeshletSize;
+						glm::vec2 maxOffset = glm::max(
+							glm::abs(glm::vec2(minB.x, minB.z) - glm::vec2(cameraPos.x, cameraPos.z)),
+							glm::abs(glm::vec2(maxB.x, maxB.z) - glm::vec2(cameraPos.x, cameraPos.z))
+						);
+						float maxDistToCam = glm::length(maxOffset);
+						if (maxDistToCam < safeInnerRadius) {
 							continue; // Region covered by finer LOD
 						}
 					}
