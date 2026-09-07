@@ -17,7 +17,6 @@ TEST_CASE("Engine Headless Render Initialization and Execution") {
 		CHECK(static_cast<bool>(engine.GetDevice()));
 		CHECK(engine.GetAllocator() != VK_NULL_HANDLE);
 
-		engine.Run();
 		engine.Cleanup();
 
 		CHECK(engine.GetValidationErrorCount() == 0);

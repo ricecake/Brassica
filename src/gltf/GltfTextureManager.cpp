@@ -3,6 +3,7 @@
 
 #include "gltf/GltfTextureManager.hpp"
 #include <filesystem>
+#include <vector>
 #include "spdlog/spdlog.h"
 
 namespace brassica {
@@ -64,7 +65,7 @@ namespace brassica {
 
 		descriptorSet = device.allocateDescriptorSets(allocInfo).front();
 
-		// 4. Create Default White Texture at Index 0
+		// 4. Create Default White Texture at Index 0 and populate descriptor array
 		CreateDefaultTexture();
 	}
 
@@ -91,7 +92,25 @@ namespace brassica {
 
 	void GltfTextureManager::CreateDefaultTexture() {
 		uint8_t whitePixel[4] = {255, 255, 255, 255};
-		CreateTextureFromPixels(whitePixel, 1, 1, 4, vk::Format::eR8G8B8A8Unorm);
+		int32_t defaultIdx = CreateTextureFromPixels(whitePixel, 1, 1, 4, vk::Format::eR8G8B8A8Unorm);
+
+		if (descriptorSet && !textures.empty() && textures[0].imageView) {
+			std::vector<vk::DescriptorImageInfo> imageInfos(MAX_TEXTURES);
+			for (size_t i = 0; i < MAX_TEXTURES; ++i) {
+				imageInfos[i].setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				imageInfos[i].setImageView(textures[0].imageView);
+				imageInfos[i].setSampler(sampler);
+			}
+
+			vk::WriteDescriptorSet write{};
+			write.setDstSet(descriptorSet);
+			write.setDstBinding(0);
+			write.setDstArrayElement(0);
+			write.setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
+			write.setImageInfo(imageInfos);
+
+			device.updateDescriptorSets(write, nullptr);
+		}
 	}
 
 	int32_t GltfTextureManager::CreateTextureFromPixels(

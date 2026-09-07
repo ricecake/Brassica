@@ -197,6 +197,13 @@ namespace brassica {
 
 			shaderWatcher.StopWatching();
 
+			if (gltfModelSystem) {
+				gltfModelSystem->Cleanup();
+				gltfModelSystem.reset();
+			}
+
+			gltfTextureManager.Cleanup();
+
 			if (deferredPass) {
 				deferredPass->DestroyPipeline();
 				deferredPass.reset();
@@ -292,6 +299,10 @@ namespace brassica {
 		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher);
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher);
 
+		gltfTextureManager.Init(device, allocator, graphicsQueue, graphicsQueueFamily);
+		gltfModelSystem = std::make_unique<GltfModelSystem>();
+		gltfModelSystem->Init(instance, device, allocator, globalSet0Layout, &gltfTextureManager, &shaderWatcher);
+
 		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 8);
 
@@ -300,6 +311,7 @@ namespace brassica {
 			auto mapData = TerrainClipmap::GenerateSineWaveMap(l, terrainClipmap.GetBaseTexelSize());
 			terrainUploader.UploadLevelAsync(l, mapData, terrainClipmap.GetImage(), TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, graphicsQueue);
 		}
+		graphicsQueue.waitIdle();
 		terrainPass->UpdateClipmapDescriptor(terrainClipmap.GetImageView(), terrainClipmap.GetSampler());
 
 		taskScheduler.Initialize();
@@ -560,10 +572,7 @@ namespace brassica {
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
 			for (uint32_t i = 0; i < targetFrames; ++i) {
-				enki::TaskSet frameTask(1, [this](enki::TaskSetPartition range, uint32_t threadnum) { DrawFrame(); });
-
-				taskScheduler.AddTaskSetToPipe(&frameTask);
-				taskScheduler.WaitforTask(&frameTask);
+				DrawFrame();
 			}
 			spdlog::info("Completed {} frames.", targetFrames);
 			return;
@@ -647,6 +656,10 @@ namespace brassica {
 		UpdateCamera(deltaTime);
 		camera.UpdateMatrices(aspect);
 
+		if (gltfModelSystem) {
+			gltfModelSystem->Update(registry, camera, deltaTime);
+		}
+
 		FrameUBO ubo{};
 		ubo.time = static_cast<float>(currentTime);
 		ubo.fov = camera.fov;
@@ -692,6 +705,11 @@ namespace brassica {
 
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
+
+		if (gltfModelSystem) {
+			gltfModelSystem->Render(registry, fg, blackboard, extent, globalDescriptorSets[activeFrame], camera, activeFrame);
+		}
+
 		deferredPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], activeFrame);
 
 		RenderContext renderCtx{
@@ -727,11 +745,12 @@ namespace brassica {
 
 		auto waitInfos = terrainUploader.GetWaitSemaphores();
 
-		vk::SemaphoreSubmitInfo waitInfo{};
-		waitInfo.setSemaphore(frame.swapchainSemaphore);
-		waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-
-		waitInfos.push_back(waitInfo);
+		if (!options.headless) {
+			vk::SemaphoreSubmitInfo waitInfo{};
+			waitInfo.setSemaphore(frame.swapchainSemaphore);
+			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+			waitInfos.push_back(waitInfo);
+		}
 
 		vk::SubmitInfo2 submitInfo{};
 		submitInfo.setWaitSemaphoreInfos(waitInfos);

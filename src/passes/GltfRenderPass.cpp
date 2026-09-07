@@ -1,6 +1,9 @@
 #include "passes/GltfRenderPass.hpp"
+#include "passes/GltfComputePass.hpp"
+#include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
 #include <array>
+#include <vector>
 
 namespace brassica {
 
@@ -30,6 +33,10 @@ namespace brassica {
 	) {
 		dls.init(instance, dev);
 
+		if (!taskShader.CompileTaskFromFile(dev, "shaders/gltf_model.task")) {
+			spdlog::error("Failed to compile shaders/gltf_model.task");
+		}
+
 		if (!meshShader.CompileMeshFromFile(dev, "shaders/gltf_model.mesh")) {
 			spdlog::error("Failed to compile shaders/gltf_model.mesh");
 		}
@@ -38,7 +45,8 @@ namespace brassica {
 			spdlog::error("Failed to compile shaders/gltf_model.frag");
 		}
 
-		SetShaders(&meshShader, &fragShader);
+		vertOrMeshShader = &meshShader;
+		RenderPass::fragShader = &this->fragShader;
 
 		modelSetLayout = modelGeometrySetLayout;
 		if (!modelSetLayout) {
@@ -47,40 +55,117 @@ namespace brassica {
 				bindings[i].setBinding(i)
 					.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 					.setDescriptorCount(1)
-					.setStageFlags(vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment);
+					.setStageFlags(vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment);
 			}
 			vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 			layoutInfo.setBindings(bindings);
 			modelSetLayout = device.createDescriptorSetLayout(layoutInfo);
 		}
 
-		std::array<vk::DescriptorSetLayout, 3> setLayouts = {
-			globalSet0Layout,
-			modelSetLayout,
-			textureSetLayout
-		};
+		std::vector<vk::DescriptorSetLayout> setLayouts;
+		setLayouts.push_back(globalSet0Layout);
+		setLayouts.push_back(modelSetLayout);
+		if (textureSetLayout) {
+			setLayouts.push_back(textureSetLayout);
+		}
 
 		vk::PushConstantRange pcRange{};
-		pcRange.setStageFlags(vk::ShaderStageFlagBits::eMeshEXT);
+		pcRange.setStageFlags(vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT);
 		pcRange.setOffset(0);
 		pcRange.setSize(sizeof(GltfRenderPushConstants));
 
-		std::array<vk::Format, 3> colorFmts = {
-			vk::Format::eR16G16B16A16Sfloat,
-			vk::Format::eR16G16B16A16Sfloat,
-			vk::Format::eR8G8B8A8Unorm
+		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
+		storedPushConstants.assign({pcRange});
+
+		auto buildPipeline = [this]() {
+			if (pipeline) device.destroyPipeline(pipeline);
+			if (pipelineLayout) device.destroyPipelineLayout(pipelineLayout);
+
+			vk::PipelineLayoutCreateInfo layoutInfo{};
+			layoutInfo.setSetLayouts(storedSetLayouts);
+			layoutInfo.setPushConstantRanges(storedPushConstants);
+			pipelineLayout = device.createPipelineLayout(layoutInfo);
+
+			std::vector<vk::PipelineShaderStageCreateInfo> stages = {
+				taskShader.GetStageCreateInfo(),
+				meshShader.GetStageCreateInfo(),
+				fragShader.GetStageCreateInfo()
+			};
+
+			vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+			vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+			inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
+
+			vk::PipelineViewportStateCreateInfo viewportState{};
+			viewportState.setViewportCount(1);
+			viewportState.setScissorCount(1);
+
+			vk::PipelineRasterizationStateCreateInfo rasterizer{};
+			rasterizer.setPolygonMode(vk::PolygonMode::eFill);
+			rasterizer.setLineWidth(1.0f);
+			rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
+			rasterizer.setFrontFace(vk::FrontFace::eCounterClockwise);
+
+			vk::PipelineMultisampleStateCreateInfo multisampling{};
+			multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
+
+			std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments(colorFormats.size());
+			for (size_t i = 0; i < colorFormats.size(); ++i) {
+				colorBlendAttachments[i].setColorWriteMask(
+					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+				);
+			}
+
+			vk::PipelineColorBlendStateCreateInfo colorBlending{};
+			colorBlending.setAttachments(colorBlendAttachments);
+
+			vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+			depthStencil.setDepthTestEnable(VK_TRUE);
+			depthStencil.setDepthWriteEnable(VK_TRUE);
+			depthStencil.setDepthCompareOp(vk::CompareOp::eLess);
+
+			std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+			vk::PipelineDynamicStateCreateInfo dynamicState{};
+			dynamicState.setDynamicStates(dynamicStates);
+
+			vk::PipelineRenderingCreateInfo renderingCreateInfo{};
+			renderingCreateInfo.setColorAttachmentFormats(colorFormats);
+			renderingCreateInfo.setDepthAttachmentFormat(depthFormat);
+
+			vk::GraphicsPipelineCreateInfo pipelineInfo{};
+			pipelineInfo.setPNext(&renderingCreateInfo);
+			pipelineInfo.setStages(stages);
+			pipelineInfo.setPVertexInputState(&vertexInputInfo);
+			pipelineInfo.setPInputAssemblyState(&inputAssembly);
+			pipelineInfo.setPViewportState(&viewportState);
+			pipelineInfo.setPRasterizationState(&rasterizer);
+			pipelineInfo.setPMultisampleState(&multisampling);
+			pipelineInfo.setPColorBlendState(&colorBlending);
+			pipelineInfo.setPDepthStencilState(&depthStencil);
+			pipelineInfo.setPDynamicState(&dynamicState);
+			pipelineInfo.setLayout(pipelineLayout);
+
+			auto result = device.createGraphicsPipeline(nullptr, pipelineInfo);
+			if (result.result == vk::Result::eSuccess) {
+				pipeline = result.value;
+				spdlog::info("RenderPass 'GltfRenderPass' pipeline created/rebuilt successfully.");
+			} else {
+				spdlog::error("Failed to create GltfRenderPass graphics pipeline.");
+			}
 		};
 
-		InitRenderPipeline(
-			colorFmts,
-			vk::Format::eD32Sfloat,
-			setLayouts,
-			std::span(&pcRange, 1),
-			watcher,
-			true,  // enableDepthTest
-			true,  // enableDepthWrite
-			vk::CompareOp::eLess
-		);
+		if (watcher) {
+			auto rebuildCb = [this, buildPipeline]() {
+				spdlog::info("Rebuilding GltfRenderPass pipeline due to shader modification...");
+				device.waitIdle();
+				buildPipeline();
+			};
+			watcher->RegisterShader(&taskShader, rebuildCb);
+			watcher->RegisterShader(&meshShader, rebuildCb);
+			watcher->RegisterShader(&fragShader, rebuildCb);
+		}
+
+		buildPipeline();
 	}
 
 	void GltfRenderPass::RegisterPass(
@@ -105,6 +190,14 @@ namespace brassica {
 				(void)builder.write(gbuffer.normalTarget, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				(void)builder.write(gbuffer.albedoTarget, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				(void)builder.write(gbuffer.depthTarget, static_cast<uint32_t>(TextureUsage::DepthStencilAttachment));
+
+				if (blackboard.has<GltfComputePassData>()) {
+					const auto& computeData = blackboard.get<GltfComputePassData>();
+					(void)builder.read(computeData.indirectDrawTarget, static_cast<uint32_t>(BufferUsage::Indirect));
+					(void)builder.read(computeData.visibleInstancesTarget, static_cast<uint32_t>(BufferUsage::StorageRead));
+					(void)builder.read(computeData.drawCountTarget, static_cast<uint32_t>(BufferUsage::StorageRead));
+				}
+
 				builder.setSideEffect();
 			},
 			[this, extent, globalDescriptorSet, modelGeometrySet, textureSet, indirectDrawBuffer, drawCountBuffer, maxDrawCount, pushConstants](
@@ -114,7 +207,38 @@ namespace brassica {
 			) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
-				if (maxDrawCount == 0 || !indirectDrawBuffer) return;
+				if (maxDrawCount == 0) return;
+
+				if (indirectDrawBuffer) {
+					std::vector<vk::BufferMemoryBarrier> barriers;
+					vk::BufferMemoryBarrier barrierIndirect{};
+					barrierIndirect.setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+						.setDstAccessMask(vk::AccessFlagBits::eIndirectCommandRead)
+						.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+						.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+						.setBuffer(indirectDrawBuffer)
+						.setOffset(0)
+						.setSize(VK_WHOLE_SIZE);
+					barriers.push_back(barrierIndirect);
+
+					if (drawCountBuffer) {
+						vk::BufferMemoryBarrier barrierCount{};
+						barrierCount.setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+							.setDstAccessMask(vk::AccessFlagBits::eIndirectCommandRead)
+							.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+							.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+							.setBuffer(drawCountBuffer)
+							.setOffset(0)
+							.setSize(VK_WHOLE_SIZE);
+						barriers.push_back(barrierCount);
+					}
+
+					cmd.pipelineBarrier(
+						vk::PipelineStageFlagBits::eComputeShader,
+						vk::PipelineStageFlagBits::eDrawIndirect,
+						{}, nullptr, barriers, nullptr
+					);
+				}
 
 				auto& posTex = resources.get<FrameGraphTexture2D>(data.positionTarget);
 				auto& normTex = resources.get<FrameGraphTexture2D>(data.normalTarget);
@@ -134,15 +258,12 @@ namespace brassica {
 				cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
 
 				std::array<vk::DescriptorSet, 3> sets = {globalDescriptorSet, modelGeometrySet, textureSet};
-				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, sets, nullptr);
+				uint32_t bindCount = textureSet ? 3 : 2;
+				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, std::span(sets.data(), bindCount), nullptr);
 
-				cmd.pushConstants<GltfRenderPushConstants>(pipelineLayout, vk::ShaderStageFlagBits::eMeshEXT, 0, pushConstants);
+				cmd.pushConstants<GltfRenderPushConstants>(pipelineLayout, vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT, 0, pushConstants);
 
-				if (drawCountBuffer) {
-					cmd.drawMeshTasksIndirectCountEXT(indirectDrawBuffer, 0, drawCountBuffer, 0, maxDrawCount, sizeof(VkDrawMeshTasksIndirectCommandEXT), dls);
-				} else {
-					DrawMeshTasksIndirectEXT(cmd, indirectDrawBuffer, 0, maxDrawCount, sizeof(VkDrawMeshTasksIndirectCommandEXT), dls);
-				}
+				cmd.drawMeshTasksEXT(maxDrawCount, 1, 1, dls);
 
 				EndRendering(cmd);
 			}
