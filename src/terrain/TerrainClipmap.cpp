@@ -299,9 +299,9 @@ namespace brassica {
 		float texelSize = baseTexelSize * static_cast<float>(1 << levelIndex);
 		float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
-		auto heightFunc = [time](float x, float z) -> float {
-			float wave1 = std::sin(0.05f * x + time) * 2.5f;
-			float wave2 = std::cos(0.05f * z + time * 0.8f) * 2.5f;
+		auto heightFunc = [](float x, float z) -> float {
+			float wave1 = std::sin(0.05f * x ) * 2.5f;
+			float wave2 = std::cos(0.05f * z ) * 2.5f;
 			float wave3 = std::sin(0.02f * (x + z)) * 1.5f;
 			return wave1 + wave2 + wave3;
 		};

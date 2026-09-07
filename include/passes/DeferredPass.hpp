@@ -38,7 +38,10 @@ namespace brassica {
 			FrameGraphBlackboard& blackboard,
 			vk::Extent2D          extent,
 			vk::DescriptorSet     globalDescriptorSet,
-			uint32_t              activeFrame = 0
+			uint32_t              activeFrame = 0,
+			vk::ImageView         clipmapImageView = nullptr,
+			vk::Sampler           clipmapSampler = nullptr,
+			vk::AccelerationStructureKHR tlas = nullptr
 		);
 
 	private:
