@@ -129,6 +129,7 @@ target_include_directories(brassica
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+        external/include
         external/glm
         external/entt/single_include
         external/stb

@@ -74,7 +74,7 @@ void main() {
 	if (albedo.a < 0.01) {
 		hdrColor = hdrBg;
 	} else {
-		vec3 lightDir = normalize(vec3(sin(ubo.time), 0.1, -cos(ubo.time)));
+		vec3 lightDir = normalize(vec3(0.5, 0.5, 0.5));
 		vec3 lightColor = vec3(2.5, 2.3, 2.0); // High intensity HDR light source
 
 		float diff = max(dot(norm, lightDir), 0.0);

@@ -4,6 +4,8 @@
 
 #include "spdlog/spdlog.h"
 
+#include "Simplex.h"
+
 #include "terrain/AsyncTerrainUploader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -93,15 +95,9 @@ namespace brassica {
 						int   colIdx = (deltaX > 0) ? (TERRAIN_MAP_DIM - stripWidth + x) : x;
 						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
 
-						float h = heightFunc(worldX, worldZ);
-						float eps = texelSize;
-						float hL = heightFunc(worldX - eps, worldZ);
-						float hR = heightFunc(worldX + eps, worldZ);
-						float hD = heightFunc(worldX, worldZ - eps);
-						float hU = heightFunc(worldX, worldZ + eps);
-
-						glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
-						stripData[z * stripWidth + x] = glm::vec4(h, normal.x, normal.y, normal.z);
+						auto hDiv = Simplex::dfBm(texelSize*glm::vec2(worldX, worldZ), 10.0f - info.level, 1.78f);
+						hDiv *= 50.0f;
+						stripData[z * stripWidth + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
 					}
 				}
 
@@ -178,15 +174,9 @@ namespace brassica {
 							static_cast<int>(TERRAIN_MAP_DIM);
 						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(localGridX) * texelSize;
 
-						float h = heightFunc(worldX, worldZ);
-						float eps = texelSize;
-						float hL = heightFunc(worldX - eps, worldZ);
-						float hR = heightFunc(worldX + eps, worldZ);
-						float hD = heightFunc(worldX, worldZ - eps);
-						float hU = heightFunc(worldX, worldZ + eps);
-
-						glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
-						stripData[z * TERRAIN_MAP_DIM + x] = glm::vec4(h, normal.x, normal.y, normal.z);
+						auto hDiv = Simplex::dfBm(texelSize*glm::vec2(worldX, worldZ), 10.0f - info.level, 1.78f);
+						hDiv *= 50.0f;
+						stripData[z * TERRAIN_MAP_DIM + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
 					}
 				}
 
@@ -333,18 +323,9 @@ namespace brassica {
 				float worldX = centerWorldPos.x - halfExtent + static_cast<float>(x) * texelSize;
 				float worldZ = centerWorldPos.y - halfExtent + static_cast<float>(z) * texelSize;
 
-				float h = heightFunc(worldX, worldZ);
-
-				// Compute analytical / central difference normals
-				float eps = texelSize;
-				float hL = heightFunc(worldX - eps, worldZ);
-				float hR = heightFunc(worldX + eps, worldZ);
-				float hD = heightFunc(worldX, worldZ - eps);
-				float hU = heightFunc(worldX, worldZ + eps);
-
-				glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
-
-				data[z * TERRAIN_MAP_DIM + x] = glm::vec4(h, normal.x, normal.y, normal.z);
+				auto hDiv = Simplex::dfBm(texelSize*glm::vec2(worldX, worldZ), 10.0f - levelIndex, 1.78f);
+				hDiv *= 50.0f;
+				data[z * TERRAIN_MAP_DIM + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
 			}
 		}
 
