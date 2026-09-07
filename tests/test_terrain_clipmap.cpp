@@ -70,9 +70,9 @@ TEST_CASE("Terrain Clipmap Generation and 7 Level Scaling") {
 
 	// Verify normal vector length is normalized
 	CHECK(doctest::Approx(glm::length(normal)).epsilon(0.01f) == 1.0f);
-	// Height from sine wave combination should be within reasonable shallow bounds [-10, 10]
-	CHECK(height >= -10.0f);
-	CHECK(height <= 10.0f);
+	// Height from multi-octave FBM terrain generator should be within [-120, 120]
+	CHECK(height >= -120.0f);
+	CHECK(height <= 120.0f);
 }
 
 TEST_CASE("Top Plane Frustum Culling and Terrain Elevation") {

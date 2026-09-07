@@ -29,17 +29,22 @@ namespace brassica {
 		~TerrainClipmap();
 
 		void Init(
-			vk::Device   device,
-			VmaAllocator allocator,
-			uint32_t     numLODs = DEFAULT_CLIPMAP_LODS,
-			float        baseTexelSize = 0.5f,
-			float        maxDistance = 15000.0f
+			vk::Device      device,
+			VmaAllocator    allocator,
+			uint32_t        numLODs = DEFAULT_CLIPMAP_LODS,
+			float           baseTexelSize = 0.5f,
+			float           maxDistance = 15000.0f,
+			const glm::vec3& initialCameraPos = glm::vec3(0.0f)
 		);
 		void Cleanup();
 
 		void UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue);
 
-		// CPU Terrain Generator function for a 1024x1024 grid at a specific clipmap level
+		// Unified CPU Terrain Generator
+		static glm::vec4 SampleTerrain(float worldX, float worldZ, float texelSize);
+
+		std::vector<glm::vec4> GenerateLevelMap(uint32_t levelIndex) const;
+
 		static std::vector<glm::vec4> GenerateSineWaveMap(
 			uint32_t         levelIndex,
 			float            baseTexelSize,

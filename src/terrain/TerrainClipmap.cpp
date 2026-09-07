@@ -1,63 +1,102 @@
 #include "terrain/TerrainClipmap.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "spdlog/spdlog.h"
 
-#include "Simplex.h"
-
 #include "terrain/AsyncTerrainUploader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/noise.hpp>
 
 namespace brassica {
 
-	glm::vec4 terrainNoise(float worldX, float worldZ, float lodLevel, float texelSize, float height = 50.0f) {
-		auto heightFunc = [texelSize, lodLevel, height](float x, float z) -> float {
-			// auto hDiv = Simplex::dfBm(texelSize*glm::vec2(x, z), 10.0f - lodLevel, 1.78f);
-			// Simplex::iqfBm(glm::vec2(x, z));
-			// hDiv *= height;
+	static float HeightFunc(float x, float z) {
+		glm::vec2 pos(x, z);
 
-			int octaves = std::min(4, int(lodLevel));
-			float gain = 0.5f;
-			float lacunarity = 2.0f;
+		// 1. Terrain Mask (Plains vs Mountains/Hills) at ~1.2km scale
+		float maskNoise = glm::simplex(pos * 0.0008f);
+		float mountainFactor = std::clamp((maskNoise - (-0.1f)) / 0.4f, 0.0f, 1.0f);
+		mountainFactor = mountainFactor * mountainFactor * (3.0f - 2.0f * mountainFactor);
 
-			glm::vec2 v{x, z};
-			v *= texelSize;
-			float sum	= Simplex::worleyfBm(v);
-			float amp	= 0.5;
-			float dx	= 0.0;
-			float dy	= 0.0;
-			float freq	= 1.0;
-			for( uint8_t i = 0; i < octaves; i++ ) {
-				glm::vec3 d = Simplex::dnoise( v * freq );
-				dx += d.y;
-				dy += d.y;
-				sum += amp * d.x / ( 1.0f + dx*dx + dy*dy );
-				freq *= lacunarity;
-				amp *= gain;
-				gain *= (lodLevel-i)/lodLevel;
-			}
+		// 2. Continental / Large Scale Elevation at ~1km and ~500m scale
+		float base1 = glm::simplex(pos * 0.001f) * 50.0f;
+		float base2 = glm::simplex(pos * 0.002f) * 20.0f;
+		float baseHeight = base1 + base2;
 
-			return sum * height;
-		};
+		// 3. Hills & Mountain Details (250m down to 8m scale)
+		float h0 = glm::simplex(pos * 0.004f) * 25.0f;
+		float h1 = glm::simplex(pos * 0.008f) * 12.0f;
+		float h2 = glm::simplex(pos * 0.016f) * 6.0f;
+		float h3 = glm::simplex(pos * 0.032f) * 3.0f;
+		float h4 = glm::simplex(pos * 0.064f) * 1.5f;
+		float h5 = glm::simplex(pos * 0.125f) * 0.75f;
 
+		float detailSum = h0 + h1 + h2 + h3 + h4 + h5;
+		float detailScale = 0.15f + 0.85f * mountainFactor;
 
-		float h = heightFunc(worldX, worldZ);
-		float eps = texelSize;
-		float hL = heightFunc(worldX - eps, worldZ);
-		float hR = heightFunc(worldX + eps, worldZ);
-		float hD = heightFunc(worldX, worldZ - eps);
-		float hU = heightFunc(worldX, worldZ + eps);
+		return baseHeight + detailSum * detailScale;
+	}
+
+	glm::vec4 TerrainClipmap::SampleTerrain(float worldX, float worldZ, float texelSize) {
+		float h = HeightFunc(worldX, worldZ);
+		float eps = std::max(0.25f, texelSize);
+		float hL = HeightFunc(worldX - eps, worldZ);
+		float hR = HeightFunc(worldX + eps, worldZ);
+		float hD = HeightFunc(worldX, worldZ - eps);
+		float hU = HeightFunc(worldX, worldZ + eps);
 
 		glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
 		return glm::vec4(h, normal.x, normal.y, normal.z);
+	}
+
+	static std::vector<glm::vec4> GenerateTerrainRegion(
+		const ClipmapLevelInfo& info,
+		uint32_t                startX,
+		uint32_t                startZ,
+		uint32_t                width,
+		uint32_t                height,
+		int                     deltaX = 0,
+		int                     deltaZ = 0
+	) {
+		std::vector<glm::vec4> stripData(width * height);
+		float                  texelSize = info.texelSize;
+		float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
+
+		for (uint32_t z = 0; z < height; ++z) {
+			int gridY = (deltaZ != 0) ? ((deltaZ > 0) ? (TERRAIN_MAP_DIM - height + z) : z)
+									  : static_cast<int>(startZ + z);
+			int rowIdx = (deltaZ != 0)
+				? gridY
+				: (gridY - info.gridOffset.y + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM);
+			float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(rowIdx) * texelSize;
+
+			for (uint32_t x = 0; x < width; ++x) {
+				int gridX = (deltaX != 0) ? ((deltaX > 0) ? (TERRAIN_MAP_DIM - width + x) : x)
+										  : static_cast<int>(startX + x);
+				int colIdx = (deltaX != 0) ? gridX
+										   : (gridX - info.gridOffset.x + static_cast<int>(TERRAIN_MAP_DIM)) %
+						static_cast<int>(TERRAIN_MAP_DIM);
+				float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
+
+				stripData[z * width + x] = TerrainClipmap::SampleTerrain(worldX, worldZ, texelSize);
+			}
+		}
+		return stripData;
 	}
 
 	TerrainClipmap::~TerrainClipmap() {
 		Cleanup();
 	}
 
-	void TerrainClipmap::Init(vk::Device dev, VmaAllocator alloc, uint32_t lods, float baseTexel, float maxDist) {
+	void TerrainClipmap::Init(
+		vk::Device      dev,
+		VmaAllocator    alloc,
+		uint32_t        lods,
+		float           baseTexel,
+		float           maxDist,
+		const glm::vec3& initialCameraPos
+	) {
 		device = dev;
 		allocator = alloc;
 		baseTexelSize = baseTexel;
@@ -76,7 +115,8 @@ namespace brassica {
 			levelInfos[i].baseTexelSize = baseTexelSize;
 			levelInfos[i].texelSize = baseTexelSize * static_cast<float>(1 << i);
 			levelInfos[i].worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * levelInfos[i].texelSize;
-			levelInfos[i].centerWorldPos = glm::vec2(0.0f);
+			levelInfos[i].centerWorldPos = glm::floor(glm::vec2(initialCameraPos.x, initialCameraPos.z) / levelInfos[i].texelSize) * levelInfos[i].texelSize;
+			levelInfos[i].gridOffset = glm::ivec2(0);
 		}
 
 		CreateTextureArray();
@@ -102,7 +142,7 @@ namespace brassica {
 			    std::abs(deltaZ) >= static_cast<int>(TERRAIN_MAP_DIM)) {
 				info.centerWorldPos = newCenter;
 				info.gridOffset = glm::ivec2(0);
-				auto mapData = GenerateSineWaveMap(l, baseTexelSize, info.centerWorldPos);
+				auto mapData = GenerateLevelMap(l);
 				uploader.UploadLevelAsync(l, mapData, image, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
 				continue;
 			}
@@ -118,30 +158,7 @@ namespace brassica {
 												  : ((info.gridOffset.x + deltaX + static_cast<int>(TERRAIN_MAP_DIM)) %
 												     static_cast<int>(TERRAIN_MAP_DIM));
 
-				std::vector<glm::vec4> stripData(stripWidth * TERRAIN_MAP_DIM);
-				float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
-
-				auto heightFunc = [](float x, float z) -> float {
-					float wave1 = std::sin(0.05f * x) * 2.5f;
-					float wave2 = std::cos(0.05f * z) * 2.5f;
-					float wave3 = std::sin(0.02f * (x + z)) * 1.5f;
-					return wave1 + wave2 + wave3;
-				};
-
-				for (uint32_t z = 0; z < TERRAIN_MAP_DIM; ++z) {
-					int localGridZ = (static_cast<int>(z) - info.gridOffset.y + static_cast<int>(TERRAIN_MAP_DIM)) %
-						static_cast<int>(TERRAIN_MAP_DIM);
-					float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(localGridZ) * texelSize;
-
-					for (uint32_t x = 0; x < stripWidth; ++x) {
-						int   colIdx = (deltaX > 0) ? (TERRAIN_MAP_DIM - stripWidth + x) : x;
-						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
-
-
-						glm::vec3 hDiv = terrainNoise(worldX, worldZ, info.level, texelSize);
-						stripData[z * stripWidth + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
-					}
-				}
+				std::vector<glm::vec4> stripData = GenerateTerrainRegion(info, 0, 0, stripWidth, TERRAIN_MAP_DIM, deltaX, 0);
 
 				size_t baseOffset = updateBuffer.size() * sizeof(glm::vec4);
 				updateBuffer.insert(updateBuffer.end(), stripData.begin(), stripData.end());
@@ -197,29 +214,7 @@ namespace brassica {
 												  : ((info.gridOffset.y + deltaZ + static_cast<int>(TERRAIN_MAP_DIM)) %
 												     static_cast<int>(TERRAIN_MAP_DIM));
 
-				std::vector<glm::vec4> stripData(TERRAIN_MAP_DIM * stripHeight);
-				float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
-
-				auto heightFunc = [](float x, float z) -> float {
-					float wave1 = std::sin(0.05f * x) * 2.5f;
-					float wave2 = std::cos(0.05f * z) * 2.5f;
-					float wave3 = std::sin(0.02f * (x + z)) * 1.5f;
-					return wave1 + wave2 + wave3;
-				};
-
-				for (uint32_t z = 0; z < stripHeight; ++z) {
-					int   rowIdx = (deltaZ > 0) ? (TERRAIN_MAP_DIM - stripHeight + z) : z;
-					float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(rowIdx) * texelSize;
-
-					for (uint32_t x = 0; x < TERRAIN_MAP_DIM; ++x) {
-						int localGridX = (static_cast<int>(x) - info.gridOffset.x + static_cast<int>(TERRAIN_MAP_DIM)) %
-							static_cast<int>(TERRAIN_MAP_DIM);
-						float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(localGridX) * texelSize;
-
-						glm::vec3 hDiv = terrainNoise(worldX, worldZ, info.level, texelSize);
-						stripData[z * TERRAIN_MAP_DIM + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
-					}
-				}
+				std::vector<glm::vec4> stripData = GenerateTerrainRegion(info, 0, 0, TERRAIN_MAP_DIM, stripHeight, 0, deltaZ);
 
 				size_t baseOffset = updateBuffer.size() * sizeof(glm::vec4);
 				updateBuffer.insert(updateBuffer.end(), stripData.begin(), stripData.end());
@@ -342,34 +337,25 @@ namespace brassica {
 		sampler = device.createSampler(samplerInfo);
 	}
 
+	std::vector<glm::vec4> TerrainClipmap::GenerateLevelMap(uint32_t levelIndex) const {
+		return GenerateTerrainRegion(levelInfos[levelIndex], 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
+	}
+
 	std::vector<glm::vec4> TerrainClipmap::GenerateSineWaveMap(
 		uint32_t         levelIndex,
 		float            baseTexelSize,
 		const glm::vec2& centerWorldPos,
 		float            time
 	) {
-		std::vector<glm::vec4> data(TERRAIN_MAP_DIM * TERRAIN_MAP_DIM);
-		float                  texelSize = baseTexelSize * static_cast<float>(1 << levelIndex);
-		float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
+		ClipmapLevelInfo info{};
+		info.level = levelIndex;
+		info.baseTexelSize = baseTexelSize;
+		info.texelSize = baseTexelSize * static_cast<float>(1 << levelIndex);
+		info.worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * info.texelSize;
+		info.centerWorldPos = centerWorldPos;
+		info.gridOffset = glm::ivec2(0);
 
-		auto heightFunc = [](float x, float z) -> float {
-			float wave1 = std::sin(0.05f * x) * 2.5f;
-			float wave2 = std::cos(0.05f * z) * 2.5f;
-			float wave3 = std::sin(0.02f * (x + z)) * 1.5f;
-			return wave1 + wave2 + wave3;
-		};
-
-		for (uint32_t z = 0; z < TERRAIN_MAP_DIM; ++z) {
-			for (uint32_t x = 0; x < TERRAIN_MAP_DIM; ++x) {
-				float worldX = centerWorldPos.x - halfExtent + static_cast<float>(x) * texelSize;
-				float worldZ = centerWorldPos.y - halfExtent + static_cast<float>(z) * texelSize;
-
-				glm::vec3 hDiv = terrainNoise(worldX, worldZ, levelIndex, texelSize);
-				data[z * TERRAIN_MAP_DIM + x] = glm::vec4(hDiv.x, glm::normalize(glm::vec3(-hDiv.y, -hDiv.z, 1.0)));
-			}
-		}
-
-		return data;
+		return GenerateTerrainRegion(info, 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
 	}
 
 } // namespace brassica
