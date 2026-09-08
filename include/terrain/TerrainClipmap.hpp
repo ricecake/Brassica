@@ -10,7 +10,7 @@
 namespace brassica {
 
 	constexpr uint32_t TERRAIN_MAP_DIM = 1088; // 1024 + 64 (1 grid cell padding for seamless off-screen streaming)
-	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 7;
+	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 8;
 
 	struct ClipmapLevelInfo {
 		uint32_t   level{0};
@@ -33,7 +33,7 @@ namespace brassica {
 			VmaAllocator     allocator,
 			uint32_t         numLODs = DEFAULT_CLIPMAP_LODS,
 			float            baseTexelSize = 0.5f,
-			float            maxDistance = 15000.0f,
+			float            maxDistance = 32768.0f,
 			const glm::vec3& initialCameraPos = glm::vec3(0.0f)
 		);
 		void Cleanup();
