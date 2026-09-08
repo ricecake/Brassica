@@ -11,6 +11,7 @@
 #include "passes/PassResource.hpp"
 #include "Shader.hpp"
 #include "types/AtmospherePushConstants.hpp"
+#include "types/SkyViewPushConstants.hpp"
 
 namespace brassica {
 
@@ -19,6 +20,7 @@ namespace brassica {
 	struct AtmosphereLUTData {
 		FrameGraphResource transmittanceLUT;
 		FrameGraphResource multiScatteringLUT;
+		FrameGraphResource skyViewLUT;
 	};
 
 	class AtmosphereLUTPass: public Pass {
@@ -32,7 +34,8 @@ namespace brassica {
 			FrameGraph&                    fg,
 			FrameGraphBlackboard&          blackboard,
 			uint32_t                       activeFrame,
-			const AtmospherePushConstants& push = {}
+			const AtmospherePushConstants& push = {},
+			const SkyViewPushConstants&    skyPush = {}
 		);
 
 		void DestroyPipeline();
@@ -42,19 +45,24 @@ namespace brassica {
 
 		ComputeShader transmittanceShader;
 		ComputeShader multiScatteringShader;
+		ComputeShader skyViewShader;
 
 		vk::DescriptorSetLayout transmittanceSetLayout{nullptr};
 		vk::DescriptorSetLayout multiScatteringSetLayout{nullptr};
+		vk::DescriptorSetLayout skyViewSetLayout{nullptr};
 		vk::DescriptorPool      descriptorPool{nullptr};
 
 		vk::DescriptorSet transmittanceSets[FRAME_OVERLAP]{nullptr, nullptr};
 		vk::DescriptorSet multiScatteringSets[FRAME_OVERLAP]{nullptr, nullptr};
+		vk::DescriptorSet skyViewSets[FRAME_OVERLAP]{nullptr, nullptr};
 
 		vk::PipelineLayout transmittancePipelineLayout{nullptr};
 		vk::PipelineLayout multiScatteringPipelineLayout{nullptr};
+		vk::PipelineLayout skyViewPipelineLayout{nullptr};
 
 		vk::Pipeline transmittancePipeline{nullptr};
 		vk::Pipeline multiScatteringPipeline{nullptr};
+		vk::Pipeline skyViewPipeline{nullptr};
 
 		vk::Sampler sampler{nullptr};
 
