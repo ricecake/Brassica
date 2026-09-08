@@ -1,0 +1,69 @@
+#version 460 core
+
+layout(local_size_x = 32, local_size_y = 32) in;
+layout(set = 0, binding = 0, rgba32f) uniform image2D outMultiScattering;
+layout(set = 0, binding = 1) uniform sampler2D u_transmittanceLUT;
+
+#include "common.glsl"
+
+vec3 getTransmittance(float r, float mu) {
+	vec2 uv = transmittanceToUV(r, mu);
+	return texture(u_transmittanceLUT, uv).rgb;
+}
+
+void main() {
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	vec2  size = vec2(imageSize(outMultiScattering));
+	if (any(greaterThanEqual(texel, ivec2(size))))
+		return;
+
+	float cosSun = (float(texel.x) / size.x) * 2.0 - 1.0;
+	float r = kEarthRadius + (float(texel.y) / size.y) * kAtmosphereHeight;
+
+	const int nSamples = 64;
+	vec3      totalL = vec3(0.0);
+	vec3      totalF = vec3(0.0);
+
+	for (int i = 0; i < nSamples; ++i) {
+		float phi = 2.0 * PI * (float(i) / float(nSamples));
+		float theta = acos(1.0 - 2.0 * (float(i) + 0.5) / float(nSamples));
+		vec3  rd = vec3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+
+		float t0, t1;
+		if (intersectSphere(vec3(0, r, 0), rd, kTopRadius, t0, t1)) {
+			float t_max = t1;
+			float p0, p1;
+			if (intersectSphere(vec3(0, r, 0), rd, kEarthRadius, p0, p1) && p0 > 0.0)
+				t_max = p0;
+
+			const int kInnerSteps = 8;
+			float     dt = t_max / float(kInnerSteps);
+			vec3      L_ray = vec3(0.0);
+			vec3      f_ray = vec3(0.0);
+			vec3      T_ray = vec3(1.0);
+
+			for (int j = 0; j < kInnerSteps; ++j) {
+				float    t = (float(j) + 0.5) * dt;
+				vec3     p = vec3(0, r, 0) + rd * t;
+				float    h = length(p) - kEarthRadius;
+				Sampling s = getAtmosphereProperties(h);
+
+				vec3 Ts = getTransmittance(length(p), cosSun);
+
+				vec3 scattering = s.rayleigh + s.mie;
+				L_ray += T_ray * scattering * Ts * dt;
+				f_ray += T_ray * scattering * dt;
+				T_ray *= exp(-s.extinction * dt);
+			}
+
+			totalL += L_ray;
+			totalF += f_ray;
+		}
+	}
+
+	vec3 L_avg = (totalL / float(nSamples)) / (4.0 * PI);
+	vec3 f_avg = totalF / float(nSamples);
+
+	vec3 multiScat = L_avg / max(vec3(0.1), vec3(1.0) - min(f_avg, vec3(0.9)));
+	imageStore(outMultiScattering, texel, vec4(multiScat, 1.0));
+}

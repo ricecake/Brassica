@@ -1,0 +1,55 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba32f) uniform image2D outTransmittance;
+
+#include "common.glsl"
+
+vec3 calculateTransmittance(float r, float mu) {
+	vec3  ro = vec3(0, r, 0);
+	float sinTheta = sqrt(max(0.0, 1.0 - mu * mu));
+	vec3  rd = vec3(0, mu, sinTheta);
+
+	float t0, t1;
+	if (!intersectSphere(ro, rd, kTopRadius, t0, t1))
+		return vec3(1.0);
+
+	float t_max = t1;
+
+	float p0, p1;
+	if (intersectSphere(ro, rd, kEarthRadius, p0, p1)) {
+		if (p0 > 0.0 || p1 > 0.0) {
+			float t_earth = p0 > 0.0 ? p0 : p1;
+			if (t_earth > 0.0)
+				t_max = min(t_max, t_earth);
+
+			if (t_earth > 0.0 && t_earth < t1)
+				return vec3(0.0);
+		}
+	}
+
+	const int kSteps = 40;
+	vec3      opticalDepth = vec3(0.0);
+	float     dt = t_max / float(kSteps);
+	for (int i = 0; i < kSteps; ++i) {
+		float    t = (float(i) + 0.5) * dt;
+		float    h = length(ro + rd * t) - kEarthRadius;
+		Sampling s = getAtmosphereProperties(h);
+		opticalDepth += s.extinction * dt;
+	}
+	return exp(-opticalDepth);
+}
+
+void main() {
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	vec2  size = vec2(imageSize(outTransmittance));
+	if (any(greaterThanEqual(texel, ivec2(size))))
+		return;
+
+	vec2  uv = (vec2(texel) + 0.5) / size;
+	float r, mu;
+	UVToTransmittance(uv, r, mu);
+
+	vec3 transmittance = calculateTransmittance(r, mu);
+	imageStore(outTransmittance, texel, vec4(transmittance, 1.0));
+}

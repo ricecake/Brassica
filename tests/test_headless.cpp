@@ -12,6 +12,7 @@ TEST_CASE("Engine Headless Render Initialization and Execution") {
 	engine.Init(options);
 
 	CHECK(engine.GetOptions().headless == true);
+
 	if (engine.GetDevice()) {
 		CHECK(static_cast<bool>(engine.GetDevice()));
 		CHECK(engine.GetAllocator() != VK_NULL_HANDLE);
@@ -21,5 +22,7 @@ TEST_CASE("Engine Headless Render Initialization and Execution") {
 
 		CHECK(engine.GetValidationErrorCount() == 0);
 		CHECK(engine.GetValidationWarningCount() == 0);
+	} else {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
 	}
 }

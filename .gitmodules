@@ -67,3 +67,10 @@
 [submodule "external/FastNoise2"]
 	path = external/FastNoise2
 	url = https://github.com/Auburn/FastNoise2.git
+[submodule "external/boidish"]
+	path = external/boidish
+	url = https://github.com/ricecake/boidsish.git
+	branch = wtf-omg-why
+	fetchRecurseSubmodules = false
+	ignore = all
+	update = none

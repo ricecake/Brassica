@@ -134,6 +134,9 @@ namespace brassica {
 							if (fs::exists(candidate) && !fs::is_directory(candidate)) {
 								fullPathStr = candidate.string();
 								break;
+							} else if (!loadFileRaw(candidate.string()).empty()) {
+								fullPathStr = candidate.string();
+								break;
 							}
 						}
 
