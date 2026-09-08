@@ -18,29 +18,41 @@ layout(set = 1, binding = 3) uniform sampler2D backgroundTex;
 layout(set = 1, binding = 4) uniform sampler2DArray terrainClipmap;
 layout(set = 1, binding = 5) uniform accelerationStructureEXT topLevelAS;
 
-vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
-	float baseTexelSize = 0.5;
-	float texelSize = baseTexelSize * pow(2.0, float(level));
-	float worldExtent = 1024.0 * texelSize;
+layout(push_constant) uniform TerrainPushConstants {
+	mat4  viewProj;
+	vec4  cameraPos;
+	uvec4 gridParams;
+	uvec4 lodOffsets0_3;
+	uvec4 lodOffsets4_7;
+} params;
 
-	vec2 linearUV = (worldXZ + vec2(worldExtent * 0.5)) / worldExtent;
-	return fract(linearUV);
+vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
+	float baseTexelSize = (params.cameraPos.w > 0.0) ? params.cameraPos.w : 0.5;
+	float texelSize = baseTexelSize * pow(2.0, float(level));
+	uint textureDim = (params.gridParams.w > 0u) ? params.gridParams.w : 1088u;
+
+	uvec4 offsets = (level < 4) ? params.lodOffsets0_3 : params.lodOffsets4_7;
+	uint packed = offsets[level % 4];
+	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
+
+	vec2 centerWorldPos = floor(params.cameraPos.xz / texelSize) * texelSize;
+	vec2 deltaWorld = worldXZ - centerWorldPos;
+	vec2 texelCoord = deltaWorld / texelSize + vec2(float(textureDim) * 0.5) + vec2(gridOffset);
+
+	return fract(texelCoord / float(textureDim));
 }
 
 // Calculate the LOD level based on the sample's Chebyshev distance
 uint calculateRayLOD(vec2 sampleXZ) {
-	// Note: If your camera moves, you must subtract cameraPos.xz from sampleXZ here
-	vec2 dists = abs(sampleXZ);
+	vec2 dists = abs(sampleXZ - params.cameraPos.xz);
 	float maxDist = max(dists.x, dists.y);
 
-	// LOD 0 radius is 256.0 (based on a 0.5 baseTexelSize and 1024 extent)
-	float baseRadius = 256.0;
+	float baseRadius = 272.0;
 
 	if (maxDist < baseRadius) {
 		return 0;
 	}
 
-	// Scale distance exponentially to find the correct LOD
 	float lodFloat = ceil(log2(maxDist / baseRadius));
 	return uint(clamp(lodFloat, 0.0, 7.0));
 }

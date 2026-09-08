@@ -25,7 +25,7 @@ namespace brassica {
 		AsyncTerrainUploader() = default;
 		~AsyncTerrainUploader();
 
-		void Init(vk::Device dev, VmaAllocator alloc, uint32_t queueFamilyIdx, uint32_t maxConcurrentUploads = 8);
+		void Init(vk::Device dev, VmaAllocator alloc, uint32_t queueFamilyIdx, uint32_t maxConcurrentUploads = 32);
 		void Cleanup();
 
 		// Non-blocking upload request for a clipmap layer

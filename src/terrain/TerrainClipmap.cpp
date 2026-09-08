@@ -61,8 +61,8 @@ namespace brassica {
 			mountainFactor = mountainFactor * mountainFactor * (3.0f - 2.0f * mountainFactor);
 			float detailFactor = 0.15f + 0.85f * mountainFactor;
 
-			float baseVal = gens.baseScale->GenSingle2D(x, z, seed) * 60.0f;
-			float detailVal = gens.detailScale->GenSingle2D(x, z, seed) * 40.0f;
+			float baseVal = gens.baseScale->GenSingle2D(x, z, seed) * 100.0f;
+			float detailVal = gens.detailScale->GenSingle2D(x, z, seed) * 75.0f;
 
 			return baseVal + detailVal * detailFactor;
 		};
@@ -142,7 +142,7 @@ namespace brassica {
 			mountainFactor = mountainFactor * mountainFactor * (3.0f - 2.0f * mountainFactor);
 			float detailFactor = 0.15f + 0.85f * mountainFactor;
 
-			paddedHeights[i] = basePatch[i] * 60.0f + detailPatch[i] * 40.0f * detailFactor;
+			paddedHeights[i] = basePatch[i] * 100.0f + detailPatch[i] * 75.0f * detailFactor;
 		}
 
 		float eps = std::max(0.25f, texelSize);

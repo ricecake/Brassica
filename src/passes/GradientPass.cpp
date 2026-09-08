@@ -50,7 +50,7 @@ namespace brassica {
 			false,
 			false,
 			vk::CompareOp::eLess,
-			vk::CullModeFlagBits::eBack,
+			vk::CullModeFlagBits::eNone,
 			pCache
 		);
 	}
