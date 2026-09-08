@@ -88,16 +88,17 @@ void main() {
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
 
 	vec2 offsetDist = abs(worldPos.xz - params.cameraPos.xz);
-	float distToCam = max(offsetDist.x, offsetDist.y); // Box distance metric
-	float outerDist = (float(meshletsPerRow) * 0.5 - 1.0) * meshletSize;
+	float distToCam = max(offsetDist.x, offsetDist.y); // CDLOD Chebyshev/box distance metric
+	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
 
 	if (lodLevel < params.gridParams.x - 1 && outerDist > 0.0) {
-		float morphStart = outerDist * 0.6;
+		float morphWidth = 2.5 * meshletSize;
+		float morphStart = max(0.0, outerDist - morphWidth);
 		float morphEnd = outerDist;
 
 		if (distToCam > morphStart) {
 			float alpha = clamp((distToCam - morphStart) / max(morphEnd - morphStart, 0.001), 0.0, 1.0);
-			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending
+			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending for CDLOD transition
 
 			vec2 uvNext = sampleToroidalUV(worldPos.xz, lodLevel + 1);
 			vec4 texNext = texture(terrainClipmap, vec3(uvNext, float(lodLevel + 1)));

@@ -81,8 +81,8 @@ void main() {
 		float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
 
 		vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
-		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -200.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
-		vec3 maxB = minB + vec3(meshletSize, 400.0, meshletSize);
+		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -500.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+		vec3 maxB = minB + vec3(meshletSize, 2000.0, meshletSize);
 
 		visible = isAABBVisible(minB, maxB, params.viewProj);
 

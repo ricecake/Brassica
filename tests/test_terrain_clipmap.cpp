@@ -40,11 +40,11 @@ TEST_CASE("AABB Tools and Frustum Culling") {
 	CHECK(lodFar == 3);
 }
 
-TEST_CASE("Terrain Clipmap Generation and 7 Level Scaling") {
-	uint32_t numLODs = 7;
+TEST_CASE("Terrain Clipmap Generation and 8 Level Scaling") {
+	uint32_t numLODs = 8;
 	float baseTexel = 0.5f;
 
-	// Verify clipmap level spatial scaling for 7 LODs
+	// Verify clipmap level spatial scaling for 8 LODs
 	for (uint32_t l = 0; l < numLODs; ++l) {
 		float expectedTexelSize = baseTexel * static_cast<float>(1 << l);
 		float expectedExtent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * expectedTexelSize;
@@ -53,9 +53,13 @@ TEST_CASE("Terrain Clipmap Generation and 7 Level Scaling") {
 		CHECK(doctest::Approx(expectedExtent) == 1088.0f * expectedTexelSize);
 	}
 
-	// LOD 6 extent should cover over 34,000 world units with padded extent (1088 texels * 32m = 34816m)
+	// LOD 6 extent covers over 34,000 world units (1088 texels * 32m = 34816m)
 	float lod6Extent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * (baseTexel * static_cast<float>(1 << 6));
 	CHECK(lod6Extent == doctest::Approx(34816.0f));
+
+	// LOD 7 extent covers over 69,000 world units (1088 texels * 64m = 69632m), exceeding 32k render distance radius
+	float lod7Extent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * (baseTexel * static_cast<float>(1 << 7));
+	CHECK(lod7Extent == doctest::Approx(69632.0f));
 
 	// Generate 1088x1088 height and normal map for Level 0
 	auto mapData = brassica::TerrainClipmap::GenerateSineWaveMap(0, baseTexel, glm::vec2(0.0f), 0.0f);
@@ -70,9 +74,9 @@ TEST_CASE("Terrain Clipmap Generation and 7 Level Scaling") {
 
 	// Verify normal vector length is normalized
 	CHECK(doctest::Approx(glm::length(normal)).epsilon(0.01f) == 1.0f);
-	// Height from FastNoise2 terrain generator should be within [-120, 120]
-	CHECK(height >= -120.0f);
-	CHECK(height <= 120.0f);
+	// Height from FastNoise2 terrain generator should be within [-500, 1500]
+	CHECK(height >= -500.0f);
+	CHECK(height <= 1500.0f);
 }
 
 TEST_CASE("Top Plane Frustum Culling and Terrain Elevation") {
