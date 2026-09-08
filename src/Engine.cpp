@@ -331,7 +331,7 @@ namespace brassica {
 		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher, GetPipelineCache());
 
-		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f, camera.position);
+		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
 
 		// Async upload initial heightmaps

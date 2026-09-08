@@ -114,11 +114,11 @@ namespace brassica {
 					glm::vec3 minB(
 						cameraSnap.x +
 							(static_cast<float>(col) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize,
-						-200.0f,
+						-500.0f,
 						cameraSnap.y +
 							(static_cast<float>(row) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize
 					);
-					glm::vec3 maxB = minB + glm::vec3(meshletSize, 400.0f, meshletSize);
+					glm::vec3 maxB = minB + glm::vec3(meshletSize, 2000.0f, meshletSize);
 
 					// Radial ring check matching task shader to only generate AABBs for active LOD regions
 					if (lod > 0) {

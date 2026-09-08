@@ -22,7 +22,7 @@ namespace brassica {
 		// FOV data and frustum settings
 		float fov{1.2f}; // vertical FOV in radians (~68.75 deg)
 		float nearPlane{0.1f};
-		float farPlane{15000.0f};
+		float farPlane{32768.0f};
 		float aspectRatio{16.0f / 9.0f};
 
 		// Speed and speed limits
@@ -81,7 +81,7 @@ namespace brassica {
 
 			for (int i = 0; i < 6; ++i) {
 				float len = glm::length(glm::vec3(frustumPlanes[i]));
-				if (len > 0.00001f) {
+				if (len > 1e-8f) {
 					frustumPlanes[i] /= len;
 				}
 			}
