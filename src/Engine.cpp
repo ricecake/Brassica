@@ -332,7 +332,7 @@ namespace brassica {
 		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher, GetPipelineCache());
 
 		terrainClipmap.Init(device, allocator, 7, 0.5f, 15000.0f, camera.position);
-		terrainUploader.Init(device, allocator, graphicsQueueFamily, 8);
+		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
 
 		// Async upload initial heightmaps
 		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
@@ -781,7 +781,7 @@ namespace brassica {
 		TerrainPushConstants terrainPush{};
 		terrainPush.viewProj = camera.viewProjMatrix;
 		terrainPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
-		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, 0);
+		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, TERRAIN_MAP_DIM);
 
 		glm::uvec4 offsets0_3{0u};
 		glm::uvec4 offsets4_7{0u};
@@ -808,7 +808,8 @@ namespace brassica {
 			activeFrame,
 			terrainClipmap.GetImageView(),
 			terrainClipmap.GetSampler(),
-			terrainPass->GetTLAS()
+			terrainPass->GetTLAS(),
+			terrainPush
 		);
 
 		RenderContext renderCtx{.commandBuffer = frame.commandBuffer, .allocator = allocator, .device = device};

@@ -67,7 +67,7 @@ set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 
-# Shaderc & FastGLTF & efsw
+# Shaderc & FastGLTF & efsw & FastNoise2
 set(SHADERC_SKIP_TESTS ON CACHE BOOL "" FORCE)
 set(SHADERC_SKIP_EXAMPLES ON CACHE BOOL "" FORCE)
 set(FG_BUILD_TEST OFF CACHE BOOL "" FORCE)
@@ -76,6 +76,10 @@ set(BUILD_TEST_APP OFF CACHE BOOL "" FORCE)
 set(EFSW_INSTALL OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(FASTNOISE2_TOOLS OFF CACHE BOOL "" FORCE)
+set(FASTNOISE2_TESTS OFF CACHE BOOL "" FORCE)
+set(FASTNOISE2_UTILITY OFF CACHE BOOL "" FORCE)
+set(FASTNOISE2_STRICT_FP OFF CACHE BOOL "Disable strict floating point calculations for maximum performance" FORCE)
 
 # Subdirectories
 add_subdirectory(external/glfw)
@@ -92,6 +96,7 @@ add_subdirectory(external/FrameGraph)
 add_subdirectory(external/tracy)
 add_subdirectory(external/VulkanMemoryAllocator)
 add_subdirectory(external/doctest)
+add_subdirectory(external/FastNoise2)
 
 # ImGui & ImGuizmo
 set(IMGUI_DIR external/imgui)
@@ -155,6 +160,7 @@ target_link_libraries(brassica
         Threads::Threads
         VulkanMemoryAllocator
         efsw-static
+        FastNoise
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)

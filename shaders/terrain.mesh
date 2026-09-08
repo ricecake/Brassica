@@ -25,16 +25,17 @@ layout(push_constant) uniform TerrainPushConstants {
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
 	float baseTexelSize = params.cameraPos.w;
 	float texelSize = baseTexelSize * pow(2.0, float(level));
-	vec2 center = floor(params.cameraPos.xz / texelSize) * texelSize;
-	float worldExtent = 1024.0 * texelSize;
-
-	vec2 linearUV = (worldXZ - (center - vec2(worldExtent * 0.5))) / worldExtent;
+	uint textureDim = (params.gridParams.w > 0u) ? params.gridParams.w : 1088u;
 
 	uvec4 offsets = (level < 4) ? params.lodOffsets0_3 : params.lodOffsets4_7;
 	uint packed = offsets[level % 4];
-	vec2 offsetFraction = vec2(float(packed & 0xFFFFu), float((packed >> 16u) & 0xFFFFu)) / 1024.0;
+	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
 
-	return fract(linearUV + offsetFraction);
+	vec2 centerWorldPos = floor(params.cameraPos.xz / texelSize) * texelSize;
+	vec2 deltaWorld = worldXZ - centerWorldPos;
+	vec2 texelCoord = deltaWorld / texelSize + vec2(float(textureDim) * 0.5) + vec2(gridOffset);
+
+	return fract(texelCoord / float(textureDim));
 }
 
 struct TaskPayload {

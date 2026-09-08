@@ -64,3 +64,6 @@
 [submodule "external/efsw"]
 	path = external/efsw
 	url = https://github.com/SpartanJ/efsw
+[submodule "external/FastNoise2"]
+	path = external/FastNoise2
+	url = https://github.com/Auburn/FastNoise2.git
