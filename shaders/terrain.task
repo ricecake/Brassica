@@ -80,19 +80,19 @@ void main() {
 		float baseMeshletSize = 32.0;
 		float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
 
-		vec2 cameraCenter = params.cameraPos.xz;
-		vec3 minB = vec3(cameraCenter.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -200.0, cameraCenter.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+		vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
+		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -200.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
 		vec3 maxB = minB + vec3(meshletSize, 400.0, meshletSize);
 
 		visible = isAABBVisible(minB, maxB, params.viewProj);
 
 		if (visible && lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
-			vec2 prevCameraCenter = params.cameraPos.xz;
+			vec2 prevCameraSnap = floor(params.cameraPos.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
-			bool insideX = minB.x >= prevCameraCenter.x - prevExtent && maxB.x <= prevCameraCenter.x + prevExtent;
-			bool insideZ = minB.z >= prevCameraCenter.y - prevExtent && maxB.z <= prevCameraCenter.y + prevExtent;
+			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
+			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
 
 			// Cull the meshlet ONLY if its entire bounding box is inside the previous LOD's extent
 			if (insideX && insideZ) {
