@@ -268,9 +268,11 @@ namespace brassica {
 
 			if (pipelineCache) {
 				size_t cacheSize = 0;
-				if (device.getPipelineCacheData(pipelineCache, &cacheSize, nullptr) == vk::Result::eSuccess && cacheSize > 0) {
+				if (device.getPipelineCacheData(pipelineCache, &cacheSize, nullptr) == vk::Result::eSuccess &&
+				    cacheSize > 0) {
 					std::vector<char> cacheData(cacheSize);
-					if (device.getPipelineCacheData(pipelineCache, &cacheSize, cacheData.data()) == vk::Result::eSuccess) {
+					if (device.getPipelineCacheData(pipelineCache, &cacheSize, cacheData.data()) ==
+					    vk::Result::eSuccess) {
 						std::ofstream outFile("pipeline_cache.bin", std::ios::binary);
 						if (outFile.is_open()) {
 							outFile.write(cacheData.data(), static_cast<std::streamsize>(cacheData.size()));
@@ -326,10 +328,19 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		meshCubePass = std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
-		gradientPass = std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
-		terrainPass = std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
-		deferredPass = std::make_unique<DeferredPass>(device, globalSet0Layout, GetSwapchainFormat(), &shaderWatcher, GetPipelineCache());
+		meshCubePass =
+			std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
+		gradientPass =
+			std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
+		terrainPass =
+			std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
+		deferredPass = std::make_unique<DeferredPass>(
+			device,
+			globalSet0Layout,
+			GetSwapchainFormat(),
+			&shaderWatcher,
+			GetPipelineCache()
+		);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
@@ -617,7 +628,7 @@ namespace brassica {
 
 		// Initialize Pipeline Cache
 		std::vector<char> pipelineCacheData;
-		std::ifstream cacheFile("pipeline_cache.bin", std::ios::binary | std::ios::ate);
+		std::ifstream     cacheFile("pipeline_cache.bin", std::ios::binary | std::ios::ate);
 		if (cacheFile.is_open()) {
 			std::streamsize size = cacheFile.tellg();
 			cacheFile.seekg(0, std::ios::beg);
@@ -684,7 +695,7 @@ namespace brassica {
 
 		// 1. Wait for GPU to finish the last time this frame context was used
 		if (frameNumber >= FRAME_OVERLAP) {
-			uint64_t waitValue = frameNumber - FRAME_OVERLAP + 1;
+			uint64_t              waitValue = frameNumber - FRAME_OVERLAP + 1;
 			vk::SemaphoreWaitInfo waitInfo{};
 			waitInfo.setSemaphores(frameTimelineSemaphore);
 			waitInfo.setValues(waitValue);
@@ -721,8 +732,7 @@ namespace brassica {
 		FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(swapchainTexWrapper));
 		blackboard.add<SwapchainData>() = SwapchainData{.target = swapchainRes};
 
-		if (fgCacheState.cachedExtent != extent ||
-		    fgCacheState.cachedFormat != format ||
+		if (fgCacheState.cachedExtent != extent || fgCacheState.cachedFormat != format ||
 		    fgCacheState.cachedClipmapView != terrainClipmap.GetImageView() ||
 		    fgCacheState.cachedClipmapSampler != terrainClipmap.GetSampler() ||
 		    fgCacheState.cachedTLAS != terrainPass->GetTLAS()) {

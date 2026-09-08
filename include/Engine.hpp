@@ -195,12 +195,12 @@ namespace brassica {
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
 		struct FrameGraphCacheState {
-			bool                          isDirty{true};
-			vk::Extent2D                  cachedExtent{0, 0};
-			vk::Format                    cachedFormat{vk::Format::eUndefined};
-			vk::ImageView                 cachedClipmapView{nullptr};
-			vk::Sampler                   cachedClipmapSampler{nullptr};
-			vk::AccelerationStructureKHR  cachedTLAS{nullptr};
+			bool                         isDirty{true};
+			vk::Extent2D                 cachedExtent{0, 0};
+			vk::Format                   cachedFormat{vk::Format::eUndefined};
+			vk::ImageView                cachedClipmapView{nullptr};
+			vk::Sampler                  cachedClipmapSampler{nullptr};
+			vk::AccelerationStructureKHR cachedTLAS{nullptr};
 
 			void Invalidate() { isDirty = true; }
 		};

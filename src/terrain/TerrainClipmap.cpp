@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
-#include <FastNoise/FastNoise.h>
 #include "spdlog/spdlog.h"
+#include <FastNoise/FastNoise.h>
 
 #include "terrain/AsyncTerrainUploader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
@@ -20,7 +20,10 @@ namespace brassica {
 
 		TerrainNoiseGenerators() {
 			land = FastNoise::New<FastNoise::DomainScale>();
-			auto landGen = FastNoise::NewFromEncodedNodeTree("KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/BAAEAw@CTAABIwhsAAHpEBA==");
+			auto landGen = FastNoise::NewFromEncodedNodeTree(
+				"KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/"
+				"BAAEAw@CTAABIwhsAAHpEBA=="
+			);
 			land->SetSource(landGen);
 
 			auto simplex = FastNoise::New<FastNoise::Simplex>();
@@ -84,9 +87,9 @@ namespace brassica {
 	}
 
 	glm::vec4 TerrainClipmap::SampleTerrain(float worldX, float worldZ, float texelSize) {
-		auto& gens = GetGenerators();
+		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;
-		float eps = std::max(0.25f, texelSize);
+		float         eps = std::max(0.25f, texelSize);
 
 		auto evalHeight = [&](float x, float z) {
 			float maskVal = gens.maskScale->GenSingle2D(x, z, seed);
@@ -157,22 +160,33 @@ namespace brassica {
 		std::vector<float> biomePatch(totalPadded);
 		std::vector<float> paddedHeights(totalPadded);
 
-		auto& gens = GetGenerators();
+		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;
 
 		float gridStartX = minWorldX - texelSize;
 		float gridStartZ = minWorldZ - texelSize;
 
-		// gens.baseScale->GenUniformGrid2D(basePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
-		// gens.detailScale->GenUniformGrid2D(detailPatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
-		// gens.maskScale->GenUniformGrid2D(maskPatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
-		// gens.biomeScale->GenUniformGrid2D(biomePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+		// gens.baseScale->GenUniformGrid2D(basePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize,
+		// texelSize, seed); gens.detailScale->GenUniformGrid2D(detailPatch.data(), gridStartX, gridStartZ, paddedW,
+		// paddedH, texelSize, texelSize, seed); gens.maskScale->GenUniformGrid2D(maskPatch.data(), gridStartX,
+		// gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+		// gens.biomeScale->GenUniformGrid2D(biomePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize,
+		// texelSize, seed);
 
 		// for (size_t i = 0; i < totalPadded; ++i) {
 		// 	paddedHeights[i] = EvalHeightFromComponents(basePatch[i], detailPatch[i], maskPatch[i], biomePatch[i]);
 		// }
 
-		gens.land->GenUniformGrid2D(paddedHeights.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+		gens.land->GenUniformGrid2D(
+			paddedHeights.data(),
+			gridStartX,
+			gridStartZ,
+			paddedW,
+			paddedH,
+			texelSize,
+			texelSize,
+			seed
+		);
 
 		float eps = std::max(0.25f, texelSize);
 
@@ -186,11 +200,11 @@ namespace brassica {
 
 			for (uint32_t x = 0; x < width; ++x) {
 				size_t colIdx = x + 1;
-				float h = paddedHeights[rowIdx + colIdx];
-				float hL = paddedHeights[rowIdx + x];
-				float hR = paddedHeights[rowIdx + x + 2];
-				float hD = paddedHeights[prevRow + colIdx];
-				float hU = paddedHeights[nextRow + colIdx];
+				float  h = paddedHeights[rowIdx + colIdx];
+				float  hL = paddedHeights[rowIdx + x];
+				float  hR = paddedHeights[rowIdx + x + 2];
+				float  hD = paddedHeights[prevRow + colIdx];
+				float  hU = paddedHeights[nextRow + colIdx];
 
 				glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
 

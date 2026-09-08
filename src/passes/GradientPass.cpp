@@ -31,7 +31,8 @@ namespace brassica {
 		}
 	}
 
-	void GradientPass::InitPipeline(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher, vk::PipelineCache pCache) {
+	void
+	GradientPass::InitPipeline(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher, vk::PipelineCache pCache) {
 		if (!vertShader.CompileVertexFromFile(dev, "shaders/gradient.vert")) {
 			spdlog::error("Failed to compile gradient.vert shader file");
 		}
