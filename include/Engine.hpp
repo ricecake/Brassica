@@ -62,7 +62,6 @@ namespace brassica {
 		vk::CommandBuffer commandBuffer;
 		vk::Semaphore     swapchainSemaphore; // Signaled when image is acquired
 		vk::Semaphore     renderSemaphore;    // Signaled when rendering finishes
-		vk::Fence         renderFence;        // Signaled when GPU finishes frame execution
 	};
 
 	class Engine {
@@ -93,6 +92,8 @@ namespace brassica {
 		}
 
 		vk::Format GetSwapchainFormat() const { return static_cast<vk::Format>(vkbSwapchain.image_format); }
+
+		vk::PipelineCache GetPipelineCache() const { return pipelineCache; }
 
 		ShaderWatcher& GetShaderWatcher() { return shaderWatcher; }
 
@@ -147,6 +148,7 @@ namespace brassica {
 		vk::Instance               instance;
 		vk::PhysicalDevice         chosenGPU;
 		vk::Device                 device;
+		vk::PipelineCache          pipelineCache{nullptr};
 		vk::SurfaceKHR             surface;
 		vk::Queue                  graphicsQueue;
 		uint32_t                   graphicsQueueFamily{0};
@@ -154,6 +156,7 @@ namespace brassica {
 		std::vector<vk::Image>     swapchainImages;
 		std::vector<vk::ImageView> swapchainImageViews;
 		std::vector<vk::Semaphore> swapchainRenderSemaphores;
+		vk::Semaphore              frameTimelineSemaphore{nullptr};
 
 		bool       windowResized{false};
 		CameraData camera{};
@@ -190,6 +193,19 @@ namespace brassica {
 		void CleanupGlobalUBO();
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
+
+		struct FrameGraphCacheState {
+			bool                          isDirty{true};
+			vk::Extent2D                  cachedExtent{0, 0};
+			vk::Format                    cachedFormat{vk::Format::eUndefined};
+			vk::ImageView                 cachedClipmapView{nullptr};
+			vk::Sampler                   cachedClipmapSampler{nullptr};
+			vk::AccelerationStructureKHR  cachedTLAS{nullptr};
+
+			void Invalidate() { isDirty = true; }
+		};
+
+		FrameGraphCacheState fgCacheState;
 
 		EngineOptions       options{};
 		uint32_t            validationErrorCount{0};

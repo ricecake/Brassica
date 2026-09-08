@@ -6,6 +6,7 @@
 #include "fg/FrameGraph.hpp"
 #include "passes/RenderPass.hpp"
 #include "passes/RenderResources.hpp"
+#include "passes/TerrainPass.hpp"
 #include "Shader.hpp"
 
 namespace brassica {
@@ -22,7 +23,8 @@ namespace brassica {
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
 			vk::Format              colorFormat,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 		~DeferredPass() override;
 
@@ -30,7 +32,8 @@ namespace brassica {
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
 			vk::Format              colorFormat,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 
 		FrameGraphResource RegisterPass(
@@ -41,7 +44,8 @@ namespace brassica {
 			uint32_t                     activeFrame = 0,
 			vk::ImageView                clipmapImageView = nullptr,
 			vk::Sampler                  clipmapSampler = nullptr,
-			vk::AccelerationStructureKHR tlas = nullptr
+			vk::AccelerationStructureKHR tlas = nullptr,
+			const TerrainPushConstants&  pushConstants = {}
 		);
 
 	private:

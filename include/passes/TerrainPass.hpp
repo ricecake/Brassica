@@ -35,7 +35,8 @@ namespace brassica {
 			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 		~TerrainPass() override;
 
@@ -43,7 +44,8 @@ namespace brassica {
 			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
-			ShaderWatcher*          watcher = nullptr
+			ShaderWatcher*          watcher = nullptr,
+			vk::PipelineCache       pCache = nullptr
 		);
 
 		void UpdateClipmapDescriptor(vk::ImageView clipmapImageView, vk::Sampler clipmapSampler);

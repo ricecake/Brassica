@@ -13,7 +13,8 @@ namespace brassica {
 		vk::Instance            instance,
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	):
 		RenderPass(
 			"MeshCubePass",
@@ -25,7 +26,7 @@ namespace brassica {
 			},
 			vk::Format::eD32Sfloat
 		) {
-		InitPipeline(instance, dev, globalSet0Layout, watcher);
+		InitPipeline(instance, dev, globalSet0Layout, watcher, pCache);
 	}
 
 	MeshCubePass::~MeshCubePass() {
@@ -119,7 +120,8 @@ namespace brassica {
 		vk::Instance            instance,
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	) {
 		dls.init(instance, dev);
 
@@ -144,7 +146,9 @@ namespace brassica {
 			watcher,
 			true, // depthTestEnable
 			true, // depthWriteEnable
-			vk::CompareOp::eLess
+			vk::CompareOp::eLess,
+			vk::CullModeFlagBits::eBack,
+			pCache
 		);
 	}
 

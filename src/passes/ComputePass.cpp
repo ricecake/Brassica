@@ -19,10 +19,12 @@ namespace brassica {
 	void ComputePass::InitComputePipeline(
 		std::span<const vk::DescriptorSetLayout> setLayouts,
 		std::span<const vk::PushConstantRange>   pushConstants,
-		ShaderWatcher*                           watcher
+		ShaderWatcher*                           watcher,
+		vk::PipelineCache                        pCache
 	) {
 		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
 		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
+		this->pipelineCache = pCache;
 
 		auto buildPipeline = [this]() {
 			if (!computeShader) {
@@ -54,7 +56,7 @@ namespace brassica {
 			pipelineInfo.setStage(computeShader->GetStageCreateInfo());
 			pipelineInfo.setLayout(pipelineLayout);
 
-			auto result = device.createComputePipeline(nullptr, pipelineInfo);
+			auto result = device.createComputePipeline(this->pipelineCache, pipelineInfo);
 			if (result.result == vk::Result::eSuccess) {
 				pipeline = result.value;
 				spdlog::info("ComputePass '{}' pipeline created/rebuilt successfully.", name);

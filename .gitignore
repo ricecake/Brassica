@@ -1,4 +1,5 @@
 *.patch
+*.bin
 
 # Build artifacts
 build/

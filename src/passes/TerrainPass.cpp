@@ -13,7 +13,8 @@ namespace brassica {
 		vk::Instance            instance,
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	):
 		RenderPass(
 			"TerrainPass",
@@ -25,8 +26,9 @@ namespace brassica {
 			},
 			vk::Format::eD32Sfloat
 		) {
+		this->pipelineCache = pCache;
 		dls.init(instance, dev);
-		InitPipeline(instance, dev, globalSet0Layout, watcher);
+		InitPipeline(instance, dev, globalSet0Layout, watcher, pCache);
 	}
 
 	TerrainPass::~TerrainPass() {
@@ -452,8 +454,10 @@ namespace brassica {
 		vk::Instance            instance,
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	) {
+		this->pipelineCache = pCache;
 		dls.init(instance, dev);
 
 		// Set 1 Layout for clipmap texture sampler
@@ -583,7 +587,7 @@ namespace brassica {
 			pipelineInfo.setPDynamicState(&dynamicState);
 			pipelineInfo.setLayout(pipelineLayout);
 
-			auto result = device.createGraphicsPipeline(nullptr, pipelineInfo);
+			auto result = device.createGraphicsPipeline(this->pipelineCache, pipelineInfo);
 			if (result.result == vk::Result::eSuccess) {
 				pipeline = result.value;
 				spdlog::info("TerrainPass pipeline created successfully.");

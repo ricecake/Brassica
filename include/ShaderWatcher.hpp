@@ -27,7 +27,7 @@ namespace brassica {
 		void RegisterShader(Shader* shader, ReloadCallback onReload = nullptr);
 		void RegisterFile(const std::string& filepath, ReloadCallback onReload);
 
-		void ProcessPendingReloads(vk::Device device);
+		bool ProcessPendingReloads(vk::Device device);
 
 		void handleFileAction(
 			efsw::WatchID      watchid,

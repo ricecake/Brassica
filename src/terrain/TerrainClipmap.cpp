@@ -3,48 +3,105 @@
 #include <algorithm>
 #include <cmath>
 
+#include <FastNoise/FastNoise.h>
 #include "spdlog/spdlog.h"
 
 #include "terrain/AsyncTerrainUploader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/noise.hpp>
 
 namespace brassica {
 
-	static float HeightFunc(float x, float z) {
-		glm::vec2 pos(x, z);
+	struct TerrainNoiseGenerators {
+		FastNoise::SmartNode<FastNoise::DomainScale> baseScale;
+		FastNoise::SmartNode<FastNoise::DomainScale> detailScale;
+		FastNoise::SmartNode<FastNoise::DomainScale> maskScale;
+		FastNoise::SmartNode<FastNoise::DomainScale> biomeScale;
+		FastNoise::SmartNode<FastNoise::DomainScale> land;
 
-		// 1. Terrain Mask (Plains vs Mountains/Hills) at ~1.2km scale
-		float maskNoise = glm::simplex(pos * 0.0008f);
-		float mountainFactor = std::clamp((maskNoise - (-0.1f)) / 0.4f, 0.0f, 1.0f);
+		TerrainNoiseGenerators() {
+			land = FastNoise::New<FastNoise::DomainScale>();
+			auto landGen = FastNoise::NewFromEncodedNodeTree("KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/BAAEAw@CTAABIwhsAAHpEBA==");
+			land->SetSource(landGen);
+
+			auto simplex = FastNoise::New<FastNoise::Simplex>();
+
+			auto baseFbm = FastNoise::New<FastNoise::FractalFBm>();
+			baseFbm->SetSource(simplex);
+			baseFbm->SetOctaveCount(2);
+			baseFbm->SetLacunarity(2.0f);
+			baseFbm->SetGain(0.5f);
+
+			baseScale = FastNoise::New<FastNoise::DomainScale>();
+			baseScale->SetSource(baseFbm);
+			baseScale->SetScaling(0.01f);
+
+			auto detailFbm = FastNoise::New<FastNoise::FractalFBm>();
+			detailFbm->SetSource(simplex);
+			detailFbm->SetOctaveCount(6);
+			detailFbm->SetLacunarity(2.0f);
+			detailFbm->SetGain(0.5f);
+
+			detailScale = FastNoise::New<FastNoise::DomainScale>();
+			detailScale->SetSource(detailFbm);
+			detailScale->SetScaling(0.4f);
+
+			maskScale = FastNoise::New<FastNoise::DomainScale>();
+			maskScale->SetSource(simplex);
+			maskScale->SetScaling(0.0008f);
+
+			// Domain Warped Worley Noise for Biomes
+			auto cellular = FastNoise::New<FastNoise::CellularDistance>();
+			cellular->SetDistanceFunction(FastNoise::DistanceFunction::Euclidean);
+			cellular->SetReturnType(FastNoise::CellularDistance::ReturnType::Index0);
+
+			auto warp = FastNoise::New<FastNoise::DomainWarpGradient>();
+			warp->SetWarpAmplitude(50.0f);
+			warp->SetSource(cellular);
+
+			biomeScale = FastNoise::New<FastNoise::DomainScale>();
+			biomeScale->SetSource(warp);
+			biomeScale->SetScaling(0.0004f);
+		}
+	};
+
+	static TerrainNoiseGenerators& GetGenerators() {
+		static TerrainNoiseGenerators gens;
+		return gens;
+	}
+
+	static float EvalHeightFromComponents(float baseVal, float detailVal, float maskVal, float biomeVal) {
+		float biome = std::clamp(biomeVal, 0.0f, 1.0f);
+
+		float mountainFactor = std::clamp((maskVal - (-0.1f)) / 0.4f, 0.0f, 1.0f);
 		mountainFactor = mountainFactor * mountainFactor * (3.0f - 2.0f * mountainFactor);
+		float detailFactor = (0.15f + 0.85f * mountainFactor) * std::lerp(0.3f, 1.2f, biome);
 
-		// 2. Continental / Large Scale Elevation at ~1km and ~500m scale
-		float base1 = glm::simplex(pos * 0.001f) * 50.0f;
-		float base2 = glm::simplex(pos * 0.002f) * 20.0f;
-		float baseHeight = base1 + base2;
+		float baseOffset = std::lerp(-35.0f, 30.0f, biome);
+		float baseHeightScale = std::lerp(40.0f, 120.0f, biome);
+		float detailHeightScale = std::lerp(20.0f, 80.0f, biome);
 
-		// 3. Hills & Mountain Details (250m down to 8m scale)
-		float h0 = glm::simplex(pos * 0.004f) * 25.0f;
-		float h1 = glm::simplex(pos * 0.008f) * 12.0f;
-		float h2 = glm::simplex(pos * 0.016f) * 6.0f;
-		float h3 = glm::simplex(pos * 0.032f) * 3.0f;
-		float h4 = glm::simplex(pos * 0.064f) * 1.5f;
-		float h5 = glm::simplex(pos * 0.125f) * 0.75f;
-
-		float detailSum = h0 + h1 + h2 + h3 + h4 + h5;
-		float detailScale = 0.15f + 0.85f * mountainFactor;
-
-		return baseHeight + detailSum * detailScale;
+		return baseOffset + baseVal * baseHeightScale + detailVal * detailHeightScale * detailFactor;
 	}
 
 	glm::vec4 TerrainClipmap::SampleTerrain(float worldX, float worldZ, float texelSize) {
-		float h = HeightFunc(worldX, worldZ);
+		auto& gens = GetGenerators();
+		constexpr int seed = 1337;
 		float eps = std::max(0.25f, texelSize);
-		float hL = HeightFunc(worldX - eps, worldZ);
-		float hR = HeightFunc(worldX + eps, worldZ);
-		float hD = HeightFunc(worldX, worldZ - eps);
-		float hU = HeightFunc(worldX, worldZ + eps);
+
+		auto evalHeight = [&](float x, float z) {
+			float maskVal = gens.maskScale->GenSingle2D(x, z, seed);
+			float baseVal = gens.baseScale->GenSingle2D(x, z, seed);
+			float detailVal = gens.detailScale->GenSingle2D(x, z, seed);
+			float biomeVal = gens.biomeScale->GenSingle2D(x, z, seed);
+
+			return EvalHeightFromComponents(baseVal, detailVal, maskVal, biomeVal);
+		};
+
+		float h = evalHeight(worldX, worldZ);
+		float hL = evalHeight(worldX - eps, worldZ);
+		float hR = evalHeight(worldX + eps, worldZ);
+		float hD = evalHeight(worldX, worldZ - eps);
+		float hU = evalHeight(worldX, worldZ + eps);
 
 		glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
 		return glm::vec4(h, normal.x, normal.y, normal.z);
@@ -63,25 +120,87 @@ namespace brassica {
 		float                  texelSize = info.texelSize;
 		float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
+		float minWorldX = info.centerWorldPos.x - halfExtent;
+		float minWorldZ = info.centerWorldPos.y - halfExtent;
+
+		if (deltaX != 0) {
+			if (deltaX > 0) {
+				minWorldX = info.centerWorldPos.x + halfExtent - static_cast<float>(width) * texelSize;
+			} else {
+				minWorldX = info.centerWorldPos.x - halfExtent;
+			}
+		} else if (width < TERRAIN_MAP_DIM) {
+			int colIdx = (static_cast<int>(startX) - info.gridOffset.x + static_cast<int>(TERRAIN_MAP_DIM)) %
+				static_cast<int>(TERRAIN_MAP_DIM);
+			minWorldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
+		}
+
+		if (deltaZ != 0) {
+			if (deltaZ > 0) {
+				minWorldZ = info.centerWorldPos.y + halfExtent - static_cast<float>(height) * texelSize;
+			} else {
+				minWorldZ = info.centerWorldPos.y - halfExtent;
+			}
+		} else if (height < TERRAIN_MAP_DIM) {
+			int rowIdx = (static_cast<int>(startZ) - info.gridOffset.y + static_cast<int>(TERRAIN_MAP_DIM)) %
+				static_cast<int>(TERRAIN_MAP_DIM);
+			minWorldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(rowIdx) * texelSize;
+		}
+
+		uint32_t paddedW = width + 2;
+		uint32_t paddedH = height + 2;
+		size_t   totalPadded = static_cast<size_t>(paddedW) * paddedH;
+
+		std::vector<float> basePatch(totalPadded);
+		std::vector<float> detailPatch(totalPadded);
+		std::vector<float> maskPatch(totalPadded);
+		std::vector<float> biomePatch(totalPadded);
+		std::vector<float> paddedHeights(totalPadded);
+
+		auto& gens = GetGenerators();
+		constexpr int seed = 1337;
+
+		float gridStartX = minWorldX - texelSize;
+		float gridStartZ = minWorldZ - texelSize;
+
+		// gens.baseScale->GenUniformGrid2D(basePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+		// gens.detailScale->GenUniformGrid2D(detailPatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+		// gens.maskScale->GenUniformGrid2D(maskPatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+		// gens.biomeScale->GenUniformGrid2D(biomePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+
+		// for (size_t i = 0; i < totalPadded; ++i) {
+		// 	paddedHeights[i] = EvalHeightFromComponents(basePatch[i], detailPatch[i], maskPatch[i], biomePatch[i]);
+		// }
+
+		gens.land->GenUniformGrid2D(paddedHeights.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+
+		float eps = std::max(0.25f, texelSize);
+
 		for (uint32_t z = 0; z < height; ++z) {
-			int   gridY = (deltaZ != 0) ? ((deltaZ > 0) ? (TERRAIN_MAP_DIM - height + z) : z)
-										: static_cast<int>(startZ + z);
-			int   rowIdx = (deltaZ != 0)
-				? gridY
-				: (gridY - info.gridOffset.y + static_cast<int>(TERRAIN_MAP_DIM)) % static_cast<int>(TERRAIN_MAP_DIM);
-			float worldZ = info.centerWorldPos.y - halfExtent + static_cast<float>(rowIdx) * texelSize;
+			size_t rowIdx = static_cast<size_t>(z + 1) * paddedW;
+			size_t prevRow = static_cast<size_t>(z) * paddedW;
+			size_t nextRow = static_cast<size_t>(z + 2) * paddedW;
+
+			// Apply toroidal wrap to the Z-axis if this is a full-height deltaX strip
+			uint32_t destZ = (height == TERRAIN_MAP_DIM) ? ((z + info.gridOffset.y) % TERRAIN_MAP_DIM) : z;
 
 			for (uint32_t x = 0; x < width; ++x) {
-				int   gridX = (deltaX != 0) ? ((deltaX > 0) ? (TERRAIN_MAP_DIM - width + x) : x)
-											: static_cast<int>(startX + x);
-				int   colIdx = (deltaX != 0) ? gridX
-											 : (gridX - info.gridOffset.x + static_cast<int>(TERRAIN_MAP_DIM)) %
-						  static_cast<int>(TERRAIN_MAP_DIM);
-				float worldX = info.centerWorldPos.x - halfExtent + static_cast<float>(colIdx) * texelSize;
+				size_t colIdx = x + 1;
+				float h = paddedHeights[rowIdx + colIdx];
+				float hL = paddedHeights[rowIdx + x];
+				float hR = paddedHeights[rowIdx + x + 2];
+				float hD = paddedHeights[prevRow + colIdx];
+				float hU = paddedHeights[nextRow + colIdx];
 
-				stripData[z * width + x] = TerrainClipmap::SampleTerrain(worldX, worldZ, texelSize);
+				glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
+
+				// Apply toroidal wrap to the X-axis if this is a full-width deltaZ strip
+				uint32_t destX = (width == TERRAIN_MAP_DIM) ? ((x + info.gridOffset.x) % TERRAIN_MAP_DIM) : x;
+
+				stripData[destZ * width + destX] = glm::vec4(h, normal.x, normal.y, normal.z);
 			}
 		}
+
 		return stripData;
 	}
 

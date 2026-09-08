@@ -8,9 +8,9 @@
 
 namespace brassica {
 
-	GradientPass::GradientPass(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher):
+	GradientPass::GradientPass(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher, vk::PipelineCache pCache):
 		RenderPass("GradientPass", dev, colorFmt) {
-		InitPipeline(dev, colorFmt, watcher);
+		InitPipeline(dev, colorFmt, watcher, pCache);
 	}
 
 	GradientPass::~GradientPass() {
@@ -31,7 +31,7 @@ namespace brassica {
 		}
 	}
 
-	void GradientPass::InitPipeline(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher) {
+	void GradientPass::InitPipeline(vk::Device dev, vk::Format colorFmt, ShaderWatcher* watcher, vk::PipelineCache pCache) {
 		if (!vertShader.CompileVertexFromFile(dev, "shaders/gradient.vert")) {
 			spdlog::error("Failed to compile gradient.vert shader file");
 		}
@@ -50,7 +50,8 @@ namespace brassica {
 			false,
 			false,
 			vk::CompareOp::eLess,
-			vk::CullModeFlagBits::eNone
+			vk::CullModeFlagBits::eNone,
+			pCache
 		);
 	}
 

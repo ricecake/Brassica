@@ -6,6 +6,7 @@
 #include "spdlog/spdlog.h"
 
 #include "passes/GradientPass.hpp"
+#include "passes/TerrainPass.hpp"
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
@@ -14,11 +15,12 @@ namespace brassica {
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		vk::Format              colorFmt,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	):
 		RenderPass("DeferredPass", dev, colorFmt) {
 		CreateDescriptorResources(dev);
-		InitPipeline(dev, globalSet0Layout, colorFmt, watcher);
+		InitPipeline(dev, globalSet0Layout, colorFmt, watcher, pCache);
 	}
 
 	DeferredPass::~DeferredPass() {
@@ -100,7 +102,8 @@ namespace brassica {
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		vk::Format              colorFmt,
-		ShaderWatcher*          watcher
+		ShaderWatcher*          watcher,
+		vk::PipelineCache       pCache
 	) {
 		if (!vertShader.CompileVertexFromFile(dev, "shaders/deferred.vert")) {
 			spdlog::error("Failed to compile deferred.vert shader file");
@@ -113,16 +116,24 @@ namespace brassica {
 		SetShaders(&vertShader, &fragShader);
 
 		std::array<vk::DescriptorSetLayout, 2> setLayouts = {globalSet0Layout, gbufferSetLayout};
+		vk::PushConstantRange                  pushConstantRange{};
+		pushConstantRange.setStageFlags(vk::ShaderStageFlagBits::eFragment);
+		pushConstantRange.setOffset(0);
+		pushConstantRange.setSize(sizeof(TerrainPushConstants));
+
+		storedPushConstants.assign({pushConstantRange});
+
 		InitRenderPipeline(
 			colorFmt,
 			vk::Format::eUndefined,
 			setLayouts,
-			{},
+			storedPushConstants,
 			watcher,
 			false,
 			false,
 			vk::CompareOp::eLess,
-			vk::CullModeFlagBits::eNone
+			vk::CullModeFlagBits::eNone,
+			pCache
 		);
 	}
 
@@ -134,7 +145,8 @@ namespace brassica {
 		uint32_t                     activeFrame,
 		vk::ImageView                clipmapImageView,
 		vk::Sampler                  clipmapSampler,
-		vk::AccelerationStructureKHR tlas
+		vk::AccelerationStructureKHR tlas,
+		const TerrainPushConstants&  pushConstants
 	) {
 		const auto& gbufferData = blackboard.get<GBufferData>();
 		const auto& gradientData = blackboard.get<GradientPassData>();
@@ -159,7 +171,8 @@ namespace brassica {
 			 activeFrame,
 			 clipmapImageView,
 			 clipmapSampler,
-			 tlas](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
+			 tlas,
+			 pushConstants](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
 				auto& posTex = resources.get<FrameGraphTexture2D>(gbufferData.positionTarget);
@@ -239,6 +252,14 @@ namespace brassica {
 					);
 				}
 				cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, currentGbufferSet, nullptr);
+
+				cmd.pushConstants(
+					pipelineLayout,
+					vk::ShaderStageFlagBits::eFragment,
+					0,
+					sizeof(TerrainPushConstants),
+					&pushConstants
+				);
 
 				cmd.draw(3, 1, 0, 0);
 
