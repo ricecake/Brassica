@@ -107,15 +107,15 @@ namespace brassica {
 		for (uint32_t lod = 0; lod < numLODs; ++lod) {
 			float     baseMeshletSize = 32.0f;
 			float     meshletSize = baseMeshletSize * std::pow(2.0f, std::min(0.0f, static_cast<float>(lod - 1)));
-			glm::vec2 cameraSnap = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / meshletSize) * meshletSize;
+			glm::vec2 cameraCenter(cameraPos.x, cameraPos.z);
 
 			for (uint32_t row = 0; row < meshletsPerRow; ++row) {
 				for (uint32_t col = 0; col < meshletsPerRow; ++col) {
 					glm::vec3 minB(
-						cameraSnap.x +
+						cameraCenter.x +
 							(static_cast<float>(col) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize,
 						-200.0f,
-						cameraSnap.y +
+						cameraCenter.y +
 							(static_cast<float>(row) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize
 					);
 					glm::vec3 maxB = minB + glm::vec3(meshletSize, 400.0f, meshletSize);

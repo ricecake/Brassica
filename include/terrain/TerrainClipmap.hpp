@@ -9,7 +9,7 @@
 
 namespace brassica {
 
-	constexpr uint32_t TERRAIN_MAP_DIM = 1024;
+	constexpr uint32_t TERRAIN_MAP_DIM = 1088; // 1024 + 64 (1 grid cell padding for seamless off-screen streaming)
 	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 7;
 
 	struct ClipmapLevelInfo {

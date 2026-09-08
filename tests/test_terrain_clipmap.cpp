@@ -50,14 +50,14 @@ TEST_CASE("Terrain Clipmap Generation and 7 Level Scaling") {
 		float expectedExtent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * expectedTexelSize;
 
 		CHECK(doctest::Approx(expectedTexelSize) == baseTexel * std::pow(2.0f, static_cast<float>(l)));
-		CHECK(doctest::Approx(expectedExtent) == 1024.0f * expectedTexelSize);
+		CHECK(doctest::Approx(expectedExtent) == 1088.0f * expectedTexelSize);
 	}
 
-	// LOD 6 extent should cover over 32,000 world units
+	// LOD 6 extent should cover over 34,000 world units with padded extent (1088 texels * 32m = 34816m)
 	float lod6Extent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * (baseTexel * static_cast<float>(1 << 6));
-	CHECK(lod6Extent == doctest::Approx(32768.0f));
+	CHECK(lod6Extent == doctest::Approx(34816.0f));
 
-	// Generate 1024x1024 height and normal map for Level 0
+	// Generate 1088x1088 height and normal map for Level 0
 	auto mapData = brassica::TerrainClipmap::GenerateSineWaveMap(0, baseTexel, glm::vec2(0.0f), 0.0f);
 	CHECK(mapData.size() == brassica::TERRAIN_MAP_DIM * brassica::TERRAIN_MAP_DIM);
 
@@ -70,7 +70,7 @@ TEST_CASE("Terrain Clipmap Generation and 7 Level Scaling") {
 
 	// Verify normal vector length is normalized
 	CHECK(doctest::Approx(glm::length(normal)).epsilon(0.01f) == 1.0f);
-	// Height from multi-octave FBM terrain generator should be within [-120, 120]
+	// Height from FastNoise2 terrain generator should be within [-120, 120]
 	CHECK(height >= -120.0f);
 	CHECK(height <= 120.0f);
 }
@@ -94,7 +94,7 @@ TEST_CASE("Top Plane Frustum Culling and Terrain Elevation") {
 }
 
 TEST_CASE("Toroidal Mapping Offset Calculation") {
-	int dim = 1024;
+	int dim = static_cast<int>(brassica::TERRAIN_MAP_DIM); // 1088
 	int offset = 0;
 
 	// Camera moves right by 10 texels
@@ -107,7 +107,7 @@ TEST_CASE("Toroidal Mapping Offset Calculation") {
 	int deltaX2 = -25;
 	offset = (offset + deltaX2) % dim;
 	if (offset < 0) offset += dim;
-	CHECK(offset == 1009);
+	CHECK(offset == dim - 15);
 }
 
 TEST_CASE("Long Distance Terrain Meshlet Grid Snapping and Coverage") {

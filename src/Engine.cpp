@@ -781,7 +781,7 @@ namespace brassica {
 		TerrainPushConstants terrainPush{};
 		terrainPush.viewProj = camera.viewProjMatrix;
 		terrainPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
-		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, 0);
+		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, TERRAIN_MAP_DIM);
 
 		glm::uvec4 offsets0_3{0u};
 		glm::uvec4 offsets4_7{0u};

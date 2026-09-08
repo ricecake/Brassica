@@ -25,16 +25,21 @@ layout(push_constant) uniform TerrainPushConstants {
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
 	float baseTexelSize = params.cameraPos.w;
 	float texelSize = baseTexelSize * pow(2.0, float(level));
-	vec2 center = floor(params.cameraPos.xz / texelSize) * texelSize;
-	float worldExtent = 1024.0 * texelSize;
-
-	vec2 linearUV = (worldXZ - (center - vec2(worldExtent * 0.5))) / worldExtent;
+	uint textureDim = (params.gridParams.w > 0u) ? params.gridParams.w : 1088u;
 
 	uvec4 offsets = (level < 4) ? params.lodOffsets0_3 : params.lodOffsets4_7;
 	uint packed = offsets[level % 4];
-	vec2 offsetFraction = vec2(float(packed & 0xFFFFu), float((packed >> 16u) & 0xFFFFu)) / 1024.0;
+	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
 
-	return fract(linearUV + offsetFraction);
+	vec2 camInTexels = params.cameraPos.xz / texelSize;
+	vec2 g = floor((camInTexels - vec2(gridOffset) + float(textureDim) * 0.5) / float(textureDim)) * float(textureDim) + vec2(gridOffset);
+	vec2 centerWorldPos = g * texelSize;
+
+	vec2 deltaWorld = worldXZ - centerWorldPos;
+	vec2 texelOffset = deltaWorld / texelSize;
+	vec2 texelCoord = vec2(float(textureDim)) * 0.5 + texelOffset + vec2(gridOffset);
+
+	return fract(texelCoord / float(textureDim));
 }
 
 struct TaskPayload {
@@ -74,8 +79,8 @@ void main() {
 	float baseMeshletSize = 32.0;
 	float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
 
-	vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
-	vec3 meshletMin = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+	vec2 cameraCenter = params.cameraPos.xz;
+	vec3 meshletMin = vec3(cameraCenter.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraCenter.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
 
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
@@ -158,13 +163,13 @@ void main() {
 		bool cullQuad = false;
 		if (lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(params.cameraPos.xz / prevMeshletSize) * prevMeshletSize;
+			vec2 prevCameraCenter = params.cameraPos.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
 			vec2 quadCenterWorld = meshletMin.xz + quadCenterLocal;
 
-			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
+			vec2 dist = abs(quadCenterWorld - prevCameraCenter);
 
 			// Cull if the quad center is strictly inside the previous LOD's active area.
 			// The -0.01 margin prevents floating point inaccuracies from culling edge quads.
