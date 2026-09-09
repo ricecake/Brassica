@@ -260,6 +260,7 @@ namespace brassica {
 			}
 		);
 
+		blackboard.add<AtmosphereSkyPassData>() = data;
 		return data;
 	}
 
