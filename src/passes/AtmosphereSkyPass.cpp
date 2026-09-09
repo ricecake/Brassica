@@ -24,7 +24,65 @@ namespace brassica {
 
 	AtmosphereSkyPass::~AtmosphereSkyPass() {
 		DestroyPipeline();
+		DestroyBackgroundTextures(lastAllocator);
 		CleanupDescriptorResources();
+	}
+
+	void AtmosphereSkyPass::CreateBackgroundTextures(vk::Extent2D extent, VmaAllocator alloc) {
+		if (!alloc || !device)
+			return;
+
+		DestroyBackgroundTextures(alloc);
+
+		for (uint32_t i = 0; i < FRAME_OVERLAP; ++i) {
+			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			imageInfo.imageType = VK_IMAGE_TYPE_2D;
+			imageInfo.extent = VkExtent3D{extent.width, extent.height, 1};
+			imageInfo.mipLevels = 1;
+			imageInfo.arrayLayers = 1;
+			imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+			VmaAllocationCreateInfo allocCreateInfo{};
+			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+			VkImage vkImg = VK_NULL_HANDLE;
+			if (vmaCreateImage(alloc, &imageInfo, &allocCreateInfo, &vkImg, &bgTex[i].allocation, nullptr) !=
+			    VK_SUCCESS) {
+				spdlog::error("Failed to create AtmosphereSkyPass background image via VMA");
+				return;
+			}
+			bgTex[i].image = vkImg;
+
+			vk::ImageViewCreateInfo viewInfo{};
+			viewInfo.setImage(bgTex[i].image);
+			viewInfo.setViewType(vk::ImageViewType::e2D);
+			viewInfo.setFormat(vk::Format::eR16G16B16A16Sfloat);
+			viewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+
+			bgTex[i].imageView = device.createImageView(viewInfo);
+		}
+
+		currentExtent = extent;
+		lastAllocator = alloc;
+	}
+
+	void AtmosphereSkyPass::DestroyBackgroundTextures(VmaAllocator alloc) {
+		for (uint32_t i = 0; i < FRAME_OVERLAP; ++i) {
+			if (bgTex[i].imageView) {
+				device.destroyImageView(bgTex[i].imageView);
+				bgTex[i].imageView = nullptr;
+			}
+			if (bgTex[i].image && bgTex[i].allocation && alloc) {
+				vmaDestroyImage(alloc, bgTex[i].image, bgTex[i].allocation);
+				bgTex[i].image = nullptr;
+				bgTex[i].allocation = VK_NULL_HANDLE;
+			}
+		}
 	}
 
 	void AtmosphereSkyPass::CreateDescriptorResources(vk::Device dev) {
@@ -170,11 +228,23 @@ namespace brassica {
 		vk::Extent2D                      extent,
 		vk::DescriptorSet                 globalDescriptorSet,
 		uint32_t                          activeFrame,
-		const AtmosphereSkyPushConstants& push
+		const AtmosphereSkyPushConstants& push,
+		VmaAllocator                      allocator
 	) {
 		AtmosphereSkyPassData data{};
 
 		auto* lutData = blackboard.try_get<AtmosphereLUTData>();
+
+		if (allocator != VK_NULL_HANDLE && (currentExtent != extent || lastAllocator != allocator)) {
+			CreateBackgroundTextures(extent, allocator);
+		}
+
+		uint32_t frameIdx = activeFrame % FRAME_OVERLAP;
+
+		if (bgTex[frameIdx].image && bgTex[frameIdx].imageView) {
+			FrameGraphTexture2D wrapper{bgTex[frameIdx].image, bgTex[frameIdx].imageView};
+			data.background = fg.import("Background", {extent, vk::Format::eR16G16B16A16Sfloat}, std::move(wrapper));
+		}
 
 		data.background = fg.addCallbackPass<FrameGraphResource>(
 			"AtmosphereSkyPass",
@@ -184,14 +254,18 @@ namespace brassica {
 					builder.read(lutData->transmittanceLUT, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
 				}
 
-				resource = builder.create<FrameGraphTexture2D>(
-					"Background",
-					FrameGraphTexture2D::Desc{
-						.extent = {extent.width, extent.height},
-						.format = vk::Format::eR16G16B16A16Sfloat,
-						.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
-					}
-				);
+				if (data.background == FrameGraphResource{}) {
+					resource = builder.create<FrameGraphTexture2D>(
+						"Background",
+						FrameGraphTexture2D::Desc{
+							.extent = {extent.width, extent.height},
+							.format = vk::Format::eR16G16B16A16Sfloat,
+							.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
+						}
+					);
+				} else {
+					resource = data.background;
+				}
 				resource = builder.write(resource, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 			},
 			[this,

@@ -809,7 +809,8 @@ namespace brassica {
 			extent,
 			globalDescriptorSets[activeFrame],
 			activeFrame,
-			skyPassPush
+			skyPassPush,
+			allocator
 		);
 
 		terrainUploader.Poll();

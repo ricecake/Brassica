@@ -8,6 +8,7 @@
 #include "passes/RenderPass.hpp"
 #include "Shader.hpp"
 #include "types/Light.hpp"
+#include "vk_mem_alloc.h"
 
 namespace brassica {
 
@@ -47,12 +48,13 @@ namespace brassica {
 		);
 
 		AtmosphereSkyPassData RegisterPass(
-			FrameGraph&                      fg,
-			FrameGraphBlackboard&            blackboard,
-			vk::Extent2D                     extent,
-			vk::DescriptorSet                globalDescriptorSet,
-			uint32_t                         activeFrame,
-			const AtmosphereSkyPushConstants& push
+			FrameGraph&                       fg,
+			FrameGraphBlackboard&             blackboard,
+			vk::Extent2D                      extent,
+			vk::DescriptorSet                 globalDescriptorSet,
+			uint32_t                          activeFrame,
+			const AtmosphereSkyPushConstants& push,
+			VmaAllocator                      allocator = VK_NULL_HANDLE
 		);
 
 		void DestroyPipeline();
@@ -70,6 +72,19 @@ namespace brassica {
 		vk::DescriptorPool      descriptorPool{nullptr};
 		vk::DescriptorSet       skySets[FRAME_OVERLAP]{nullptr, nullptr};
 		vk::Sampler             sampler{nullptr};
+
+		struct TextureResource {
+			vk::Image     image{nullptr};
+			vk::ImageView imageView{nullptr};
+			VmaAllocation allocation{VK_NULL_HANDLE};
+		};
+
+		VmaAllocator    lastAllocator{VK_NULL_HANDLE};
+		vk::Extent2D    currentExtent{0, 0};
+		TextureResource bgTex[FRAME_OVERLAP];
+
+		void CreateBackgroundTextures(vk::Extent2D extent, VmaAllocator allocator);
+		void DestroyBackgroundTextures(VmaAllocator allocator);
 
 		void CreateDescriptorResources(vk::Device dev);
 		void CleanupDescriptorResources();
