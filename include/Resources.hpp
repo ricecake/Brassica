@@ -9,6 +9,366 @@
 
 #include "vulkan/vulkan.hpp"
 
+/* USAGE
+
+// Initialize context container
+AssetManager asset(device, allocator);
+
+// 1. Allocate a standard volumetric lookup table (3D Texture)
+asset.Create3DTexture("volumetric_fog_lut", 256, 256, 64);
+
+// 2. Setup standard render attachments with automatic format handling
+asset.CreateDepthBuffer("main_frame_depth", 1920, 1080);
+asset.CreateComputeShaderTarget("raytraced_shadows_out", 1920, 1080);
+
+// 3. Spin up your structural vertex mesh memory array
+struct Vertex { float pos[3]; float uv[2]; };
+asset.CreateVertexBuffer("quad_vertices", sizeof(Vertex) * 4);
+
+// 4. Easily update frame transforms on every update loop frame pass
+struct CameraMatrices { glm::mat4 viewProj; } uboData;
+BufferResource* myUbo = asset.GetBuffer("main_camera_ubo");
+myUbo->UpdateData(&uboData, sizeof(CameraMatrices));
+
+
+*/
+
+// Semantic aliases for common image roles
+enum class ImageUsagePurpose {
+	StandardTexture,     // Read by fragment shaders, populated by CPU
+	DepthBuffer,         // Depth/Stencil attachment (GPU only)
+	ColorAttachment,     // Render target for offscreen rendering
+	ComputeShaderTarget, // Storage image read/written by a Compute shader
+	DataReadback         // GPU-written data to be read back by CPU (screenshots, etc.)
+};
+
+// Semantic aliases for buffer roles
+enum class BufferUsagePurpose {
+	VertexInput,    // High-speed GPU memory for raw vertex data
+	IndexInput,     // High-speed GPU memory for index arrays
+	UniformBlock,   // Constant data frequently updated/read by shaders
+	StorageCompute, // Structured buffers for compute or heavy data storage
+	StagingTransfer // CPU-visible staging memory
+};
+
+// Flexible base options for Images (supporting 2D and 3D dimensions)
+struct ImageConfigOptions {
+	vk::Format      format = vk::Format::eR8G8B8A8Srgb;
+	vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
+	uint32_t        mipLevels = 1;
+	uint32_t        depth = 1; // Used for 3D textures, defaults to 1 for 2D
+
+	// Explicit override flags (leave as eNone if using a purpose-built alias)
+	vk::ImageUsageFlags      customUsageFlags = vk::ImageUsageFlags(0);
+	VmaMemoryUsage           customMemoryUsage = VMA_MEMORY_USAGE_UNKNOWN;
+	VmaAllocationCreateFlags customAllocFlags = VmaAllocationCreateFlags(0);
+};
+
+class TextureResource {
+public:
+	TextureResource(
+		vk::Device         device,
+		VmaAllocator       allocator,
+		uint32_t           width,
+		uint32_t           height,
+		ImageUsagePurpose  purpose,
+		ImageConfigOptions options = {}
+	):
+		m_device(device),
+		m_allocator(allocator),
+		m_width(width),
+		m_height(height),
+		m_depth(options.depth),
+		m_format(options.format) {
+		// 1. Resolve Vulkan & VMA configurations based on structural intent/purpose
+		vk::ImageUsageFlags      usageFlags;
+		VmaMemoryUsage           memoryUsage = VMA_MEMORY_USAGE_AUTO;
+		VmaAllocationCreateFlags allocFlags = 0;
+		vk::ImageAspectFlags     aspectFlags = vk::ImageAspectFlagBits::eColor;
+
+		switch (purpose) {
+		case ImageUsagePurpose::StandardTexture:
+			usageFlags = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+			break;
+		case ImageUsagePurpose::DepthBuffer:
+			usageFlags = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+			aspectFlags = vk::ImageAspectFlagBits::eDepth;
+			// Auto-fallback to depth format if the user didn't specify one
+			if (m_format == vk::Format::eR8G8B8A8Srgb)
+				m_format = vk::Format::eD32Sfloat;
+			break;
+		case ImageUsagePurpose::ColorAttachment:
+			usageFlags = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+			break;
+		case ImageUsagePurpose::ComputeShaderTarget:
+			usageFlags = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
+			break;
+		case ImageUsagePurpose::DataReadback:
+			usageFlags = vk::ImageUsageFlagBits::eTransferDst;
+			options.tiling = vk::ImageTiling::eLinear;
+			allocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			break;
+		}
+
+		// Apply overrides if provided
+		if (options.customUsageFlags)
+			usageFlags = options.customUsageFlags;
+		if (options.customMemoryUsage != VMA_MEMORY_USAGE_UNKNOWN)
+			memoryUsage = options.customMemoryUsage;
+		if (options.customAllocFlags)
+			allocFlags = options.customAllocFlags;
+
+		// 2. Identify Dimensionality (2D vs 3D)
+		vk::ImageType     imageType = (m_depth > 1) ? vk::ImageType::e3D : vk::ImageType::e2D;
+		vk::ImageViewType viewType = (m_depth > 1) ? vk::ImageViewType::e3D : vk::ImageViewType::e2D;
+
+		// 3. Allocate via VMA
+		vk::ImageCreateInfo imageInfo(
+			{},
+			imageType,
+			m_format,
+			vk::Extent3D(width, height, m_depth),
+			options.mipLevels,
+			1,
+			vk::SampleCountFlagBits::e1,
+			options.tiling,
+			usageFlags,
+			vk::SharingMode::eExclusive
+		);
+
+		VmaAllocationCreateInfo allocInfo{};
+		allocInfo.usage = memoryUsage;
+		allocInfo.flags = allocFlags;
+
+		VkImageCreateInfo cImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
+		VkImage           rawImage;
+		if (vmaCreateImage(m_allocator, &cImageInfo, &allocInfo, &rawImage, &m_allocation, nullptr) != VK_SUCCESS) {
+			throw std::runtime_error("Failed to allocate image resource!");
+		}
+		m_image = rawImage;
+
+		// 4. Instantiate matching View layout automatically
+		vk::ImageViewCreateInfo viewInfo(
+			{},
+			m_image,
+			viewType,
+			m_format,
+			{},
+			vk::ImageSubresourceRange(aspectFlags, 0, options.mipLevels, 0, 1)
+		);
+		m_view = m_device.createImageView(viewInfo);
+	}
+
+	~TextureResource() {
+		if (m_view)
+			m_device.destroyImageView(m_view);
+		if (m_image && m_allocation)
+			vmaDestroyImage(m_allocator, m_image, m_allocation);
+	}
+
+	// Move semantic lifecycle hooks
+	TextureResource(const TextureResource&) = delete;
+	TextureResource& operator=(const TextureResource&) = delete;
+
+	TextureResource(TextureResource&& o) noexcept:
+		m_device(o.m_device),
+		m_allocator(o.m_allocator),
+		m_image(o.m_image),
+		m_allocation(o.m_allocation),
+		m_view(o.m_view),
+		m_width(o.m_width),
+		m_height(o.m_height),
+		m_depth(o.m_depth),
+		m_format(o.m_format) {
+		o.m_image = nullptr;
+		o.m_allocation = nullptr;
+		o.m_view = nullptr;
+	}
+
+	// Getters
+	vk::Image GetImage() const { return m_image; }
+
+	vk::ImageView GetImageView() const { return m_view; }
+
+private:
+	vk::Device    m_device;
+	VmaAllocator  m_allocator;
+	vk::Image     m_image;
+	VmaAllocation m_allocation;
+	vk::ImageView m_view;
+	uint32_t      m_width, m_height, m_depth;
+	vk::Format    m_format;
+};
+
+class BufferResource {
+public:
+	BufferResource(vk::Device device, VmaAllocator allocator, size_t size, BufferUsagePurpose purpose):
+		m_device(device), m_allocator(allocator), m_size(size) {
+		vk::BufferUsageFlags     usageFlags;
+		VmaAllocationCreateFlags allocFlags = 0;
+
+		switch (purpose) {
+		case BufferUsagePurpose::VertexInput:
+			usageFlags = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+			break;
+		case BufferUsagePurpose::IndexInput:
+			usageFlags = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+			break;
+		case BufferUsagePurpose::UniformBlock:
+			usageFlags = vk::BufferUsageFlagBits::eUniformBuffer;
+			// Persistent mapping lets CPU write data continuously without flushing maps
+			allocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			break;
+		case BufferUsagePurpose::StorageCompute:
+			usageFlags = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
+			break;
+		case BufferUsagePurpose::StagingTransfer:
+			usageFlags = vk::BufferUsageFlagBits::eTransferSrc;
+			allocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			break;
+		}
+
+		vk::BufferCreateInfo    bufferInfo({}, size, usageFlags, vk::SharingMode::eExclusive);
+		VmaAllocationCreateInfo allocInfo{};
+		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocInfo.flags = allocFlags;
+
+		VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
+		VkBuffer           rawBuffer;
+		if (vmaCreateBuffer(m_allocator, &cBufferInfo, &allocInfo, &rawBuffer, &m_allocation, &m_allocInfo) !=
+		    VK_SUCCESS) {
+			throw std::runtime_error("Failed to allocate uniform/vertex buffer!");
+		}
+		m_buffer = rawBuffer;
+	}
+
+	~BufferResource() {
+		if (m_buffer && m_allocation)
+			vmaDestroyBuffer(m_allocator, m_buffer, m_allocation);
+	}
+
+	// Move assignment/constructor overrides
+	BufferResource(const BufferResource&) = delete;
+	BufferResource& operator=(const BufferResource&) = delete;
+
+	BufferResource(BufferResource&& o) noexcept:
+		m_device(o.m_device),
+		m_allocator(o.m_allocator),
+		m_buffer(o.m_buffer),
+		m_allocation(o.m_allocation),
+		m_allocInfo(o.m_allocInfo),
+		m_size(o.m_size) {
+		o.m_buffer = nullptr;
+		o.m_allocation = nullptr;
+	}
+
+	// Direct access helper for persistently mapped memory blocks (Uniforms)
+	void UpdateData(const void* srcData, size_t size, size_t offset = 0) {
+		if (!m_allocInfo.pMappedData)
+			throw std::runtime_error("Cannot direct-write to an unmapped buffer!");
+		std::memcpy(static_cast<char*>(m_allocInfo.pMappedData) + offset, srcData, size);
+	}
+
+	vk::Buffer GetBuffer() const { return m_buffer; }
+
+private:
+	vk::Device        m_device;
+	VmaAllocator      m_allocator;
+	vk::Buffer        m_buffer = nullptr;
+	VmaAllocation     m_allocation = nullptr;
+	VmaAllocationInfo m_allocInfo{};
+	size_t            m_size;
+};
+
+class AssetManager {
+public:
+	AssetManager(vk::Device device, VmaAllocator allocator): m_device(device), m_allocator(allocator) {}
+
+	// --- TEXTURE ARCHITECTURAL FACTORIES ---
+
+	TextureResource*
+	Create2DTexture(const std::string& name, uint32_t width, uint32_t height, ImageConfigOptions opts = {}) {
+		auto [it, success] = m_textures.emplace(
+			std::piecewise_construct,
+			std::forward_as_tuple(name),
+			std::forward_as_tuple(m_device, m_allocator, width, height, ImageUsagePurpose::StandardTexture, opts)
+		);
+		return &it->second;
+	}
+
+	TextureResource* Create3DTexture(
+		const std::string& name,
+		uint32_t           width,
+		uint32_t           height,
+		uint32_t           depth,
+		ImageConfigOptions opts = {}
+	) {
+		opts.depth = depth; // Enforce depth sizing dimension
+		auto [it, success] = m_textures.emplace(
+			std::piecewise_construct,
+			std::forward_as_tuple(name),
+			std::forward_as_tuple(m_device, m_allocator, width, height, ImageUsagePurpose::StandardTexture, opts)
+		);
+		return &it->second;
+	}
+
+	TextureResource*
+	CreateDepthBuffer(const std::string& name, uint32_t width, uint32_t height, ImageConfigOptions opts = {}) {
+		auto [it, success] = m_textures.emplace(
+			std::piecewise_construct,
+			std::forward_as_tuple(name),
+			std::forward_as_tuple(m_device, m_allocator, width, height, ImageUsagePurpose::DepthBuffer, opts)
+		);
+		return &it->second;
+	}
+
+	TextureResource*
+	CreateComputeShaderTarget(const std::string& name, uint32_t width, uint32_t height, ImageConfigOptions opts = {}) {
+		auto [it, success] = m_textures.emplace(
+			std::piecewise_construct,
+			std::forward_as_tuple(name),
+			std::forward_as_tuple(m_device, m_allocator, width, height, ImageUsagePurpose::ComputeShaderTarget, opts)
+		);
+		return &it->second;
+	}
+
+	// --- BUFFER ARCHITECTURAL FACTORIES ---
+
+	BufferResource* CreateVertexBuffer(const std::string& name, size_t size) {
+		auto [it, success] = m_buffers.emplace(
+			std::piecewise_construct,
+			std::forward_as_tuple(name),
+			std::forward_as_tuple(m_device, m_allocator, size, BufferUsagePurpose::VertexInput)
+		);
+		return &it->second;
+	}
+
+	BufferResource* CreateUniformBuffer(const std::string& name, size_t size) {
+		auto [it, success] = m_buffers.emplace(
+			std::piecewise_construct,
+			std::forward_as_tuple(name),
+			std::forward_as_tuple(m_device, m_allocator, size, BufferUsagePurpose::UniformBlock)
+		);
+		return &it->second;
+	}
+
+	// Global cleanups
+	void ClearAllResources() {
+		m_textures.clear();
+		m_buffers.clear();
+	}
+
+	TextureResource* GetTexture(const std::string& name) { return &m_textures.at(name); }
+
+	BufferResource* GetBuffer(const std::string& name) { return &m_buffers.at(name); }
+
+private:
+	vk::Device                                       m_device;
+	VmaAllocator                                     m_allocator;
+	std::unordered_map<std::string, TextureResource> m_textures;
+	std::unordered_map<std::string, BufferResource>  m_buffers;
+};
+
 struct TextureOptions {
 	vk::Format          format = vk::Format::eR8G8B8A8Srgb;
 	vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
