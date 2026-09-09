@@ -45,7 +45,8 @@ namespace brassica {
 			vk::ImageView                clipmapImageView = nullptr,
 			vk::Sampler                  clipmapSampler = nullptr,
 			vk::AccelerationStructureKHR tlas = nullptr,
-			const TerrainPushConstants&  pushConstants = {}
+			const TerrainPushConstants&  pushConstants = {},
+			vk::Buffer                   aabbBuffer = nullptr
 		);
 
 	private:

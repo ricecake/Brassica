@@ -18,6 +18,19 @@ layout(set = 1, binding = 3) uniform sampler2D backgroundTex;
 layout(set = 1, binding = 4) uniform sampler2DArray terrainClipmap;
 layout(set = 1, binding = 5) uniform accelerationStructureEXT topLevelAS;
 
+struct AABB {
+	float minX;
+	float minY;
+	float minZ;
+	float maxX;
+	float maxY;
+	float maxZ;
+};
+
+layout(std430, set = 1, binding = 6) readonly buffer TerrainAABBBuffer {
+	AABB terrainAABBs[];
+};
+
 layout(push_constant) uniform TerrainPushConstants {
 	mat4  viewProj;
 	vec4  cameraPos;
@@ -57,14 +70,41 @@ uint calculateRayLOD(vec2 sampleXZ) {
 	return uint(clamp(lodFloat, 0.0, 7.0));
 }
 
-// Update the intersection function to use dynamic LODs
-bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
-	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
-	int numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
+// Update the intersection function to use dynamic LODs and candidate AABB bounds
+bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, uint primID, float camDistToShaded, out float hitT) {
+	AABB box = terrainAABBs[primID];
+	vec3 boxMin = vec3(box.minX, box.minY, box.minZ);
+	vec3 boxMax = vec3(box.maxX, box.maxY, box.maxZ);
 
-	float rayLength = 500.0;
-	for (int i = 1; i <= numSteps; ++i) {
-		float t = (float(i) / float(numSteps)) * rayLength;
+	vec3 invDir = 1.0 / rayDir;
+	vec3 t0 = (boxMin - rayOrigin) * invDir;
+	vec3 t1 = (boxMax - rayOrigin) * invDir;
+
+	vec3 tMinVec = min(t0, t1);
+	vec3 tMaxVec = max(t0, t1);
+
+	float tNear = max(max(tMinVec.x, tMinVec.y), tMinVec.z);
+	float tFar = min(min(tMaxVec.x, tMaxVec.y), tMaxVec.z);
+
+	if (tFar < max(tNear, 0.0)) {
+		hitT = 0.0;
+		return false;
+	}
+
+	float tStart = max(tNear, 0.0);
+	float tEnd = tFar;
+
+	float boxLength = tEnd - tStart;
+	if (boxLength <= 0.0001) {
+		hitT = 0.0;
+		return false;
+	}
+
+	float stepSize = clamp(camDistToShaded * 0.01, 0.5, 4.0);
+	int numSteps = int(clamp(boxLength / stepSize, 8.0, 32.0));
+
+	for (int i = 0; i <= numSteps; ++i) {
+		float t = tStart + (float(i) / float(numSteps)) * boxLength;
 		vec3 samplePos = rayOrigin + rayDir * t;
 
 		// Fetch the appropriate LOD for the current spatial step
@@ -147,8 +187,9 @@ void main() {
 			while (rayQueryProceedEXT(rq)) {
 				uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);
 				if (candidateType == gl_RayQueryCandidateIntersectionAABBEXT) {
+					uint primID = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
 					float hitT;
-					if (checkTerrainAABBIntersection(rayOrigin, lightDir, camDistToShaded, hitT)) {
+					if (checkTerrainAABBIntersection(rayOrigin, lightDir, primID, camDistToShaded, hitT)) {
 						rayQueryGenerateIntersectionEXT(rq, hitT);
 					}
 				}

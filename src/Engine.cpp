@@ -735,7 +735,8 @@ namespace brassica {
 		if (fgCacheState.cachedExtent != extent || fgCacheState.cachedFormat != format ||
 		    fgCacheState.cachedClipmapView != terrainClipmap.GetImageView() ||
 		    fgCacheState.cachedClipmapSampler != terrainClipmap.GetSampler() ||
-		    fgCacheState.cachedTLAS != terrainPass->GetTLAS()) {
+		    fgCacheState.cachedTLAS != terrainPass->GetTLAS() ||
+		    fgCacheState.cachedAABBBuffer != terrainPass->GetAABBBuffer()) {
 			fgCacheState.Invalidate();
 		}
 
@@ -746,6 +747,7 @@ namespace brassica {
 			fgCacheState.cachedClipmapView = terrainClipmap.GetImageView();
 			fgCacheState.cachedClipmapSampler = terrainClipmap.GetSampler();
 			fgCacheState.cachedTLAS = terrainPass->GetTLAS();
+			fgCacheState.cachedAABBBuffer = terrainPass->GetAABBBuffer();
 			fgCacheState.isDirty = false;
 		}
 
@@ -819,7 +821,8 @@ namespace brassica {
 			terrainClipmap.GetImageView(),
 			terrainClipmap.GetSampler(),
 			terrainPass->GetTLAS(),
-			terrainPush
+			terrainPush,
+			terrainPass->GetAABBBuffer()
 		);
 
 		RenderContext renderCtx{.commandBuffer = frame.commandBuffer, .allocator = allocator, .device = device};

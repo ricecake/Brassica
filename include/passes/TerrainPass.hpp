@@ -60,6 +60,8 @@ namespace brassica {
 		);
 
 		vk::AccelerationStructureKHR GetTLAS() const { return tlas; }
+		vk::Buffer                   GetAABBBuffer() const { return aabbBuffer.buffer; }
+		uint32_t                     GetAABBCount() const { return lastAABBCount; }
 
 	private:
 		vk::DispatchLoaderDynamic dls;
@@ -99,6 +101,7 @@ namespace brassica {
 		BufferResource               tlasBuffer;
 		vk::AccelerationStructureKHR tlas{nullptr};
 		BufferResource               scratchBuffer;
+		uint32_t                     lastAABBCount{0};
 		glm::vec3                    lastASCameraPos{1e9f, 1e9f, 1e9f};
 
 		void CreateGBufferTextures(vk::Extent2D extent, VmaAllocator allocator);

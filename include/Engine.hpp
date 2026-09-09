@@ -201,6 +201,7 @@ namespace brassica {
 			vk::ImageView                cachedClipmapView{nullptr};
 			vk::Sampler                  cachedClipmapSampler{nullptr};
 			vk::AccelerationStructureKHR cachedTLAS{nullptr};
+			vk::Buffer                   cachedAABBBuffer{nullptr};
 
 			void Invalidate() { isDirty = true; }
 		};
