@@ -38,10 +38,13 @@ namespace Brassica {
 	};
 
 	class Phase {};
-
-	class Graph {};
-
 	class Node {};
+
+	class Graph {
+	public:
+		using ExpectedBuffers = std::tuple<>;
+	};
+
 
 	class Queue {};
 
@@ -91,6 +94,290 @@ namespace Brassica {
 	template <typename T, typename X = T>
 	class Transform: public operation {};
 }; // namespace Brassica
+
+
+#include <iostream>
+#include <concepts>
+#include <string_view>
+
+// ==========================================
+// 1. The Stateful Metaprogramming Counter
+// ==========================================
+namespace counter_impl {
+    template <size_t N> struct tag : tag<N - 1> {};
+    template <> struct tag<0> {};
+
+    template <size_t N, typename Context>
+    struct flag {
+        friend constexpr bool is_defined(flag<N, Context>, tag<N>);
+    };
+
+    template <size_t N, typename Context>
+    struct writer {
+        friend constexpr bool is_defined(flag<N, Context>, tag<N>) { return true; }
+    };
+
+    template <size_t N, typename Context>
+    constexpr size_t next_id(...) {
+        return N;
+    }
+
+    template <size_t N, typename Context>
+    requires requires { is_defined(flag<N, Context>{}, tag<N>{}); }
+    constexpr size_t next_id(int) {
+        return next_id<N + 1, Context>(0);
+    }
+}
+
+// Helper macro/function to fetch and increment the compile-time counter for a Type context
+template <typename Context, size_t UniqueID = counter_impl::next_id<0, Context>(0)>
+constexpr int next_value() {
+    [[maybe_unused]] auto w = counter_impl::writer<UniqueID, Context>{};
+    return static_cast<int>(UniqueID);
+}
+
+// ==========================================
+// 2. The Refactored TypeSafeEnum Framework
+// ==========================================
+template <typename T>
+concept IsEnumDefinition = requires {
+    { T::typeName } -> std::convertible_to<std::string_view>;
+};
+
+template <IsEnumDefinition Def>
+class TypeSafeEnum {
+private:
+    int value;
+
+public:
+    // C++ requires default arguments to be evaluated at the call-site.
+    // By passing next_value<Def>() as a default template-driven argument,
+    // each distinct instantiation of this constructor locks in a brand new sequential ID.
+    constexpr explicit TypeSafeEnum(int val = next_value<Def>()) : value(val) {}
+
+    friend Def;
+    constexpr int underlying() const { return value; }
+    auto operator<=>(const TypeSafeEnum&) const = default;
+};
+
+// ==========================================
+// 3. Exact Usage As You Intended
+// ==========================================
+struct NetworkErrorDef {
+    inline static constexpr std::string_view typeName = "NetworkError";
+
+    using Enum = TypeSafeEnum<NetworkErrorDef>;
+
+    // Evaluated sequentially: next_value<NetworkErrorDef>() returns 0, then 1
+    inline static constexpr Enum Timeout;
+    inline static constexpr Enum Disconnected;
+};
+using NetworkError = NetworkErrorDef::Enum;
+
+struct ExtendedNetworkErrorDef : public NetworkErrorDef {
+    inline static constexpr std::string_view typeName = "ExtendedNetworkError";
+
+    using Enum = TypeSafeEnum<ExtendedNetworkErrorDef>;
+
+    // Evaluated sequentially: next_value<ExtendedNetworkErrorDef>() starts fresh at 0, then 1
+    inline static constexpr Enum RateLimited;
+    inline static constexpr Enum ServerError;
+};
+using ExtendedNetworkError = ExtendedNetworkErrorDef::Enum;
+
+// // ==========================================
+// // 4. Verification
+// // ==========================================
+// int main() {
+//     std::cout << NetworkErrorDef::typeName << " values:\n";
+//     std::cout << "  Timeout:      " << NetworkError::Timeout.underlying() << "\n";
+//     std::cout << "  Disconnected: " << NetworkError::Disconnected.underlying() << "\n\n";
+
+//     std::cout << ExtendedNetworkErrorDef::typeName << " values:\n";
+//     std::cout << "  RateLimited:  " << ExtendedNetworkError::RateLimited.underlying() << "\n";
+//     std::cout << "  ServerError:  " << ExtendedNetworkError::ServerError.underlying() << "\n";
+
+//     // True compile-time verification
+//     static_assert(NetworkError::Timeout.underlying() == 0);
+//     static_assert(NetworkError::Disconnected.underlying() == 1);
+//     static_assert(ExtendedNetworkError::RateLimited.underlying() == 0);
+//     static_assert(ExtendedNetworkError::ServerError.underlying() == 1);
+// }
+
+
+// #include <iostream>
+// #include <concepts>
+// #include <string_view>
+
+// template <typename T>
+// concept IsEnumDefinition = requires {
+//     { T::typeName } -> std::convertible_to<std::string_view>;
+// };
+
+// template <IsEnumDefinition Def>
+// class TypeSafeEnum {
+// private:
+// 	inline static constexpr int counter = 0;
+//     int value;
+
+//     constexpr explicit TypeSafeEnum(int val = counter++) : value(val) {}
+
+// public:
+//     friend Def;
+//     constexpr int underlying() const { return value; }
+//     auto operator<=>(const TypeSafeEnum&) const = default;
+// };
+
+// struct NetworkErrorDef {
+//     inline static constexpr std::string_view typeName = "NetworkError";
+
+//     using Enum = TypeSafeEnum<NetworkErrorDef>;
+
+//     inline static constexpr Enum Timeout;
+//     inline static constexpr Enum Disconnected;
+// };
+// using NetworkError = NetworkErrorDef::Enum;
+
+// struct ExtendedNetworkErrorDef : public NetworkErrorDef {
+//     inline static constexpr std::string_view typeName = "ExtendedNetworkError";
+
+//     using Enum = TypeSafeEnum<ExtendedNetworkErrorDef>;
+
+//     inline static constexpr Enum RateLimited;
+//     inline static constexpr Enum ServerError;
+// };
+// using ExtendedNetworkError = ExtendedNetworkErrorDef::Enum;
+
+
+
+
+#include <iostream>
+#include <concepts>
+#include <string_view>
+
+// ==========================================
+// 1. The Tree-Wide Sequence Counter
+// ==========================================
+namespace counter_impl {
+    template <size_t N> struct tag : tag<N - 1> {};
+    template <> struct tag<0> {};
+
+    template <size_t N, typename RootContext>
+    struct flag { friend constexpr bool is_defined(flag<N, RootContext>, tag<N>); };
+
+    template <size_t N, typename RootContext>
+    struct writer { friend constexpr bool is_defined(flag<N, RootContext>, tag<N>) { return true; } };
+
+    template <size_t N, typename RootContext>
+    constexpr size_t next_id(...) { return N; }
+
+    template <size_t N, typename RootContext>
+    requires requires { is_defined(flag<N, RootContext>{}, tag<N>{}); }
+    constexpr size_t next_id(int) { return next_id<N + 1, RootContext>(0); }
+}
+
+template <typename RootContext, size_t UniqueID = counter_impl::next_id<0, RootContext>(0)>
+constexpr int assign_tree_id() {
+    [[maybe_unused]] auto w = counter_impl::writer<UniqueID, RootContext>{};
+    return static_cast<int>(UniqueID);
+}
+
+// // ==========================================
+// // 2. The TypeSafeEnum Structure
+// // ==========================================
+// // We template against a "Root" type so that parents and children share the exact same C++ type.
+// template <typename Root>
+// class TypeSafeEnum {
+// private:
+//     int value;
+//     std::string_view name;
+
+// public:
+//     // Every time an enum instance is instantiated, it grabs the next ID from the Root counter.
+//     constexpr explicit TypeSafeEnum(std::string_view n, int val = assign_tree_id<Root>())
+//         : value(val), name(n) {}
+
+//     constexpr int underlying() const { return value; }
+//     constexpr std::string_view to_string() const { return name; }
+
+//     auto operator<=>(const TypeSafeEnum&) const = default;
+// };
+
+// // ==========================================
+// // 3. Defining the Enum Tree
+// // ==========================================
+// // Base struct acting as the Type Anchor
+// struct NetworkErrorRoot {};
+// using NetworkError = TypeSafeEnum<NetworkErrorRoot>;
+
+// struct NetworkErrorDef {
+//     inline static constexpr std::string_view typeName = "NetworkError";
+
+//     // Values share the NetworkErrorRoot type context
+//     inline static constexpr NetworkError Timeout{"Timeout"};
+//     inline static constexpr NetworkError Disconnected{"Disconnected"};
+// };
+
+// // Extension inherits from base definitions but adds new entries
+// struct ExtendedNetworkErrorDef : public NetworkErrorDef {
+//     inline static constexpr std::string_view typeName = "ExtendedNetworkError";
+
+//     // These STILL use 'NetworkError' type! They seamlessly interoperate.
+//     inline static constexpr NetworkError RateLimited{"RateLimited"};
+//     inline static constexpr NetworkError ServerError{"ServerError"};
+// };
+
+
+
+// ==========================================
+// 2. The TypeSafeEnum Structure
+// ==========================================
+// We template against a "Root" type so that parents and children share the exact same C++ type.
+template <typename Root>
+class TypeSafeEnum {
+private:
+    int value;
+
+public:
+    // Every time an enum instance is instantiated, it grabs the next ID from the Root counter.
+    constexpr explicit TypeSafeEnum(std::string_view n, int val = assign_tree_id<Root>())
+        : value(val) {}
+
+    constexpr int underlying() const { return value; }
+
+    auto operator<=>(const TypeSafeEnum&) const = default;
+};
+
+// ==========================================
+// 3. Defining the Enum Tree
+// ==========================================
+// Base struct acting as the Type Anchor
+struct NetworkErrorRoot {};
+using NetworkError = TypeSafeEnum<NetworkErrorRoot>;
+
+struct NetworkErrorDef {
+    inline static constexpr std::string_view typeName = "NetworkError";
+
+    // Values share the NetworkErrorRoot type context
+    inline static constexpr NetworkError Timeout;
+    inline static constexpr NetworkError Disconnected;
+};
+
+// Extension inherits from base definitions but adds new entries
+struct ExtendedNetworkErrorDef : public NetworkErrorDef {
+    inline static constexpr std::string_view typeName = "ExtendedNetworkError";
+
+    // These STILL use 'NetworkError' type! They seamlessly interoperate.
+    inline static constexpr NetworkError RateLimited;
+    inline static constexpr NetworkError ServerError;
+};
+
+
+
+
+
+
+
 
 /*
 
