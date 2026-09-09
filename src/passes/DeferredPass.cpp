@@ -27,6 +27,48 @@ namespace brassica {
 		CleanupDescriptorResources();
 	}
 
+	void DeferredPass::EnsureDummyBuffer(VmaAllocator allocator) {
+		if (dummyBuffer || allocator == VK_NULL_HANDLE)
+			return;
+		lastAllocator = allocator;
+
+		VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		bufInfo.size = 256;
+		bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+
+		VmaAllocationCreateInfo allocInfo{};
+		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+		VkBuffer vkBuf = VK_NULL_HANDLE;
+		if (vmaCreateBuffer(allocator, &bufInfo, &allocInfo, &vkBuf, &dummyAllocation, nullptr) == VK_SUCCESS) {
+			dummyBuffer = vkBuf;
+		}
+
+		if (!dummy3DImage) {
+			VkImageCreateInfo img3D{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			img3D.imageType = VK_IMAGE_TYPE_3D;
+			img3D.extent = VkExtent3D{1, 1, 1};
+			img3D.mipLevels = 1;
+			img3D.arrayLayers = 1;
+			img3D.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+			img3D.tiling = VK_IMAGE_TILING_OPTIMAL;
+			img3D.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			img3D.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+			img3D.samples = VK_SAMPLE_COUNT_1_BIT;
+
+			VkImage vk3D = VK_NULL_HANDLE;
+			if (vmaCreateImage(allocator, &img3D, &allocInfo, &vk3D, &dummy3DAllocation, nullptr) == VK_SUCCESS) {
+				dummy3DImage = vk3D;
+				vk::ImageViewCreateInfo viewInfo{};
+				viewInfo.setImage(dummy3DImage);
+				viewInfo.setViewType(vk::ImageViewType::e3D);
+				viewInfo.setFormat(vk::Format::eR16G16B16A16Sfloat);
+				viewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+				dummy3DView = device.createImageView(viewInfo);
+			}
+		}
+	}
+
 	void DeferredPass::CreateDescriptorResources(vk::Device dev) {
 		// Set 1 Layout:
 		// Binding 0: Position sampler
@@ -35,7 +77,9 @@ namespace brassica {
 		// Binding 3: Background sampler
 		// Binding 4: Terrain Clipmap Texture Array sampler
 		// Binding 5: Acceleration Structure (TLAS)
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		// Binding 6: Terrain AABBs SSBO
+		// Binding 7: Volumetric Integrated Grid 3D sampler
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 		for (uint32_t i = 0; i < 5; ++i) {
 			bindings[i].setBinding(i);
 			bindings[i].setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
@@ -47,14 +91,25 @@ namespace brassica {
 		bindings[5].setDescriptorCount(1);
 		bindings[5].setStageFlags(vk::ShaderStageFlagBits::eFragment);
 
+		bindings[6].setBinding(6);
+		bindings[6].setDescriptorType(vk::DescriptorType::eStorageBuffer);
+		bindings[6].setDescriptorCount(1);
+		bindings[6].setStageFlags(vk::ShaderStageFlagBits::eFragment);
+
+		bindings[7].setBinding(7);
+		bindings[7].setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
+		bindings[7].setDescriptorCount(1);
+		bindings[7].setStageFlags(vk::ShaderStageFlagBits::eFragment);
+
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		gbufferSetLayout = dev.createDescriptorSetLayout(layoutInfo);
 
 		// Pool
-		std::array<vk::DescriptorPoolSize, 2> poolSizes{};
-		poolSizes[0].setType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(5 * FRAME_OVERLAP);
+		std::array<vk::DescriptorPoolSize, 3> poolSizes{};
+		poolSizes[0].setType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(6 * FRAME_OVERLAP);
 		poolSizes[1].setType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1 * FRAME_OVERLAP);
+		poolSizes[2].setType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1 * FRAME_OVERLAP);
 
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setMaxSets(FRAME_OVERLAP);
@@ -84,6 +139,20 @@ namespace brassica {
 	}
 
 	void DeferredPass::CleanupDescriptorResources() {
+		if (dummyBuffer && lastAllocator) {
+			vmaDestroyBuffer(lastAllocator, dummyBuffer, dummyAllocation);
+			dummyBuffer = nullptr;
+			dummyAllocation = VK_NULL_HANDLE;
+		}
+		if (dummy3DView) {
+			device.destroyImageView(dummy3DView);
+			dummy3DView = nullptr;
+		}
+		if (dummy3DImage && lastAllocator) {
+			vmaDestroyImage(lastAllocator, dummy3DImage, dummy3DAllocation);
+			dummy3DImage = nullptr;
+			dummy3DAllocation = VK_NULL_HANDLE;
+		}
 		if (sampler) {
 			device.destroySampler(sampler);
 			sampler = nullptr;
@@ -146,8 +215,14 @@ namespace brassica {
 		vk::ImageView                clipmapImageView,
 		vk::Sampler                  clipmapSampler,
 		vk::AccelerationStructureKHR tlas,
-		const TerrainPushConstants&  pushConstants
+		vk::Buffer                   aabbBuffer,
+		vk::ImageView                volumetricIntegratedView,
+		const TerrainPushConstants&  pushConstants,
+		VmaAllocator                 allocator
 	) {
+		if (allocator != VK_NULL_HANDLE) {
+			EnsureDummyBuffer(allocator);
+		}
 		const auto& gbufferData = blackboard.get<GBufferData>();
 		const auto& gradientData = blackboard.get<GradientPassData>();
 		const auto& swapchainData = blackboard.get<SwapchainData>();
@@ -172,6 +247,8 @@ namespace brassica {
 			 clipmapImageView,
 			 clipmapSampler,
 			 tlas,
+			 aabbBuffer,
+			 volumetricIntegratedView,
 			 pushConstants](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
@@ -183,7 +260,7 @@ namespace brassica {
 
 				vk::DescriptorSet currentGbufferSet = gbufferDescriptorSets[activeFrame % FRAME_OVERLAP];
 
-				std::array<vk::DescriptorImageInfo, 5> imageInfos{};
+				std::array<vk::DescriptorImageInfo, 6> imageInfos{};
 				imageInfos[0]
 					.setSampler(sampler)
 					.setImageView(posTex.imageView)
@@ -208,7 +285,12 @@ namespace brassica {
 					.setImageView(clipView)
 					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 
-				std::array<vk::WriteDescriptorSet, 6> descriptorWrites{};
+				imageInfos[5]
+					.setSampler(sampler)
+					.setImageView(volumetricIntegratedView ? volumetricIntegratedView : dummy3DView)
+					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+
+				std::array<vk::WriteDescriptorSet, 8> descriptorWrites{};
 				for (uint32_t i = 0; i < 5; ++i) {
 					descriptorWrites[i].setDstSet(currentGbufferSet);
 					descriptorWrites[i].setDstBinding(i);
@@ -228,6 +310,24 @@ namespace brassica {
 				descriptorWrites[5].setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR);
 				descriptorWrites[5].setDescriptorCount(1);
 				descriptorWrites[5].setPNext(&asInfo);
+
+				vk::DescriptorBufferInfo bufferInfo{};
+				bufferInfo.setBuffer(aabbBuffer ? aabbBuffer : dummyBuffer);
+				bufferInfo.setOffset(0);
+				bufferInfo.setRange(VK_WHOLE_SIZE);
+
+				descriptorWrites[6].setDstSet(currentGbufferSet);
+				descriptorWrites[6].setDstBinding(6);
+				descriptorWrites[6].setDstArrayElement(0);
+				descriptorWrites[6].setDescriptorType(vk::DescriptorType::eStorageBuffer);
+				descriptorWrites[6].setDescriptorCount(1);
+				descriptorWrites[6].setBufferInfo(bufferInfo);
+
+				descriptorWrites[7].setDstSet(currentGbufferSet);
+				descriptorWrites[7].setDstBinding(7);
+				descriptorWrites[7].setDstArrayElement(0);
+				descriptorWrites[7].setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
+				descriptorWrites[7].setImageInfo(imageInfos[5]);
 
 				device.updateDescriptorSets(descriptorWrites, nullptr);
 

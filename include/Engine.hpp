@@ -14,6 +14,7 @@
 #include "passes/GradientPass.hpp"
 #include "passes/MeshCubePass.hpp"
 #include "passes/TerrainPass.hpp"
+#include "passes/VolumetricLightingPass.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
 #include "terrain/AsyncTerrainUploader.hpp"
@@ -160,6 +161,8 @@ namespace brassica {
 
 		bool       windowResized{false};
 		CameraData camera{};
+		glm::mat4  prevViewProjMatrix{1.0f};
+		glm::vec3  prevCameraPosition{0.0f};
 		double     lastFrameTime{0.0};
 		double     lastMouseX{0.0};
 		double     lastMouseY{0.0};
@@ -167,10 +170,11 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		std::unique_ptr<GradientPass> gradientPass;
-		std::unique_ptr<MeshCubePass> meshCubePass;
-		std::unique_ptr<TerrainPass>  terrainPass;
-		std::unique_ptr<DeferredPass> deferredPass;
+		std::unique_ptr<GradientPass>           gradientPass;
+		std::unique_ptr<MeshCubePass>           meshCubePass;
+		std::unique_ptr<TerrainPass>            terrainPass;
+		std::unique_ptr<VolumetricLightingPass> volumetricLightingPass;
+		std::unique_ptr<DeferredPass>           deferredPass;
 
 		TerrainClipmap       terrainClipmap;
 		AsyncTerrainUploader terrainUploader;

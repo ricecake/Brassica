@@ -19,6 +19,7 @@ namespace brassica {
 		FrameGraphResource normalTarget;
 		FrameGraphResource albedoTarget;
 		FrameGraphResource depthTarget;
+		vk::Buffer         aabbBuffer{nullptr};
 	};
 
 	struct TerrainPushConstants {
@@ -60,6 +61,8 @@ namespace brassica {
 		);
 
 		vk::AccelerationStructureKHR GetTLAS() const { return tlas; }
+		vk::Buffer                   GetAABBBuffer() const { return aabbBuffer.buffer; }
+		uint32_t                     GetAABBCount() const { return static_cast<uint32_t>(lastAABBCount); }
 
 	private:
 		vk::DispatchLoaderDynamic dls;
@@ -100,6 +103,7 @@ namespace brassica {
 		vk::AccelerationStructureKHR tlas{nullptr};
 		BufferResource               scratchBuffer;
 		glm::vec3                    lastASCameraPos{1e9f, 1e9f, 1e9f};
+		size_t                       lastAABBCount{0};
 
 		void CreateGBufferTextures(vk::Extent2D extent, VmaAllocator allocator);
 		void DestroyGBufferTextures(VmaAllocator allocator);

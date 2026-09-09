@@ -150,6 +150,8 @@ namespace brassica {
 		if (aabbs.empty())
 			return;
 
+		lastAABBCount = aabbs.size();
+
 		// Ensure GPU has finished reading/using previous TLAS before destroying or updating
 		device.waitIdle();
 
@@ -187,7 +189,7 @@ namespace brassica {
 		vk::DeviceSize aabbBufferSize = sizeof(VkAabbPositionsKHR) * aabbs.size();
 		void*          aabbMapped = createBuffer(
 			aabbBufferSize,
-			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eStorageBuffer,
 			aabbBuffer,
 			true
 		);
@@ -757,7 +759,9 @@ namespace brassica {
 			}
 		);
 
-		blackboard.add<TerrainPassData>() = passData;
+		TerrainPassData passDataWithBuffer = passData;
+		passDataWithBuffer.aabbBuffer = aabbBuffer.buffer;
+		blackboard.add<TerrainPassData>() = passDataWithBuffer;
 		blackboard.add<GBufferData>() = GBufferData{
 			.positionTarget = passData.positionTarget,
 			.normalTarget = passData.normalTarget,

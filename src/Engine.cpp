@@ -220,6 +220,11 @@ namespace brassica {
 				deferredPass.reset();
 			}
 
+			if (volumetricLightingPass) {
+				volumetricLightingPass->DestroyPipeline();
+				volumetricLightingPass.reset();
+			}
+
 			if (terrainPass) {
 				terrainPass->DestroyPipeline();
 				terrainPass.reset();
@@ -334,6 +339,12 @@ namespace brassica {
 			std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
 		terrainPass =
 			std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
+		volumetricLightingPass = std::make_unique<VolumetricLightingPass>(
+			device,
+			globalSet0Layout,
+			&shaderWatcher,
+			GetPipelineCache()
+		);
 		deferredPass = std::make_unique<DeferredPass>(
 			device,
 			globalSet0Layout,
@@ -810,6 +821,35 @@ namespace brassica {
 		terrainPush.lodOffsets4_7 = offsets4_7;
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
+
+		VolumetricPushConstants volPush{};
+		volPush.invViewProj = glm::inverse(camera.viewProjMatrix);
+		volPush.prevViewProj = prevViewProjMatrix;
+		volPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
+		volPush.sunDir = glm::vec4(0.5f, 0.2f, 0.5f, 1.0f);
+		volPush.sunColor = glm::vec4(2.5f, 2.3f, 2.0f, 1.0f);
+		volPush.params0 = glm::vec4(0.8f, 1.0f, 1.0f, 1.0f);  // anisotropy, intensity, ambientScale, shadowSensitivity
+		volPush.params1 = glm::vec4(2.0f, 0.95f, 1.0f, 1.0f); // lightAccent, temporalAlpha, rayleighScale, mieScale
+		volPush.cascadeDistances = glm::vec4(20.0f, 60.0f, 200.0f, 1000.0f);
+
+		prevViewProjMatrix = camera.viewProjMatrix;
+		prevCameraPosition = camera.position;
+
+		volumetricLightingPass->RegisterPass(
+			fg,
+			blackboard,
+			globalDescriptorSets[activeFrame],
+			activeFrame,
+			nullptr,
+			nullptr,
+			terrainClipmap.GetImageView(),
+			terrainClipmap.GetSampler(),
+			terrainPass->GetTLAS(),
+			terrainPass->GetAABBBuffer(),
+			volPush,
+			allocator
+		);
+
 		deferredPass->RegisterPass(
 			fg,
 			blackboard,
@@ -819,7 +859,10 @@ namespace brassica {
 			terrainClipmap.GetImageView(),
 			terrainClipmap.GetSampler(),
 			terrainPass->GetTLAS(),
-			terrainPush
+			terrainPass->GetAABBBuffer(),
+			volumetricLightingPass->GetIntegratedImageView(),
+			terrainPush,
+			allocator
 		);
 
 		RenderContext renderCtx{.commandBuffer = frame.commandBuffer, .allocator = allocator, .device = device};
