@@ -225,6 +225,16 @@ namespace brassica {
 				terrainPass.reset();
 			}
 
+			if (atmosphereSkyPass) {
+				atmosphereSkyPass->DestroyPipeline();
+				atmosphereSkyPass.reset();
+			}
+
+			if (atmosphereLUTPass) {
+				atmosphereLUTPass->DestroyPipeline();
+				atmosphereLUTPass.reset();
+			}
+
 			terrainUploader.Cleanup();
 			terrainClipmap.Cleanup();
 
@@ -332,6 +342,14 @@ namespace brassica {
 			std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
 		gradientPass =
 			std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
+		atmosphereLUTPass = std::make_unique<AtmosphereLUTPass>(device, &shaderWatcher);
+		atmosphereSkyPass = std::make_unique<AtmosphereSkyPass>(
+			instance,
+			device,
+			globalSet0Layout,
+			&shaderWatcher,
+			GetPipelineCache()
+		);
 		terrainPass =
 			std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
 		deferredPass = std::make_unique<DeferredPass>(
@@ -345,7 +363,6 @@ namespace brassica {
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
 
-		// Async upload initial heightmaps
 		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
 			auto mapData = terrainClipmap.GenerateLevelMap(l);
 			terrainUploader.UploadLevelAsync(
@@ -453,7 +470,6 @@ namespace brassica {
 	}
 
 	bool Engine::InitVulkan() {
-		// Query maximum available Vulkan API version from the system
 		uint32_t systemVersion = VK_API_VERSION_1_0;
 		if (vk::enumerateInstanceVersion(&systemVersion) != vk::Result::eSuccess) {
 			systemVersion = VK_API_VERSION_1_0;
@@ -481,7 +497,6 @@ namespace brassica {
 			);
 		}
 
-		// 1. Instance
 		vkb::InstanceBuilder builder;
 		builder.set_app_name("Brassica")
 			.require_api_version(chosenMajor, chosenMinor, 0)
@@ -543,13 +558,11 @@ namespace brassica {
 			surface = c_surface;
 		}
 
-		// 2. Physical Device (Enable Dynamic Rendering & Sync2)
 		VkPhysicalDeviceVulkan13Features features13{};
 		features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 		features13.dynamicRendering = VK_TRUE;
 		features13.synchronization2 = VK_TRUE;
 
-		// Optional but required for bindless later:
 		VkPhysicalDeviceVulkan12Features features12{};
 		features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 		features12.descriptorIndexing = VK_TRUE;
@@ -600,7 +613,6 @@ namespace brassica {
 
 		chosenGPU = phys_ret.value().physical_device;
 
-		// 3. Logical Device
 		vkb::DeviceBuilder deviceBuilder{phys_ret.value()};
 		auto               dev_ret = deviceBuilder.build();
 		if (!dev_ret) {
@@ -613,7 +625,6 @@ namespace brassica {
 		graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
 		graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
-		// Initialize VMA
 		VmaAllocatorCreateInfo allocatorInfo{};
 		allocatorInfo.physicalDevice = chosenGPU;
 		allocatorInfo.device = device;
@@ -626,7 +637,6 @@ namespace brassica {
 			return false;
 		}
 
-		// Initialize Pipeline Cache
 		std::vector<char> pipelineCacheData;
 		std::ifstream     cacheFile("pipeline_cache.bin", std::ios::binary | std::ios::ate);
 		if (cacheFile.is_open()) {
@@ -673,8 +683,6 @@ namespace brassica {
 		while (window && !glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 
-			// Wrap the frame in an enkiTS task so the main thread remains free
-			// for OS event pumping and window resizing.
 			enki::TaskSet frameTask(1, [this](enki::TaskSetPartition range, uint32_t threadnum) { DrawFrame(); });
 
 			taskScheduler.AddTaskSetToPipe(&frameTask);
@@ -693,7 +701,6 @@ namespace brassica {
 
 		FrameData& frame = GetCurrentFrame();
 
-		// 1. Wait for GPU to finish the last time this frame context was used
 		if (frameNumber >= FRAME_OVERLAP) {
 			uint64_t              waitValue = frameNumber - FRAME_OVERLAP + 1;
 			vk::SemaphoreWaitInfo waitInfo{};
@@ -702,7 +709,6 @@ namespace brassica {
 			(void)device.waitSemaphores(waitInfo, 1000000000);
 		}
 
-		// 2. Acquire Swapchain Image
 		auto acquireResult = device.acquireNextImageKHR(vkbSwapchain.swapchain, 1000000000, frame.swapchainSemaphore);
 		if (acquireResult.result == vk::Result::eErrorOutOfDateKHR) {
 			RecreateSwapchain();
@@ -713,12 +719,10 @@ namespace brassica {
 		}
 		uint32_t swapchainImageIndex = acquireResult.value;
 
-		// 3. Record Commands
 		frame.commandBuffer.reset();
 		vk::CommandBufferBeginInfo cmdBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
 		frame.commandBuffer.begin(cmdBeginInfo);
 
-		// FrameGraph Setup and Execution
 		FrameGraph           fg;
 		FrameGraphBlackboard blackboard;
 		FrameGraphTexture2D  swapchainTexWrapper{
@@ -766,8 +770,11 @@ namespace brassica {
 		UpdateCamera(deltaTime);
 		camera.UpdateMatrices(aspect);
 
+		lightingData.time = static_cast<float>(currentTime);
+		lightingData.UpdateSunMoonFromTime(12.0f + std::fmod(lightingData.time * 0.1f, 24.0f));
+
 		FrameUBO ubo{};
-		ubo.time = static_cast<float>(currentTime);
+		ubo.time = lightingData.time;
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
 		ubo.frameIndex = frameNumber;
@@ -778,7 +785,33 @@ namespace brassica {
 			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
 		}
 
-		gradientPass->RegisterPass(fg, blackboard, extent, allocator);
+		AtmospherePushConstants atmospherePush{};
+		SkyViewPushConstants skyPush{};
+		skyPush.sunDir = lightingData.sun.direction;
+		skyPush.sunRadiance = lightingData.sun.GetRadiance();
+		skyPush.moonDir = lightingData.moon.direction;
+		skyPush.moonRadiance = lightingData.moon.GetRadiance();
+		skyPush.cameraPos = camera.position;
+		skyPush.time = lightingData.time;
+
+		atmosphereLUTPass->RegisterPass(fg, blackboard, activeFrame, atmospherePush, skyPush);
+
+		AtmosphereSkyPushConstants skyPassPush{};
+		skyPassPush.invViewProj = glm::inverse(camera.viewProjMatrix);
+		skyPassPush.cameraPosAndScale = glm::vec4(camera.position, 1.0f);
+		skyPassPush.sunDirAndAureole = glm::vec4(lightingData.sun.direction, lightingData.sunAureoleStrength);
+		skyPassPush.moonDirAndCirrus = glm::vec4(lightingData.moon.direction, lightingData.cirrusOpacity);
+		skyPassPush.sunRadianceAndSkyExp = glm::vec4(lightingData.sun.GetRadiance(), lightingData.skyExposure);
+
+		atmosphereSkyPass->RegisterPass(
+			fg,
+			blackboard,
+			extent,
+			globalDescriptorSets[activeFrame],
+			activeFrame,
+			skyPassPush,
+			allocator
+		);
 
 		terrainUploader.Poll();
 
@@ -810,6 +843,16 @@ namespace brassica {
 		terrainPush.lodOffsets4_7 = offsets4_7;
 
 		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
+
+		DeferredPushConstants deferredPush{};
+		deferredPush.viewProj = camera.viewProjMatrix;
+		deferredPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
+		deferredPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, TERRAIN_MAP_DIM);
+		deferredPush.lodOffsets0_3 = offsets0_3;
+		deferredPush.lodOffsets4_7 = offsets4_7;
+		deferredPush.sunDirAndIntensity = glm::vec4(lightingData.sun.GetLightDir(), lightingData.sun.intensity);
+		deferredPush.sunColor = glm::vec4(lightingData.sun.color, 1.0f);
+
 		deferredPass->RegisterPass(
 			fg,
 			blackboard,
@@ -819,7 +862,7 @@ namespace brassica {
 			terrainClipmap.GetImageView(),
 			terrainClipmap.GetSampler(),
 			terrainPass->GetTLAS(),
-			terrainPush
+			deferredPush
 		);
 
 		RenderContext renderCtx{.commandBuffer = frame.commandBuffer, .allocator = allocator, .device = device};
@@ -828,7 +871,6 @@ namespace brassica {
 		vk::CommandBuffer rawCmd = frame.commandBuffer;
 		fg.execute(&rawCmd, &renderCtx);
 
-		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation
 		vk::ImageMemoryBarrier2 presentBarrier{};
 		presentBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
 		presentBarrier.setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite);
@@ -845,7 +887,6 @@ namespace brassica {
 
 		frame.commandBuffer.end();
 
-		// 4. Submit to GPU (Using Vulkan 1.4 / Sync2 API)
 		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
 		cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
@@ -877,7 +918,6 @@ namespace brassica {
 
 		graphicsQueue.submit2(submitInfo, nullptr);
 
-		// 5. Present
 		vk::PresentInfoKHR presentInfo{};
 		presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
 		vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
@@ -895,7 +935,6 @@ namespace brassica {
 	}
 
 	void Engine::InitGlobalUBO() {
-		// 1. Set 0 Layout
 		vk::DescriptorSetLayoutBinding layoutBinding{};
 		layoutBinding.setBinding(0);
 		layoutBinding.setDescriptorType(vk::DescriptorType::eUniformBuffer);
@@ -906,7 +945,6 @@ namespace brassica {
 		layoutInfo.setBindings(layoutBinding);
 		globalSet0Layout = device.createDescriptorSetLayout(layoutInfo);
 
-		// 2. Descriptor Pool
 		vk::DescriptorPoolSize poolSize{};
 		poolSize.setType(vk::DescriptorType::eUniformBuffer);
 		poolSize.setDescriptorCount(FRAME_OVERLAP);
@@ -916,7 +954,6 @@ namespace brassica {
 		poolInfo.setPoolSizes(poolSize);
 		globalDescriptorPool = device.createDescriptorPool(poolInfo);
 
-		// 3. Allocate Descriptor Sets & UBO Buffers
 		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, globalSet0Layout);
 		vk::DescriptorSetAllocateInfo        allocInfo{};
 		allocInfo.setDescriptorPool(globalDescriptorPool);

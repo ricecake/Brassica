@@ -5,6 +5,7 @@
 
 #include "spdlog/spdlog.h"
 
+#include "passes/AtmosphereSkyPass.hpp"
 #include "passes/GradientPass.hpp"
 #include "passes/TerrainPass.hpp"
 #include "ShaderWatcher.hpp"
@@ -28,13 +29,6 @@ namespace brassica {
 	}
 
 	void DeferredPass::CreateDescriptorResources(vk::Device dev) {
-		// Set 1 Layout:
-		// Binding 0: Position sampler
-		// Binding 1: Normal sampler
-		// Binding 2: Albedo sampler
-		// Binding 3: Background sampler
-		// Binding 4: Terrain Clipmap Texture Array sampler
-		// Binding 5: Acceleration Structure (TLAS)
 		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
 		for (uint32_t i = 0; i < 5; ++i) {
 			bindings[i].setBinding(i);
@@ -51,7 +45,6 @@ namespace brassica {
 		layoutInfo.setBindings(bindings);
 		gbufferSetLayout = dev.createDescriptorSetLayout(layoutInfo);
 
-		// Pool
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{};
 		poolSizes[0].setType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(5 * FRAME_OVERLAP);
 		poolSizes[1].setType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1 * FRAME_OVERLAP);
@@ -62,7 +55,6 @@ namespace brassica {
 		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
 		descriptorPool = dev.createDescriptorPool(poolInfo);
 
-		// Allocate Sets
 		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, gbufferSetLayout);
 		vk::DescriptorSetAllocateInfo        allocInfo{};
 		allocInfo.setDescriptorPool(descriptorPool);
@@ -73,7 +65,6 @@ namespace brassica {
 			gbufferDescriptorSets[i] = allocatedSets[i];
 		}
 
-		// Sampler
 		vk::SamplerCreateInfo samplerInfo{};
 		samplerInfo.setMagFilter(vk::Filter::eNearest);
 		samplerInfo.setMinFilter(vk::Filter::eNearest);
@@ -119,7 +110,7 @@ namespace brassica {
 		vk::PushConstantRange                  pushConstantRange{};
 		pushConstantRange.setStageFlags(vk::ShaderStageFlagBits::eFragment);
 		pushConstantRange.setOffset(0);
-		pushConstantRange.setSize(sizeof(TerrainPushConstants));
+		pushConstantRange.setSize(sizeof(DeferredPushConstants));
 
 		storedPushConstants.assign({pushConstantRange});
 
@@ -146,11 +137,17 @@ namespace brassica {
 		vk::ImageView                clipmapImageView,
 		vk::Sampler                  clipmapSampler,
 		vk::AccelerationStructureKHR tlas,
-		const TerrainPushConstants&  pushConstants
+		const DeferredPushConstants& pushConstants
 	) {
 		const auto& gbufferData = blackboard.get<GBufferData>();
-		const auto& gradientData = blackboard.get<GradientPassData>();
 		const auto& swapchainData = blackboard.get<SwapchainData>();
+
+		FrameGraphResource bgResource;
+		if (const auto* skyData = blackboard.try_get<AtmosphereSkyPassData>()) {
+			bgResource = skyData->background;
+		} else if (const auto* gradientData = blackboard.try_get<GradientPassData>()) {
+			bgResource = gradientData->target;
+		}
 
 		const auto& passData = fg.addCallbackPass<DeferredPassData>(
 			"DeferredPass",
@@ -158,7 +155,9 @@ namespace brassica {
 				builder.read(gbufferData.positionTarget, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
 				builder.read(gbufferData.normalTarget, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
 				builder.read(gbufferData.albedoTarget, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
-				builder.read(gradientData.target, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
+				if (bgResource != FrameGraphResource{}) {
+					builder.read(bgResource, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
+				}
 
 				data.target = builder.write(swapchainData.target, static_cast<uint32_t>(TextureUsage::ColorAttachment));
 				builder.setSideEffect();
@@ -167,7 +166,7 @@ namespace brassica {
 			 extent,
 			 globalDescriptorSet,
 			 gbufferData,
-			 gradientData,
+			 bgResource,
 			 activeFrame,
 			 clipmapImageView,
 			 clipmapSampler,
@@ -178,7 +177,6 @@ namespace brassica {
 				auto& posTex = resources.get<FrameGraphTexture2D>(gbufferData.positionTarget);
 				auto& normTex = resources.get<FrameGraphTexture2D>(gbufferData.normalTarget);
 				auto& albTex = resources.get<FrameGraphTexture2D>(gbufferData.albedoTarget);
-				auto& bgTex = resources.get<FrameGraphTexture2D>(gradientData.target);
 				auto& targetTex = resources.get<FrameGraphTexture2D>(data.target);
 
 				vk::DescriptorSet currentGbufferSet = gbufferDescriptorSets[activeFrame % FRAME_OVERLAP];
@@ -196,10 +194,19 @@ namespace brassica {
 					.setSampler(sampler)
 					.setImageView(albTex.imageView)
 					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-				imageInfos[3]
-					.setSampler(sampler)
-					.setImageView(bgTex.imageView)
-					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+
+				if (bgResource != FrameGraphResource{}) {
+					auto& bgTex = resources.get<FrameGraphTexture2D>(bgResource);
+					imageInfos[3]
+						.setSampler(sampler)
+						.setImageView(bgTex.imageView)
+						.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				} else {
+					imageInfos[3]
+						.setSampler(sampler)
+						.setImageView(albTex.imageView)
+						.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+				}
 
 				vk::Sampler   clipSampler = clipmapSampler ? clipmapSampler : sampler;
 				vk::ImageView clipView = clipmapImageView ? clipmapImageView : posTex.imageView;
@@ -257,7 +264,7 @@ namespace brassica {
 					pipelineLayout,
 					vk::ShaderStageFlagBits::eFragment,
 					0,
-					sizeof(TerrainPushConstants),
+					sizeof(DeferredPushConstants),
 					&pushConstants
 				);
 

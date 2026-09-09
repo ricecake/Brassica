@@ -1,0 +1,101 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform image2D outSkyView;
+layout(set = 0, binding = 1) uniform sampler2D u_transmittanceLUT;
+layout(set = 0, binding = 2) uniform sampler2D u_multiScatteringLUT;
+
+layout(push_constant) uniform SkyViewPushConstants {
+	vec3  sunDir;
+	float time;
+	vec3  sunRadiance;
+	float worldScale;
+	vec3  moonDir;
+	float multiScatScale;
+	vec3  moonRadiance;
+	float cloudShadowIntensity;
+	vec3  cameraPos;
+	float padding;
+} u_skyView;
+
+#define ATMOSPHERE_NO_PUSH_CONSTANTS
+#include "common.glsl"
+
+vec3 getTransmittance(float r, float mu) {
+	vec2 uv = transmittanceToUV(r, mu);
+	return texture(u_transmittanceLUT, uv).rgb;
+}
+
+vec3 getMultiScattering(float r, float mu_s) {
+	vec2 uv = vec2(mu_s * 0.5 + 0.5, (r - kEarthRadius) / kAtmosphereHeight);
+	return texture(u_multiScatteringLUT, uv).rgb;
+}
+
+void main() {
+	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+	vec2  size = vec2(imageSize(outSkyView));
+	if (any(greaterThanEqual(texel, ivec2(size))))
+		return;
+
+	vec2 uv = (vec2(texel) + 0.5) / size;
+
+	float azimuth = uv.x * 2.0 * PI;
+	float adjV = (uv.y < 0.5) ? (1.0 - 2.0 * uv.y) : (2.0 * uv.y - 1.0);
+	adjV = adjV * adjV;
+	float elevation = (uv.y < 0.5) ? (-adjV * PI * 0.5) : (adjV * PI * 0.5);
+
+	vec3 rd = vec3(cos(elevation) * sin(azimuth), sin(elevation), -cos(elevation) * cos(azimuth));
+
+	float camAltKM = u_skyView.cameraPos.y / 1000.0;
+	float r = kEarthRadius + max(0.0, camAltKM);
+	vec3  ro = vec3(0, r, 0);
+
+	float t0, t1;
+	if (!intersectSphere(ro, rd, kTopRadius, t0, t1)) {
+		imageStore(outSkyView, texel, vec4(0.0));
+		return;
+	}
+
+	float t_max = t1;
+	float p0, p1;
+	bool  intersectsPlanet = intersectSphere(ro, rd, kEarthRadius, p0, p1);
+	if (intersectsPlanet && p0 > 0.0)
+		t_max = p0;
+
+	const int kSteps = 32;
+	vec3      L = vec3(0.0);
+	vec3      T = vec3(1.0);
+	float     dt = t_max / float(kSteps);
+
+	for (int i = 0; i < kSteps; ++i) {
+		float    t = (float(i) + 0.5) * dt;
+		vec3     p = ro + rd * t;
+		float    h = length(p) - kEarthRadius;
+		Sampling s = getAtmosphereProperties(h);
+
+		float cosSun = dot(normalize(p), u_skyView.sunDir);
+		vec3  Ts = getTransmittance(length(p), cosSun);
+
+		float cosThetaSun = dot(rd, u_skyView.sunDir);
+		vec3  phaseSun = s.rayleigh * rayleighPhase(cosThetaSun) + s.mie * miePhase(cosThetaSun);
+		vec3  multiScatSun = getMultiScattering(length(p), cosSun) * u_skyView.multiScatScale;
+
+		vec3 inScattered = (phaseSun * u_skyView.sunRadiance * Ts + multiScatSun * u_skyView.sunRadiance * (s.rayleigh + s.mie)) * dt;
+
+		if (length(u_skyView.moonRadiance) > 0.00001) {
+			float cosMoon = dot(normalize(p), u_skyView.moonDir);
+			vec3  Tm = getTransmittance(length(p), cosMoon);
+			float cosThetaMoon = dot(rd, u_skyView.moonDir);
+			vec3  phaseMoon = s.rayleigh * rayleighPhase(cosThetaMoon) + s.mie * miePhase(cosThetaMoon);
+			vec3  multiScatMoon = getMultiScattering(length(p), cosMoon) * u_skyView.multiScatScale;
+
+			inScattered += (phaseMoon * u_skyView.moonRadiance * Tm + multiScatMoon * u_skyView.moonRadiance * (s.rayleigh + s.mie)) * dt;
+		}
+
+		L += T * inScattered;
+		T *= exp(-s.extinction * dt);
+	}
+
+	imageStore(outSkyView, texel, vec4(L, 1.0));
+}

@@ -4,6 +4,7 @@
 const float PI = 3.14159265359;
 const float kEarthRadius = 6360.0; // km
 
+#ifndef ATMOSPHERE_NO_PUSH_CONSTANTS
 layout(push_constant) uniform AtmospherePushConstants {
 	vec3  rayleighScatteringBase;
 	float rayleighScaleHeight;
@@ -31,6 +32,20 @@ layout(push_constant) uniform AtmospherePushConstants {
 #define u_mieScale u_atmosphere.mieScale
 #define u_mieAnisotropy u_atmosphere.mieAnisotropy
 #define kAtmosphereHeight u_atmosphere.atmosphereHeight
+#else
+#define kRayleighScattering vec3(5.802e-3, 13.558e-3, 33.100e-3)
+#define kRayleighScaleHeight 8.0
+#define kOzoneAbsorption vec3(0.650e-3, 1.881e-3, 0.085e-3)
+#define kMieScaleHeight 1.2
+#define hazeColor vec3(0.6, 0.7, 0.8)
+#define kMieScattering 3.996e-3
+#define kMieExtinction 4.440e-3
+#define u_rayleighScale 1.1
+#define u_mieScale 0.35
+#define u_mieAnisotropy 0.8
+#define kAtmosphereHeight 100.0
+#endif
+
 #define kTopRadius (kEarthRadius + kAtmosphereHeight)
 
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {
