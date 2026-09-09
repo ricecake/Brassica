@@ -238,8 +238,6 @@ namespace brassica {
 				gradientPass.reset();
 			}
 
-			if (atmosphereSkyPass)
-
 			CleanupGlobalUBO();
 
 			for (int i = 0; i < FRAME_OVERLAP; i++) {
