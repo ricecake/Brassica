@@ -26,3 +26,16 @@ TEST_CASE("GlobalDescriptorPool Options") {
 	CHECK(opts.combinedImageSamplers == 2000);
 	CHECK(opts.allowUpdateAfterBind == true);
 }
+
+TEST_CASE("DescriptorLayoutOptions Binding Flags Setup") {
+	brassica::DescriptorLayoutOptions options{};
+	options.bindingIndex = 0;
+	options.type = vk::DescriptorType::eCombinedImageSampler;
+	options.count = 64;
+	options.stageFlags = vk::ShaderStageFlagBits::eFragment;
+	options.bindingFlags = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
+
+	CHECK(options.count == 64);
+	CHECK((options.bindingFlags & vk::DescriptorBindingFlagBits::ePartiallyBound) == vk::DescriptorBindingFlagBits::ePartiallyBound);
+	CHECK((options.bindingFlags & vk::DescriptorBindingFlagBits::eUpdateAfterBind) == vk::DescriptorBindingFlagBits::eUpdateAfterBind);
+}

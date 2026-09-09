@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <deque>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -378,8 +379,8 @@ namespace brassica {
 				vk::AccessFlagBits2::eTransferWrite,
 				vk::ImageLayout::eUndefined,
 				vk::ImageLayout::eTransferDstOptimal,
-				srcQueueFamilyIndex,
-				dstQueueFamilyIndex,
+				VK_QUEUE_FAMILY_IGNORED,
+				VK_QUEUE_FAMILY_IGNORED,
 				m_image,
 				vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, m_mipLevels, 0, 1)
 			);
@@ -399,12 +400,19 @@ namespace brassica {
 
 			cmdBuffer.copyBufferToImage(rawStagingBuffer, m_image, vk::ImageLayout::eTransferDstOptimal, 1, &copyRegion);
 
-			// E. Record layout barrier using Vulkan 1.3 Synchronization2: Transfer Dst -> Shader Read Only
+			// E. Record layout barrier or Release barrier using Vulkan 1.3 Synchronization2
+			bool isQueueTransfer = (srcQueueFamilyIndex != dstQueueFamilyIndex) &&
+				(srcQueueFamilyIndex != VK_QUEUE_FAMILY_IGNORED) &&
+				(dstQueueFamilyIndex != VK_QUEUE_FAMILY_IGNORED);
+
+			vk::PipelineStageFlags2 dstStage = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader;
+			vk::AccessFlags2        dstAccess = vk::AccessFlagBits2::eShaderRead;
+
 			vk::ImageMemoryBarrier2 barrierToShader(
 				vk::PipelineStageFlagBits2::eTransfer,
 				vk::AccessFlagBits2::eTransferWrite,
-				vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
-				vk::AccessFlagBits2::eShaderRead,
+				isQueueTransfer ? vk::PipelineStageFlagBits2::eNone : dstStage,
+				isQueueTransfer ? vk::AccessFlagBits2::eNone : dstAccess,
 				vk::ImageLayout::eTransferDstOptimal,
 				vk::ImageLayout::eShaderReadOnlyOptimal,
 				srcQueueFamilyIndex,
@@ -420,15 +428,37 @@ namespace brassica {
 			m_stagingQueue.push_back(StagingResource{rawStagingBuffer, stagingAllocation, completionValue});
 		}
 
+		// Records the matching Acquire barrier on the destination queue command buffer during a queue ownership transfer
+		void RecordAcquireBarrier(
+			vk::CommandBuffer dstCmdBuffer,
+			uint32_t          srcQueueFamilyIndex,
+			uint32_t          dstQueueFamilyIndex
+		) {
+			vk::ImageMemoryBarrier2 acquireBarrier(
+				vk::PipelineStageFlagBits2::eNone,
+				vk::AccessFlagBits2::eNone,
+				vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
+				vk::AccessFlagBits2::eShaderRead,
+				vk::ImageLayout::eTransferDstOptimal,
+				vk::ImageLayout::eShaderReadOnlyOptimal,
+				srcQueueFamilyIndex,
+				dstQueueFamilyIndex,
+				m_image,
+				vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, m_mipLevels, 0, 1)
+			);
+
+			vk::DependencyInfo depInfo({}, {}, {}, acquireBarrier);
+			dstCmdBuffer.pipelineBarrier2(depInfo);
+		}
+
 		// Cleans up staging resources whose completion values have been reached on GPU timeline semaphore
 		void CleanupStagingResources(uint64_t currentTimelineValue) {
-			auto it = m_stagingQueue.begin();
-			while (it != m_stagingQueue.end()) {
-				if (currentTimelineValue >= it->completionValue) {
-					vmaDestroyBuffer(m_allocator, it->buffer, it->allocation);
-					it = m_stagingQueue.erase(it);
+			while (!m_stagingQueue.empty()) {
+				if (currentTimelineValue >= m_stagingQueue.front().completionValue) {
+					vmaDestroyBuffer(m_allocator, m_stagingQueue.front().buffer, m_stagingQueue.front().allocation);
+					m_stagingQueue.pop_front();
 				} else {
-					++it;
+					break;
 				}
 			}
 		}
@@ -549,6 +579,10 @@ namespace brassica {
 		}
 
 		void Cleanup() {
+			// If in-flight transfers exist on destruction, wait for GPU completion to prevent race conditions/crashes
+			if (!m_stagingQueue.empty() && m_device) {
+				m_device.waitIdle();
+			}
 			CleanupStagingResources();
 			if (m_sampler) {
 				m_device.destroySampler(m_sampler);
@@ -565,16 +599,16 @@ namespace brassica {
 			}
 		}
 
-		vk::Device             m_device = nullptr;
-		VmaAllocator           m_allocator = nullptr;
-		vk::Image              m_image = VK_NULL_HANDLE;
-		VmaAllocation          m_allocation = nullptr;
-		vk::ImageView          m_view = nullptr;
-		vk::Sampler            m_sampler = nullptr;
-		uint32_t               m_width = 0, m_height = 0, m_depth = 1;
-		uint32_t               m_mipLevels = 1;
-		vk::Format             m_format = vk::Format::eR8G8B8A8Srgb;
-		std::vector<StagingResource> m_stagingQueue;
+		vk::Device                   m_device = nullptr;
+		VmaAllocator                 m_allocator = nullptr;
+		vk::Image                    m_image = VK_NULL_HANDLE;
+		VmaAllocation                m_allocation = nullptr;
+		vk::ImageView                m_view = nullptr;
+		vk::Sampler                  m_sampler = nullptr;
+		uint32_t                     m_width = 0, m_height = 0, m_depth = 1;
+		uint32_t                     m_mipLevels = 1;
+		vk::Format                   m_format = vk::Format::eR8G8B8A8Srgb;
+		std::deque<StagingResource>  m_stagingQueue;
 	};
 
 	using TextureResource = Texture2D;
@@ -675,14 +709,30 @@ namespace brassica {
 				nullptr
 			);
 
-			vk::DescriptorSetLayoutCreateInfo layoutInfo({}, 1, &layoutBinding);
+			vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo(1, &options.bindingFlags);
+
+			vk::DescriptorSetLayoutCreateFlags layoutFlags{};
+			if ((options.bindingFlags & vk::DescriptorBindingFlagBits::eUpdateAfterBind) == vk::DescriptorBindingFlagBits::eUpdateAfterBind) {
+				layoutFlags |= vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
+			}
+
+			vk::DescriptorSetLayoutCreateInfo layoutInfo(layoutFlags, 1, &layoutBinding);
+			if (options.bindingFlags != vk::DescriptorBindingFlags{}) {
+				layoutInfo.pNext = &bindingFlagsInfo;
+			}
+
 			m_layout = m_device.createDescriptorSetLayout(layoutInfo);
 
 			if (!m_globalPool) {
 				// Internal pool with scaled capacity for multiple descriptor sets
 				vk::DescriptorPoolSize       poolSize(options.type, options.count * 128);
+				vk::DescriptorPoolCreateFlags poolFlags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+				if ((options.bindingFlags & vk::DescriptorBindingFlagBits::eUpdateAfterBind) == vk::DescriptorBindingFlagBits::eUpdateAfterBind) {
+					poolFlags |= vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
+				}
+
 				vk::DescriptorPoolCreateInfo poolInfo(
-					vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+					poolFlags,
 					128,
 					1,
 					&poolSize
