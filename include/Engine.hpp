@@ -14,6 +14,7 @@
 #include "passes/GradientPass.hpp"
 #include "passes/MeshCubePass.hpp"
 #include "passes/TerrainPass.hpp"
+#include "passes/VolumetricLightingPass.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
 #include "terrain/AsyncTerrainUploader.hpp"
@@ -167,10 +168,11 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		std::unique_ptr<GradientPass> gradientPass;
-		std::unique_ptr<MeshCubePass> meshCubePass;
-		std::unique_ptr<TerrainPass>  terrainPass;
-		std::unique_ptr<DeferredPass> deferredPass;
+		std::unique_ptr<GradientPass>           gradientPass;
+		std::unique_ptr<MeshCubePass>           meshCubePass;
+		std::unique_ptr<TerrainPass>            terrainPass;
+		std::unique_ptr<VolumetricLightingPass> volumetricLightingPass;
+		std::unique_ptr<DeferredPass>           deferredPass;
 
 		TerrainClipmap       terrainClipmap;
 		AsyncTerrainUploader terrainUploader;

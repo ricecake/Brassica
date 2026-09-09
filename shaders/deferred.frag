@@ -18,6 +18,21 @@ layout(set = 1, binding = 3) uniform sampler2D backgroundTex;
 layout(set = 1, binding = 4) uniform sampler2DArray terrainClipmap;
 layout(set = 1, binding = 5) uniform accelerationStructureEXT topLevelAS;
 
+struct TerrainAABB {
+	float minX;
+	float minY;
+	float minZ;
+	float maxX;
+	float maxY;
+	float maxZ;
+};
+
+layout(std430, set = 1, binding = 6) readonly buffer TerrainAABBs {
+	TerrainAABB terrainAABBs[];
+};
+
+layout(set = 1, binding = 7) uniform sampler3D volumetricIntegratedTex;
+
 layout(push_constant) uniform TerrainPushConstants {
 	mat4  viewProj;
 	vec4  cameraPos;
@@ -57,14 +72,17 @@ uint calculateRayLOD(vec2 sampleXZ) {
 	return uint(clamp(lodFloat, 0.0, 7.0));
 }
 
-// Update the intersection function to use dynamic LODs
-bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
-	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
-	int numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
+// Heightmap raymarching constrained strictly within bounding box entry and exit parameters
+bool checkTerrainAABBIntersectionInRange(vec3 rayOrigin, vec3 rayDir, float tMin, float tMax, out float hitT) {
+	if (tMax <= tMin) {
+		hitT = 0.0;
+		return false;
+	}
+	float range = tMax - tMin;
+	int numSteps = int(clamp(range * 0.1, 10.0, 40.0));
 
-	float rayLength = 500.0;
-	for (int i = 1; i <= numSteps; ++i) {
-		float t = (float(i) / float(numSteps)) * rayLength;
+	for (int i = 0; i <= numSteps; ++i) {
+		float t = tMin + (float(i) / float(numSteps)) * range;
 		vec3 samplePos = rayOrigin + rayDir * t;
 
 		// Fetch the appropriate LOD for the current spatial step
@@ -147,8 +165,21 @@ void main() {
 			while (rayQueryProceedEXT(rq)) {
 				uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);
 				if (candidateType == gl_RayQueryCandidateIntersectionAABBEXT) {
+					uint primIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+					TerrainAABB box = terrainAABBs[primIdx];
+					vec3 bMin = vec3(box.minX, box.minY, box.minZ);
+					vec3 bMax = vec3(box.maxX, box.maxY, box.maxZ);
+
+					vec3 invDir = 1.0 / lightDir;
+					vec3 t0 = (bMin - rayOrigin) * invDir;
+					vec3 t1 = (bMax - rayOrigin) * invDir;
+					vec3 tNear = min(t0, t1);
+					vec3 tFar = max(t0, t1);
+					float tMin = max(max(tNear.x, tNear.y), tNear.z);
+					float tMax = min(min(tFar.x, tFar.y), tFar.z);
+
 					float hitT;
-					if (checkTerrainAABBIntersection(rayOrigin, lightDir, camDistToShaded, hitT)) {
+					if (checkTerrainAABBIntersectionInRange(rayOrigin, lightDir, max(0.0, tMin), tMax, hitT)) {
 						rayQueryGenerateIntersectionEXT(rq, hitT);
 					}
 				}
@@ -166,6 +197,17 @@ void main() {
 
 		hdrColor = ambient + diffuse;
 	}
+
+	// Volumetric Fog Integration
+	float zNear = 0.1;
+	float zFar = 32768.0;
+	float viewDepth = length(pos - params.cameraPos.xyz);
+	if (albedo.a < 0.01) {
+		viewDepth = zFar;
+	}
+	float w = clamp(log(max(viewDepth, zNear) / zNear) / log(zFar / zNear), 0.0, 1.0);
+	vec4 volSample = texture(volumetricIntegratedTex, vec3(inUV, w));
+	hdrColor = hdrColor * volSample.a + volSample.rgb;
 
 	// HDR Tonemapping & Gamma Correction
 	vec3 ldrColor = ACESFilm(hdrColor);

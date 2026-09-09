@@ -45,7 +45,10 @@ namespace brassica {
 			vk::ImageView                clipmapImageView = nullptr,
 			vk::Sampler                  clipmapSampler = nullptr,
 			vk::AccelerationStructureKHR tlas = nullptr,
-			const TerrainPushConstants&  pushConstants = {}
+			vk::Buffer                   aabbBuffer = nullptr,
+			vk::ImageView                volumetricIntegratedView = nullptr,
+			const TerrainPushConstants&  pushConstants = {},
+			VmaAllocator                 allocator = VK_NULL_HANDLE
 		);
 
 	private:
@@ -58,8 +61,16 @@ namespace brassica {
 		vk::DescriptorSet         gbufferDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 		vk::Sampler               sampler{nullptr};
 
+		vk::Buffer                dummyBuffer{nullptr};
+		VmaAllocation             dummyAllocation{VK_NULL_HANDLE};
+		vk::Image                 dummy3DImage{nullptr};
+		vk::ImageView             dummy3DView{nullptr};
+		VmaAllocation             dummy3DAllocation{VK_NULL_HANDLE};
+		VmaAllocator              lastAllocator{VK_NULL_HANDLE};
+
 		void CreateDescriptorResources(vk::Device device);
 		void CleanupDescriptorResources();
+		void EnsureDummyBuffer(VmaAllocator allocator);
 	};
 
 } // namespace brassica
