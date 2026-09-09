@@ -14,20 +14,19 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct VolumetricLightingData {
-		FrameGraphResource injectionGrid;  // 3D Texture 160x90x64
-		FrameGraphResource integratedGrid; // 3D Texture 160x90x64
+		FrameGraphResource injectionGrid;  // 3D Texture 160x90x256
+		FrameGraphResource integratedGrid; // 3D Texture 160x90x256
 	};
 
 	struct VolumetricPushConstants {
-		glm::mat4  invViewProj{1.0f};
-		glm::vec4  cameraPos{0.0f, 10.0f, 20.0f, 0.5f}; // xyz = cam pos, w = baseTexelSize
-		glm::vec4  sunDir{0.5f, 0.2f, 0.5f, 1.0f};      // xyz = dir to sun, w = sun intensity
-		glm::vec4  sunColor{2.5f, 2.3f, 2.0f, 1.0f};    // rgb = sun color/radiance
-		glm::vec4  gridDimensions{160.0f, 90.0f, 64.0f, 0.0f}; // x, y, z grid size
-		glm::vec4  clipParams{0.1f, 32768.0f, 0.0f, 0.0f}; // x = near, y = far
-		glm::uvec4 gridParams{8, 16, 2048, 1088};       // terrain lods, meshletsPerRow, etc.
-		glm::uvec4 lodOffsets0_3{0u};                   // Toroidal offsets for LOD 0-3
-		glm::uvec4 lodOffsets4_7{0u};                   // Toroidal offsets for LOD 4-7
+		glm::mat4 invViewProj{1.0f};
+		glm::mat4 prevViewProj{1.0f};
+		glm::vec4 cameraPos{0.0f, 10.0f, 20.0f, 0.5f}; // xyz = cam pos, w = baseTexelSize
+		glm::vec4 sunDir{0.5f, 0.2f, 0.5f, 1.0f};       // xyz = dir to sun, w = sun intensity
+		glm::vec4 sunColor{2.5f, 2.3f, 2.0f, 1.0f};     // rgb = sun color
+		glm::vec4 params0{0.8f, 1.0f, 1.0f, 1.0f};      // x = anisotropy (g), y = intensity, z = ambientScale, w = shadowSensitivity
+		glm::vec4 params1{2.0f, 0.95f, 1.0f, 1.0f};     // x = lightAccent, y = temporalAlpha, z = rayleighScale, w = mieScale
+		glm::vec4 cascadeDistances{20.0f, 60.0f, 200.0f, 1000.0f}; // 4 cascades
 	};
 
 	class VolumetricLightingPass: public Pass {
@@ -96,11 +95,15 @@ namespace brassica {
 		vk::ImageView integratedImageView{nullptr};
 		VmaAllocation integratedAllocation{VK_NULL_HANDLE};
 
+		// Double-buffered 3D history textures for temporal reprojection
+		vk::Image     history3DImages[2]{nullptr, nullptr};
+		vk::ImageView history3DViews[2]{nullptr, nullptr};
+		VmaAllocation history3DAllocations[2]{VK_NULL_HANDLE, VK_NULL_HANDLE};
+		uint32_t      historyIndex3D{0};
+		bool          hasHistory3D{false};
+
 		vk::Buffer    dummyBuffer{nullptr};
 		VmaAllocation dummyAllocation{VK_NULL_HANDLE};
-
-		vk::PipelineCache pipelineCache{nullptr};
-		VmaAllocator      lastAllocator{VK_NULL_HANDLE};
 
 		struct TextureResourceInternal {
 			vk::Image     image{nullptr};
@@ -108,6 +111,9 @@ namespace brassica {
 			VmaAllocation allocation{VK_NULL_HANDLE};
 		};
 		TextureResourceInternal dummy2DTex;
+
+		vk::PipelineCache pipelineCache{nullptr};
+		VmaAllocator      lastAllocator{VK_NULL_HANDLE};
 
 		void CreateDescriptorResources(vk::Device device);
 		void CleanupDescriptorResources();

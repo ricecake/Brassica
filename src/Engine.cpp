@@ -824,14 +824,16 @@ namespace brassica {
 
 		VolumetricPushConstants volPush{};
 		volPush.invViewProj = glm::inverse(camera.viewProjMatrix);
+		volPush.prevViewProj = prevViewProjMatrix;
 		volPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
 		volPush.sunDir = glm::vec4(0.5f, 0.2f, 0.5f, 1.0f);
 		volPush.sunColor = glm::vec4(2.5f, 2.3f, 2.0f, 1.0f);
-		volPush.gridDimensions = glm::vec4(160.0f, 90.0f, 64.0f, 0.0f);
-		volPush.clipParams = glm::vec4(0.1f, camera.farPlane, 0.0f, 0.0f);
-		volPush.gridParams = terrainPush.gridParams;
-		volPush.lodOffsets0_3 = terrainPush.lodOffsets0_3;
-		volPush.lodOffsets4_7 = terrainPush.lodOffsets4_7;
+		volPush.params0 = glm::vec4(0.8f, 1.0f, 1.0f, 1.0f);  // anisotropy, intensity, ambientScale, shadowSensitivity
+		volPush.params1 = glm::vec4(2.0f, 0.95f, 1.0f, 1.0f); // lightAccent, temporalAlpha, rayleighScale, mieScale
+		volPush.cascadeDistances = glm::vec4(20.0f, 60.0f, 200.0f, 1000.0f);
+
+		prevViewProjMatrix = camera.viewProjMatrix;
+		prevCameraPosition = camera.position;
 
 		volumetricLightingPass->RegisterPass(
 			fg,

@@ -37,7 +37,7 @@ namespace brassica {
 		auto create3DTex = [this, allocator](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc) {
 			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 			imageInfo.imageType = VK_IMAGE_TYPE_3D;
-			imageInfo.extent = VkExtent3D{160, 90, 64};
+			imageInfo.extent = VkExtent3D{160, 90, 256}; // 4 cascades * 64
 			imageInfo.mipLevels = 1;
 			imageInfo.arrayLayers = 1;
 			imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -65,6 +65,10 @@ namespace brassica {
 
 		create3DTex(injectionImage, injectionImageView, injectionAllocation);
 		create3DTex(integratedImage, integratedImageView, integratedAllocation);
+
+		// Double-buffered 3D history textures
+		create3DTex(history3DImages[0], history3DViews[0], history3DAllocations[0]);
+		create3DTex(history3DImages[1], history3DViews[1], history3DAllocations[1]);
 
 		// Create dummy 2D image for unbound transmittance/clipmap
 		VkImageCreateInfo img2D{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -121,6 +125,8 @@ namespace brassica {
 
 		destroyTex(injectionImage, injectionImageView, injectionAllocation);
 		destroyTex(integratedImage, integratedImageView, integratedAllocation);
+		destroyTex(history3DImages[0], history3DViews[0], history3DAllocations[0]);
+		destroyTex(history3DImages[1], history3DViews[1], history3DAllocations[1]);
 
 		if (dummy2DTex.imageView) {
 			device.destroyImageView(dummy2DTex.imageView);
@@ -145,27 +151,31 @@ namespace brassica {
 
 		// Injection Set Layout (Set 1):
 		// Binding 0: Storage Image 3D (injectionGrid)
-		// Binding 1: Combined Image Sampler 2D (transmittanceLUT)
-		// Binding 2: Combined Image Sampler 2DArray (terrainClipmap)
-		// Binding 3: Acceleration Structure (topLevelAS)
-		// Binding 4: Storage Buffer (TerrainAABBs)
-		std::array<vk::DescriptorSetLayoutBinding, 5> injBindings{};
+		// Binding 1: Combined Image Sampler 3D (uHistoryTexture)
+		// Binding 2: Combined Image Sampler 2D (transmittanceLUT)
+		// Binding 3: Combined Image Sampler 2DArray (terrainClipmap)
+		// Binding 4: Acceleration Structure (topLevelAS)
+		// Binding 5: Storage Buffer (TerrainAABBs)
+		std::array<vk::DescriptorSetLayoutBinding, 6> injBindings{};
 		injBindings[0].setBinding(0).setDescriptorType(vk::DescriptorType::eStorageImage).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
 		injBindings[1].setBinding(1).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
 		injBindings[2].setBinding(2).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
-		injBindings[3].setBinding(3).setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
-		injBindings[4].setBinding(4).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+		injBindings[3].setBinding(3).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+		injBindings[4].setBinding(4).setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+		injBindings[5].setBinding(5).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
 
 		vk::DescriptorSetLayoutCreateInfo injLayoutInfo{};
 		injLayoutInfo.setBindings(injBindings);
 		injectionSetLayout = dev.createDescriptorSetLayout(injLayoutInfo);
 
 		// Integration Set Layout (Set 1):
-		// Binding 0: Storage Image 3D (injectionGrid)
-		// Binding 1: Storage Image 3D (integratedGrid)
-		std::array<vk::DescriptorSetLayoutBinding, 2> integBindings{};
+		// Binding 0: Storage Image 3D (inInjection)
+		// Binding 1: Storage Image 3D (outScattering)
+		// Binding 2: Storage Image 3D (outHistory)
+		std::array<vk::DescriptorSetLayoutBinding, 3> integBindings{};
 		integBindings[0].setBinding(0).setDescriptorType(vk::DescriptorType::eStorageImage).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
 		integBindings[1].setBinding(1).setDescriptorType(vk::DescriptorType::eStorageImage).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+		integBindings[2].setBinding(2).setDescriptorType(vk::DescriptorType::eStorageImage).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
 
 		vk::DescriptorSetLayoutCreateInfo integLayoutInfo{};
 		integLayoutInfo.setBindings(integBindings);
@@ -173,8 +183,8 @@ namespace brassica {
 
 		// Descriptor Pool
 		std::array<vk::DescriptorPoolSize, 4> poolSizes{};
-		poolSizes[0].setType(vk::DescriptorType::eStorageImage).setDescriptorCount(3 * FRAME_OVERLAP);
-		poolSizes[1].setType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(2 * FRAME_OVERLAP);
+		poolSizes[0].setType(vk::DescriptorType::eStorageImage).setDescriptorCount(4 * FRAME_OVERLAP);
+		poolSizes[1].setType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(3 * FRAME_OVERLAP);
 		poolSizes[2].setType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1 * FRAME_OVERLAP);
 		poolSizes[3].setType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1 * FRAME_OVERLAP);
 
@@ -341,7 +351,7 @@ namespace brassica {
 			Create3DGridResources(allocator);
 		}
 
-		vk::Extent3D extent{160, 90, 64};
+		vk::Extent3D extent{160, 90, 256}; // 4 cascades * 64
 
 		FrameGraphResource importedInjection = fg.import(
 			"VolumetricInjectionGrid",
@@ -385,9 +395,17 @@ namespace brassica {
 				vk::DescriptorSet injSet = injectionDescriptorSets[activeFrame % FRAME_OVERLAP];
 				vk::DescriptorSet integSet = integrationDescriptorSets[activeFrame % FRAME_OVERLAP];
 
+				uint32_t currentHistIndex = historyIndex3D;
+				uint32_t nextHistIndex = 1 - historyIndex3D;
+
 				// Write Injection Descriptors
 				vk::DescriptorImageInfo injImageInfo{};
 				injImageInfo.setImageView(injTex.imageView).setImageLayout(vk::ImageLayout::eGeneral);
+
+				vk::DescriptorImageInfo historyReadInfo{};
+				historyReadInfo.setSampler(sampler)
+					.setImageView(history3DViews[currentHistIndex] ? history3DViews[currentHistIndex] : injTex.imageView)
+					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 
 				vk::DescriptorImageInfo transLUTInfo{};
 				transLUTInfo.setSampler(transmittanceLUTSampler ? transmittanceLUTSampler : sampler)
@@ -399,20 +417,21 @@ namespace brassica {
 					.setImageView(clipmapImageView ? clipmapImageView : dummy2DTex.imageView)
 					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 
-				std::array<vk::WriteDescriptorSet, 5> injWrites{};
+				std::array<vk::WriteDescriptorSet, 6> injWrites{};
 				injWrites[0].setDstSet(injSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageImage).setImageInfo(injImageInfo);
-				injWrites[1].setDstSet(injSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(transLUTInfo);
-				injWrites[2].setDstSet(injSet).setDstBinding(2).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(clipmapInfo);
+				injWrites[1].setDstSet(injSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(historyReadInfo);
+				injWrites[2].setDstSet(injSet).setDstBinding(2).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(transLUTInfo);
+				injWrites[3].setDstSet(injSet).setDstBinding(3).setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(clipmapInfo);
 
 				vk::WriteDescriptorSetAccelerationStructureKHR asInfo{};
 				if (tlas) {
 					asInfo.setAccelerationStructures(tlas);
 				}
-				injWrites[3].setDstSet(injSet).setDstBinding(3).setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1).setPNext(&asInfo);
+				injWrites[4].setDstSet(injSet).setDstBinding(4).setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1).setPNext(&asInfo);
 
 				vk::DescriptorBufferInfo bufferInfo{};
 				bufferInfo.setBuffer(aabbBuffer ? aabbBuffer : dummyBuffer).setOffset(0).setRange(VK_WHOLE_SIZE);
-				injWrites[4].setDstSet(injSet).setDstBinding(4).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(bufferInfo);
+				injWrites[5].setDstSet(injSet).setDstBinding(5).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(bufferInfo);
 
 				device.updateDescriptorSets(injWrites, nullptr);
 
@@ -423,20 +442,30 @@ namespace brassica {
 				vk::DescriptorImageInfo integWriteInfo{};
 				integWriteInfo.setImageView(integTex.imageView).setImageLayout(vk::ImageLayout::eGeneral);
 
-				std::array<vk::WriteDescriptorSet, 2> integWrites{};
+				vk::DescriptorImageInfo historyWriteInfo{};
+				historyWriteInfo.setImageView(history3DViews[nextHistIndex] ? history3DViews[nextHistIndex] : integTex.imageView)
+					.setImageLayout(vk::ImageLayout::eGeneral);
+
+				std::array<vk::WriteDescriptorSet, 3> integWrites{};
 				integWrites[0].setDstSet(integSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageImage).setImageInfo(injReadInfo);
 				integWrites[1].setDstSet(integSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eStorageImage).setImageInfo(integWriteInfo);
+				integWrites[2].setDstSet(integSet).setDstBinding(2).setDescriptorType(vk::DescriptorType::eStorageImage).setImageInfo(historyWriteInfo);
 
 				device.updateDescriptorSets(integWrites, nullptr);
 
-				// Dispatch Injection Pass
+				// Dispatch Injection Pass (160x90x256 grid)
 				cmd.bindPipeline(vk::PipelineBindPoint::eCompute, injectionPipeline);
 				if (globalDescriptorSet) {
 					cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, injectionPipelineLayout, 0, globalDescriptorSet, nullptr);
 				}
 				cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, injectionPipelineLayout, 1, injSet, nullptr);
-				cmd.pushConstants(injectionPipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricPushConstants), &pushConstants);
-				cmd.dispatch((160 + 7) / 8, (90 + 7) / 8, 64);
+
+				VolumetricPushConstants activePush = pushConstants;
+				if (!hasHistory3D) {
+					activePush.params1.y = 0.0f; // Disable temporal blend on first frame
+				}
+				cmd.pushConstants(injectionPipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricPushConstants), &activePush);
+				cmd.dispatch((160 + 7) / 8, (90 + 7) / 8, (256 + 3) / 4);
 
 				// Memory Barrier between Injection and Integration
 				vk::MemoryBarrier memoryBarrier{
@@ -452,14 +481,18 @@ namespace brassica {
 					nullptr
 				);
 
-				// Dispatch Integration Pass
+				// Dispatch Integration Pass (160x90 threads, 256 local threads along Z)
 				cmd.bindPipeline(vk::PipelineBindPoint::eCompute, integrationPipeline);
 				if (globalDescriptorSet) {
 					cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, integrationPipelineLayout, 0, globalDescriptorSet, nullptr);
 				}
 				cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, integrationPipelineLayout, 1, integSet, nullptr);
-				cmd.pushConstants(integrationPipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricPushConstants), &pushConstants);
-				cmd.dispatch((160 + 15) / 16, (90 + 15) / 16, 1);
+				cmd.pushConstants(integrationPipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricPushConstants), &activePush);
+				cmd.dispatch(160, 90, 1);
+
+				// Advance 3D history index
+				historyIndex3D = nextHistIndex;
+				hasHistory3D = true;
 			}
 		);
 

@@ -10,22 +10,22 @@
 #include "Shader.hpp"
 
 TEST_CASE("VolumetricPushConstants Struct Layout and Size") {
-	CHECK(sizeof(brassica::VolumetricPushConstants) == 192);
+	CHECK(sizeof(brassica::VolumetricPushConstants) == 224);
 
 	brassica::VolumetricPushConstants push{};
 	CHECK(offsetof(brassica::VolumetricPushConstants, invViewProj) == 0);
-	CHECK(offsetof(brassica::VolumetricPushConstants, cameraPos) == 64);
-	CHECK(offsetof(brassica::VolumetricPushConstants, sunDir) == 80);
-	CHECK(offsetof(brassica::VolumetricPushConstants, sunColor) == 96);
-	CHECK(offsetof(brassica::VolumetricPushConstants, gridDimensions) == 112);
-	CHECK(offsetof(brassica::VolumetricPushConstants, clipParams) == 128);
-	CHECK(offsetof(brassica::VolumetricPushConstants, gridParams) == 144);
-	CHECK(offsetof(brassica::VolumetricPushConstants, lodOffsets0_3) == 160);
-	CHECK(offsetof(brassica::VolumetricPushConstants, lodOffsets4_7) == 176);
+	CHECK(offsetof(brassica::VolumetricPushConstants, prevViewProj) == 64);
+	CHECK(offsetof(brassica::VolumetricPushConstants, cameraPos) == 128);
+	CHECK(offsetof(brassica::VolumetricPushConstants, sunDir) == 144);
+	CHECK(offsetof(brassica::VolumetricPushConstants, sunColor) == 160);
+	CHECK(offsetof(brassica::VolumetricPushConstants, params0) == 176);
+	CHECK(offsetof(brassica::VolumetricPushConstants, params1) == 192);
+	CHECK(offsetof(brassica::VolumetricPushConstants, cascadeDistances) == 208);
 
-	CHECK(push.gridDimensions.x == doctest::Approx(160.0f));
-	CHECK(push.gridDimensions.y == doctest::Approx(90.0f));
-	CHECK(push.gridDimensions.z == doctest::Approx(64.0f));
+	CHECK(push.cascadeDistances.x == doctest::Approx(20.0f));
+	CHECK(push.cascadeDistances.y == doctest::Approx(60.0f));
+	CHECK(push.cascadeDistances.z == doctest::Approx(200.0f));
+	CHECK(push.cascadeDistances.w == doctest::Approx(1000.0f));
 }
 
 TEST_CASE("Volumetric Lighting Compute Shaders Compilation") {
@@ -36,6 +36,7 @@ TEST_CASE("Volumetric Lighting Compute Shaders Compilation") {
 		std::string injSource = injShader.GetSource();
 		CHECK(injSource.find("#version 460") != std::string::npos);
 		CHECK(injSource.find("injectionGrid") != std::string::npos);
+		CHECK(injSource.find("uHistoryTexture") != std::string::npos);
 		CHECK(injSource.find("VolumetricPushConstants") != std::string::npos);
 		CHECK(injSource.find("topLevelAS") != std::string::npos);
 	}
@@ -46,9 +47,10 @@ TEST_CASE("Volumetric Lighting Compute Shaders Compilation") {
 	if (integLoaded) {
 		std::string integSource = integShader.GetSource();
 		CHECK(integSource.find("#version 460") != std::string::npos);
-		CHECK(integSource.find("injectionGrid") != std::string::npos);
-		CHECK(integSource.find("integratedGrid") != std::string::npos);
-		CHECK(integSource.find("VolumetricPushConstants") != std::string::npos);
+		CHECK(integSource.find("inInjection") != std::string::npos);
+		CHECK(integSource.find("outScattering") != std::string::npos);
+		CHECK(integSource.find("outHistory") != std::string::npos);
+		CHECK(integSource.find("Hillis-Steele") != std::string::npos);
 	}
 }
 

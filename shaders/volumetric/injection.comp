@@ -1,7 +1,7 @@
 #version 460
 #extension GL_EXT_ray_query : enable
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
 	float time;
@@ -11,9 +11,10 @@ layout(set = 0, binding = 0) uniform FrameUBO {
 } ubo;
 
 layout(rgba16f, set = 1, binding = 0) writeonly uniform image3D injectionGrid;
-layout(set = 1, binding = 1) uniform sampler2D transmittanceLUT;
-layout(set = 1, binding = 2) uniform sampler2DArray terrainClipmap;
-layout(set = 1, binding = 3) uniform accelerationStructureEXT topLevelAS;
+layout(set = 1, binding = 1) uniform sampler3D uHistoryTexture;
+layout(set = 1, binding = 2) uniform sampler2D transmittanceLUT;
+layout(set = 1, binding = 3) uniform sampler2DArray terrainClipmap;
+layout(set = 1, binding = 4) uniform accelerationStructureEXT topLevelAS;
 
 struct TerrainAABB {
 	float minX;
@@ -24,23 +25,27 @@ struct TerrainAABB {
 	float maxZ;
 };
 
-layout(std430, set = 1, binding = 4) readonly buffer TerrainAABBs {
+layout(std430, set = 1, binding = 5) readonly buffer TerrainAABBs {
 	TerrainAABB terrainAABBs[];
 };
 
 layout(push_constant) uniform VolumetricPushConstants {
 	mat4  invViewProj;
-	vec4  cameraPos;      // xyz = cam pos, w = baseTexelSize
-	vec4  sunDir;         // xyz = sun direction, w = intensity
-	vec4  sunColor;       // rgb = sun color
-	vec4  gridDimensions; // x, y, z grid size (160, 90, 64)
-	vec4  clipParams;     // x = near, y = far
-	uvec4 gridParams;     // numLODs, meshletsPerRow, totalMeshlets, textureDim
-	uvec4 lodOffsets0_3;
-	uvec4 lodOffsets4_7;
+	mat4  prevViewProj;
+	vec4  cameraPos;         // xyz = cam pos, w = baseTexelSize
+	vec4  sunDir;            // xyz = sun direction, w = intensity
+	vec4  sunColor;          // rgb = sun color
+	vec4  params0;           // x = anisotropy (g), y = intensity, z = ambientScale, w = shadowSensitivity
+	vec4  params1;           // x = lightAccent, y = temporalAlpha, z = rayleighScale, w = mieScale
+	vec4  cascadeDistances;  // 4 cascades: (20.0, 60.0, 200.0, 1000.0)
 } params;
 
-// Mie Phase function
+shared vec4 s_current[256]; // 8 * 8 * 4 local workgroup threads
+
+float rayleighPhase(float cosTheta) {
+	return (3.0 / (16.0 * 3.14159265359)) * (1.0 + cosTheta * cosTheta);
+}
+
 float miePhase(float cosTheta, float g) {
 	float g2 = g * g;
 	float num = 1.0 - g2;
@@ -49,34 +54,56 @@ float miePhase(float cosTheta, float g) {
 }
 
 void main() {
-	uvec3 gridPos = gl_GlobalInvocationID;
-	uvec3 dim = uvec3(params.gridDimensions.xyz);
-	if (gridPos.x >= dim.x || gridPos.y >= dim.y || gridPos.z >= dim.z) {
+	uvec3 vox = gl_GlobalInvocationID;
+	uvec3 gridRes = uvec3(160, 90, 256);
+	if (vox.x >= gridRes.x || vox.y >= gridRes.y || vox.z >= gridRes.z) {
 		return;
 	}
 
-	vec3 uvw = (vec3(gridPos) + vec3(0.5)) / vec3(dim);
+	uint cascade = vox.z / 64u;
+	uint sliceInCascade = vox.z % 64u;
 
-	float zNear = params.clipParams.x > 0.0 ? params.clipParams.x : 0.1;
-	float zFar = params.clipParams.y > 0.0 ? params.clipParams.y : 32768.0;
+	float cascadeDists[4] = float[4](
+		params.cascadeDistances.x,
+		params.cascadeDistances.y,
+		params.cascadeDistances.z,
+		params.cascadeDistances.w
+	);
 
-	// Exponential depth distribution
-	float viewDepth = zNear * pow(zFar / zNear, uvw.z);
+	float z_near = (cascade == 0u) ? 0.1 : cascadeDists[cascade - 1u];
+	float z_far = cascadeDists[cascade];
 
-	// Reconstruct world position from uvw and depth
-	vec2 ndc = uvw.xy * 2.0 - 1.0;
+	float sliceFrac = (float(sliceInCascade) + 0.5) / 64.0;
+	float viewDepth = z_near * pow(z_far / z_near, sliceFrac);
+
+	vec2 uv = (vec2(vox.xy) + 0.5) / vec2(gridRes.xy);
+	vec2 ndc = uv * 2.0 - 1.0;
+
 	vec4 clipPos = vec4(ndc, 0.5, 1.0);
 	vec4 worldRay = params.invViewProj * clipPos;
 	vec3 rayDir = normalize(worldRay.xyz / worldRay.w - params.cameraPos.xyz);
 	vec3 worldPos = params.cameraPos.xyz + rayDir * viewDepth;
 
 	vec3 lightDir = normalize(params.sunDir.xyz);
+	float cosTheta = dot(rayDir, lightDir);
 
-	// Light transmittance and shadowing
-	float shadow = 1.0;
-	vec3 lightColor = params.sunColor.rgb * params.sunDir.w;
+	float g = params.params0.x;
+	float intensity = params.params0.y;
+	float ambientScale = params.params0.z;
+	float shadowSensitivity = params.params0.w;
 
-	// Ray Query shadow test
+	float lightAccent = params.params1.x;
+	float temporalAlpha = params.params1.y;
+	float rayleighScale = params.params1.z;
+	float mieScale = params.params1.w;
+
+	// Rayleigh + Mie Phase functions
+	float pRayleigh = rayleighPhase(cosTheta) * rayleighScale;
+	float pMie = miePhase(cosTheta, g) * mieScale;
+	float phase = pRayleigh + pMie;
+
+	// Hardware Ray Query shadow test
+	float mainLightShadow = 1.0;
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(
 		rq,
@@ -97,15 +124,96 @@ void main() {
 	}
 
 	if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
-		shadow = 0.2;
+		mainLightShadow = 0.2; // Shadowed region
 	}
 
-	float cosTheta = dot(rayDir, lightDir);
-	float phase = miePhase(cosTheta, 0.8);
+	vec3 directRadiance = params.sunColor.rgb * params.sunDir.w * phase * mainLightShadow * lightAccent;
 
-	// In-scattered light calculation
-	vec3 inScattered = lightColor * phase * shadow + vec3(0.02, 0.04, 0.08); // Include sky ambient term
-	float extinction = 0.0005; // Uniform atmospheric extinction coefficient
+	// Ambient sky scattering
+	vec3 ambientRadiance = vec3(0.02, 0.04, 0.08) * ambientScale;
+	float ambientShadow = mix(1.0, mainLightShadow, 0.85 * clamp(shadowSensitivity, 0.0, 1.0));
+	vec3 totalRadiance = (directRadiance + ambientRadiance * ambientShadow) * intensity;
 
-	imageStore(injectionGrid, ivec3(gridPos), vec4(inScattered, extinction));
+	// Convert per-KM scattering/extinction coefficients to per-meter
+	vec3 scatteringCoeff = totalRadiance * 0.001;
+	float extinctionCoeff = 0.0005;
+
+	vec4 current_local = vec4(scatteringCoeff, extinctionCoeff);
+
+	// 3D Temporal Accumulation with Neighborhood Clamping
+	ivec3 l_id = ivec3(gl_LocalInvocationID);
+	int flat_id = int(l_id.z * 64 + l_id.y * 8 + l_id.x);
+	s_current[flat_id] = current_local;
+
+	barrier();
+
+	vec4 current = current_local;
+
+	if (temporalAlpha > 0.0) {
+		vec4 prevClip = params.prevViewProj * vec4(worldPos, 1.0);
+		if (abs(prevClip.w) > 0.0001) {
+			vec3 prevNDC = prevClip.xyz / prevClip.w;
+			if (all(greaterThanEqual(prevNDC, vec3(-1.0))) && all(lessThanEqual(prevNDC, vec3(1.0)))) {
+				vec2 prevUV = prevNDC.xy * 0.5 + 0.5;
+
+				// Map to cascade index for previous frame
+				float prevLinearZ = length(worldPos - params.cameraPos.xyz);
+				int prevCascade = -1;
+				float p_near = 0.1;
+				float p_far = 0.0;
+				for (int i = 0; i < 4; ++i) {
+					if (prevLinearZ <= cascadeDists[i]) {
+						prevCascade = i;
+						p_far = cascadeDists[i];
+						if (i > 0) p_near = cascadeDists[i - 1];
+						break;
+					}
+				}
+
+				if (prevCascade != -1 && prevLinearZ > p_near) {
+					float slice = clamp(log(prevLinearZ / p_near) / log(p_far / p_near), 0.0, 1.0);
+					float w = (float(prevCascade) + slice) / 4.0;
+
+					vec4 history = texture(uHistoryTexture, vec3(prevUV, w));
+
+					// Neighborhood clamping
+					vec4 m1 = vec4(0.0);
+					vec4 m2 = vec4(0.0);
+					int count = 0;
+
+					const ivec3 offsets[6] = ivec3[](
+						ivec3( 1, 0, 0),
+						ivec3(-1, 0, 0),
+						ivec3( 0, 1, 0),
+						ivec3( 0,-1, 0),
+						ivec3( 0, 0, 1),
+						ivec3( 0, 0,-1)
+					);
+
+					for (int i = 0; i < 6; ++i) {
+						ivec3 neighbor = l_id + offsets[i];
+						if (all(greaterThanEqual(neighbor, ivec3(0))) && all(lessThan(neighbor, ivec3(8, 8, 4)))) {
+							vec4 val = s_current[neighbor.z * 64 + neighbor.y * 8 + neighbor.x];
+							m1 += val;
+							m2 += val * val;
+							count++;
+						}
+					}
+
+					if (count > 0) {
+						vec4 mean = m1 / float(count);
+						vec4 stddev = sqrt(max(vec4(0.0), (m2 / float(count)) - (mean * mean)));
+						vec4 minColor = mean - 1.2 * stddev;
+						vec4 maxColor = mean + 1.2 * stddev;
+						history = clamp(history, minColor, maxColor);
+
+						current = mix(current, history, clamp(temporalAlpha, 0.0, 0.95));
+					}
+				}
+			}
+		}
+	}
+
+	current = clamp(current, vec4(0.0), vec4(1000.0));
+	imageStore(injectionGrid, ivec3(vox), current);
 }

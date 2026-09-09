@@ -161,6 +161,8 @@ namespace brassica {
 
 		bool       windowResized{false};
 		CameraData camera{};
+		glm::mat4  prevViewProjMatrix{1.0f};
+		glm::vec3  prevCameraPosition{0.0f};
 		double     lastFrameTime{0.0};
 		double     lastMouseX{0.0};
 		double     lastMouseY{0.0};

@@ -198,14 +198,32 @@ void main() {
 		hdrColor = ambient + diffuse;
 	}
 
-	// Volumetric Fog Integration
-	float zNear = 0.1;
-	float zFar = 32768.0;
+	// Volumetric Fog Integration across 4 Cascades
 	float viewDepth = length(pos - params.cameraPos.xyz);
 	if (albedo.a < 0.01) {
-		viewDepth = zFar;
+		viewDepth = 1000.0; // Distant background
 	}
-	float w = clamp(log(max(viewDepth, zNear) / zNear) / log(zFar / zNear), 0.0, 1.0);
+
+	float cascadeDists[4] = float[4](20.0, 60.0, 200.0, 1000.0);
+	int cascade = -1;
+	float z_near = 0.1;
+	float z_far = 1000.0;
+
+	for (int i = 0; i < 4; ++i) {
+		if (viewDepth <= cascadeDists[i]) {
+			cascade = i;
+			z_far = cascadeDists[i];
+			if (i > 0) z_near = cascadeDists[i - 1];
+			break;
+		}
+	}
+
+	float w = 1.0;
+	if (cascade != -1) {
+		float slice = clamp(log(max(viewDepth, z_near) / z_near) / log(z_far / z_near), 0.0, 1.0);
+		w = (float(cascade) + slice) / 4.0;
+	}
+
 	vec4 volSample = texture(volumetricIntegratedTex, vec3(inUV, w));
 	hdrColor = hdrColor * volSample.a + volSample.rgb;
 
