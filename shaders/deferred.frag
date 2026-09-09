@@ -18,12 +18,14 @@ layout(set = 1, binding = 3) uniform sampler2D backgroundTex;
 layout(set = 1, binding = 4) uniform sampler2DArray terrainClipmap;
 layout(set = 1, binding = 5) uniform accelerationStructureEXT topLevelAS;
 
-layout(push_constant) uniform TerrainPushConstants {
+layout(push_constant) uniform DeferredPushConstants {
 	mat4  viewProj;
 	vec4  cameraPos;
 	uvec4 gridParams;
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	vec4  sunDirAndIntensity; // xyz = lightDir (towards light), w = intensity
+	vec4  sunColor;          // rgb = light color
 } params;
 
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
@@ -42,7 +44,6 @@ vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
 	return fract(texelCoord / float(textureDim));
 }
 
-// Calculate the LOD level based on the sample's Chebyshev distance
 uint calculateRayLOD(vec2 sampleXZ) {
 	vec2 dists = abs(sampleXZ - params.cameraPos.xz);
 	float maxDist = max(dists.x, dists.y);
@@ -57,7 +58,6 @@ uint calculateRayLOD(vec2 sampleXZ) {
 	return uint(clamp(lodFloat, 0.0, 7.0));
 }
 
-// Update the intersection function to use dynamic LODs
 bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
 	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
 	int numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
@@ -67,11 +67,9 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 		float t = (float(i) / float(numSteps)) * rayLength;
 		vec3 samplePos = rayOrigin + rayDir * t;
 
-		// Fetch the appropriate LOD for the current spatial step
 		uint stepLod = calculateRayLOD(samplePos.xz);
 
 		vec2 uv = sampleToroidalUV(samplePos.xz, stepLod);
-		// Sample the specific array layer matching the LOD
 		vec4 texSample = texture(terrainClipmap, vec3(uv, float(stepLod)));
 		float terrainHeight = texSample.r;
 
@@ -84,7 +82,6 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 	return false;
 }
 
-// ACES Filmic Tone Mapping Curve
 vec3 ACESFilm(vec3 x) {
 	float a = 2.51f;
 	float b = 0.03f;
@@ -106,29 +103,29 @@ void main() {
 	if (albedo.a < 0.01) {
 		hdrColor = hdrBg;
 	} else {
-		vec3 lightDir = normalize(vec3(0.5, 0.2, 0.5));
-		vec3 lightColor = vec3(2.5, 2.3, 2.0); // High intensity HDR light source
+		vec3 lightDir = normalize(params.sunDirAndIntensity.xyz);
+		if (length(lightDir) < 0.001) {
+			lightDir = normalize(vec3(0.5, 0.2, 0.5));
+		}
+		float lightIntensity = (params.sunDirAndIntensity.w > 0.0) ? params.sunDirAndIntensity.w : 2.5;
+		vec3 lightColor = (length(params.sunColor.rgb) > 0.001) ? (params.sunColor.rgb * lightIntensity) : vec3(2.5, 2.3, 2.0);
 
 		float diff = max(dot(norm, lightDir), 0.0);
 
 		// Ray Query Shadows
 		float shadowFactor = 1.0;
 
-		// Inside main(), replace the existing rayOrigin assignment:
 		if (diff > 0.001) {
-			vec3 rayOrigin = pos + norm * 0.1; // Base offset to avoid standard self-shadowing
+			vec3 rayOrigin = pos + norm * 0.1;
 
-			// Sample the absolute highest-detail terrain height at this coordinate
 			vec2 uv0 = sampleToroidalUV(pos.xz, 0);
 			float trueHeight0 = texture(terrainClipmap, vec3(uv0, 0.0)).r;
 
-			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
 			if (rayOrigin.y < trueHeight0 + 0.1) {
 				rayOrigin.y = trueHeight0 + 0.1;
 			}
 
 			float shadowRayTMax = 1000.0;
-
 
 			rayQueryEXT rq;
 			rayQueryInitializeEXT(
@@ -155,7 +152,7 @@ void main() {
 			}
 
 			if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
-				shadowFactor = 0.2; // Shadowed region
+				shadowFactor = 0.2;
 			}
 		}
 

@@ -10,6 +10,8 @@
 
 #include "GLFW/glfw3.h"
 #include "InputHandler.hpp"
+#include "passes/AtmosphereLUTPass.hpp"
+#include "passes/AtmosphereSkyPass.hpp"
 #include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
 #include "passes/MeshCubePass.hpp"
@@ -19,6 +21,7 @@
 #include "terrain/AsyncTerrainUploader.hpp"
 #include "terrain/TerrainClipmap.hpp"
 #include "types/CameraData.hpp"
+#include "types/Light.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "vk_mem_alloc.h"
 #include "VkBootstrap.h"
@@ -56,12 +59,11 @@ namespace brassica {
 		}
 	};
 
-	// Double-buffering data to prevent CPU/GPU stalling
 	struct FrameData {
 		vk::CommandPool   commandPool;
 		vk::CommandBuffer commandBuffer;
-		vk::Semaphore     swapchainSemaphore; // Signaled when image is acquired
-		vk::Semaphore     renderSemaphore;    // Signaled when rendering finishes
+		vk::Semaphore     swapchainSemaphore;
+		vk::Semaphore     renderSemaphore;
 	};
 
 	class Engine {
@@ -104,6 +106,10 @@ namespace brassica {
 		CameraData& GetCamera() { return camera; }
 
 		const CameraData& GetCamera() const { return camera; }
+
+		GlobalLightingData& GetLightingData() { return lightingData; }
+
+		const GlobalLightingData& GetLightingData() const { return lightingData; }
 
 		void UpdateCamera(float deltaTime);
 
@@ -167,10 +173,14 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		std::unique_ptr<GradientPass> gradientPass;
-		std::unique_ptr<MeshCubePass> meshCubePass;
-		std::unique_ptr<TerrainPass>  terrainPass;
-		std::unique_ptr<DeferredPass> deferredPass;
+		std::unique_ptr<GradientPass>      gradientPass;
+		std::unique_ptr<AtmosphereLUTPass> atmosphereLUTPass;
+		std::unique_ptr<AtmosphereSkyPass> atmosphereSkyPass;
+		std::unique_ptr<MeshCubePass>      meshCubePass;
+		std::unique_ptr<TerrainPass>       terrainPass;
+		std::unique_ptr<DeferredPass>      deferredPass;
+
+		GlobalLightingData lightingData{};
 
 		TerrainClipmap       terrainClipmap;
 		AsyncTerrainUploader terrainUploader;
@@ -178,10 +188,8 @@ namespace brassica {
 		uint32_t     globalSeed{0};
 		std::mt19937 rng;
 
-		// Vulkan Memory Allocator
 		VmaAllocator allocator{VK_NULL_HANDLE};
 
-		// Global Descriptor Set 0 (FrameUBO)
 		vk::DescriptorSetLayout globalSet0Layout{nullptr};
 		vk::DescriptorPool      globalDescriptorPool{nullptr};
 		vk::Buffer              globalUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};

@@ -13,6 +13,16 @@ namespace brassica {
 
 	class ShaderWatcher;
 
+	struct DeferredPushConstants {
+		alignas(16) glm::mat4 viewProj{1.0f};
+		alignas(16) glm::vec4 cameraPos{0.0f};
+		alignas(16) glm::uvec4 gridParams{0};
+		alignas(16) glm::uvec4 lodOffsets0_3{0};
+		alignas(16) glm::uvec4 lodOffsets4_7{0};
+		alignas(16) glm::vec4 sunDirAndIntensity{0.5f, 0.2f, 0.5f, 2.5f};
+		alignas(16) glm::vec4 sunColor{1.0f, 0.95f, 0.9f, 1.0f};
+	};
+
 	struct DeferredPassData {
 		FrameGraphResource target;
 	};
@@ -45,7 +55,7 @@ namespace brassica {
 			vk::ImageView                clipmapImageView = nullptr,
 			vk::Sampler                  clipmapSampler = nullptr,
 			vk::AccelerationStructureKHR tlas = nullptr,
-			const TerrainPushConstants&  pushConstants = {}
+			const DeferredPushConstants& pushConstants = {}
 		);
 
 	private:
