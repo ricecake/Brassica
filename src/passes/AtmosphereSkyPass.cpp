@@ -126,6 +126,9 @@ namespace brassica {
 		storedSetLayouts = {globalSet0Layout, skySetLayout};
 		storedPushConstants = {pushRange};
 
+		if (!dev)
+			return;
+
 		InitRenderPipeline(
 			vk::Format::eR16G16B16A16Sfloat,
 			vk::Format::eUndefined,
@@ -197,6 +200,9 @@ namespace brassica {
 			 activeFrame,
 			 lutData,
 			 push](const FrameGraphResource& resource, FrameGraphPassResources& resources, void* ctx) {
+				if (!pipeline || !pipelineLayout)
+					return;
+
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 				auto&             bgTex = resources.get<FrameGraphTexture2D>(resource);
 

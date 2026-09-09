@@ -23,6 +23,7 @@ layout(push_constant) uniform AtmosphereSkyPushConstants {
 	vec4 sunRadianceAndSkyExp; // xyz = sunRadiance, w = skyExposure
 } push;
 
+#define ATMOSPHERE_NO_PUSH_CONSTANTS
 #include "common.glsl"
 #include "../helpers/astral.glsl"
 
