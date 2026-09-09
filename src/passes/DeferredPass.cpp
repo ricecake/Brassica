@@ -35,7 +35,8 @@ namespace brassica {
 		// Binding 3: Background sampler
 		// Binding 4: Terrain Clipmap Texture Array sampler
 		// Binding 5: Acceleration Structure (TLAS)
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		// Binding 6: Terrain AABB Storage Buffer
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		for (uint32_t i = 0; i < 5; ++i) {
 			bindings[i].setBinding(i);
 			bindings[i].setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
@@ -47,14 +48,20 @@ namespace brassica {
 		bindings[5].setDescriptorCount(1);
 		bindings[5].setStageFlags(vk::ShaderStageFlagBits::eFragment);
 
+		bindings[6].setBinding(6);
+		bindings[6].setDescriptorType(vk::DescriptorType::eStorageBuffer);
+		bindings[6].setDescriptorCount(1);
+		bindings[6].setStageFlags(vk::ShaderStageFlagBits::eFragment);
+
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		gbufferSetLayout = dev.createDescriptorSetLayout(layoutInfo);
 
 		// Pool
-		std::array<vk::DescriptorPoolSize, 2> poolSizes{};
+		std::array<vk::DescriptorPoolSize, 3> poolSizes{};
 		poolSizes[0].setType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(5 * FRAME_OVERLAP);
 		poolSizes[1].setType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1 * FRAME_OVERLAP);
+		poolSizes[2].setType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1 * FRAME_OVERLAP);
 
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setMaxSets(FRAME_OVERLAP);
@@ -146,7 +153,8 @@ namespace brassica {
 		vk::ImageView                clipmapImageView,
 		vk::Sampler                  clipmapSampler,
 		vk::AccelerationStructureKHR tlas,
-		const TerrainPushConstants&  pushConstants
+		const TerrainPushConstants&  pushConstants,
+		vk::Buffer                   aabbBuffer
 	) {
 		const auto& gbufferData = blackboard.get<GBufferData>();
 		const auto& gradientData = blackboard.get<GradientPassData>();
@@ -172,7 +180,8 @@ namespace brassica {
 			 clipmapImageView,
 			 clipmapSampler,
 			 tlas,
-			 pushConstants](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
+			 pushConstants,
+			 aabbBuffer](const DeferredPassData& data, FrameGraphPassResources& resources, void* ctx) {
 				vk::CommandBuffer cmd = *static_cast<vk::CommandBuffer*>(ctx);
 
 				auto& posTex = resources.get<FrameGraphTexture2D>(gbufferData.positionTarget);
@@ -208,7 +217,7 @@ namespace brassica {
 					.setImageView(clipView)
 					.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 
-				std::array<vk::WriteDescriptorSet, 6> descriptorWrites{};
+				std::array<vk::WriteDescriptorSet, 7> descriptorWrites{};
 				for (uint32_t i = 0; i < 5; ++i) {
 					descriptorWrites[i].setDstSet(currentGbufferSet);
 					descriptorWrites[i].setDstBinding(i);
@@ -229,7 +238,24 @@ namespace brassica {
 				descriptorWrites[5].setDescriptorCount(1);
 				descriptorWrites[5].setPNext(&asInfo);
 
-				device.updateDescriptorSets(descriptorWrites, nullptr);
+				vk::DescriptorBufferInfo aabbBufferInfo{};
+				if (aabbBuffer) {
+					aabbBufferInfo.setBuffer(aabbBuffer);
+					aabbBufferInfo.setOffset(0);
+					aabbBufferInfo.setRange(VK_WHOLE_SIZE);
+				}
+
+				descriptorWrites[6].setDstSet(currentGbufferSet);
+				descriptorWrites[6].setDstBinding(6);
+				descriptorWrites[6].setDstArrayElement(0);
+				descriptorWrites[6].setDescriptorType(vk::DescriptorType::eStorageBuffer);
+				descriptorWrites[6].setDescriptorCount(1);
+				if (aabbBuffer) {
+					descriptorWrites[6].setBufferInfo(aabbBufferInfo);
+				}
+
+				uint32_t writeCount = aabbBuffer ? 7 : 6;
+				device.updateDescriptorSets(std::span(descriptorWrites.data(), writeCount), nullptr);
 
 				vk::RenderingAttachmentInfo colorAttachment{};
 				colorAttachment.setImageView(targetTex.imageView);

@@ -183,11 +183,13 @@ namespace brassica {
 				return static_cast<void*>(nullptr);
 			};
 
+		lastAABBCount = static_cast<uint32_t>(aabbs.size());
+
 		// 1. Upload AABBs to GPU Buffer
 		vk::DeviceSize aabbBufferSize = sizeof(VkAabbPositionsKHR) * aabbs.size();
 		void*          aabbMapped = createBuffer(
 			aabbBufferSize,
-			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eStorageBuffer,
 			aabbBuffer,
 			true
 		);

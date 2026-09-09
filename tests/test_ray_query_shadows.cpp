@@ -29,6 +29,69 @@ TEST_CASE("Ray Query Terrain Shadows: AABB Resolution vs Shadow Caster Distance"
 	}
 }
 
+struct TestAABB {
+	float minX, minY, minZ;
+	float maxX, maxY, maxZ;
+};
+
+static bool testRayAABBIntersection(
+	const glm::vec3& rayOrigin,
+	const glm::vec3& rayDir,
+	const TestAABB&  box,
+	float&           tStart,
+	float&           tEnd
+) {
+	glm::vec3 boxMin(box.minX, box.minY, box.minZ);
+	glm::vec3 boxMax(box.maxX, box.maxY, box.maxZ);
+
+	glm::vec3 invDir = 1.0f / rayDir;
+	glm::vec3 t0 = (boxMin - rayOrigin) * invDir;
+	glm::vec3 t1 = (boxMax - rayOrigin) * invDir;
+
+	glm::vec3 tMinVec = glm::min(t0, t1);
+	glm::vec3 tMaxVec = glm::max(t0, t1);
+
+	float tNear = std::max(std::max(tMinVec.x, tMinVec.y), tMinVec.z);
+	float tFar = std::min(std::min(tMaxVec.x, tMaxVec.y), tMaxVec.z);
+
+	if (tFar < std::max(tNear, 0.0f)) {
+		return false;
+	}
+
+	tStart = std::max(tNear, 0.0f);
+	tEnd = tFar;
+	return (tEnd - tStart) > 0.0001f;
+}
+
+TEST_CASE("Ray Query Terrain Shadows: Candidate AABB Ray Bounding") {
+	TestAABB box{-16.0f, -500.0f, -16.0f, 16.0f, 2000.0f, 16.0f};
+
+	glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 0.2f, 0.5f));
+
+	// Ray originating outside box pointing through it
+	glm::vec3 rayOriginOutside(-30.0f, 10.0f, -30.0f);
+	float     tStart = 0.0f, tEnd = 0.0f;
+	bool      hitOutside = testRayAABBIntersection(rayOriginOutside, lightDir, box, tStart, tEnd);
+
+	CHECK(hitOutside);
+	CHECK(tStart > 0.0f);
+	CHECK(tEnd > tStart);
+
+	// Ray originating inside box
+	glm::vec3 rayOriginInside(0.0f, 10.0f, 0.0f);
+	bool      hitInside = testRayAABBIntersection(rayOriginInside, lightDir, box, tStart, tEnd);
+
+	CHECK(hitInside);
+	CHECK(tStart == doctest::Approx(0.0f));
+	CHECK(tEnd > 0.0f);
+
+	// Ray missing box completely
+	glm::vec3 rayOriginMiss(100.0f, 10.0f, 100.0f);
+	bool      hitMiss = testRayAABBIntersection(rayOriginMiss, lightDir, box, tStart, tEnd);
+
+	CHECK_FALSE(hitMiss);
+}
+
 TEST_CASE("Ray Query Terrain Shadows: Heightmap Traversal Precision vs Camera Distance") {
 	auto calculateStepSize = [](float camDistToShaded) {
 		return std::clamp(camDistToShaded * 0.01f, 0.5f, 4.0f);
