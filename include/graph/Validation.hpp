@@ -95,8 +95,7 @@ namespace brassica::graph {
 			sizeof...(Missing) == 0,
 			"frame is not renderable; see instantiation notes below for the missing keys"
 		);
-		static constexpr bool ok =
-			(..., (sizeof...(Missing) == 0 || (RESOURCE_IS_NOT_PRODUCED_BY_ANY_NODE<Missing>{}, false)), true);
+		static constexpr bool ok = sizeof...(Missing) == 0;
 	};
 #endif
 
