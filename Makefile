@@ -44,7 +44,9 @@ clean:
 graph-test:
 	@mkdir -p $(BUILD_DIR)/bin
 	@$(CXX) $(GRAPH_CXXFLAGS) -o $(BUILD_DIR)/bin/test_graph tests/graph/test_graph.cpp
+	@$(CXX) $(GRAPH_CXXFLAGS) -o $(BUILD_DIR)/bin/test_physical_backend tests/graph/test_physical_backend.cpp
 	@$(BUILD_DIR)/bin/test_graph
+	@$(BUILD_DIR)/bin/test_physical_backend
 
 # Compile-time assertions only, no link/run step. Fastest inner loop while iterating on the
 # declaration/validation layers.

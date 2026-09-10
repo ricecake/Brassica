@@ -142,10 +142,17 @@ namespace brassica::graph {
 			}
 		}
 
-		[[nodiscard]] const Schedule& GetSchedule() const { return m_schedule; }
+		// Executes a single scheduled node by index, bracketed by nothing itself -- callers
+		// that need to interleave per-node work (barrier flushes, dynamic-rendering begin/end)
+		// use this instead of the batch Execute() above.
+		void ExecuteNode(std::size_t index, CommandBuffer& cmd) {
+			if (index < m_nodes.size()) {
+				m_nodes[index].Execute(cmd);
+			}
+		}
 
-		[[nodiscard]] std::span<const Recipe> Recipes() const { return m_recipes; }
-
+		[[nodiscard]] const Schedule&             GetSchedule() const { return m_schedule; }
+		[[nodiscard]] std::span<const Recipe>     Recipes() const { return m_recipes; }
 		[[nodiscard]] std::span<const NodeHandle> Nodes() const { return m_nodes; }
 
 	private:
