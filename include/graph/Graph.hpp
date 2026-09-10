@@ -151,8 +151,10 @@ namespace brassica::graph {
 			}
 		}
 
-		[[nodiscard]] const Schedule&             GetSchedule() const { return m_schedule; }
-		[[nodiscard]] std::span<const Recipe>     Recipes() const { return m_recipes; }
+		[[nodiscard]] const Schedule& GetSchedule() const { return m_schedule; }
+
+		[[nodiscard]] std::span<const Recipe> Recipes() const { return m_recipes; }
+
 		[[nodiscard]] std::span<const NodeHandle> Nodes() const { return m_nodes; }
 
 	private:

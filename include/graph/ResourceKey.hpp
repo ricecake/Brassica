@@ -103,7 +103,8 @@ namespace brassica::graph {
 	} // namespace detail
 
 	inline constexpr bool kTypeNameParseIsSane = TypeName<detail::TypeNameProbe>() ==
-		"brassica::graph::detail::TypeNameProbe" || TypeName<detail::TypeNameProbe>() == "detail::TypeNameProbe";
+			"brassica::graph::detail::TypeNameProbe" ||
+		TypeName<detail::TypeNameProbe>() == "detail::TypeNameProbe";
 
 	static_assert(kTypeNameParseIsSane, "TypeName() parse is out of sync with this compiler's function_name() format");
 

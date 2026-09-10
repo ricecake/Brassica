@@ -42,7 +42,7 @@ namespace brassica::graph {
 				VkFormat format = static_cast<VkFormat>(tex->desc.formatCode);
 				bool     isDepth =
 					(format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D24_UNORM_S8_UINT ||
-				     format == VK_FORMAT_D16_UNORM);
+					 format == VK_FORMAT_D16_UNORM);
 
 				if (isDepth) {
 					depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;

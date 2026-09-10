@@ -12,11 +12,8 @@ namespace brassica::graph {
 	public:
 		// Translates abstract MemoryBarrier items from a BarrierBatch into concrete
 		// VkImageMemoryBarrier2 / VkBufferMemoryBarrier2 and issues vkCmdPipelineBarrier2.
-		static void TranslateAndDispatch(
-			VkCommandBuffer                 cmd,
-			const PhysicalResourceRegistry& registry,
-			const BarrierBatch&             batch
-		) {
+		static void
+		TranslateAndDispatch(VkCommandBuffer cmd, const PhysicalResourceRegistry& registry, const BarrierBatch& batch) {
 			if (batch.Empty() || cmd == VK_NULL_HANDLE) {
 				return;
 			}
@@ -43,8 +40,9 @@ namespace brassica::graph {
 					imb.image = tex->image;
 
 					VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-					VkFormat format = static_cast<VkFormat>(tex->desc.formatCode);
-					if (format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D16_UNORM) {
+					VkFormat           format = static_cast<VkFormat>(tex->desc.formatCode);
+					if (format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D24_UNORM_S8_UINT ||
+					    format == VK_FORMAT_D16_UNORM) {
 						aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
 					}
 
@@ -82,7 +80,7 @@ namespace brassica::graph {
 				return;
 			}
 
-#if defined(VK_VERSION_1_3) || defined(VK_KHR_dynamic_rendering)
+	#if defined(VK_VERSION_1_3) || defined(VK_KHR_dynamic_rendering)
 			VkDependencyInfo depInfo{};
 			depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
 			depInfo.imageMemoryBarrierCount = static_cast<uint32_t>(imageBarriers.size());
@@ -91,12 +89,13 @@ namespace brassica::graph {
 			depInfo.pBufferMemoryBarriers = bufferBarriers.data();
 
 			// Function pointer resolution if needed or standard call
-			PFN_vkCmdPipelineBarrier2 pfnCmdPipelineBarrier2 =
-				reinterpret_cast<PFN_vkCmdPipelineBarrier2>(vkGetDeviceProcAddr(nullptr, "vkCmdPipelineBarrier2"));
+			PFN_vkCmdPipelineBarrier2 pfnCmdPipelineBarrier2 = reinterpret_cast<PFN_vkCmdPipelineBarrier2>(
+				vkGetDeviceProcAddr(nullptr, "vkCmdPipelineBarrier2")
+			);
 			if (pfnCmdPipelineBarrier2) {
 				pfnCmdPipelineBarrier2(cmd, &depInfo);
 			}
-#endif
+	#endif
 #else
 			(void)registry;
 #endif

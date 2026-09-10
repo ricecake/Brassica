@@ -162,7 +162,7 @@ namespace brassica::graph {
 				}
 
 				out << DotId(nodePath) << " [label=\"" << Escape(desc.name) << "\", shape=" << ShapeFor(desc.kind)
-					<< ", style=filled, fillcolor=" << FillColorFor(desc.kind) << "];\n";
+				    << ", style=filled, fillcolor=" << FillColorFor(desc.kind) << "];\n";
 			}
 
 			// Resource-flow edges: one per (producer, consumer, key) touching this graph's own
@@ -212,8 +212,8 @@ namespace brassica::graph {
 						EdgeStyle edgeStyle = StyleFor(key, producerDomain, consumerDomain);
 
 						out << DotId(producerPath) << " -> " << DotId(consumerPath) << " [label=\""
-							<< Escape(edgeStyle.label) << "\", color=" << edgeStyle.color
-							<< ", style=" << edgeStyle.style << "];\n";
+						    << Escape(edgeStyle.label) << "\", color=" << edgeStyle.color
+						    << ", style=" << edgeStyle.style << "];\n";
 					}
 				}
 			}
@@ -244,8 +244,8 @@ namespace brassica::graph {
 						nextPath.push_back(next);
 
 						out << DotId(prevPath) << " -> " << DotId(nextPath) << " [label=\""
-							<< Escape(historyKey->historyTarget->name)
-							<< "\", color=purple, style=dotted, penwidth=2, constraint=false];\n";
+						    << Escape(historyKey->historyTarget->name)
+						    << "\", color=purple, style=dotted, penwidth=2, constraint=false];\n";
 					}
 				}
 			}
