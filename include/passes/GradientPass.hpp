@@ -2,20 +2,16 @@
 
 #include "vulkan/vulkan.hpp"
 
-#include "fg/Blackboard.hpp"
-#include "fg/FrameGraph.hpp"
+#include "graph/Declaration.hpp"
+#include "graph/Execution.hpp"
+#include "graph/PhysicalResource.hpp"
 #include "passes/RenderPass.hpp"
-#include "passes/RenderResources.hpp"
+#include "passes/ResourceKeys.hpp"
 #include "Shader.hpp"
-#include "vk_mem_alloc.h"
 
 namespace brassica {
 
 	class ShaderWatcher;
-
-	struct GradientPassData {
-		FrameGraphResource target;
-	};
 
 	class GradientPass: public RenderPass {
 	public:
@@ -34,24 +30,39 @@ namespace brassica {
 			vk::PipelineCache pCache = nullptr
 		);
 
-		FrameGraphResource RegisterPass(
-			FrameGraph&           fg,
-			FrameGraphBlackboard& blackboard,
-			vk::Extent2D          extent,
-			VmaAllocator          allocator = VK_NULL_HANDLE
-		);
-
 	private:
 		VertexShader   vertShader;
 		FragmentShader fragShader;
+	};
 
-		VmaAllocator  lastAllocator{VK_NULL_HANDLE};
-		vk::Extent2D  currentExtent{0, 0};
-		vk::Image     bgImage{nullptr};
-		vk::ImageView bgImageView{nullptr};
-		VmaAllocation bgAllocation{VK_NULL_HANDLE};
+	// Registry-managed replacement for the old manual bgImage/bgImageView/currentExtent
+	// reallocation-on-resize logic in RegisterPass -- the registry now owns that texture's
+	// lifetime and reuses it across frames automatically whenever its desc doesn't change
+	// (PhysicalResourceRegistry::ProvisionTexture's desc-match early return).
+	struct GradientNode {
+		using Resources = graph::Declares<graph::Create<GradientBackground>>;
 
-		void DestroyTextureResource(VmaAllocator allocator);
+		GradientPass* pass;
+
+		graph::Recipe Setup(const graph::FrameContext& ctx) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GradientBackground>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			return r;
+		}
+
+		void Execute(graph::CommandBuffer& cmd) {
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(cmd.vkCmd));
+			pass->BindForDraw(vkCmd, extent);
+			vkCmd.draw(3, 1, 0, 0);
+		}
+
+		vk::Extent2D extent;
 	};
 
 } // namespace brassica

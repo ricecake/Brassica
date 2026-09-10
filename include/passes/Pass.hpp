@@ -6,8 +6,6 @@
 
 #include "vulkan/vulkan.hpp"
 
-#include "fg/Blackboard.hpp"
-#include "fg/FrameGraph.hpp"
 #include "passes/PassResource.hpp"
 
 namespace brassica {

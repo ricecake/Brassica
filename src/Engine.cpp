@@ -6,7 +6,7 @@
 
 #include "spdlog/spdlog.h"
 
-#include "fg/Blackboard.hpp"
+#include "graph/PhysicalExecutionBackend.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace brassica {
@@ -173,7 +173,6 @@ namespace brassica {
 		swapchainImageViews.assign(raw_image_views.begin(), raw_image_views.end());
 
 		windowResized = false;
-		fgCacheState.Invalidate();
 	}
 
 	void Engine::InitCommands() {
@@ -215,6 +214,11 @@ namespace brassica {
 
 			shaderWatcher.StopWatching();
 
+			// Must run before vmaDestroyAllocator/device.destroy() below -- PhysicalTexture's
+			// destructor calls device.destroyImageView and vmaDestroyImage on whatever the
+			// registry still owns (G-buffer textures, the gradient background, ...).
+			physicalRegistry.Reset();
+
 			if (deferredPass) {
 				deferredPass->DestroyPipeline();
 				deferredPass.reset();
@@ -227,11 +231,6 @@ namespace brassica {
 
 			terrainUploader.Cleanup();
 			terrainClipmap.Cleanup();
-
-			if (meshCubePass) {
-				meshCubePass->DestroyPipeline();
-				meshCubePass.reset();
-			}
 
 			if (gradientPass) {
 				gradientPass->DestroyPipeline();
@@ -328,8 +327,6 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		meshCubePass =
-			std::make_unique<MeshCubePass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
 		gradientPass =
 			std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
 		terrainPass =
@@ -626,6 +623,8 @@ namespace brassica {
 			return false;
 		}
 
+		physicalRegistry.SetDeviceAndAllocator(device, allocator);
+
 		// Initialize Pipeline Cache
 		std::vector<char> pipelineCacheData;
 		std::ifstream     cacheFile("pipeline_cache.bin", std::ios::binary | std::ios::ate);
@@ -687,9 +686,7 @@ namespace brassica {
 			RecreateSwapchain();
 		}
 
-		if (shaderWatcher.ProcessPendingReloads(device)) {
-			fgCacheState.Invalidate();
-		}
+		shaderWatcher.ProcessPendingReloads(device);
 
 		FrameData& frame = GetCurrentFrame();
 
@@ -718,36 +715,18 @@ namespace brassica {
 		vk::CommandBufferBeginInfo cmdBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
 		frame.commandBuffer.begin(cmdBeginInfo);
 
-		// FrameGraph Setup and Execution
-		FrameGraph           fg;
-		FrameGraphBlackboard blackboard;
-		FrameGraphTexture2D  swapchainTexWrapper{
-			swapchainImages[swapchainImageIndex],
-			swapchainImageViews[swapchainImageIndex]
-		};
-
 		vk::Extent2D extent{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
 		vk::Format   format = GetSwapchainFormat();
 
-		FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(swapchainTexWrapper));
-		blackboard.add<SwapchainData>() = SwapchainData{.target = swapchainRes};
-
-		if (fgCacheState.cachedExtent != extent || fgCacheState.cachedFormat != format ||
-		    fgCacheState.cachedClipmapView != terrainClipmap.GetImageView() ||
-		    fgCacheState.cachedClipmapSampler != terrainClipmap.GetSampler() ||
-		    fgCacheState.cachedTLAS != terrainPass->GetTLAS()) {
-			fgCacheState.Invalidate();
-		}
-
-		if (fgCacheState.isDirty) {
-			spdlog::debug("FrameGraph graph cache invalidated; updating cached configuration.");
-			fgCacheState.cachedExtent = extent;
-			fgCacheState.cachedFormat = format;
-			fgCacheState.cachedClipmapView = terrainClipmap.GetImageView();
-			fgCacheState.cachedClipmapSampler = terrainClipmap.GetSampler();
-			fgCacheState.cachedTLAS = terrainPass->GetTLAS();
-			fgCacheState.isDirty = false;
-		}
+		// Re-imported fresh every frame: a freshly constructed PhysicalTexture always starts
+		// {eUndefined, hasDefinedContents=false}, which is correct here -- DeferredNode's
+		// Modify<Swapchain> fully overwrites every pixel via a fullscreen triangle, so there is
+		// nothing worth preserving from whatever the driver left behind after the last present.
+		physicalRegistry.RegisterImportedTexture<Swapchain>(
+			swapchainImages[swapchainImageIndex],
+			swapchainImageViews[swapchainImageIndex],
+			graph::ColorAttachmentDesc(extent.width, extent.height, format)
+		);
 
 		uint32_t activeFrame = frameNumber % FRAME_OVERLAP;
 
@@ -778,8 +757,6 @@ namespace brassica {
 			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
 		}
 
-		gradientPass->RegisterPass(fg, blackboard, extent, allocator);
-
 		terrainUploader.Poll();
 
 		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
@@ -809,32 +786,101 @@ namespace brassica {
 		terrainPush.lodOffsets0_3 = offsets0_3;
 		terrainPush.lodOffsets4_7 = offsets4_7;
 
-		terrainPass->RegisterPass(fg, blackboard, extent, globalDescriptorSets[activeFrame], terrainPush, allocator);
-		deferredPass->RegisterPass(
-			fg,
-			blackboard,
-			extent,
-			globalDescriptorSets[activeFrame],
-			activeFrame,
-			terrainClipmap.GetImageView(),
-			terrainClipmap.GetSampler(),
-			terrainPass->GetTLAS(),
-			terrainPush
+		// TLAS build stays fully out-of-band: its own transient command pool/queue, its own
+		// camera-movement throttle, its own synchronous device.waitIdle() -- unchanged from
+		// before this migration. Only the *result* flows into the graph, registered just like
+		// the swapchain above. See the AccelerationStructure resource-kind plan for why moving
+		// the build itself into the graph's command buffer was rejected (a real use-after-free
+		// risk against frames still in flight).
+		terrainPass->BuildOrUpdateAccelerationStructure(
+			allocator,
+			glm::vec3(terrainPush.cameraPos),
+			terrainPush.cameraPos.w,
+			terrainPush.gridParams.x
 		);
+		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainPass->GetTLAS());
 
-		RenderContext renderCtx{.commandBuffer = frame.commandBuffer, .allocator = allocator, .device = device};
+		graph::Graph frameGraph;
+		frameGraph.Register<GradientNode>(GradientNode{.pass = gradientPass.get(), .extent = extent});
+		frameGraph.Register<TerrainNode>(TerrainNode{
+			.pass = terrainPass.get(),
+			.extent = extent,
+			.globalDescriptorSet = globalDescriptorSets[activeFrame],
+			.pushConstants = terrainPush,
+		});
+		frameGraph.Register<DeferredNode>(DeferredNode{
+			.pass = deferredPass.get(),
+			.registry = &physicalRegistry,
+			.extent = extent,
+			.swapchainFormat = format,
+			.globalDescriptorSet = globalDescriptorSets[activeFrame],
+			.activeFrame = activeFrame,
+			.clipmapImageView = terrainClipmap.GetImageView(),
+			.clipmapSampler = terrainClipmap.GetSampler(),
+			.pushConstants = terrainPush,
+		});
 
-		fg.compile();
-		vk::CommandBuffer rawCmd = frame.commandBuffer;
-		fg.execute(&rawCmd, &renderCtx);
+		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
+		graph::PhysicalExecutionBackend backend(physicalRegistry);
+		graph::CommandBuffer            graphCmd{static_cast<void*>(static_cast<VkCommandBuffer>(frame.commandBuffer))};
 
-		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation
+		try {
+			backend.Execute(frameGraph, ctx, graphCmd, true);
+		} catch (const std::exception& e) {
+			spdlog::error("Frame graph execution failed: {}", e.what());
+			frame.commandBuffer.end();
+
+			// backend.Execute throws before recording anything into frame.commandBuffer
+			// (Provision, which is where this can fail, runs before the command buffer is ever
+			// touched) -- so this is submitting an empty but valid begin/end pair, purely to
+			// consume frame.swapchainSemaphore's signal from the acquire above. Skipping the
+			// submit entirely would leave that semaphore signaled, and the next time this frame
+			// slot's semaphore is reused for acquireNextImageKHR (FRAME_OVERLAP frames from now),
+			// the validation layer correctly flags "Semaphore must not be currently signaled".
+			// presentKHR is skipped on purpose: the swapchain image's layout was never
+			// transitioned to ePresentSrcKHR (the graph never ran), so presenting it now would be
+			// invalid -- this frame is simply dropped, not shown with stale/undefined content.
+			vk::CommandBufferSubmitInfo cmdSubmitInfo{};
+			cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
+
+			vk::SemaphoreSubmitInfo waitInfo{};
+			waitInfo.setSemaphore(frame.swapchainSemaphore);
+			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+
+			vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
+			frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
+			frameTimelineSignalInfo.setValue(frameNumber + 1);
+			frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+
+			vk::SubmitInfo2 recoverySubmitInfo{};
+			recoverySubmitInfo.setWaitSemaphoreInfos(waitInfo);
+			recoverySubmitInfo.setSignalSemaphoreInfos(frameTimelineSignalInfo);
+			recoverySubmitInfo.setCommandBufferInfos(cmdSubmitInfo);
+			graphicsQueue.submit2(recoverySubmitInfo, nullptr);
+
+			frameNumber++;
+			return;
+		}
+
+		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
+		// srcStage/srcAccess now come from the registry's tracked state rather than being
+		// hardcoded -- DeferredNode's Modify<Swapchain> always leaves it at exactly
+		// {eColorAttachmentOptimal, eColorAttachmentOutput, eColorAttachmentWrite|Read} today
+		// (see tests/test_resource_state.cpp's swapchain-chain case), but reading it instead of
+		// assuming it means this stays correct the day a different node becomes the last writer.
+		auto                    swapchainTex = physicalRegistry.GetTexture<Swapchain>();
 		vk::ImageMemoryBarrier2 presentBarrier{};
-		presentBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-		presentBarrier.setSrcAccessMask(vk::AccessFlagBits2::eColorAttachmentWrite);
+		presentBarrier.setSrcStageMask(
+			swapchainTex ? swapchainTex->GetLastStage() : vk::PipelineStageFlagBits2::eColorAttachmentOutput
+		);
+		presentBarrier.setSrcAccessMask(
+			swapchainTex ? swapchainTex->GetLastAccess() : vk::AccessFlagBits2::eColorAttachmentWrite
+		);
 		presentBarrier.setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe);
 		presentBarrier.setDstAccessMask(vk::AccessFlagBits2::eNone);
-		presentBarrier.setOldLayout(vk::ImageLayout::eColorAttachmentOptimal);
+		presentBarrier.setOldLayout(
+			swapchainTex ? swapchainTex->GetCurrentLayout() : vk::ImageLayout::eColorAttachmentOptimal
+		);
 		presentBarrier.setNewLayout(vk::ImageLayout::ePresentSrcKHR);
 		presentBarrier.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 		presentBarrier.setImage(swapchainImages[swapchainImageIndex]);

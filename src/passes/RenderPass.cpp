@@ -218,15 +218,38 @@ namespace brassica {
 		buildPipeline();
 	}
 
+	void RenderPass::BindForDraw(vk::CommandBuffer cmd, vk::Extent2D extent) const {
+		if (pipeline) {
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+		}
+
+		vk::Viewport
+			viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
+		cmd.setViewport(0, viewport);
+
+		vk::Rect2D scissor{{0, 0}, extent};
+		cmd.setScissor(0, scissor);
+	}
+
 	void RenderPass::DrawMeshTasksIndirectEXT(
-		vk::CommandBuffer                cmd,
-		vk::Buffer                       buffer,
-		vk::DeviceSize                   offset,
-		uint32_t                         drawCount,
-		uint32_t                         stride,
-		const vk::DispatchLoaderDynamic& dls
+		vk::CommandBuffer            cmd,
+		vk::Buffer                   buffer,
+		vk::DeviceSize               offset,
+		uint32_t                     drawCount,
+		uint32_t                     stride,
+		const DispatchLoaderDynamic& dls
 	) const {
 		cmd.drawMeshTasksIndirectEXT(buffer, offset, drawCount, stride, dls);
+	}
+
+	void RenderPass::DrawMeshTasksEXT(
+		vk::CommandBuffer            cmd,
+		uint32_t                     groupCountX,
+		uint32_t                     groupCountY,
+		uint32_t                     groupCountZ,
+		const DispatchLoaderDynamic& dls
+	) const {
+		cmd.drawMeshTasksEXT(groupCountX, groupCountY, groupCountZ, dls);
 	}
 
 	void RenderPass::DrawIndexedIndirect(
@@ -247,38 +270,6 @@ namespace brassica {
 		uint32_t          stride
 	) const {
 		cmd.drawIndirect(buffer, offset, drawCount, stride);
-	}
-
-	void RenderPass::BeginRendering(
-		vk::CommandBuffer                            cmd,
-		vk::Extent2D                                 extent,
-		std::span<const vk::RenderingAttachmentInfo> colorAttachments,
-		const vk::RenderingAttachmentInfo*           depthAttachment
-	) const {
-		vk::RenderingInfo renderingInfo{};
-		renderingInfo.setRenderArea(vk::Rect2D({0, 0}, extent));
-		renderingInfo.setLayerCount(1);
-		renderingInfo.setColorAttachments(colorAttachments);
-		if (depthAttachment) {
-			renderingInfo.setPDepthAttachment(depthAttachment);
-		}
-
-		cmd.beginRendering(renderingInfo);
-
-		if (pipeline) {
-			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
-		}
-
-		vk::Viewport
-			viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-		cmd.setViewport(0, viewport);
-
-		vk::Rect2D scissor{{0, 0}, extent};
-		cmd.setScissor(0, scissor);
-	}
-
-	void RenderPass::EndRendering(vk::CommandBuffer cmd) const {
-		cmd.endRendering();
 	}
 
 } // namespace brassica

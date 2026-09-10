@@ -1,145 +1,97 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
-#include "fg/Blackboard.hpp"
-#include "fg/FrameGraph.hpp"
-#include "passes/ComputeTestPass.hpp"
+#include "Engine.hpp"
+#include "graph/Graph.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
-#include "passes/MeshCubePass.hpp"
-#include "passes/PassResource.hpp"
-#include "passes/RenderResources.hpp"
+#include "passes/TerrainPass.hpp"
 
 using namespace brassica;
 
-TEST_CASE("RenderGraph Blackboard resource passing and generic pass subtypes") {
-	FrameGraph           fg;
-	FrameGraphBlackboard blackboard;
+// Real GradientNode/TerrainNode/DeferredNode registered into a real graph::Graph -- genuine
+// integration coverage the old fg::-based version of this test never had (it exercised
+// hand-written MockGradientPass/MockGBufferPass/MockDeferredPass lambdas, never the real pass
+// classes). Gated on a real headless device, same pattern as
+// tests/test_headless.cpp/test_physical_backend.cpp, since TerrainPass/DeferredPass build real
+// Vulkan pipelines (and TerrainPass compiles real mesh/task shaders) in their constructors.
+//
+// Only Setup()+Compile() are exercised here, matching the old test's own scope (it never called
+// fg.execute() either) -- this proves the real production nodes compose into a renderable,
+// correctly-scheduled graph; PhysicalExecutionBackend's actual Provision/barrier/render path has
+// its own dedicated coverage in tests/test_physical_backend.cpp.
+TEST_CASE("Real GradientNode/TerrainNode/DeferredNode compose into a renderable, correctly-staged graph") {
+	brassica::Engine        engine;
+	brassica::EngineOptions opts;
+	opts.headless = true;
+	engine.Init(opts);
 
-	FrameGraphTexture2D mockTex;
-	vk::Extent2D        extent{1280, 720};
-	vk::Format          format = vk::Format::eB8G8R8A8Unorm;
+	if (!engine.GetDevice()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
 
-	FrameGraphResource swapchainRes = fg.import("SwapchainImage", {extent, format}, std::move(mockTex));
-	CHECK(fg.isValid(swapchainRes));
+	vk::Device   device = engine.GetDevice();
+	vk::Instance instance = engine.GetInstance();
 
-	blackboard.add<SwapchainData>() = SwapchainData{.target = swapchainRes};
-	CHECK(blackboard.has<SwapchainData>());
-	CHECK(blackboard.get<SwapchainData>().target == swapchainRes);
+	{
+		// A minimal, valid (if trivial) stand-in for the real global descriptor set 0 layout --
+		// TerrainPass/DeferredPass's pipeline layouts reference it by slot, so it must be a real
+		// vk::DescriptorSetLayout, even though nothing in this test binds an actual descriptor
+		// set to it. Scoped in a nested block, along with every other device-dependent object
+		// below, so all of it is destroyed before engine.Cleanup() tears down the device --
+		// Vulkan handles held by locals must not outlive the device that owns them.
+		vk::DescriptorSetLayout globalSet0Layout =
+			device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo{});
 
-	// Pass 1: GradientPass (renders background)
-	const auto& mockGradientPass = fg.addCallbackPass<GradientPassData>(
-		"MockGradientPass",
-		[&](FrameGraph::Builder& builder, GradientPassData& data) {
-			data.target = builder.create<FrameGraphTexture2D>(
-				"GradientBackground",
-				FrameGraphTexture2D::Desc{
-					.extent = extent,
-					.format = vk::Format::eR16G16B16A16Sfloat,
-					.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
-				}
-			);
-			data.target = builder.write(data.target, static_cast<uint32_t>(TextureUsage::ColorAttachment));
-			builder.setSideEffect();
-		},
-		[](const GradientPassData&, FrameGraphPassResources&, void*) {}
-	);
-	blackboard.add<GradientPassData>() = mockGradientPass;
+		GradientPass gradientPass(device, vk::Format::eR16G16B16A16Sfloat);
+		TerrainPass  terrainPass(instance, device, globalSet0Layout);
+		DeferredPass deferredPass(device, globalSet0Layout, vk::Format::eB8G8R8A8Unorm);
 
-	CHECK(blackboard.has<GradientPassData>());
-	CHECK(fg.isValid(blackboard.get<GradientPassData>().target));
+		graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
 
-	// Pass 2: MeshCubePass (G-Buffer MRT Pass)
-	const auto& mockMeshCubePass = fg.addCallbackPass<MeshCubePassData>(
-		"MockMeshCubePass",
-		[&](FrameGraph::Builder& builder, MeshCubePassData& data) {
-			data.positionTarget = builder.create<FrameGraphTexture2D>(
-				"GBuffer_Position",
-				FrameGraphTexture2D::Desc{.extent = extent, .format = vk::Format::eR16G16B16A16Sfloat}
-			);
-			data.positionTarget = builder.write(data.positionTarget, static_cast<uint32_t>(TextureUsage::ColorAttachment));
+		graph::Graph frameGraph;
+		frameGraph.Register<GradientNode>(GradientNode{.pass = &gradientPass, .extent = {1280, 720}});
+		frameGraph.Register<TerrainNode>(
+			TerrainNode{
+				.pass = &terrainPass,
+				.extent = {1280, 720},
+				.globalDescriptorSet = nullptr,
+				.pushConstants = {},
+			}
+		);
+		frameGraph.Register<DeferredNode>(
+			DeferredNode{
+				.pass = &deferredPass,
+				.registry = &registry,
+				.extent = {1280, 720},
+				.swapchainFormat = vk::Format::eB8G8R8A8Unorm,
+				.globalDescriptorSet = nullptr,
+				.activeFrame = 0,
+				.clipmapImageView = nullptr,
+				.clipmapSampler = nullptr,
+				.pushConstants = {},
+			}
+		);
 
-			data.normalTarget = builder.create<FrameGraphTexture2D>(
-				"GBuffer_Normal",
-				FrameGraphTexture2D::Desc{.extent = extent, .format = vk::Format::eR16G16B16A16Sfloat}
-			);
-			data.normalTarget = builder.write(data.normalTarget, static_cast<uint32_t>(TextureUsage::ColorAttachment));
+		graph::FrameContext ctx{.width = 1280, .height = 720};
+		frameGraph.Setup(ctx);
 
-			data.albedoTarget = builder.create<FrameGraphTexture2D>(
-				"GBuffer_Albedo",
-				FrameGraphTexture2D::Desc{.extent = extent, .format = vk::Format::eR8G8B8A8Unorm}
-			);
-			data.albedoTarget = builder.write(data.albedoTarget, static_cast<uint32_t>(TextureUsage::ColorAttachment));
+		auto compileResult = frameGraph.Compile();
+		REQUIRE(compileResult.has_value());
 
-			data.depthTarget = builder.create<FrameGraphTexture2D>(
-				"GBuffer_Depth",
-				FrameGraphTexture2D::Desc{.extent = extent, .format = vk::Format::eD32Sfloat}
-			);
-			data.depthTarget = builder.write(data.depthTarget, static_cast<uint32_t>(TextureUsage::DepthStencilAttachment));
+		// Real cross-node edges, not just "it compiled": Gradient and Terrain share no
+		// dependency between them, so they must land in the same stage (provably independent);
+		// Deferred depends on both of their outputs (G-buffer, gradient background, TLAS), so it
+		// must land strictly later.
+		const auto& schedule = frameGraph.GetSchedule();
+		REQUIRE(schedule.stages.size() == 2);
+		CHECK(schedule.stages[0].nodes.size() == 2);
+		CHECK(schedule.stages[1].nodes.size() == 1);
 
-			builder.setSideEffect();
-		},
-		[](const MeshCubePassData&, FrameGraphPassResources&, void*) {}
-	);
-	blackboard.add<MeshCubePassData>() = mockMeshCubePass;
-	blackboard.add<GBufferData>() = GBufferData{
-		.positionTarget = mockMeshCubePass.positionTarget,
-		.normalTarget = mockMeshCubePass.normalTarget,
-		.albedoTarget = mockMeshCubePass.albedoTarget,
-		.depthTarget = mockMeshCubePass.depthTarget
-	};
+		device.destroyDescriptorSetLayout(globalSet0Layout);
+	}
 
-	CHECK(blackboard.has<MeshCubePassData>());
-	CHECK(blackboard.has<GBufferData>());
-
-	// Pass 3: DeferredPass (Deferred Lighting Pass reading G-Buffer + Background -> Swapchain)
-	const auto& gbufferData = blackboard.get<GBufferData>();
-	const auto& gradData = blackboard.get<GradientPassData>();
-	const auto& scData = blackboard.get<SwapchainData>();
-
-	const auto& mockDeferredPass = fg.addCallbackPass<DeferredPassData>(
-		"MockDeferredPass",
-		[&](FrameGraph::Builder& builder, DeferredPassData& data) {
-			builder.read(gbufferData.positionTarget, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
-			builder.read(gbufferData.normalTarget, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
-			builder.read(gbufferData.albedoTarget, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
-			builder.read(gradData.target, static_cast<uint32_t>(TextureUsage::SampledShaderRead));
-
-			data.target = builder.write(scData.target, static_cast<uint32_t>(TextureUsage::ColorAttachment));
-			builder.setSideEffect();
-		},
-		[](const DeferredPassData&, FrameGraphPassResources&, void*) {}
-	);
-	blackboard.add<DeferredPassData>() = mockDeferredPass;
-
-	CHECK(blackboard.has<DeferredPassData>());
-	CHECK(fg.isValid(blackboard.get<DeferredPassData>().target));
-
-	// Pass 4: Compute Pass using FrameGraphTexture3D and Indirect SSBO
-	const auto& mockComputePass = fg.addCallbackPass<ComputeTestPassData>(
-		"MockComputeTestPass",
-		[&](FrameGraph::Builder& builder, ComputeTestPassData& data) {
-			data.outputTexture3D = builder.create<FrameGraphTexture3D>(
-				"Volume3D",
-				FrameGraphTexture3D::Desc{.extent = {16, 16, 16}, .format = vk::Format::eR8G8B8A8Unorm}
-			);
-			data.outputTexture3D = builder.write(data.outputTexture3D, static_cast<uint32_t>(TextureUsage::StorageWrite));
-
-			data.outputSSBO = builder.create<FrameGraphSSBO>(
-				"IndirectBufferSSBO",
-				FrameGraphSSBO::Desc{.size = 1024}
-			);
-			data.outputSSBO = builder.write(data.outputSSBO, static_cast<uint32_t>(BufferUsage::StorageWrite | BufferUsage::Indirect));
-			builder.setSideEffect();
-		},
-		[](const ComputeTestPassData&, FrameGraphPassResources&, void*) {}
-	);
-	blackboard.add<ComputeTestPassData>() = mockComputePass;
-
-	CHECK(blackboard.has<ComputeTestPassData>());
-	CHECK(fg.isValid(blackboard.get<ComputeTestPassData>().outputTexture3D));
-	CHECK(fg.isValid(blackboard.get<ComputeTestPassData>().outputSSBO));
-
-	// Compile framegraph
-	fg.compile();
+	engine.Cleanup();
 }
