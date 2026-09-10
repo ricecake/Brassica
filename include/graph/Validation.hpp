@@ -96,7 +96,7 @@ namespace brassica::graph {
 			"frame is not renderable; see instantiation notes below for the missing keys"
 		);
 		static constexpr bool ok =
-			(..., (sizeof...(Missing) == 0 || (RESOURCE_IS_NOT_PRODUCED_BY_ANY_NODE<Missing>{}, false)), true);
+			((sizeof...(Missing) == 0 || (RESOURCE_IS_NOT_PRODUCED_BY_ANY_NODE<Missing>{}, false)), ..., true);
 	};
 #endif
 
@@ -118,7 +118,7 @@ namespace brassica::graph {
 
 	template <typename... Hs, typename NextConsumes>
 	struct TemporalInvariantT<TypeList<Hs...>, NextConsumes>
-		: std::bool_constant<(Contains<HistoryTarget<Hs>, NextConsumes> && ...)> {};
+	    : std::bool_constant<(Contains<HistoryTarget<Hs>, NextConsumes> && ...)> {};
 
 	template <DeclaresResources Prev, DeclaresResources Next>
 	inline constexpr bool TemporalInvariantHolds = TemporalInvariantT<ProducesOf<Prev>, ConsumesOf<Next>>::value;

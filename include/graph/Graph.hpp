@@ -51,6 +51,26 @@ namespace brassica::graph {
 		return std::unexpected(ValidationError{std::move(message), std::move(missing)});
 	}
 
+	// One dependency-respecting level: every node here is provably independent of every other
+	// node here (no edge connects any pair within a stage), so a backend is free to dispatch
+	// them concurrently -- to different queues, different threads, whatever it has. preBarriers
+	// must be flushed before this stage's nodes run; postBarriers after, before the next stage
+	// begins (this is where a cross-domain transfer's release half lives, recorded on the
+	// producer's side rather than deferred all the way to the consumer's stage).
+	struct ScheduleStage {
+		std::vector<std::size_t> nodes;
+		BarrierBatch             preBarriers;
+		BarrierBatch             postBarriers;
+	};
+
+	// The whole point of Compile(): a structure a renderer walks without making any further
+	// scheduling decisions of its own -- flush a stage's preBarriers, dispatch its nodes to
+	// whatever queue matches their declared domain (in any order; that's the parallelism),
+	// flush postBarriers, advance.
+	struct Schedule {
+		std::vector<ScheduleStage> stages;
+	};
+
 	// Runtime container of type-erased nodes. Unlike the declaration layer, Graph has no idea
 	// type lists exist -- it only ever sees NodeDescriptor spans, which is what lets a
 	// Subgraph (Frame.hpp) hold a Graph internally without leaking template machinery into
@@ -72,10 +92,13 @@ namespace brassica::graph {
 			}
 		}
 
-		// Validates producer coverage, then orders nodes by dependency (Kahn's algorithm on
-		// producer -> consumer edges) and culls inactive/unreachable ones. This is the
-		// single biggest correctness gain over external/FrameGraph, which culls by refcount
-		// but executes in registration order rather than dependency order.
+		// Validates producer coverage, levels nodes into dependency-respecting stages (a node's
+		// stage is one past the latest stage of anything it consumes; two nodes share a stage
+		// iff neither depends on the other -- that structural fact is the parallelism proof),
+		// and synthesizes the barriers -- including cross-domain release/acquire pairs -- that
+		// sit at each stage boundary. This is the single biggest correctness gain over
+		// external/FrameGraph, which culls by refcount but executes in registration order and
+		// never batches a barrier at all.
 		std::expected<void, ValidationError> Compile() {
 			std::vector<NodeDescriptor> descriptors;
 			descriptors.reserve(m_nodes.size());
@@ -87,82 +110,186 @@ namespace brassica::graph {
 				return result;
 			}
 
-			m_schedule = TopoSort(descriptors);
+			const std::vector<Edge> edges = CollectEdges(descriptors);
+			const std::size_t       n = descriptors.size();
 
-			std::vector<std::size_t> active;
-			active.reserve(m_schedule.size());
-			for (std::size_t index : m_schedule) {
-				if (index < m_recipes.size() && m_recipes[index].isActive) {
-					active.push_back(index);
+			std::vector<std::size_t> nodeStage(n, 0);
+			m_schedule.stages.clear();
+			for (auto& level : LevelNodes(n, edges)) {
+				const std::size_t stageIndex = m_schedule.stages.size();
+				for (std::size_t index : level) {
+					nodeStage[index] = stageIndex;
 				}
+				m_schedule.stages.push_back(ScheduleStage{std::move(level), {}, {}});
 			}
-			m_schedule = std::move(active);
 
-			m_batches.assign(m_schedule.size(), BarrierBatch{});
+			for (const Edge& edge : edges) {
+				SynthesizeBarrier(descriptors, nodeStage, edge);
+			}
+
+			for (auto& stage : m_schedule.stages) {
+				std::erase_if(stage.nodes, [this](std::size_t index) { return !m_recipes[index].isActive; });
+			}
+
 			return {};
 		}
 
 		void Execute(CommandBuffer& cmd) {
-			for (std::size_t index : m_schedule) {
-				m_nodes[index].Execute(cmd);
+			for (const auto& stage : m_schedule.stages) {
+				for (std::size_t index : stage.nodes) {
+					m_nodes[index].Execute(cmd);
+				}
 			}
 		}
 
-		[[nodiscard]] std::span<const std::size_t> Schedule() const { return m_schedule; }
+		[[nodiscard]] const Schedule& GetSchedule() const { return m_schedule; }
 
 		[[nodiscard]] std::span<const Recipe> Recipes() const { return m_recipes; }
 
-	private:
-		// Node i depends on node j (must run after j) if i consumes a key that j produces.
-		// Self-edges from Modify<K> (a node both consuming and producing K) are skipped --
-		// otherwise Kahn's algorithm would report a false cycle on every in-place modify.
-		static std::vector<std::size_t> TopoSort(const std::vector<NodeDescriptor>& nodes) {
-			const std::size_t                     n = nodes.size();
-			std::vector<std::vector<std::size_t>> dependents(n);
-			std::vector<std::size_t>              indegree(n, 0);
+		[[nodiscard]] std::span<const NodeHandle> Nodes() const { return m_nodes; }
 
-			for (std::size_t consumer = 0; consumer < n; ++consumer) {
+	private:
+		struct Edge {
+			std::size_t producer;
+			std::size_t consumer;
+			ResourceId  key;
+		};
+
+		// One edge per (producer, consumer, key) triple where consumer.consumes contains key
+		// and producer.produces contains it too. Self-edges (Modify<K>, a node both consuming
+		// and producing K) are skipped -- otherwise leveling would treat a node as depending on
+		// itself.
+		static std::vector<Edge> CollectEdges(const std::vector<NodeDescriptor>& nodes) {
+			std::vector<Edge> edges;
+			for (std::size_t consumer = 0; consumer < nodes.size(); ++consumer) {
 				for (ResourceId key : nodes[consumer].consumes) {
-					for (std::size_t producer = 0; producer < n; ++producer) {
+					for (std::size_t producer = 0; producer < nodes.size(); ++producer) {
 						if (producer == consumer) {
 							continue;
 						}
 						const auto& produces = nodes[producer].produces;
 						if (std::find(produces.begin(), produces.end(), key) != produces.end()) {
-							dependents[producer].push_back(consumer);
-							++indegree[consumer];
+							edges.push_back(Edge{producer, consumer, key});
 						}
 					}
 				}
 			}
-
-			std::vector<std::size_t> ready;
-			for (std::size_t i = 0; i < n; ++i) {
-				if (indegree[i] == 0) {
-					ready.push_back(i);
-				}
-			}
-
-			std::vector<std::size_t> order;
-			order.reserve(n);
-			while (!ready.empty()) {
-				std::size_t current = ready.back();
-				ready.pop_back();
-				order.push_back(current);
-				for (std::size_t next : dependents[current]) {
-					if (--indegree[next] == 0) {
-						ready.push_back(next);
-					}
-				}
-			}
-
-			return order;
+			return edges;
 		}
 
-		std::vector<NodeHandle>   m_nodes;
-		std::vector<Recipe>       m_recipes;
-		std::vector<std::size_t>  m_schedule;
-		std::vector<BarrierBatch> m_batches;
+		// BFS layering (longest-path-from-source levels): repeatedly peel off every node whose
+		// dependencies are already fully satisfied by prior levels. A node only leaves the
+		// frontier once every one of its producers has been placed, so level(v) == 1 +
+		// max(level(u)) over all direct producers u -- and no two nodes in the same level can
+		// have an edge between them, which is exactly the "provably independent" property
+		// Schedule promises.
+		static std::vector<std::vector<std::size_t>> LevelNodes(std::size_t n, const std::vector<Edge>& edges) {
+			std::vector<std::vector<std::size_t>> dependents(n);
+			std::vector<std::size_t>              indegree(n, 0);
+
+			for (std::size_t consumer = 0; consumer < n; ++consumer) {
+				std::vector<std::size_t> producers;
+				for (const Edge& edge : edges) {
+					if (edge.consumer != consumer) {
+						continue;
+					}
+					if (std::find(producers.begin(), producers.end(), edge.producer) != producers.end()) {
+						continue;
+					}
+					producers.push_back(edge.producer);
+					dependents[edge.producer].push_back(consumer);
+				}
+				indegree[consumer] = producers.size();
+			}
+
+			std::vector<std::size_t> frontier;
+			for (std::size_t i = 0; i < n; ++i) {
+				if (indegree[i] == 0) {
+					frontier.push_back(i);
+				}
+			}
+
+			std::vector<std::vector<std::size_t>> levels;
+			while (!frontier.empty()) {
+				std::sort(frontier.begin(), frontier.end());
+				std::vector<std::size_t> next;
+				for (std::size_t node : frontier) {
+					for (std::size_t dependent : dependents[node]) {
+						if (--indegree[dependent] == 0) {
+							next.push_back(dependent);
+						}
+					}
+				}
+				levels.push_back(frontier);
+				frontier = std::move(next);
+			}
+
+			return levels;
+		}
+
+		// A node's access to a key it touches: ReadWrite if the key appears in both its
+		// consumes and produces (Modify<K>), Write if produces-only, Read otherwise.
+		static AccessKind AccessOf(const NodeDescriptor& node, ResourceId key) {
+			const bool reads = std::find(node.consumes.begin(), node.consumes.end(), key) != node.consumes.end();
+			const bool writes = std::find(node.produces.begin(), node.produces.end(), key) != node.produces.end();
+			if (reads && writes) {
+				return AccessKind::ReadWrite;
+			}
+			return writes ? AccessKind::Write : AccessKind::Read;
+		}
+
+		// Every edge CollectEdges finds has, by construction, a producer that writes the key
+		// (that's what made it a producer) -- so producerAccess is never pure Read, and there
+		// is no read-after-read case to special-case away here. Two readers of an
+		// already-settled resource simply never edge each other: each gets its own
+		// producer->reader edge instead, and BarrierBatch::Add already merges those into one
+		// entry when they land in the same stage.
+		void SynthesizeBarrier(
+			const std::vector<NodeDescriptor>& descriptors,
+			const std::vector<std::size_t>&    nodeStage,
+			const Edge&                        edge
+		) {
+			const AccessKind producerAccess = AccessOf(descriptors[edge.producer], edge.key);
+			const AccessKind consumerAccess = AccessOf(descriptors[edge.consumer], edge.key);
+
+			const ExecutionDomain producerDomain = m_recipes[edge.producer].domain;
+			const ExecutionDomain consumerDomain = m_recipes[edge.consumer].domain;
+			const std::size_t     producerStage = nodeStage[edge.producer];
+			const std::size_t     consumerStage = nodeStage[edge.consumer];
+
+			if (producerDomain == consumerDomain) {
+				m_schedule.stages[consumerStage].preBarriers.Add(
+					MemoryBarrier{
+						.resource = edge.key,
+						.access = consumerAccess,
+						.srcDomain = producerDomain,
+						.dstDomain = consumerDomain,
+					}
+				);
+				return;
+			}
+
+			m_schedule.stages[producerStage].postBarriers.Add(
+				MemoryBarrier{
+					.resource = edge.key,
+					.access = producerAccess,
+					.srcDomain = producerDomain,
+					.dstDomain = consumerDomain,
+				}
+			);
+			m_schedule.stages[consumerStage].preBarriers.Add(
+				MemoryBarrier{
+					.resource = edge.key,
+					.access = consumerAccess,
+					.srcDomain = producerDomain,
+					.dstDomain = consumerDomain,
+				}
+			);
+		}
+
+		std::vector<NodeHandle> m_nodes;
+		std::vector<Recipe>     m_recipes;
+		Schedule                m_schedule;
 	};
 
 } // namespace brassica::graph

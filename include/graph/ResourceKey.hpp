@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "graph/TypeList.hpp"
+#include <entt/core/type_info.hpp>
 
 namespace brassica::graph {
 
@@ -58,12 +59,43 @@ namespace brassica::graph {
 	// unspecified. The self-test below (kTypeNameParseIsSane) is not optional -- it is the
 	// only thing standing between a compiler upgrade and every diagnostic silently
 	// becoming "".
+	// template <typename T>
+	// constexpr std::string_view TypeName() {
+	// #if defined(__clang__)
+	// 	constexpr std::string_view prefix = "std::string_view TypeName() [T = ";
+	// 	constexpr std::string_view suffix = "]";
+	// 	constexpr std::string_view sig = __PRETTY_FUNCTION__;
+	// #elif defined(__GNUC__)
+	// 	constexpr std::string_view prefix = "constexpr std::string_view TypeName() [with T = ";
+	// 	constexpr std::string_view suffix = "]";
+	// 	constexpr std::string_view sig = __PRETTY_FUNCTION__;
+	// #elif defined(_MSC_VER)
+	// 	constexpr std::string_view prefix = "class std::basic_string_view<char,struct std::char_traits<char> > __cdecl
+	// TypeName<"; 	constexpr std::string_view suffix = ">(void)"; 	constexpr std::string_view sig = __FUNCSIG__; #else
+	// 	#error "Unsupported compiler"
+	// #endif
+
+	// // 1. Calculate bounds using prefix/suffix lengths
+	// // 2. Extract substring
+	// // 3. (MSVC only) strip "struct " / "class " from the start of the substring
+	// 	auto             begin = full.find("T = ");
+	// 	auto             end = full.find_first_of(";]", begin);
+	// 	return full.substr(begin, end - begin);
+	// }
+
+	constexpr std::string_view StripTags(std::string_view name) {
+		if (name.starts_with("struct "))
+			return name.substr(7);
+		if (name.starts_with("class "))
+			return name.substr(6);
+		if (name.starts_with("enum "))
+			return name.substr(5);
+		return name;
+	}
+
 	template <typename T>
 	constexpr std::string_view TypeName() {
-		std::string_view full = std::source_location::current().function_name();
-		auto             begin = full.find("T = ") + 4;
-		auto             end = full.find_first_of(";]", begin);
-		return full.substr(begin, end - begin);
+		return StripTags(entt::type_name<T>::value());
 	}
 
 	namespace detail {
@@ -78,15 +110,34 @@ namespace brassica::graph {
 	// Runtime identity for a resource key: the address of a unique inline-constexpr object
 	// per key type (ODR-safe since C++17). Unique, stable, constexpr-comparable, and it
 	// carries a human-readable name -- no RTTI, no counter of any kind.
+	struct ResourceTypeInfo;
+
+	using ResourceId = const ResourceTypeInfo*;
+
 	struct ResourceTypeInfo {
 		std::string_view name;
 		bool             isHistory;
+		ResourceId       historyTarget = nullptr; // non-null iff isHistory
 	};
 
 	template <ResourceRef K>
-	inline constexpr ResourceTypeInfo kResourceTypeInfo{TypeName<K>(), IsHistory<K>};
+	constexpr ResourceId IdOf();
 
-	using ResourceId = const ResourceTypeInfo*;
+	// Resolves History<K>'s target id without ever instantiating IdOf<K>() for a plain
+	// (non-History) K: the `else` branch is a discarded statement of a dependent
+	// if-constexpr, so it's never substituted for K = a bare key, which is what keeps
+	// kResourceTypeInfo<K>'s own initializer below from recursing into itself.
+	template <typename K>
+	constexpr ResourceId HistoryTargetIdOf() {
+		if constexpr (IsHistory<K>) {
+			return IdOf<HistoryTarget<K>>();
+		} else {
+			return nullptr;
+		}
+	}
+
+	template <ResourceRef K>
+	inline constexpr ResourceTypeInfo kResourceTypeInfo{TypeName<K>(), IsHistory<K>, HistoryTargetIdOf<K>()};
 
 	template <ResourceRef K>
 	constexpr ResourceId IdOf() {

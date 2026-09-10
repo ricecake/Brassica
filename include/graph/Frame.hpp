@@ -1,8 +1,11 @@
 #pragma once
 #include <expected>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "graph/Declaration.hpp"
+#include "graph/Dot.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Graph.hpp"
 #include "graph/Node.hpp"
@@ -34,8 +37,15 @@ namespace brassica::graph {
 
 		[[nodiscard]] Graph& InnerGraph() { return m_graph; }
 
+		[[nodiscard]] const Graph& InnerGraph() const { return m_graph; }
+
 	private:
 		Graph m_graph;
+	};
+
+	template <typename Spec>
+	struct NodeKindOfT<Subgraph<Spec>> {
+		static constexpr NodeKind value = NodeKind::Subgraph;
 	};
 
 	template <typename Temporal>
@@ -64,6 +74,11 @@ namespace brassica::graph {
 		void Execute(CommandBuffer&) {}
 	};
 
+	template <typename Temporal>
+	struct NodeKindOfT<PreviousFrame<Temporal>> {
+		static constexpr NodeKind value = NodeKind::PreviousFrame;
+	};
+
 	// Consumes the bare (non-History) keys in Temporal -- this frame's values, to be carried
 	// forward as next frame's History<K>. The asymmetry (Produces History<K>, Consumes K) is
 	// the reason HistoryTarget exists at all.
@@ -74,6 +89,11 @@ namespace brassica::graph {
 		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Host}; }
 
 		void Execute(CommandBuffer&) {}
+	};
+
+	template <typename Temporal>
+	struct NodeKindOfT<NextFrame<Temporal>> {
+		static constexpr NodeKind value = NodeKind::NextFrame;
 	};
 
 	// The public entry point. Renderability is asserted here, and only here: a Frame is the
@@ -95,6 +115,10 @@ namespace brassica::graph {
 		std::expected<void, ValidationError> Compile() { return m_graph.Compile(); }
 
 		void Execute(CommandBuffer& cmd) { m_graph.Execute(cmd); }
+
+		[[nodiscard]] std::string ToDot(std::string_view label = "Frame") const {
+			return brassica::graph::ToDot(m_graph, label);
+		}
 
 	private:
 		Graph m_graph;

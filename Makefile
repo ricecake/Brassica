@@ -2,7 +2,7 @@ BUILD_DIR = build
 CONFIG = RelWithDebInfo
 APP = sandbox
 
-GRAPH_CXXFLAGS = -std=c++23 -Wall -Wextra -Wpedantic -Iinclude -Iexternal/doctest
+GRAPH_CXXFLAGS = -std=c++23 -Wall -Wextra -Wpedantic -Iinclude -Iexternal/doctest -Iexternal/entt/src
 
 .PHONY: all clean format run clean-build test profile setup-deps graph-test graph-check
 
