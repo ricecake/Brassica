@@ -14,6 +14,7 @@
 #include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
 #include "passes/TerrainPass.hpp"
+#include "passes/WaterPass.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
 #include "terrain/AsyncTerrainUploader.hpp"
@@ -172,6 +173,7 @@ namespace brassica {
 		std::unique_ptr<GradientPass> gradientPass;
 		std::unique_ptr<TerrainPass>  terrainPass;
 		std::unique_ptr<DeferredPass> deferredPass;
+		std::unique_ptr<WaterPass>    waterPass;
 
 		TerrainClipmap       terrainClipmap;
 		AsyncTerrainUploader terrainUploader;

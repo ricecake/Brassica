@@ -219,6 +219,11 @@ namespace brassica {
 			// registry still owns (G-buffer textures, the gradient background, ...).
 			physicalRegistry.Reset();
 
+			if (waterPass) {
+				waterPass->DestroyPipeline();
+				waterPass.reset();
+			}
+
 			if (deferredPass) {
 				deferredPass->DestroyPipeline();
 				deferredPass.reset();
@@ -338,6 +343,35 @@ namespace brassica {
 			&shaderWatcher,
 			GetPipelineCache()
 		);
+		waterPass = std::make_unique<WaterPass>(
+			device,
+			globalSet0Layout,
+			GetSwapchainFormat(),
+			&shaderWatcher,
+			GetPipelineCache()
+		);
+
+		// Position camera 50 units above terrain, looking downslope towards the y-zero plane
+		float     camX = 0.0f;
+		float     camZ = 0.0f;
+		glm::vec4 terrainSample = TerrainClipmap::SampleTerrain(camX, camZ, 0.5f);
+		float     terrainY = terrainSample.x;
+		camera.position = glm::vec3(camX, terrainY + 50.0f, camZ);
+
+		glm::vec2 downslope(terrainSample.y, terrainSample.w);
+		if (glm::length(downslope) > 0.001f) {
+			downslope = glm::normalize(downslope);
+		} else {
+			downslope = glm::vec2(0.0f, 1.0f);
+		}
+
+		glm::vec3 target = camera.position + glm::vec3(downslope.x, 0.0f, downslope.y) * 100.0f;
+		target.y = 0.0f;
+
+		glm::vec3 lookDir = glm::normalize(target - camera.position);
+		camera.pitch = std::asin(std::clamp(lookDir.y, -0.99f, 0.99f));
+		camera.yaw = std::atan2(-lookDir.x, -lookDir.z);
+		camera.roll = 0.0f;
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
@@ -810,6 +844,17 @@ namespace brassica {
 		});
 		frameGraph.Register<DeferredNode>(DeferredNode{
 			.pass = deferredPass.get(),
+			.registry = &physicalRegistry,
+			.extent = extent,
+			.swapchainFormat = format,
+			.globalDescriptorSet = globalDescriptorSets[activeFrame],
+			.activeFrame = activeFrame,
+			.clipmapImageView = terrainClipmap.GetImageView(),
+			.clipmapSampler = terrainClipmap.GetSampler(),
+			.pushConstants = terrainPush,
+		});
+		frameGraph.Register<WaterNode>(WaterNode{
+			.pass = waterPass.get(),
 			.registry = &physicalRegistry,
 			.extent = extent,
 			.swapchainFormat = format,

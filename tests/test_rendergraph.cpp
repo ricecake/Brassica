@@ -7,10 +7,11 @@
 #include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
 #include "passes/TerrainPass.hpp"
+#include "passes/WaterPass.hpp"
 
 using namespace brassica;
 
-// Real GradientNode/TerrainNode/DeferredNode registered into a real graph::Graph -- genuine
+// Real GradientNode/TerrainNode/DeferredNode/WaterNode registered into a real graph::Graph -- genuine
 // integration coverage the old fg::-based version of this test never had (it exercised
 // hand-written MockGradientPass/MockGBufferPass/MockDeferredPass lambdas, never the real pass
 // classes). Gated on a real headless device, same pattern as
@@ -48,6 +49,7 @@ TEST_CASE("Real GradientNode/TerrainNode/DeferredNode compose into a renderable,
 		GradientPass gradientPass(device, vk::Format::eR16G16B16A16Sfloat);
 		TerrainPass  terrainPass(instance, device, globalSet0Layout);
 		DeferredPass deferredPass(device, globalSet0Layout, vk::Format::eB8G8R8A8Unorm);
+		WaterPass    waterPass(device, globalSet0Layout, vk::Format::eB8G8R8A8Unorm);
 
 		graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
 
@@ -74,6 +76,19 @@ TEST_CASE("Real GradientNode/TerrainNode/DeferredNode compose into a renderable,
 				.pushConstants = {},
 			}
 		);
+		frameGraph.Register<WaterNode>(
+			WaterNode{
+				.pass = &waterPass,
+				.registry = &registry,
+				.extent = {1280, 720},
+				.swapchainFormat = vk::Format::eB8G8R8A8Unorm,
+				.globalDescriptorSet = nullptr,
+				.activeFrame = 0,
+				.clipmapImageView = nullptr,
+				.clipmapSampler = nullptr,
+				.pushConstants = {},
+			}
+		);
 
 		graph::FrameContext ctx{.width = 1280, .height = 720};
 		frameGraph.Setup(ctx);
@@ -82,13 +97,14 @@ TEST_CASE("Real GradientNode/TerrainNode/DeferredNode compose into a renderable,
 		REQUIRE(compileResult.has_value());
 
 		// Real cross-node edges, not just "it compiled": Gradient and Terrain share no
-		// dependency between them, so they must land in the same stage (provably independent);
-		// Deferred depends on both of their outputs (G-buffer, gradient background, TLAS), so it
-		// must land strictly later.
+		// dependency between them, so they land in stage 0; Deferred depends on their outputs
+		// and modifies Swapchain, so it lands in stage 1; Water reads GBuffer and modifies
+		// Swapchain after Deferred, so it lands in stage 2 (deferred-forward hybrid pipeline).
 		const auto& schedule = frameGraph.GetSchedule();
-		REQUIRE(schedule.stages.size() == 2);
+		REQUIRE(schedule.stages.size() == 3);
 		CHECK(schedule.stages[0].nodes.size() == 2);
 		CHECK(schedule.stages[1].nodes.size() == 1);
+		CHECK(schedule.stages[2].nodes.size() == 1);
 
 		device.destroyDescriptorSetLayout(globalSet0Layout);
 	}
