@@ -1,71 +1,95 @@
 #pragma once
-
+#include <algorithm>
+#include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include "graph/BarrierTranslator.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Graph.hpp"
 #include "graph/PhysicalRegistry.hpp"
+#include "graph/ResourceState.hpp"
 #include "graph/VulkanSeam.hpp"
 
 namespace brassica::graph {
 
+	// Begins/ends a dynamic-rendering pass for a Graphics-domain node's color/depth
+	// realizations. Direct vk::CommandBuffer calls -- no proc-addr resolution needed. Vulkan
+	// 1.3 core (already the engine's baseline: see Engine.cpp's VkPhysicalDeviceVulkan13Features
+	// dynamicRendering/synchronization2) links vkCmdBeginRendering/vkCmdEndRendering directly,
+	// the same way src/passes/RenderPass.cpp already calls cmd.beginRendering()/endRendering().
 	class DynamicRenderingWrapper {
 	public:
-		static bool Begin(VkCommandBuffer cmd, const PhysicalResourceRegistry& registry, const Recipe& recipe) {
-			if (cmd == VK_NULL_HANDLE || recipe.domain != ExecutionDomain::Graphics) {
+		// registry is const: Begin only ever reads tracked resource state (the barrier-synthesis
+		// seam in PhysicalExecutionBackend::Execute is what transitions a resource before Begin
+		// runs, not Begin itself) -- see PhysicalRegistry.hpp's non-const GetTexture/GetBuffer
+		// overloads for the other half of that invariant.
+		static bool Begin(vk::CommandBuffer cmd, const PhysicalResourceRegistry& registry, const Recipe& recipe) {
+			if (!cmd || recipe.domain != ExecutionDomain::Graphics) {
 				return false;
 			}
 
-#if __has_include(<vulkan/vulkan.h>) || __has_include("glad/vulkan.h")
-			std::vector<VkRenderingAttachmentInfo> colorAttachments;
-			VkRenderingAttachmentInfo              depthAttachment{};
-			bool                                   hasDepth = false;
-			uint32_t                               renderWidth = 0;
-			uint32_t                               renderHeight = 0;
+			std::vector<vk::RenderingAttachmentInfo> colorAttachments;
+			vk::RenderingAttachmentInfo              depthAttachment{};
+			bool                                     hasDepth = false;
+			std::uint32_t                            renderWidth = 0;
+			std::uint32_t                            renderHeight = 0;
 
 			for (const auto& r : recipe.realizations) {
 				if (r.desc.kind != ResourceDesc::Kind::Image2D && r.desc.kind != ResourceDesc::Kind::Image3D) {
 					continue;
 				}
-
-				const auto* tex = registry.GetTexture(r.key);
-				if (!tex || tex->view == VK_NULL_HANDLE) {
+				if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite) {
+					// A Read realization is sampled through a descriptor, not attached. Attaching
+					// it here would ask dynamic rendering to write into a resource the barrier
+					// seam has (correctly) put in a read-only layout -- invalid. This mirrors the
+					// color branch below, which always required Write/ReadWrite; the depth
+					// branch used to attach on any access, including Read, which the hardcoded
+					// eDepthStencilAttachmentOptimal below masked until tracked-layout replaced it.
 					continue;
 				}
 
-				if (r.desc.width > renderWidth)
-					renderWidth = r.desc.width;
-				if (r.desc.height > renderHeight)
-					renderHeight = r.desc.height;
+				auto tex = registry.GetTexture(r.key);
+				if (!tex || !tex->GetView()) {
+					continue;
+				}
 
-				VkFormat format = static_cast<VkFormat>(tex->desc.formatCode);
-				bool     isDepth =
-					(format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D24_UNORM_S8_UINT ||
-					 format == VK_FORMAT_D16_UNORM);
+				renderWidth = std::max(renderWidth, r.desc.width);
+				renderHeight = std::max(renderHeight, r.desc.height);
 
-				if (isDepth) {
-					depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-					depthAttachment.imageView = tex->view;
-					depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-					depthAttachment.loadOp = (r.access == AccessKind::Write) ? VK_ATTACHMENT_LOAD_OP_CLEAR
-																			 : VK_ATTACHMENT_LOAD_OP_LOAD;
-					depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-					depthAttachment.clearValue.depthStencil = {1.0f, 0};
+				// loadOp: eLoad only when this resource already has meaningful content *and*
+				// this access isn't a plain Write (a Write means "I'm about to produce all of
+				// it," so discarding is correct and cheaper). A ReadWrite realization on a
+				// never-written resource still has nothing to load, which is why this checks
+				// HasDefinedContents() explicitly rather than trusting AccessKind alone.
+				const bool preserveExisting = tex->HasDefinedContents() && r.access != AccessKind::Write;
+				const auto loadOp = preserveExisting ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eClear;
+				const auto format = static_cast<vk::Format>(tex->GetDesc().formatCode);
+
+				// imageLayout comes from tracked state, not a hardcoded constant: by the time
+				// Begin runs, PhysicalExecutionBackend::Execute has already flushed this stage's
+				// Acquire barrier, which transitioned this exact realization to the layout
+				// DeriveImageState(r.access, ...) computed -- the same function this file no
+				// longer duplicates its own copy of.
+				if (IsDepthFormat(format)) {
+					depthAttachment.imageView = tex->GetView();
+					depthAttachment.imageLayout = tex->GetCurrentLayout();
+					depthAttachment.loadOp = loadOp;
+					depthAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+					depthAttachment.clearValue = vk::ClearDepthStencilValue{1.0f, 0};
 					hasDepth = true;
-				} else if (r.access == AccessKind::Write || r.access == AccessKind::ReadWrite) {
-					VkRenderingAttachmentInfo colorAtt{};
-					colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-					colorAtt.imageView = tex->view;
-					colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-					colorAtt.loadOp = (r.access == AccessKind::Write) ? VK_ATTACHMENT_LOAD_OP_CLEAR
-																	  : VK_ATTACHMENT_LOAD_OP_LOAD;
-					colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-					colorAtt.clearValue.color.float32[0] = 0.0f;
-					colorAtt.clearValue.color.float32[1] = 0.0f;
-					colorAtt.clearValue.color.float32[2] = 0.0f;
-					colorAtt.clearValue.color.float32[3] = 1.0f;
-
+				} else {
+					vk::RenderingAttachmentInfo colorAtt{};
+					colorAtt.imageView = tex->GetView();
+					colorAtt.imageLayout = tex->GetCurrentLayout();
+					colorAtt.loadOp = loadOp;
+					colorAtt.storeOp = vk::AttachmentStoreOp::eStore;
+					// Per-realization, not a blanket default: see ResourceRealization::clearColor's
+					// comment (Execution.hpp) -- the G-buffer's alpha channel is a data sentinel
+					// deferred.frag reads, not just opacity, so it needs {0,0,0,0} while everything
+					// else wants opaque black.
+					colorAtt.clearValue =
+						vk::ClearColorValue(r.clearColor[0], r.clearColor[1], r.clearColor[2], r.clearColor[3]);
 					colorAttachments.push_back(colorAtt);
 				}
 			}
@@ -74,43 +98,23 @@ namespace brassica::graph {
 				return false;
 			}
 
-	#if defined(VK_VERSION_1_3) || defined(VK_KHR_dynamic_rendering)
-			VkRenderingInfo renderingInfo{};
-			renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-			renderingInfo.renderArea.offset = {0, 0};
-			renderingInfo.renderArea.extent.width = renderWidth ? renderWidth : 1;
-			renderingInfo.renderArea.extent.height = renderHeight ? renderHeight : 1;
-			renderingInfo.layerCount = 1;
-			renderingInfo.colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size());
-			renderingInfo.pColorAttachments = colorAttachments.empty() ? nullptr : colorAttachments.data();
-			renderingInfo.pDepthAttachment = hasDepth ? &depthAttachment : nullptr;
-
-			PFN_vkCmdBeginRendering pfnCmdBeginRendering = reinterpret_cast<PFN_vkCmdBeginRendering>(
-				vkGetDeviceProcAddr(nullptr, "vkCmdBeginRendering")
-			);
-			if (pfnCmdBeginRendering) {
-				pfnCmdBeginRendering(cmd, &renderingInfo);
-				return true;
-			}
-	#endif
-#else
-			(void)registry;
-			(void)recipe;
-#endif
-			return false;
+			vk::RenderingInfo renderingInfo{
+				{},
+				vk::Rect2D{{0, 0}, {renderWidth ? renderWidth : 1, renderHeight ? renderHeight : 1}},
+				1,
+				0,
+				static_cast<std::uint32_t>(colorAttachments.size()),
+				colorAttachments.empty() ? nullptr : colorAttachments.data(),
+				hasDepth ? &depthAttachment : nullptr,
+			};
+			cmd.beginRendering(renderingInfo);
+			return true;
 		}
 
-		static void End(VkCommandBuffer cmd) {
-			if (cmd == VK_NULL_HANDLE)
-				return;
-#if (defined(VK_VERSION_1_3) || defined(VK_KHR_dynamic_rendering)) && (__has_include(<vulkan/vulkan.h>) || __has_include("glad/vulkan.h"))
-			PFN_vkCmdEndRendering pfnCmdEndRendering = reinterpret_cast<PFN_vkCmdEndRendering>(
-				vkGetDeviceProcAddr(nullptr, "vkCmdEndRendering")
-			);
-			if (pfnCmdEndRendering) {
-				pfnCmdEndRendering(cmd);
+		static void End(vk::CommandBuffer cmd) {
+			if (cmd) {
+				cmd.endRendering();
 			}
-#endif
 		}
 	};
 
@@ -123,7 +127,9 @@ namespace brassica::graph {
 			graph.Setup(ctx);
 
 			// 2. Compile: levels nodes into dependency-respecting stages and synthesizes the
-			// barriers -- including cross-domain transfers -- that sit at each stage boundary.
+			// (resource, access, domain) metadata -- including cross-domain transfers -- that
+			// sits at each stage boundary. Layouts/stages/access masks are deliberately not this
+			// layer's job; see ResourceState.hpp's header comment for why.
 			if (auto compileRes = graph.Compile(); !compileRes) {
 				throw std::runtime_error("Graph compilation failed: " + compileRes.error().message);
 			}
@@ -134,17 +140,47 @@ namespace brassica::graph {
 			// 3. Provision physical resources matching concrete recipes
 			m_registry.Provision(schedule, recipes, enableAliasing);
 
-			// 4. Extract raw VkCommandBuffer handle if available
-			VkCommandBuffer vkCmd = static_cast<VkCommandBuffer>(cmd.vkCmd);
+			// 4. The graph's opaque CommandBuffer handle, viewed as real Vulkan at this boundary
+			// only -- Execution.hpp's CommandBuffer stays untouched and Vulkan-free.
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(cmd.vkCmd));
 
-			// 5. Staged execution: flush a stage's preBarriers once (covering every node in the
-			// stage, not once per node -- that's the point of batching them), run the stage's
-			// nodes, then flush postBarriers (releases for any transfer this stage originated)
-			// before moving on. Nodes within a stage are provably independent of each other, so
-			// nothing here decides how they're actually parallelized across queues; that's a
-			// scheduling decision Compile() already made, not this loop's job.
+			// 5. Staged execution. Nodes within a stage are provably independent of each other
+			// (ScheduleStage's documented invariant), so per-node barriers between them would be
+			// wrong even if they happened to be correct today -- everything a stage's nodes need
+			// transitioned is therefore synthesized once, up front, into one local batch.
 			for (const auto& stage : schedule.stages) {
-				BarrierTranslator::TranslateAndDispatch(vkCmd, m_registry, stage.preBarriers);
+				// Acquire = stage.preBarriers (real cross-node edges, synthesized by
+				// Graph::SynthesizeBarrier) unioned with a self-entry for every realization of
+				// every node in this stage. The self-entries are what close the "first use has
+				// no incoming edge" gap: a node that only creates or self-modifies a resource
+				// (Create<K>, Modify<K>) has no edge pointing at it, so without this it would
+				// never get transitioned out of eUndefined. Built as a local copy -- schedule is
+				// held by const reference, and stage.preBarriers must stay exactly what
+				// Graph::Compile() produced (tests/graph/test_graph.cpp asserts stage 0's is
+				// empty).
+				BarrierBatch acquireBatch;
+				for (const auto& mb : stage.preBarriers.Items()) {
+					acquireBatch.Add(mb);
+				}
+				for (std::size_t nodeIndex : stage.nodes) {
+					const auto& recipe = recipes[nodeIndex];
+					for (const auto& r : recipe.realizations) {
+						// srcDomain == dstDomain == recipe.domain: this is a node's own use of
+						// its own resource, not a cross-node transfer. access comes from the
+						// realization, not Graph::AccessOf's declaration-derived answer -- the
+						// realization is the concrete per-frame truth Provision() already keys
+						// off (PhysicalRegistry.hpp), and it's the only value in scope here.
+						acquireBatch.Add(
+							MemoryBarrier{
+								.resource = r.key,
+								.access = r.access,
+								.srcDomain = recipe.domain,
+								.dstDomain = recipe.domain,
+							}
+						);
+					}
+				}
+				BarrierTranslator::TranslateAndDispatch(vkCmd, m_registry, acquireBatch, BarrierPhase::Acquire);
 
 				for (std::size_t nodeIndex : stage.nodes) {
 					const auto& recipe = recipes[nodeIndex];
@@ -154,9 +190,28 @@ namespace brassica::graph {
 					if (activeRendering) {
 						DynamicRenderingWrapper::End(vkCmd);
 					}
+
+					// Mark contents defined only now, after the node has actually recorded its
+					// commands -- this is what lets Begin (run before ExecuteNode, on the *next*
+					// stage that touches this resource) still see "never written" and choose
+					// eClear correctly for this node's own first write.
+					for (const auto& r : recipe.realizations) {
+						if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite) {
+							continue;
+						}
+						if (auto tex = m_registry.GetTexture(r.key)) {
+							tex->SetHasDefinedContents(true);
+						} else if (auto buf = m_registry.GetBuffer(r.key)) {
+							buf->SetHasDefinedContents(true);
+						}
+					}
 				}
 
-				BarrierTranslator::TranslateAndDispatch(vkCmd, m_registry, stage.postBarriers);
+				// Release: the producer side of any cross-domain edge this stage originated.
+				// Used as-is, straight from the schedule -- unlike Acquire, there is no
+				// first-use case to synthesize here (see BarrierTranslator::DispatchRelease for
+				// why this phase carries no per-resource layout at all).
+				BarrierTranslator::TranslateAndDispatch(vkCmd, m_registry, stage.postBarriers, BarrierPhase::Release);
 			}
 		}
 

@@ -5,7 +5,7 @@
 #include <fstream>
 
 #include "Shader.hpp"
-#include "passes/RenderResources.hpp"
+#include "passes/PassResource.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "vulkan/vulkan.hpp"
 

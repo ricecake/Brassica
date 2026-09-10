@@ -4,8 +4,10 @@
 #include <cstddef>
 #include <string>
 
-#include "fg/Blackboard.hpp"
-#include "fg/FrameGraph.hpp"
+#include "Engine.hpp"
+#include "graph/Graph.hpp"
+#include "graph/PhysicalExecutionBackend.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "passes/AtmosphereLUTPass.hpp"
 #include "Shader.hpp"
 #include "types/AtmospherePushConstants.hpp"
@@ -56,18 +58,87 @@ TEST_CASE("Atmosphere Shaders Compilation") {
 	}
 }
 
-TEST_CASE("AtmosphereLUTPass FrameGraph Pass Registration") {
-	FrameGraph           fg;
-	FrameGraphBlackboard blackboard;
+// Real TransmittanceLUTNode/MultiScatteringLUTNode through the real PhysicalExecutionBackend --
+// genuine coverage of the regeneration throttle (AtmosphereLUTPass::ShouldRegenerate/
+// MarkRegenerated) the old fg-dependent version of this test never had (it only checked that
+// RegisterPass populated the blackboard, using a null device that never actually built anything).
+// Gated on a real headless device since this exercises real compute dispatches; see
+// tests/test_headless.cpp for the skip pattern.
+TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually change") {
+	brassica::Engine        engine;
+	brassica::EngineOptions opts;
+	opts.headless = true;
+	engine.Init(opts);
 
-	// Mock AtmosphereLUTPass registration using nullptr device
-	brassica::AtmosphereLUTPass pass(nullptr, nullptr);
+	if (!engine.GetDevice()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
 
-	brassica::AtmospherePushConstants push{};
-	auto data = pass.RegisterPass(fg, blackboard, 0, push);
+	vk::Device device = engine.GetDevice();
 
-	CHECK(blackboard.has<brassica::AtmosphereLUTData>());
-	const auto& bbData = blackboard.get<brassica::AtmosphereLUTData>();
-	CHECK(bbData.transmittanceLUT == data.transmittanceLUT);
-	CHECK(bbData.multiScatteringLUT == data.multiScatteringLUT);
+	{
+		brassica::AtmosphereLUTPass          pass(device);
+		brassica::graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
+		brassica::graph::PhysicalExecutionBackend backend(registry);
+
+		vk::CommandPool pool = device.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, 0}
+		);
+		vk::CommandBuffer vkCmd =
+			device.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+		vk::Queue queue = device.getQueue(0, 0);
+
+		// Runs one "frame" of just the two LUT nodes and returns whether TransmittanceLUTNode
+		// reported itself active (i.e. whether it actually regenerated) -- the direct signal for
+		// the throttle, rather than inferring it from texture identity: ProvisionTexture reuses
+		// the same PhysicalTexture object whenever the desc matches regardless of whether the
+		// producing node ran, and these two LUTs' descs (fixed 256x64/32x32 R32G32B32A32Sfloat)
+		// never change, so identity alone can't distinguish "regenerated" from "throttled".
+		auto runFrame = [&](const brassica::AtmospherePushConstants& push) {
+			brassica::graph::Graph g;
+			g.Register<brassica::TransmittanceLUTNode>(
+				brassica::TransmittanceLUTNode{.pass = &pass, .registry = &registry, .activeFrame = 0, .push = push}
+			);
+			g.Register<brassica::MultiScatteringLUTNode>(
+				brassica::MultiScatteringLUTNode{.pass = &pass, .registry = &registry, .activeFrame = 0, .push = push}
+			);
+
+			brassica::graph::FrameContext ctx{.width = 256, .height = 64};
+
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			brassica::graph::CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			backend.Execute(g, ctx, cmd, true);
+			vkCmd.end();
+
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			queue.submit(submitInfo);
+			queue.waitIdle();
+
+			return g.Recipes()[0].isActive;
+		};
+
+		brassica::AtmospherePushConstants push1{};
+		CHECK(runFrame(push1)); // first call: nothing generated yet, must regenerate
+
+		REQUIRE(registry.GetTexture<brassica::TransmittanceLUT>() != nullptr);
+		REQUIRE(registry.GetTexture<brassica::MultiScatteringLUT>() != nullptr);
+
+		// Second frame, identical push constants: the throttle must report inactive.
+		CHECK_FALSE(runFrame(push1));
+
+		// Third frame, changed push constants: must regenerate again.
+		brassica::AtmospherePushConstants push2 = push1;
+		push2.mieAnisotropy = push1.mieAnisotropy + 0.1f;
+		CHECK(runFrame(push2));
+
+		// And immediately throttles again once caught up to the new parameters.
+		CHECK_FALSE(runFrame(push2));
+
+		device.destroyCommandPool(pool);
+	}
+
+	engine.Cleanup();
 }

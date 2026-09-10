@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -40,7 +41,10 @@ namespace brassica::graph {
 	// here on purpose: this layer never interprets them, it only carries them through (and,
 	// later, compares/hashes them for aliasing) for a backend to map onto real enums.
 	struct ResourceDesc {
-		enum class Kind : std::uint8_t { Image2D, Image3D, Buffer };
+		// AccelerationStructure carries none of the fields below -- no extent/format/usage is
+		// meaningful for it, they stay at their defaults. See PhysicalResource.hpp's
+		// PhysicalAccelerationStructure comment for why this kind is Imported-only.
+		enum class Kind : std::uint8_t { Image2D, Image3D, Buffer, AccelerationStructure };
 
 		Kind          kind = Kind::Image2D;
 		std::uint32_t width = 0;
@@ -57,6 +61,16 @@ namespace brassica::graph {
 		ResourceId   key = nullptr;
 		AccessKind   access = AccessKind::Read;
 		ResourceDesc desc{};
+
+		// Used only when this realization becomes a color attachment with loadOp=eClear (see
+		// DynamicRenderingWrapper::Begin, PhysicalExecutionBackend.hpp). Defaults to opaque
+		// black, matching what every current color target except the G-buffer wants. The
+		// G-buffer's alpha channel is a data sentinel, not just opacity -- deferred.frag reads
+		// albedo.a < 0.01 to mean "no terrain rendered here, show the gradient background" -- so
+		// TerrainNode overrides this to {0,0,0,0} for its three color realizations. Getting this
+		// wrong doesn't fail to compile or throw; it just silently miscomposites, which is
+		// exactly what happened before this field existed (see the migration's post-port fix).
+		std::array<float, 4> clearColor{0.0f, 0.0f, 0.0f, 1.0f};
 	};
 
 	// Returned by Node::Setup for a given frame. isActive drives culling; realizations are

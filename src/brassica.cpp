@@ -21,7 +21,6 @@
 #include "shaderc/shaderc.hpp"
 
 #include "fastgltf/core.hpp"
-#include "fg/FrameGraph.hpp"
 #include "meshoptimizer.h"
 
 // 5. UI

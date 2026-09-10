@@ -92,7 +92,6 @@ add_subdirectory(external/JoltPhysics/Build)
 add_subdirectory(external/vk-bootstrap)
 add_subdirectory(external/shaderc)
 add_subdirectory(external/meshoptimizer)
-add_subdirectory(external/FrameGraph)
 add_subdirectory(external/tracy)
 add_subdirectory(external/VulkanMemoryAllocator)
 add_subdirectory(external/doctest)
@@ -137,6 +136,7 @@ target_include_directories(brassica
         external/include
         external/glm
         external/entt/single_include
+        external/entt/src
         external/stb
         external/miniaudio
         external/imgui_entt_entity_editor
@@ -155,7 +155,6 @@ target_link_libraries(brassica
         vk-bootstrap
         shaderc_shared
         meshoptimizer
-        FrameGraph
         TracyClient
         Threads::Threads
         VulkanMemoryAllocator

@@ -9,10 +9,10 @@
 #include "vulkan/vulkan.hpp"
 
 #include "GLFW/glfw3.h"
+#include "graph/PhysicalRegistry.hpp"
 #include "InputHandler.hpp"
 #include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
-#include "passes/MeshCubePass.hpp"
 #include "passes/TerrainPass.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
@@ -82,6 +82,8 @@ namespace brassica {
 			const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
 			void*                                       pUserData
 		);
+
+		vk::Instance GetInstance() const { return instance; }
 
 		vk::Device GetDevice() const { return device; }
 
@@ -168,7 +170,6 @@ namespace brassica {
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
 		std::unique_ptr<GradientPass> gradientPass;
-		std::unique_ptr<MeshCubePass> meshCubePass;
 		std::unique_ptr<TerrainPass>  terrainPass;
 		std::unique_ptr<DeferredPass> deferredPass;
 
@@ -194,18 +195,14 @@ namespace brassica {
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
-		struct FrameGraphCacheState {
-			bool                         isDirty{true};
-			vk::Extent2D                 cachedExtent{0, 0};
-			vk::Format                   cachedFormat{vk::Format::eUndefined};
-			vk::ImageView                cachedClipmapView{nullptr};
-			vk::Sampler                  cachedClipmapSampler{nullptr};
-			vk::AccelerationStructureKHR cachedTLAS{nullptr};
-
-			void Invalidate() { isDirty = true; }
-		};
-
-		FrameGraphCacheState fgCacheState;
+		// Engine-owned and persistent across frames (not a per-frame stack local, unlike the old
+		// FrameGraph fg;) -- this is what lets a resource a node doesn't touch this frame simply
+		// keep existing rather than being torn down and rebuilt, and is the entire mechanism
+		// behind AtmosphereLUT-style regeneration throttling (see PhysicalResourceRegistry's
+		// desc-match reuse in ProvisionTexture/ProvisionBuffer). Constructed with a default
+		// device/allocator at Engine construction time; SetDeviceAndAllocator wires in the real
+		// ones once InitVulkan has run.
+		graph::PhysicalResourceRegistry physicalRegistry;
 
 		EngineOptions       options{};
 		uint32_t            validationErrorCount{0};
