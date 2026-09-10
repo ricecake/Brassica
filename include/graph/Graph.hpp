@@ -108,9 +108,17 @@ namespace brassica::graph {
 			}
 		}
 
+		void ExecuteNode(std::size_t index, CommandBuffer& cmd) {
+			if (index < m_nodes.size()) {
+				m_nodes[index].Execute(cmd);
+			}
+		}
+
 		[[nodiscard]] std::span<const std::size_t> Schedule() const { return m_schedule; }
 
 		[[nodiscard]] std::span<const Recipe> Recipes() const { return m_recipes; }
+
+		[[nodiscard]] std::span<const BarrierBatch> Batches() const { return m_batches; }
 
 	private:
 		// Node i depends on node j (must run after j) if i consumes a key that j produces.

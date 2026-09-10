@@ -18,7 +18,9 @@ namespace brassica::graph {
 	enum class AccessKind : std::uint8_t { Read, Write, ReadWrite };
 
 	// Stand-in for a backend command buffer. Deliberately opaque at this layer.
-	struct CommandBuffer {};
+	struct CommandBuffer {
+		void* vkCmd = nullptr;
+	};
 
 	// Per-frame, backend-agnostic render state (resolution, frame index, ...). Named
 	// FrameContext rather than RenderContext: brassica::RenderContext already exists in
