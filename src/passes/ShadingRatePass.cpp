@@ -50,7 +50,7 @@ namespace brassica {
 		allocInfo.setSetLayouts(set1Layout);
 		descriptorSet = device.allocateDescriptorSets(allocInfo).front();
 
-		compShader.LoadFromFile(device, "shaders/shading_rate.comp");
+		compShader.CompileComputeFromFile(device, "shaders/shading_rate.comp");
 		SetShader(&compShader);
 
 		vk::DescriptorSetLayout setLayouts[] = {globalSet0Layout, set1Layout};
