@@ -1,5 +1,7 @@
 #pragma once
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <source_location>
 #include <span>
 #include <string_view>
@@ -49,10 +51,70 @@ namespace brassica::graph {
 	template <typename T>
 	using HistoryTarget = typename HistoryTargetT<T>::type;
 
-	// A resource reference is a bare key or a History-wrapped key. This is the constraint
-	// used everywhere downstream, not ResourceKey directly.
+	// Wraps a key to mark it, at the type level, as a specific version in a write chain --
+	// e.g. two nodes both writing Swapchain in sequence produce VersionedKey<Swapchain, 1> and
+	// VersionedKey<Swapchain, 2>. Like History<T>, never unwrapped during set algebra (Concat/
+	// Dedup/Difference), so a write chain's ordering falls out of ordinary reachability with no
+	// special-casing in TypeList.hpp or Validation.hpp.
+	template <ResourceKey K, std::size_t N>
+	struct VersionedKey {};
+
 	template <typename T>
-	concept ResourceRef = ResourceKey<HistoryTarget<T>>;
+	struct IsVersionedT: std::false_type {};
+
+	template <typename K, std::size_t N>
+	struct IsVersionedT<VersionedKey<K, N>>: std::true_type {};
+
+	template <typename T>
+	inline constexpr bool IsVersioned = IsVersionedT<T>::value;
+
+	// VersionOf<K, 0> is K itself -- version 0 is whatever Create<K>/an import already produces,
+	// not a distinct type. This is what lets Modify<K> (no version) and Import<K> keep working
+	// untouched: they are indistinguishable from Modify<K, 0>.
+	template <typename K, std::size_t N>
+	struct VersionOfT {
+		using type = VersionedKey<K, N>;
+	};
+
+	template <typename K>
+	struct VersionOfT<K, 0> {
+		using type = K;
+	};
+
+	template <typename K, std::size_t N>
+	using VersionOf = typename VersionOfT<K, N>::type;
+
+	// Unwraps VersionedKey<K, N> to K; identity for anything else. Named to mirror HistoryTarget:
+	// VersionBase<T> is "what resource is this a version of", the same shape as "what resource is
+	// this history of".
+	template <typename T>
+	struct VersionBaseT {
+		using type = T;
+	};
+
+	template <typename K, std::size_t N>
+	struct VersionBaseT<VersionedKey<K, N>> {
+		using type = K;
+	};
+
+	template <typename T>
+	using VersionBase = typename VersionBaseT<T>::type;
+
+	template <typename T>
+	struct VersionIndexT: std::integral_constant<std::size_t, 0> {};
+
+	template <typename K, std::size_t N>
+	struct VersionIndexT<VersionedKey<K, N>>: std::integral_constant<std::size_t, N> {};
+
+	// The N in VersionedKey<K, N>; 0 for anything that isn't a VersionedKey (including K itself,
+	// which is correct -- VersionOf<K, 0> collapses to K).
+	template <typename T>
+	inline constexpr std::size_t VersionIndexOf = VersionIndexT<T>::value;
+
+	// A resource reference is a bare key, a History-wrapped key, or a versioned key. This is the
+	// constraint used everywhere downstream, not ResourceKey directly.
+	template <typename T>
+	concept ResourceRef = ResourceKey<HistoryTarget<VersionBase<T>>>;
 
 	// Constexpr, compiler-specific-format type name for diagnostics. No RTTI.
 	// WARNING: parses std::source_location::current().function_name(), whose format is
@@ -119,6 +181,8 @@ namespace brassica::graph {
 		std::string_view name;
 		bool             isHistory;
 		ResourceId       historyTarget = nullptr; // non-null iff isHistory
+		ResourceId       versionBase = nullptr;   // non-null iff this is a VersionedKey<K, N>
+		std::uint32_t    version = 0;             // the N in VersionedKey<K, N>; 0 otherwise
 	};
 
 	template <ResourceRef K>
@@ -137,8 +201,26 @@ namespace brassica::graph {
 		}
 	}
 
+	// Same discarded-if-constexpr-branch guard as HistoryTargetIdOf, for the same reason: a bare
+	// (non-versioned) K must never instantiate IdOf<VersionBase<K>>() from within its own
+	// kResourceTypeInfo<K> initializer.
+	template <typename K>
+	constexpr ResourceId VersionBaseIdOf() {
+		if constexpr (IsVersioned<K>) {
+			return IdOf<VersionBase<K>>();
+		} else {
+			return nullptr;
+		}
+	}
+
 	template <ResourceRef K>
-	inline constexpr ResourceTypeInfo kResourceTypeInfo{TypeName<K>(), IsHistory<K>, HistoryTargetIdOf<K>()};
+	inline constexpr ResourceTypeInfo kResourceTypeInfo{
+		TypeName<K>(),
+		IsHistory<K>,
+		HistoryTargetIdOf<K>(),
+		VersionBaseIdOf<K>(),
+		static_cast<std::uint32_t>(VersionIndexOf<K>),
+	};
 
 	template <ResourceRef K>
 	constexpr ResourceId IdOf() {

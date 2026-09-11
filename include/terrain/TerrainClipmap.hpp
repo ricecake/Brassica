@@ -1,10 +1,12 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "graph/Execution.hpp"
 #include "vk_mem_alloc.h"
 
 namespace brassica {
@@ -80,5 +82,25 @@ namespace brassica {
 		void CreateTextureArray();
 		void CreateSampler();
 	};
+
+	// Desc for registering TerrainClipmapTexture (ResourceKeys.hpp) as a graph-tracked Imported
+	// texture (Engine::Init, once -- the image/view handles never change after that) and for a
+	// consumer's own Read realization (TerrainNode/DeferredNode's Setup). layers = numLODs is
+	// what routes its bindless index into the sampled-*array* arena
+	// (PhysicalRegistry::AssignAndWriteBindlessIndices), not the plain sampled arena a
+	// single-layer texture would use -- getting this wrong wouldn't fail to compile, it would
+	// silently sample garbage or overflow into the wrong binding.
+	inline graph::ResourceDesc TerrainClipmapDesc(std::uint32_t numLODs) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = TERRAIN_MAP_DIM,
+			.height = TERRAIN_MAP_DIM,
+			.layers = numLODs,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
 
 } // namespace brassica

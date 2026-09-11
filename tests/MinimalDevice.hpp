@@ -53,8 +53,26 @@ namespace brassica::testing {
 			features13.dynamicRendering = VK_TRUE;
 			features13.synchronization2 = VK_TRUE;
 
+			// Bindless set 0 (PhysicalRegistry's bindless index machinery, Engine::InitGlobalDescriptors)
+			// -- confirmed present on this Mac's MoltenVK 1.4.2 via vulkaninfo before relying on it
+			// here, unlike mesh shader/ray query/AS/VRS, which MoltenVK genuinely doesn't implement
+			// (see this header's class comment). Mirrors the same features Engine.cpp requests.
+			VkPhysicalDeviceVulkan12Features features12{};
+			features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+			features12.descriptorIndexing = VK_TRUE;
+			features12.descriptorBindingPartiallyBound = VK_TRUE;
+			features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+			features12.runtimeDescriptorArray = VK_TRUE;
+			features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+			features12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+			features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+			features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
-			selector.set_minimum_version(1, 3).set_required_features_13(features13).defer_surface_initialization();
+			selector.set_minimum_version(1, 3)
+				.set_required_features_13(features13)
+				.set_required_features_12(features12)
+				.defer_surface_initialization();
 
 			auto physRes = selector.select();
 			if (!physRes) {

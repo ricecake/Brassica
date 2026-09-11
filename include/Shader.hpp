@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -50,6 +51,11 @@ namespace brassica {
 
 		const std::string& GetFilePath() const { return filePath; }
 
+		// Bumped on every successful (re)compile. Lets a cache keyed on (shader pointer,
+		// generation) -- see render::PipelineLibrary -- treat a hot-reloaded shader as a
+		// different key without either side needing to notify the other directly.
+		std::uint64_t GetGeneration() const { return generation; }
+
 		const std::set<std::string>& GetIncludedFiles() const { return includedFiles; }
 
 		shaderc_shader_kind GetKind() const { return shaderKind; }
@@ -63,6 +69,7 @@ namespace brassica {
 		std::vector<uint32_t> spirvCode;
 		vk::ShaderModule      shaderModule{nullptr};
 		shaderc_shader_kind   shaderKind{shaderc_glsl_infer_from_source};
+		std::uint64_t         generation{0};
 	};
 
 	// Compute Shader Subclass

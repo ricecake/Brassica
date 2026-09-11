@@ -1,54 +1,12 @@
-#include "passes/TerrainPass.hpp"
+#include "terrain/TerrainAccelerationStructure.hpp"
 
-#include <array>
+#include <cmath>
+#include <cstring>
 #include <vector>
-
-#include "spdlog/spdlog.h"
-
-#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
-	TerrainPass::TerrainPass(
-		vk::Instance            instance,
-		vk::Device              dev,
-		vk::DescriptorSetLayout globalSet0Layout,
-		ShaderWatcher*          watcher,
-		vk::PipelineCache       pCache
-	):
-		RenderPass(
-			"TerrainPass",
-			dev,
-			std::array<vk::Format, 3>{
-				vk::Format::eR16G16B16A16Sfloat,
-				vk::Format::eR16G16B16A16Sfloat,
-				vk::Format::eR8G8B8A8Unorm
-			},
-			vk::Format::eD32Sfloat
-		) {
-		this->pipelineCache = pCache;
-		dls.init(instance, dev);
-		InitPipeline(instance, dev, globalSet0Layout, watcher, pCache);
-	}
-
-	TerrainPass::~TerrainPass() {
-		if (terrainDescriptorPool) {
-			device.destroyDescriptorPool(terrainDescriptorPool);
-			terrainDescriptorPool = nullptr;
-		}
-		if (terrainSet1Layout) {
-			device.destroyDescriptorSetLayout(terrainSet1Layout);
-			terrainSet1Layout = nullptr;
-		}
-		if (taskShader.GetModule()) {
-			taskShader.Destroy(device);
-		}
-		if (lastAllocator != VK_NULL_HANDLE) {
-			DestroyAccelerationStructures();
-		}
-	}
-
-	void TerrainPass::DestroyAccelerationStructures() {
+	void TerrainAccelerationStructure::DestroyAccelerationStructures() {
 		if (!lastAllocator)
 			return;
 
@@ -81,7 +39,7 @@ namespace brassica {
 		destroyBuf(scratchBuffer);
 	}
 
-	void TerrainPass::BuildOrUpdateAccelerationStructure(
+	void TerrainAccelerationStructure::BuildOrUpdate(
 		VmaAllocator     allocator,
 		const glm::vec3& cameraPos,
 		float            baseTexelSize,
@@ -366,184 +324,6 @@ namespace brassica {
 		queue.waitIdle();
 
 		device.destroyCommandPool(tempPool);
-	}
-
-	void TerrainPass::InitPipeline(
-		vk::Instance            instance,
-		vk::Device              dev,
-		vk::DescriptorSetLayout globalSet0Layout,
-		ShaderWatcher*          watcher,
-		vk::PipelineCache       pCache
-	) {
-		this->pipelineCache = pCache;
-		dls.init(instance, dev);
-
-		// Set 1 Layout for clipmap texture sampler
-		vk::DescriptorSetLayoutBinding samplerBinding{};
-		samplerBinding.setBinding(0);
-		samplerBinding.setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
-		samplerBinding.setDescriptorCount(1);
-		samplerBinding.setStageFlags(
-			vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eFragment
-		);
-
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(samplerBinding);
-		terrainSet1Layout = dev.createDescriptorSetLayout(layoutInfo);
-
-		// Descriptor Pool for Set 1
-		vk::DescriptorPoolSize poolSize{};
-		poolSize.setType(vk::DescriptorType::eCombinedImageSampler);
-		poolSize.setDescriptorCount(1);
-
-		vk::DescriptorPoolCreateInfo poolInfo{};
-		poolInfo.setMaxSets(1);
-		poolInfo.setPoolSizes(poolSize);
-		terrainDescriptorPool = dev.createDescriptorPool(poolInfo);
-
-		vk::DescriptorSetAllocateInfo allocInfo{};
-		allocInfo.setDescriptorPool(terrainDescriptorPool);
-		allocInfo.setSetLayouts(terrainSet1Layout);
-		terrainDescriptorSet = dev.allocateDescriptorSets(allocInfo).front();
-
-		InitPipelineCustom(instance, dev, globalSet0Layout, watcher);
-	}
-
-	void TerrainPass::InitPipelineCustom(
-		vk::Instance            instance,
-		vk::Device              dev,
-		vk::DescriptorSetLayout globalSet0Layout,
-		ShaderWatcher*          watcher
-	) {
-		if (!taskShader.CompileTaskFromFile(dev, "shaders/terrain.task")) {
-			spdlog::error("Failed to compile terrain.task shader file");
-		}
-		if (!meshShader.CompileMeshFromFile(dev, "shaders/terrain.mesh")) {
-			spdlog::error("Failed to compile terrain.mesh shader file");
-		}
-		if (!fragShader.CompileFragmentFromFile(dev, "shaders/terrain.frag")) {
-			spdlog::error("Failed to compile terrain.frag shader file");
-		}
-
-		vertOrMeshShader = &meshShader;
-		RenderPass::fragShader = &this->fragShader;
-
-		std::array<vk::DescriptorSetLayout, 2> setLayouts = {globalSet0Layout, terrainSet1Layout};
-		vk::PushConstantRange                  pushConstantRange{};
-		pushConstantRange.setStageFlags(vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT);
-		pushConstantRange.setOffset(0);
-		pushConstantRange.setSize(sizeof(TerrainPushConstants));
-
-		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
-		storedPushConstants.assign({pushConstantRange});
-
-		auto buildPipeline = [this]() {
-			if (pipeline)
-				device.destroyPipeline(pipeline);
-			if (pipelineLayout)
-				device.destroyPipelineLayout(pipelineLayout);
-
-			vk::PipelineLayoutCreateInfo layoutInfo{};
-			layoutInfo.setSetLayouts(storedSetLayouts);
-			layoutInfo.setPushConstantRanges(storedPushConstants);
-			pipelineLayout = device.createPipelineLayout(layoutInfo);
-
-			std::vector<vk::PipelineShaderStageCreateInfo> stages =
-				{taskShader.GetStageCreateInfo(), meshShader.GetStageCreateInfo(), fragShader.GetStageCreateInfo()};
-
-			vk::PipelineVertexInputStateCreateInfo   vertexInputInfo{};
-			vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
-			inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
-
-			vk::PipelineViewportStateCreateInfo viewportState{};
-			viewportState.setViewportCount(1);
-			viewportState.setScissorCount(1);
-
-			vk::PipelineRasterizationStateCreateInfo rasterizer{};
-			rasterizer.setPolygonMode(vk::PolygonMode::eFill);
-			rasterizer.setLineWidth(1.0f);
-			rasterizer.setCullMode(vk::CullModeFlagBits::eBack);
-			rasterizer.setFrontFace(vk::FrontFace::eCounterClockwise);
-
-			vk::PipelineMultisampleStateCreateInfo multisampling{};
-			multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
-
-			std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments(colorFormats.size());
-			for (size_t i = 0; i < colorFormats.size(); ++i) {
-				colorBlendAttachments[i].setColorWriteMask(
-					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
-					vk::ColorComponentFlagBits::eA
-				);
-			}
-
-			vk::PipelineColorBlendStateCreateInfo colorBlending{};
-			colorBlending.setAttachments(colorBlendAttachments);
-
-			vk::PipelineDepthStencilStateCreateInfo depthStencil{};
-			depthStencil.setDepthTestEnable(VK_TRUE);
-			depthStencil.setDepthWriteEnable(VK_TRUE);
-			depthStencil.setDepthCompareOp(vk::CompareOp::eLess);
-
-			std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
-			vk::PipelineDynamicStateCreateInfo dynamicState{};
-			dynamicState.setDynamicStates(dynamicStates);
-
-			vk::PipelineRenderingCreateInfo renderingCreateInfo{};
-			renderingCreateInfo.setColorAttachmentFormats(colorFormats);
-			renderingCreateInfo.setDepthAttachmentFormat(depthFormat);
-
-			vk::GraphicsPipelineCreateInfo pipelineInfo{};
-			pipelineInfo.setPNext(&renderingCreateInfo);
-			pipelineInfo.setStages(stages);
-			pipelineInfo.setPVertexInputState(&vertexInputInfo);
-			pipelineInfo.setPInputAssemblyState(&inputAssembly);
-			pipelineInfo.setPViewportState(&viewportState);
-			pipelineInfo.setPRasterizationState(&rasterizer);
-			pipelineInfo.setPMultisampleState(&multisampling);
-			pipelineInfo.setPColorBlendState(&colorBlending);
-			pipelineInfo.setPDepthStencilState(&depthStencil);
-			pipelineInfo.setPDynamicState(&dynamicState);
-			pipelineInfo.setLayout(pipelineLayout);
-
-			auto result = device.createGraphicsPipeline(this->pipelineCache, pipelineInfo);
-			if (result.result == vk::Result::eSuccess) {
-				pipeline = result.value;
-				spdlog::info("TerrainPass pipeline created successfully.");
-			} else {
-				spdlog::error("Failed to create TerrainPass graphics pipeline.");
-			}
-		};
-
-		if (watcher) {
-			auto rebuildCb = [this, buildPipeline]() {
-				spdlog::info("Rebuilding TerrainPass pipeline due to shader modification...");
-				device.waitIdle();
-				buildPipeline();
-			};
-			watcher->RegisterShader(&taskShader, rebuildCb);
-			watcher->RegisterShader(&meshShader, rebuildCb);
-			watcher->RegisterShader(&fragShader, rebuildCb);
-		}
-
-		buildPipeline();
-	}
-
-	void TerrainPass::UpdateClipmapDescriptor(vk::ImageView clipmapImageView, vk::Sampler clipmapSampler) {
-		if (!terrainDescriptorSet || !clipmapImageView || !clipmapSampler)
-			return;
-
-		vk::DescriptorImageInfo imageInfo{};
-		imageInfo.setImageView(clipmapImageView);
-		imageInfo.setSampler(clipmapSampler);
-		imageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-
-		vk::WriteDescriptorSet descriptorWrite{};
-		descriptorWrite.setDstSet(terrainDescriptorSet);
-		descriptorWrite.setDstBinding(0);
-		descriptorWrite.setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
-		descriptorWrite.setImageInfo(imageInfo);
-
-		device.updateDescriptorSets(descriptorWrite, nullptr);
 	}
 
 } // namespace brassica

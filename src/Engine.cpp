@@ -219,25 +219,24 @@ namespace brassica {
 			// registry still owns (G-buffer textures, the gradient background, ...).
 			physicalRegistry.Reset();
 
-			if (deferredPass) {
-				deferredPass->DestroyPipeline();
-				deferredPass.reset();
-			}
-
-			if (terrainPass) {
-				terrainPass->DestroyPipeline();
-				terrainPass.reset();
-			}
+			terrainAS.DestroyAccelerationStructures();
 
 			terrainUploader.Cleanup();
 			terrainClipmap.Cleanup();
 
-			if (gradientPass) {
-				gradientPass->DestroyPipeline();
-				gradientPass.reset();
-			}
+			pipelineLibrary.Reset();
+			gradientVertShader.Destroy(device);
+			gradientFragShader.Destroy(device);
+			deferredVertShader.Destroy(device);
+			deferredFragShader.Destroy(device);
+			terrainTaskShader.Destroy(device);
+			terrainMeshShader.Destroy(device);
+			terrainFragShader.Destroy(device);
+			waterVertShader.Destroy(device);
+			waterFragShader.Destroy(device);
 
 			CleanupGlobalUBO();
+			CleanupGlobalDescriptors();
 
 			for (int i = 0; i < FRAME_OVERLAP; i++) {
 				device.destroySemaphore(frames[i].swapchainSemaphore);
@@ -314,6 +313,7 @@ namespace brassica {
 		rng.seed(globalSeed);
 
 		InitGlobalUBO();
+		InitGlobalDescriptors();
 
 		std::string shaderDir = "shaders";
 		if (!std::filesystem::exists(shaderDir)) {
@@ -327,17 +327,54 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		gradientPass =
-			std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
-		terrainPass =
-			std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
-		deferredPass = std::make_unique<DeferredPass>(
-			device,
-			globalSet0Layout,
-			GetSwapchainFormat(),
-			&shaderWatcher,
-			GetPipelineCache()
-		);
+		// Exact same literal path GradientPass::InitPipeline used to compile from -- not
+		// shaderDir above, deliberately: Shader::LoadFromFile's fallback search (bin/,
+		// <build>/bin/, ...) already finds it wherever it actually lives, so preserving the
+		// literal preserves behavior exactly rather than changing which path resolution wins.
+		if (!gradientVertShader.CompileVertexFromFile(device, "shaders/gradient.vert")) {
+			spdlog::error("Failed to compile gradient.vert shader file");
+		}
+		if (!gradientFragShader.CompileFragmentFromFile(device, "shaders/gradient.frag")) {
+			spdlog::error("Failed to compile gradient.frag shader file");
+		}
+		// No rebuild callback needed: GradientNode calls PipelineLibrary::ResolveCached every
+		// frame with a request keyed partly on these shaders' generation numbers, so a bare
+		// recompile-in-place here (ShaderWatcher's default behavior with no callback) already
+		// invalidates the cache entry on the very next frame.
+		shaderWatcher.RegisterShader(&gradientVertShader);
+		shaderWatcher.RegisterShader(&gradientFragShader);
+
+		terrainAS.Init(instance, device);
+		if (!terrainTaskShader.CompileTaskFromFile(device, "shaders/terrain.task")) {
+			spdlog::error("Failed to compile terrain.task shader file");
+		}
+		if (!terrainMeshShader.CompileMeshFromFile(device, "shaders/terrain.mesh")) {
+			spdlog::error("Failed to compile terrain.mesh shader file");
+		}
+		if (!terrainFragShader.CompileFragmentFromFile(device, "shaders/terrain.frag")) {
+			spdlog::error("Failed to compile terrain.frag shader file");
+		}
+		shaderWatcher.RegisterShader(&terrainTaskShader);
+		shaderWatcher.RegisterShader(&terrainMeshShader);
+		shaderWatcher.RegisterShader(&terrainFragShader);
+
+		if (!deferredVertShader.CompileVertexFromFile(device, "shaders/deferred.vert")) {
+			spdlog::error("Failed to compile deferred.vert shader file");
+		}
+		if (!deferredFragShader.CompileFragmentFromFile(device, "shaders/deferred.frag")) {
+			spdlog::error("Failed to compile deferred.frag shader file");
+		}
+		shaderWatcher.RegisterShader(&deferredVertShader);
+		shaderWatcher.RegisterShader(&deferredFragShader);
+
+		if (!waterVertShader.CompileVertexFromFile(device, "shaders/water.vert")) {
+			spdlog::error("Failed to compile water.vert shader file");
+		}
+		if (!waterFragShader.CompileFragmentFromFile(device, "shaders/water.frag")) {
+			spdlog::error("Failed to compile water.frag shader file");
+		}
+		shaderWatcher.RegisterShader(&waterVertShader);
+		shaderWatcher.RegisterShader(&waterFragShader);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
@@ -354,7 +391,23 @@ namespace brassica {
 				graphicsQueue
 			);
 		}
-		terrainPass->UpdateClipmapDescriptor(terrainClipmap.GetImageView(), terrainClipmap.GetSampler());
+
+		// Registered once, here -- the clipmap's image/view handles are stable for the engine's
+		// entire lifetime (only its *contents* mutate, via terrainUploader), so re-registering it
+		// every frame would just churn a fresh bindless index for no reason (RegisterImportedTexture
+		// has no desc-match reuse the way ProvisionTexture does for owned resources). Real state,
+		// not the eUndefined/false defaults: the uploader always leaves the image in
+		// eShaderReadOnlyOptimal by the time its timeline semaphore signals (AsyncTerrainUploader.cpp),
+		// and DrawFrame's submission already waits on that semaphore before this image is ever
+		// touched -- see RegisterImportedTexture's own comment on why a long-lived import must pass
+		// its real state.
+		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
+			terrainClipmap.GetImage(),
+			terrainClipmap.GetImageView(),
+			TerrainClipmapDesc(terrainClipmap.GetNumLODs()),
+			vk::ImageLayout::eShaderReadOnlyOptimal,
+			/*hasDefinedContents=*/true
+		);
 
 		taskScheduler.Initialize();
 		camera.UpdateMatrices(16.0f / 9.0f);
@@ -546,12 +599,25 @@ namespace brassica {
 		features13.dynamicRendering = VK_TRUE;
 		features13.synchronization2 = VK_TRUE;
 
-		// Optional but required for bindless later:
+		// Bindless set 0 (PhysicalRegistry.hpp's bindless index machinery, Engine::InitGlobalDescriptors):
+		// runtimeDescriptorArray + shaderSampledImageArrayNonUniformIndexing/
+		// shaderStorageImageArrayNonUniformIndexing let a shader index an unsized
+		// texture2D[]/image2D[] with nonuniformEXT; the two UpdateAfterBind bits let the registry
+		// write a new texture's descriptor without invalidating command buffers that reference the
+		// same set but a different index. Deliberately NOT requesting
+		// descriptorBindingAccelerationStructureUpdateAfterBind (the spottiest of this family) or
+		// descriptorBindingVariableDescriptorCount (unused -- see ShadingRateAttachmentDesc-style
+		// fixed-size arrays in InitGlobalDescriptors).
 		VkPhysicalDeviceVulkan12Features features12{};
 		features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 		features12.descriptorIndexing = VK_TRUE;
 		features12.descriptorBindingPartiallyBound = VK_TRUE;
 		features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+		features12.runtimeDescriptorArray = VK_TRUE;
+		features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+		features12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+		features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+		features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 		features12.timelineSemaphore = VK_TRUE;
 		features12.bufferDeviceAddress = VK_TRUE;
 
@@ -596,6 +662,28 @@ namespace brassica {
 		}
 
 		chosenGPU = phys_ret.value().physical_device;
+
+		// Bindless sampled-image array size: clamp to a generous fixed default rather than the
+		// device's real (often absurdly high, e.g. 1000000+ on this Mac's MoltenVK) limit --
+		// descriptorBindingVariableDescriptorCount is deliberately not used (PhysicalRegistry.hpp),
+		// so this is a real, if small, chunk of descriptor memory reserved up front regardless of
+		// how many textures actually exist. Logged so a future device swap with a *lower* limit
+		// than 4096 doesn't silently truncate.
+		{
+			auto chain =
+				chosenGPU
+					.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDescriptorIndexingProperties>();
+			const auto& descIndexingProps = chain.get<vk::PhysicalDeviceDescriptorIndexingProperties>();
+			maxBindlessSampledImages = std::min<std::uint32_t>(
+				4096,
+				descIndexingProps.maxPerStageDescriptorUpdateAfterBindSampledImages
+			);
+			spdlog::info(
+				"Bindless sampled-image array size: {} (device max {})",
+				maxBindlessSampledImages,
+				descIndexingProps.maxPerStageDescriptorUpdateAfterBindSampledImages
+			);
+		}
 
 		// 3. Logical Device
 		vkb::DeviceBuilder deviceBuilder{phys_ret.value()};
@@ -646,6 +734,7 @@ namespace brassica {
 		}
 
 		pipelineCache = device.createPipelineCache(cacheCreateInfo);
+		pipelineLibrary.SetDeviceAndCache(device, pipelineCache);
 
 		return true;
 	}
@@ -722,10 +811,28 @@ namespace brassica {
 		// {eUndefined, hasDefinedContents=false}, which is correct here -- DeferredNode's
 		// Modify<Swapchain> fully overwrites every pixel via a fullscreen triangle, so there is
 		// nothing worth preserving from whatever the driver left behind after the last present.
+		//
+		// Unlike an Owning resource (where usageMask drives real image creation and is therefore
+		// always accurate), an Imported one's desc is just metadata describing an image this
+		// registry didn't create -- it must match what the image was *actually* created with, not
+		// what would be generically convenient. ColorAttachmentDesc() claims eSampled (correct for
+		// G-buffer-style targets the bindless array is meant to hold), but vk-bootstrap's
+		// SwapchainBuilder here never requests VK_IMAGE_USAGE_SAMPLED_BIT (Engine.cpp's swapchain
+		// creation has no set_image_usage_flags call, so it's the vk-bootstrap default of
+		// eColorAttachment | eTransferDst only) -- so claiming eSampled made
+		// AssignAndWriteBindlessIndices try to write an invalid SAMPLED_IMAGE descriptor pointing
+		// at a view that was never created with that usage. Stripped here rather than fixed at the
+		// preset: every *other* ColorAttachmentDesc consumer is Owning and does want eSampled.
+		graph::ResourceDesc swapchainDesc = graph::ColorAttachmentDesc(extent.width, extent.height, format);
+		swapchainDesc.usageMask &= ~static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled);
+
 		physicalRegistry.RegisterImportedTexture<Swapchain>(
 			swapchainImages[swapchainImageIndex],
 			swapchainImageViews[swapchainImageIndex],
-			graph::ColorAttachmentDesc(extent.width, extent.height, format)
+			swapchainDesc,
+			vk::ImageLayout::eUndefined,
+			false,
+			frameNumber
 		);
 
 		uint32_t activeFrame = frameNumber % FRAME_OVERLAP;
@@ -792,32 +899,54 @@ namespace brassica {
 		// the swapchain above. See the AccelerationStructure resource-kind plan for why moving
 		// the build itself into the graph's command buffer was rejected (a real use-after-free
 		// risk against frames still in flight).
-		terrainPass->BuildOrUpdateAccelerationStructure(
+		terrainAS.BuildOrUpdate(
 			allocator,
 			glm::vec3(terrainPush.cameraPos),
 			terrainPush.cameraPos.w,
 			terrainPush.gridParams.x
 		);
-		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainPass->GetTLAS());
+		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
+		// The terrain clipmap has no producer node -- it's registered once at Engine::Init and
+		// never rewritten by anything in the graph -- so a plain Import (Node.hpp) declares it
+		// for validation purposes, same idea as the swapchain would need if DeferredNode's own
+		// Modify<Swapchain> didn't already self-satisfy that requirement.
 		graph::Graph frameGraph;
-		frameGraph.Register<GradientNode>(GradientNode{.pass = gradientPass.get(), .extent = extent});
-		frameGraph.Register<TerrainNode>(TerrainNode{
-			.pass = terrainPass.get(),
+		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
+		frameGraph.Register<GradientNode>(GradientNode{
+			.pipelineLibrary = &pipelineLibrary,
+			.vertShader = &gradientVertShader,
+			.fragShader = &gradientFragShader,
 			.extent = extent,
-			.globalDescriptorSet = globalDescriptorSets[activeFrame],
-			.pushConstants = terrainPush,
+		});
+		frameGraph.Register<TerrainNode>(TerrainNode{
+			.pipelineLibrary = &pipelineLibrary,
+			.taskShader = &terrainTaskShader,
+			.meshShader = &terrainMeshShader,
+			.fragShader = &terrainFragShader,
+			.terrainAS = &terrainAS,
+			.extent = extent,
+			.push = terrainPush,
 		});
 		frameGraph.Register<DeferredNode>(DeferredNode{
-			.pass = deferredPass.get(),
-			.registry = &physicalRegistry,
+			.pipelineLibrary = &pipelineLibrary,
+			.vertShader = &deferredVertShader,
+			.fragShader = &deferredFragShader,
 			.extent = extent,
 			.swapchainFormat = format,
-			.globalDescriptorSet = globalDescriptorSets[activeFrame],
-			.activeFrame = activeFrame,
-			.clipmapImageView = terrainClipmap.GetImageView(),
-			.clipmapSampler = terrainClipmap.GetSampler(),
-			.pushConstants = terrainPush,
+			.push = DeferredPushConstants{
+				.cameraPos = terrainPush.cameraPos,
+				.gridParams = terrainPush.gridParams,
+				.lodOffsets0_3 = terrainPush.lodOffsets0_3,
+				.lodOffsets4_7 = terrainPush.lodOffsets4_7,
+			},
+		});
+		frameGraph.Register<WaterNode>(WaterNode{
+			.pipelineLibrary = &pipelineLibrary,
+			.vertShader = &waterVertShader,
+			.fragShader = &waterFragShader,
+			.extent = extent,
+			.swapchainFormat = format,
 		});
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
@@ -825,7 +954,15 @@ namespace brassica {
 		graph::CommandBuffer            graphCmd{static_cast<void*>(static_cast<VkCommandBuffer>(frame.commandBuffer))};
 
 		try {
-			backend.Execute(frameGraph, ctx, graphCmd, true);
+			// enableAliasing=false: ImageAliasPool/BufferAliasPool's block bookkeeping
+			// (PhysicalResource.hpp) records neither an occupant's identity nor its liveness, only
+			// the schedule stage its lifetime last touched -- and that bookkeeping is never
+			// refreshed for a key that keeps hitting ProvisionTexture's desc-match early return
+			// (PhysicalRegistry.hpp), which every steady-state resource here does every frame. A
+			// window resize (or any new/changed key) can then bind a fresh image onto a block a
+			// live resource still occupies. See FRAME_GRAPH_MIGRATION_TODO.md for the full writeup;
+			// this was already the migration plan's own recommendation before shipping true.
+			backend.Execute(frameGraph, ctx, graphCmd, false);
 		} catch (const std::exception& e) {
 			spdlog::error("Frame graph execution failed: {}", e.what());
 			frame.commandBuffer.end();
@@ -1033,6 +1170,144 @@ namespace brassica {
 		if (globalSet0Layout) {
 			device.destroyDescriptorSetLayout(globalSet0Layout);
 			globalSet0Layout = nullptr;
+		}
+	}
+
+	// The bindless set: PhysicalResourceRegistry writes into bindings 0/1/3/4 as textures are
+	// provisioned (see PhysicalRegistry.hpp's AssignAndWriteBindlessIndices); this function's
+	// only job is to create the layout/pool/set those writes land in, and to populate the one
+	// binding the registry never touches itself -- the sampler catalog. Deliberately separate
+	// from InitGlobalUBO/globalSet0Layout -- see the comment on this class's bindlessSetLayout.
+	void Engine::InitGlobalDescriptors() {
+		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		bindings[0]
+			.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(maxBindlessSampledImages)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		bindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(64)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		bindings[2]
+			.setBinding(2)
+			.setDescriptorType(vk::DescriptorType::eSampler)
+			.setDescriptorCount(4)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		bindings[3]
+			.setBinding(3)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setDescriptorCount(256)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		bindings[4]
+			.setBinding(4)
+			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
+			.setDescriptorCount(4)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+
+		// The sampler catalog (binding 2) is written once, below, right after allocation -- never
+		// partially bound or update-after-bind, unlike the other four, which the registry writes
+		// into over the course of the run as textures/an AS get provisioned.
+		std::array<vk::DescriptorBindingFlags, 5> bindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlags{},
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound, // AS: no eUpdateAfterBind -- see
+			// PhysicalRegistry.hpp's RegisterImportedAccelerationStructure comment for why.
+		};
+		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+		bindingFlagsInfo.setBindingFlags(bindingFlags);
+
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.setBindings(bindings);
+		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
+		layoutInfo.pNext = &bindingFlagsInfo;
+		bindlessSetLayout = device.createDescriptorSetLayout(layoutInfo);
+
+		std::array<vk::DescriptorPoolSize, 4> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
+			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
+		};
+		vk::DescriptorPoolCreateInfo poolInfo{};
+		poolInfo.setPoolSizes(poolSizes);
+		poolInfo.setMaxSets(1);
+		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind);
+		bindlessDescriptorPool = device.createDescriptorPool(poolInfo);
+
+		vk::DescriptorSetAllocateInfo allocInfo{};
+		allocInfo.setDescriptorPool(bindlessDescriptorPool);
+		allocInfo.setSetLayouts(bindlessSetLayout);
+		bindlessDescriptorSet = device.allocateDescriptorSets(allocInfo).front();
+
+		// Sampler catalog: 4 engine-owned entries, matching the real configs already hand-picked
+		// by existing passes -- {nearest+clamp (DeferredPass today), linear+clamp
+		// (AtmosphereLUTPass/water today), linear+repeat+mipmap (the terrain clipmap's own
+		// config, TerrainClipmap.cpp), nearest+repeat}. Written once, here, never rewritten.
+		auto makeSampler = [&](vk::Filter filter, vk::SamplerAddressMode addressMode, bool mipmap) {
+			vk::SamplerCreateInfo info{};
+			info.setMagFilter(filter)
+				.setMinFilter(filter)
+				.setAddressModeU(addressMode)
+				.setAddressModeV(addressMode)
+				.setAddressModeW(addressMode)
+				.setMipmapMode(mipmap ? vk::SamplerMipmapMode::eLinear : vk::SamplerMipmapMode::eNearest)
+				.setMinLod(0.0f)
+				.setMaxLod(mipmap ? VK_LOD_CLAMP_NONE : 0.25f);
+			return device.createSampler(info);
+		};
+		bindlessSamplers[0] = makeSampler(vk::Filter::eNearest, vk::SamplerAddressMode::eClampToEdge, false);
+		bindlessSamplers[1] = makeSampler(vk::Filter::eLinear, vk::SamplerAddressMode::eClampToEdge, false);
+		bindlessSamplers[2] = makeSampler(vk::Filter::eLinear, vk::SamplerAddressMode::eRepeat, true);
+		bindlessSamplers[3] = makeSampler(vk::Filter::eNearest, vk::SamplerAddressMode::eRepeat, false);
+
+		// Registered once, permanently -- every subsequent shader compile (including hot
+		// reloads) sees the same [[NAME]] substitution, so shaders/bindless.glsl's
+		// BRASSICA_SAMPLER_* macros can never disagree with this catalog's real indices.
+		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
+		std::array<vk::DescriptorImageInfo, 4> samplerInfos{};
+		for (std::uint32_t i = 0; i < 4; ++i) {
+			samplerInfos[i].setSampler(bindlessSamplers[i]);
+		}
+		vk::WriteDescriptorSet samplerWrite{};
+		samplerWrite.setDstSet(bindlessDescriptorSet);
+		samplerWrite.setDstBinding(2);
+		samplerWrite.setDstArrayElement(0);
+		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
+		samplerWrite.setImageInfo(samplerInfos);
+		device.updateDescriptorSets(samplerWrite, {});
+
+		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
+		bindlessBindings.set = bindlessDescriptorSet;
+		bindlessBindings.layout = bindlessSetLayout;
+		bindlessBindings.sampledImage2DBinding = 0;
+		bindlessBindings.sampledImage2DArrayBinding = 1;
+		bindlessBindings.storageImageBinding = 3;
+		bindlessBindings.accelerationStructureBinding = 4;
+		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
+	}
+
+	void Engine::CleanupGlobalDescriptors() {
+		for (vk::Sampler& sampler : bindlessSamplers) {
+			if (sampler) {
+				device.destroySampler(sampler);
+				sampler = nullptr;
+			}
+		}
+		if (bindlessDescriptorPool) {
+			device.destroyDescriptorPool(bindlessDescriptorPool);
+			bindlessDescriptorPool = nullptr;
+		}
+		if (bindlessSetLayout) {
+			device.destroyDescriptorSetLayout(bindlessSetLayout);
+			bindlessSetLayout = nullptr;
 		}
 	}
 

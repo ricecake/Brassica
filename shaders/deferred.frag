@@ -1,29 +1,21 @@
 #version 460
-#extension GL_EXT_ray_query : enable
+#include "bindless.glsl"
+#include "bindless_tlas.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
-layout(set = 0, binding = 0) uniform FrameUBO {
-	float time;
-	uint  frameIndex;
-	uint  globalSeed;
-	uint  frameRandom;
-} ubo;
-
-layout(set = 1, binding = 0) uniform sampler2D gPosition;
-layout(set = 1, binding = 1) uniform sampler2D gNormal;
-layout(set = 1, binding = 2) uniform sampler2D gAlbedo;
-layout(set = 1, binding = 3) uniform sampler2D backgroundTex;
-layout(set = 1, binding = 4) uniform sampler2DArray terrainClipmap;
-layout(set = 1, binding = 5) uniform accelerationStructureEXT topLevelAS;
-
-layout(push_constant) uniform TerrainPushConstants {
-	mat4  viewProj;
-	vec4  cameraPos;
-	uvec4 gridParams;
+layout(push_constant) uniform DeferredPushConstants {
+	vec4  cameraPos; // xyz = camera position, w = baseTexelSize
+	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uint  gPositionIndex;
+	uint  gNormalIndex;
+	uint  gAlbedoIndex;
+	uint  backgroundIndex;
+	uint  clipmapIndex;
+	uint  tlasIndex;
 } params;
 
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
@@ -72,7 +64,7 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 
 		vec2 uv = sampleToroidalUV(samplePos.xz, stepLod);
 		// Sample the specific array layer matching the LOD
-		vec4 texSample = texture(terrainClipmap, vec3(uv, float(stepLod)));
+		vec4 texSample = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv, float(stepLod)));
 		float terrainHeight = texSample.r;
 
 		if (samplePos.y <= terrainHeight) {
@@ -95,10 +87,10 @@ vec3 ACESFilm(vec3 x) {
 }
 
 void main() {
-	vec4 albedo = texture(gAlbedo, inUV);
-	vec3 norm = texture(gNormal, inUV).rgb;
-	vec3 pos = texture(gPosition, inUV).rgb;
-	vec3 hdrBg = texture(backgroundTex, inUV).rgb;
+	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
+	vec3 norm = SAMPLE_NEAREST(params.gNormalIndex, inUV).rgb;
+	vec3 pos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
+	vec3 hdrBg = SAMPLE_NEAREST(params.backgroundIndex, inUV).rgb;
 
 	vec3 hdrColor;
 
@@ -120,7 +112,7 @@ void main() {
 
 			// Sample the absolute highest-detail terrain height at this coordinate
 			vec2 uv0 = sampleToroidalUV(pos.xz, 0);
-			float trueHeight0 = texture(terrainClipmap, vec3(uv0, 0.0)).r;
+			float trueHeight0 = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv0, 0.0)).r;
 
 			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
 			if (rayOrigin.y < trueHeight0 + 0.1) {
@@ -133,7 +125,7 @@ void main() {
 			rayQueryEXT rq;
 			rayQueryInitializeEXT(
 				rq,
-				topLevelAS,
+				uTLAS[nonuniformEXT(params.tlasIndex)],
 				gl_RayFlagsNoneEXT,
 				0xFF,
 				rayOrigin,

@@ -8,15 +8,20 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "EngineConstants.hpp"
 #include "GLFW/glfw3.h"
 #include "graph/PhysicalRegistry.hpp"
 #include "InputHandler.hpp"
-#include "passes/DeferredPass.hpp"
-#include "passes/GradientPass.hpp"
-#include "passes/TerrainPass.hpp"
+#include "passes/DeferredNode.hpp"
+#include "passes/GradientNode.hpp"
+#include "passes/TerrainNode.hpp"
+#include "passes/WaterNode.hpp"
+#include "render/PipelineLibrary.hpp"
+#include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
 #include "terrain/AsyncTerrainUploader.hpp"
+#include "terrain/TerrainAccelerationStructure.hpp"
 #include "terrain/TerrainClipmap.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -139,10 +144,9 @@ namespace brassica {
 		void RecreateSwapchain();
 		void DrawFrame();
 
-		GLFWwindow*                   window{nullptr};
-		uint32_t                      frameNumber{0};
-		static constexpr unsigned int FRAME_OVERLAP = 2;
-		FrameData                     frames[FRAME_OVERLAP];
+		GLFWwindow* window{nullptr};
+		uint32_t    frameNumber{0};
+		FrameData   frames[FRAME_OVERLAP]; // brassica::FRAME_OVERLAP, EngineConstants.hpp
 
 		// Vulkan Core
 		vkb::Instance              vkbInst;
@@ -169,9 +173,25 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		std::unique_ptr<GradientPass> gradientPass;
-		std::unique_ptr<TerrainPass>  terrainPass;
-		std::unique_ptr<DeferredPass> deferredPass;
+		// GradientNode/DeferredNode own no persistent state of their own (constructed fresh
+		// every frame, see pipelineLibrary's comment above) -- these four shaders are their
+		// entire persistent footprint, replacing what the deleted GradientPass/DeferredPass
+		// used to own.
+		VertexShader   gradientVertShader;
+		FragmentShader gradientFragShader;
+		VertexShader   deferredVertShader;
+		FragmentShader deferredFragShader;
+		TaskShader     terrainTaskShader;
+		MeshShader     terrainMeshShader;
+		FragmentShader terrainFragShader;
+		VertexShader   waterVertShader;
+		FragmentShader waterFragShader;
+
+		// What's left of the old TerrainPass once its pipeline/shader ownership moved above --
+		// the terrain BLAS/TLAS build, unchanged, now living in terrain/ rather than passes/
+		// (see TerrainAccelerationStructure's own comment for why). Default-constructed, wired
+		// via Init() once instance/device exist, same pattern as physicalRegistry/pipelineLibrary.
+		TerrainAccelerationStructure terrainAS;
 
 		TerrainClipmap       terrainClipmap;
 		AsyncTerrainUploader terrainUploader;
@@ -193,6 +213,21 @@ namespace brassica {
 		void InitGlobalUBO();
 		void CleanupGlobalUBO();
 
+		// The bindless set -- deliberately separate from globalSet0Layout/globalDescriptorSets
+		// above rather than merged into them: FrameUBO's binding needs to stay a plain
+		// eUniformBuffer with no dynamic offset at every existing bind call site until those
+		// call sites are rewritten anyway (the NodeContext/PipelineLibrary work), so folding the
+		// two together now would mean threading a dynamic offset through every one of them just
+		// to add bindings nothing consumes yet. See PhysicalResourceRegistry::BindlessBindings.
+		vk::DescriptorSetLayout bindlessSetLayout{nullptr};
+		vk::DescriptorPool      bindlessDescriptorPool{nullptr};
+		vk::DescriptorSet       bindlessDescriptorSet{nullptr};
+		vk::Sampler             bindlessSamplers[4]{nullptr, nullptr, nullptr, nullptr};
+		std::uint32_t           maxBindlessSampledImages{0};
+
+		void InitGlobalDescriptors();
+		void CleanupGlobalDescriptors();
+
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
 		// Engine-owned and persistent across frames (not a per-frame stack local, unlike the old
@@ -203,6 +238,15 @@ namespace brassica {
 		// device/allocator at Engine construction time; SetDeviceAndAllocator wires in the real
 		// ones once InitVulkan has run.
 		graph::PhysicalResourceRegistry physicalRegistry;
+
+		// Engine-owned and persistent across frames, mirroring physicalRegistry immediately
+		// above -- what lets a node reconstructed fresh every frame (GradientNode and everything
+		// ported after it, none of which own a persistent Pass object anymore) resolve the exact
+		// same pipeline request every frame as a cache hit instead of rebuilding a real
+		// vk::Pipeline 60+ times a second. Constructed with a default device/cache at Engine
+		// construction time; SetDeviceAndCache wires in the real ones once InitVulkan has run,
+		// same as physicalRegistry.SetDeviceAndAllocator.
+		render::PipelineLibrary pipelineLibrary;
 
 		EngineOptions       options{};
 		uint32_t            validationErrorCount{0};

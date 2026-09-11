@@ -166,8 +166,14 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_G
     target_link_libraries(brassica PRIVATE stdc++exp)
 endif()
 
-# Asset Sync Post-Build Rule
-add_custom_command(TARGET brassica POST_BUILD
+# Asset/shader sync -- a standalone target in ALL, not a POST_BUILD hook on `brassica`. A
+# POST_BUILD command only fires when brassica itself needs to relink, and CMake has no dependency
+# edge from brassica's C++ sources to these plain-text asset/shader files, so editing a shader
+# alone (no .cpp touched) used to leave build/bin/shaders/ stale -- confirmed twice, confusingly
+# presenting as a shader/C++ logic bug rather than a stale-copy problem (a validation error citing
+# descriptor bindings that had already been removed from the real source). add_custom_target with
+# no OUTPUT is always considered out of date, so this reruns on every build invocation instead.
+add_custom_target(sync_assets ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/assets
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/assets
@@ -176,6 +182,7 @@ add_custom_command(TARGET brassica POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
+    COMMENT "Syncing assets/shaders to the runtime output directory"
 )
 
 # 5. Apps & Executables

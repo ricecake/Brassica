@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <vulkan/vulkan.hpp>
 
 #include "graph/Execution.hpp"
@@ -64,6 +66,32 @@ namespace brassica::graph {
 			return aspect;
 		}
 		return vk::ImageAspectFlagBits::eColor;
+	}
+
+	// What kind of dynamic-rendering attachment a realization becomes, if any -- the single owner
+	// of that classification. Previously inline (IsDepthFormat(format) ? depth : color) in
+	// DynamicRenderingWrapper::Begin, with no way to express a third kind at all: adding
+	// fragment-shading-rate support meant editing three unrelated files (ResourceState.hpp,
+	// PhysicalResource.hpp, PhysicalExecutionBackend.hpp) with no single place declaring "this is
+	// a shading-rate attachment." This function is that place now -- teaching the system about a
+	// new attachment kind means adding one branch here and one in DynamicRenderingWrapper::Begin,
+	// not searching for every place format/usage got inspected inline.
+	enum class AttachmentRole : std::uint8_t { None, Color, Depth, ShadingRate };
+
+	inline AttachmentRole AttachmentRoleFor(vk::ImageUsageFlags usage, vk::Format format) {
+		// Checked first: a shading-rate map is Image2D/eR8Uint by convention (ShadingRateAttachmentDesc,
+		// PhysicalResource.hpp), which format alone can't distinguish from an ordinary color target --
+		// only the usage bit can.
+		if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR) {
+			return AttachmentRole::ShadingRate;
+		}
+		if (IsDepthFormat(format) && (usage & vk::ImageUsageFlagBits::eDepthStencilAttachment)) {
+			return AttachmentRole::Depth;
+		}
+		if (usage & vk::ImageUsageFlagBits::eColorAttachment) {
+			return AttachmentRole::Color;
+		}
+		return AttachmentRole::None;
 	}
 
 	// -- state derivation ---------------------------------------------------------------
@@ -171,7 +199,19 @@ namespace brassica::graph {
 			return ResourceState{vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eAllCommands, acc};
 		}
 
-		// Read. Storage is checked before Sampled deliberately: a combined Storage|Sampled
+		// Read. Checked before Storage/Sampled deliberately: a shading-rate map is also built
+		// with eStorage set (a compute shader writes it via imageStore), so the usage bit alone
+		// can't disambiguate -- AttachmentRoleFor already checks this bit first for exactly that
+		// reason (see its comment).
+		if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR) {
+			return ResourceState{
+				vk::ImageLayout::eFragmentShadingRateAttachmentOptimalKHR,
+				vk::PipelineStageFlagBits2::eFragmentShadingRateAttachmentKHR,
+				vk::AccessFlagBits2::eFragmentShadingRateAttachmentReadKHR,
+			};
+		}
+
+		// Storage is checked before Sampled deliberately: a combined Storage|Sampled
 		// resource (e.g. ComputeStorageImageDesc) must use eGeneral, since a storage-image
 		// descriptor requires it and a sampler can legally read from eGeneral, but the reverse
 		// isn't true. AccessKind can't distinguish "read via imageLoad" from "read via a

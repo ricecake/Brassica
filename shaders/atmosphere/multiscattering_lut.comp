@@ -1,19 +1,36 @@
 #version 460 core
+#include "bindless.glsl"
 
 layout(local_size_x = 32, local_size_y = 32) in;
-layout(set = 0, binding = 0, rgba32f) uniform image2D outMultiScattering;
-layout(set = 0, binding = 1) uniform sampler2D u_transmittanceLUT;
+
+layout(push_constant) uniform MultiScatteringPushConstants {
+	vec3  rayleighScatteringBase;
+	float rayleighScaleHeight;
+	vec3  ozoneAbsorptionBase;
+	float mieScaleHeight;
+	vec3  hazeColor;
+	float mieScatteringBase;
+	float mieExtinctionBase;
+	float rayleighScale;
+	float mieScale;
+	float mieAnisotropy;
+	float atmosphereHeight;
+	float hazeDensity;
+	float hazeHeight;
+	layout(offset = 80) uint outIndex;
+	uint  transmittanceIndex;
+} u_atmosphere;
 
 #include "common.glsl"
 
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
-	return texture(u_transmittanceLUT, uv).rgb;
+	return SAMPLE_LINEAR(u_atmosphere.transmittanceIndex, uv).rgb;
 }
 
 void main() {
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-	vec2  size = vec2(imageSize(outMultiScattering));
+	vec2  size = vec2(imageSize(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)]));
 	if (any(greaterThanEqual(texel, ivec2(size))))
 		return;
 
@@ -65,5 +82,5 @@ void main() {
 	vec3 f_avg = totalF / float(nSamples);
 
 	vec3 multiScat = L_avg / max(vec3(0.1), vec3(1.0) - min(f_avg, vec3(0.9)));
-	imageStore(outMultiScattering, texel, vec4(multiScat, 1.0));
+	imageStore(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)], texel, vec4(multiScat, 1.0));
 }

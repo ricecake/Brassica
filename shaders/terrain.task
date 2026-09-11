@@ -4,13 +4,9 @@
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform FrameUBO {
-	float time;
-	uint  frameIndex;
-	uint  globalSeed;
-	uint  frameRandom;
-} ubo;
-
+// Matches TerrainNode's push_constant block layout exactly (this stage just doesn't need the
+// trailing clipmapIndex field terrain.mesh reads, which is fine -- each stage only needs to
+// declare the prefix it actually uses, not the whole shared range).
 layout(push_constant) uniform TerrainPushConstants {
 	mat4  viewProj;
 	vec4  cameraPos; // cameraPos.xyz, cameraPos.w = baseTexelSize

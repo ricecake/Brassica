@@ -1,4 +1,6 @@
 #pragma once
+#include <cstddef>
+
 #include "graph/ResourceKey.hpp"
 #include "graph/TypeList.hpp"
 
@@ -31,8 +33,27 @@ namespace brassica::graph {
 
 	// Modify<K> is a read-modify-write of a single key in place. Equivalent to
 	// Transform<K, K>; kept as its own name because it's the common case.
-	template <ResourceRef K>
+	//
+	// Modify<K, Version> (Version >= 1) is the multi-writer case: a chain of nodes each
+	// read-modify-writing the same physical resource in sequence, e.g. deferred shading producing
+	// Modify<Swapchain, 1> and a later forward pass producing Modify<Swapchain, 2>. VersionOf<K, 0>
+	// collapses to K itself (ResourceKey.hpp), so consuming version N-1 and producing version N is
+	// exactly Modify<K> generalized -- version 0 is whatever Create<K>/an import already produces.
+	// PhysicalResourceRegistry::ResolveId (PhysicalRegistry.hpp) maps every version back to the one
+	// underlying physical resource automatically, from the type alone -- no node-side registration.
+	//
+	// This is deliberately not how two writers of one resource get *ordered* -- that's a node's
+	// Phase (Node.hpp), which is coarser and doesn't require naming a version number at all. Modify
+	// with a version is for the finer-grained case: multiple writers in the *same* phase, where the
+	// write order needs to be explicit because phase alone can't disambiguate it.
+	template <ResourceRef K, std::size_t Version = 0>
 	struct Modify {
+		using Consumes = TypeList<VersionOf<K, Version - 1>>;
+		using Produces = TypeList<VersionOf<K, Version>>;
+	};
+
+	template <ResourceRef K>
+	struct Modify<K, 0> {
 		using Consumes = TypeList<K>;
 		using Produces = TypeList<K>;
 	};

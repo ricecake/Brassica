@@ -135,7 +135,9 @@ namespace brassica::graph {
 			m_currentLayout(o.m_currentLayout),
 			m_lastStage(o.m_lastStage),
 			m_lastAccess(o.m_lastAccess),
-			m_hasDefinedContents(o.m_hasDefinedContents) {
+			m_hasDefinedContents(o.m_hasDefinedContents),
+			m_sampledBindlessIndex(o.m_sampledBindlessIndex),
+			m_storageBindlessIndex(o.m_storageBindlessIndex) {
 			o.m_image = nullptr;
 			o.m_view = nullptr;
 			o.m_allocation = nullptr;
@@ -143,6 +145,8 @@ namespace brassica::graph {
 			o.m_lastStage = {};
 			o.m_lastAccess = {};
 			o.m_hasDefinedContents = false;
+			o.m_sampledBindlessIndex = 0;
+			o.m_storageBindlessIndex = 0;
 		}
 
 		PhysicalTexture& operator=(PhysicalTexture&& o) noexcept {
@@ -159,6 +163,8 @@ namespace brassica::graph {
 				m_lastStage = o.m_lastStage;
 				m_lastAccess = o.m_lastAccess;
 				m_hasDefinedContents = o.m_hasDefinedContents;
+				m_sampledBindlessIndex = o.m_sampledBindlessIndex;
+				m_storageBindlessIndex = o.m_storageBindlessIndex;
 
 				o.m_image = nullptr;
 				o.m_view = nullptr;
@@ -167,6 +173,8 @@ namespace brassica::graph {
 				o.m_lastStage = {};
 				o.m_lastAccess = {};
 				o.m_hasDefinedContents = false;
+				o.m_sampledBindlessIndex = 0;
+				o.m_storageBindlessIndex = 0;
 			}
 			return *this;
 		}
@@ -209,6 +217,26 @@ namespace brassica::graph {
 
 		void SetHasDefinedContents(bool defined) { m_hasDefinedContents = defined; }
 
+		// This texture's slot(s) in the engine's global bindless descriptor arrays
+		// (PhysicalResourceRegistry's AssignBindlessIndex), assigned once at creation and never
+		// reassigned for the life of the object. Two separate indices, not one: a texture with
+		// both eSampled and eStorage usage (e.g. ComputeStorageImageDesc -- a compute LUT is
+		// written via imageStore and later sampled via texture() by a *different* node) occupies
+		// a slot in both arrays at once, and they're different GLSL variable types (image2D vs
+		// texture2D/texture2DArray), so one flat index can't name both. 0 is the registry's
+		// permanent fallback-texture slot in the sampled array, never assigned to a real
+		// resource, so an unassigned/non-sampled texture reads as "the fallback" rather than as a
+		// distinct sentinel a caller could forget to check. There is no equivalent fallback
+		// reservation in the storage array -- GetStorageBindlessIndex() is only ever queried for
+		// a key a node already knows is a storage image.
+		[[nodiscard]] std::uint32_t GetSampledBindlessIndex() const { return m_sampledBindlessIndex; }
+
+		void SetSampledBindlessIndex(std::uint32_t index) { m_sampledBindlessIndex = index; }
+
+		[[nodiscard]] std::uint32_t GetStorageBindlessIndex() const { return m_storageBindlessIndex; }
+
+		void SetStorageBindlessIndex(std::uint32_t index) { m_storageBindlessIndex = index; }
+
 	private:
 		void CreateImage(VmaAllocation existingAllocation, vk::DeviceSize offsetInBlock) {
 			vk::ImageCreateInfo imageInfo = detail::BuildImageCreateInfo(m_desc);
@@ -235,13 +263,20 @@ namespace brassica::graph {
 
 		void CreateView() {
 			const bool is3D = m_desc.depth > 1;
+			// layers > 1 (and not 3D -- the two axes are mutually exclusive in BuildImageCreateInfo)
+			// means an array image, e.g. the terrain clipmap's sampler2DArray. This was previously
+			// always e2D regardless of layer count -- latent only because no Owning texture created
+			// through this path has ever had layers > 1 (the clipmap manages its own image/view
+			// outside PhysicalTexture today); a bindless array-texture index still needs the real
+			// view type to bind correctly once something does go through here with layers > 1.
+			const bool is2DArray = !is3D && m_desc.layers > 1;
 			const auto format = static_cast<vk::Format>(
 				m_desc.formatCode ? m_desc.formatCode : static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Unorm)
 			);
 			vk::ImageViewCreateInfo viewInfo{
 				{},
 				m_image,
-				is3D ? vk::ImageViewType::e3D : vk::ImageViewType::e2D,
+				is3D ? vk::ImageViewType::e3D : (is2DArray ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D),
 				format,
 				vk::ComponentMapping{},
 				vk::ImageSubresourceRange(
@@ -289,6 +324,8 @@ namespace brassica::graph {
 		vk::PipelineStageFlags2 m_lastStage{};
 		vk::AccessFlags2        m_lastAccess{};
 		bool                    m_hasDefinedContents{false};
+		std::uint32_t           m_sampledBindlessIndex{0};
+		std::uint32_t           m_storageBindlessIndex{0};
 	};
 
 	// Move-only RAII owner of a Vulkan buffer. Same three ownership modes as PhysicalTexture,
@@ -495,10 +532,20 @@ namespace brassica::graph {
 			m_lastAccess = access;
 		}
 
+		// Same meaning as PhysicalTexture::GetBindlessIndex, but the caller (PhysicalRegistry's
+		// RegisterImportedAccelerationStructure) must carry this forward itself across a rebuild:
+		// unlike a texture, a new AS handle always replaces this object outright rather than
+		// reusing it (there is no ProvisionTexture-style desc-match early return for an AS), so an
+		// index assigned once needs to survive that replacement, not just a move.
+		[[nodiscard]] std::uint32_t GetBindlessIndex() const { return m_bindlessIndex; }
+
+		void SetBindlessIndex(std::uint32_t index) { m_bindlessIndex = index; }
+
 	private:
 		vk::AccelerationStructureKHR m_as{};
 		vk::PipelineStageFlags2      m_lastStage{};
 		vk::AccessFlags2             m_lastAccess{};
+		std::uint32_t                m_bindlessIndex{0};
 	};
 
 	// Reuses one VmaAllocation across a sequence of images whose stage lifetimes don't overlap,
@@ -671,8 +718,14 @@ namespace brassica::graph {
 			.width = width,
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
+			// eTransferDst: this is the most commonly reused color-shaped preset, so it's the
+			// most likely one a future History<K> pair (PhysicalRegistry::ProvisionTemporalPairs)
+			// ends up allocated with -- ZeroInitializeUndefinedReads (PhysicalExecutionBackend.hpp)
+			// clears an undefined History slot's first frame via clearColorImage, which requires
+			// this bit on the destination image regardless of what else it's used for.
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
+				vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
 	}
@@ -684,7 +737,40 @@ namespace brassica::graph {
 			.width = width,
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
-			.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eDepthStencilAttachment),
+			// eSampled alongside eDepthStencilAttachment: without it, Read<GBufferDepth> isn't
+			// actually expressible -- a node declaring it would sample a view created without
+			// VK_IMAGE_USAGE_SAMPLED_BIT. Latent until now only because no shipped node reads depth.
+			// eTransferDst: same reasoning as ColorAttachmentDesc's -- needed for
+			// ZeroInitializeUndefinedReads to clear a depth-shaped History<K> pair's first frame.
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
+	// Fragment shading rate attachment texel size defaults to 16x16, matching the granularity
+	// most VK_KHR_fragment_shading_rate implementations report as their minimum -- callers with a
+	// device-reported minFragmentShadingRateAttachmentTexelSize should override the extent
+	// accordingly rather than relying on this default staying correct for every device.
+	inline ResourceDesc
+	ShadingRateAttachmentDesc(std::uint32_t width, std::uint32_t height, vk::Format format = vk::Format::eR8Uint) {
+		return ResourceDesc{
+			.kind = ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.formatCode = static_cast<std::uint32_t>(format),
+			// eStorage: the mask is written via imageStore from a compute shader, not through
+			// dynamic rendering -- see AttachmentRoleFor's comment (ResourceState.hpp) for why the
+			// read side still resolves to ShadingRate rather than Storage despite this bit.
+			// eTransferDst: this desc is exactly what a History<ShadingRateMap> pair allocates
+			// with (PhysicalRegistry::ProvisionTemporalPairs), and ZeroInitializeUndefinedReads
+			// (PhysicalExecutionBackend.hpp) clears an undefined History slot's first frame via
+			// clearColorImage, which requires the destination layout's usage to include this bit.
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR | vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eTransferDst
+			),
 		};
 	}
 

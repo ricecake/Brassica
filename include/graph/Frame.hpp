@@ -1,5 +1,6 @@
 #pragma once
 #include <expected>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,10 +29,29 @@ namespace brassica::graph {
 	public:
 		using Resources = ResourceInterface<typename Spec::Unsatisfied, typename Spec::Produces>;
 
+		// Compiles the inner graph here, not lazily -- Graph::Compile() culls inactive nodes
+		// using this frame's Recipes (isActive), so it must run after this frame's own Setup,
+		// exactly the order PhysicalExecutionBackend::Execute uses for the outer graph. A
+		// backend that recognizes this node as a Subgraph (InnerGraphIfAny() != nullptr) reads
+		// the now-current inner Schedule/Recipes directly rather than going through Execute
+		// below -- see PhysicalExecutionBackend::RunSchedule's recursion.
 		Recipe Setup(const FrameContext& ctx) {
 			m_graph.Setup(ctx);
+			// Spec::Unsatisfied is this Subgraph's declared net input -- by construction, no
+			// node inside m_graph produces it, so it must be named here or ValidateRuntime
+			// (inside Compile) would report it missing every time.
+			if (auto result = m_graph.Compile(IdsOf<typename Spec::Unsatisfied>()); !result) {
+				throw std::runtime_error("Subgraph compilation failed: " + result.error().message);
+			}
 			return Recipe{.domain = ExecutionDomain::Graphics};
 		}
+
+		// Naive fallback for a caller that executes this node directly rather than through a
+		// backend that recurses into InnerGraphIfAny() (PhysicalExecutionBackend does, so this
+		// never actually runs on the real render path) -- no barrier synthesis, no dynamic-
+		// rendering wrapping, just runs the inner nodes in schedule order. Forwards the full
+		// NodeContext so bindless/pipeline/globalSet state still reaches inner nodes even here.
+		void Execute(NodeContext& ctx) { m_graph.Execute(ctx); }
 
 		void Execute(CommandBuffer& cmd) { m_graph.Execute(cmd); }
 
@@ -71,12 +91,20 @@ namespace brassica::graph {
 
 		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Host}; }
 
-		void Execute(CommandBuffer&) {}
+		void Execute(NodeContext&) {}
 	};
 
 	template <typename Temporal>
 	struct NodeKindOfT<PreviousFrame<Temporal>> {
 		static constexpr NodeKind value = NodeKind::PreviousFrame;
+	};
+
+	// Brackets every other node's phase from below, with no risk of a user-defined phase
+	// colliding with it (Phase::PreviousFrame is INT32_MIN) -- so last frame's data is always
+	// available before anything that might read it, with no resource-level wiring required.
+	template <typename Temporal>
+	struct PhaseOfT<PreviousFrame<Temporal>> {
+		static constexpr Phase value = Phase::PreviousFrame;
 	};
 
 	// Consumes the bare (non-History) keys in Temporal -- this frame's values, to be carried
@@ -88,12 +116,18 @@ namespace brassica::graph {
 
 		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Host}; }
 
-		void Execute(CommandBuffer&) {}
+		void Execute(NodeContext&) {}
 	};
 
 	template <typename Temporal>
 	struct NodeKindOfT<NextFrame<Temporal>> {
 		static constexpr NodeKind value = NodeKind::NextFrame;
+	};
+
+	// Brackets every other node's phase from above, mirroring PreviousFrame's placement below.
+	template <typename Temporal>
+	struct PhaseOfT<NextFrame<Temporal>> {
+		static constexpr Phase value = Phase::NextFrame;
 	};
 
 	// The public entry point. Renderability is asserted here, and only here: a Frame is the

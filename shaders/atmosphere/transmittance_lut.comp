@@ -1,7 +1,24 @@
 #version 460 core
+#include "bindless.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba32f) uniform image2D outTransmittance;
+
+layout(push_constant) uniform TransmittancePushConstants {
+	vec3  rayleighScatteringBase;
+	float rayleighScaleHeight;
+	vec3  ozoneAbsorptionBase;
+	float mieScaleHeight;
+	vec3  hazeColor;
+	float mieScatteringBase;
+	float mieExtinctionBase;
+	float rayleighScale;
+	float mieScale;
+	float mieAnisotropy;
+	float atmosphereHeight;
+	float hazeDensity;
+	float hazeHeight;
+	layout(offset = 80) uint outIndex;
+} u_atmosphere;
 
 #include "common.glsl"
 
@@ -42,7 +59,7 @@ vec3 calculateTransmittance(float r, float mu) {
 
 void main() {
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-	vec2  size = vec2(imageSize(outTransmittance));
+	vec2  size = vec2(imageSize(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)]));
 	if (any(greaterThanEqual(texel, ivec2(size))))
 		return;
 
@@ -51,5 +68,5 @@ void main() {
 	UVToTransmittance(uv, r, mu);
 
 	vec3 transmittance = calculateTransmittance(r, mu);
-	imageStore(outTransmittance, texel, vec4(transmittance, 1.0));
+	imageStore(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)], texel, vec4(transmittance, 1.0));
 }

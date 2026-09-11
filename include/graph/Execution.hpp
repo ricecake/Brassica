@@ -18,9 +18,70 @@ namespace brassica::graph {
 
 	enum class AccessKind : std::uint8_t { Read, Write, ReadWrite };
 
+	// Coarse ordering between nodes, independent of resource flow: "this pass belongs after
+	// deferred shading" without naming everything deferred shading touches. Int-backed and spaced
+	// so callers can insert a new band between existing ones without renumbering anything, the same
+	// way ExecutionDomain leaves room for future domains. Comparison is always on the underlying
+	// int; the two extremes exist so PreviousFrame/NextFrame (Frame.hpp) bracket every other node
+	// with no risk of a user-defined phase colliding with them.
+	//
+	// This layer only defines the generic bands. An engine's own named phases (e.g.
+	// DeferredShading, ForwardTranslucent) are its vocabulary, not the graph's -- see
+	// include/passes/RenderPhases.hpp.
+	enum class Phase : std::int32_t {
+		PreviousFrame = INT32_MIN,
+		Early = -1000,
+		Default = 0,
+		Late = 1000,
+		NextFrame = INT32_MAX,
+	};
+
 	// Stand-in for a backend command buffer. Deliberately opaque at this layer.
 	struct CommandBuffer {
 		void* vkCmd = nullptr;
+	};
+
+	// Opaque per-resource bindless-index lookup. Implemented by PhysicalResourceRegistry
+	// (PhysicalRegistry.hpp, Vulkan-aware) so that NodeContext::Index<K>()/StorageIndex<K>()
+	// below can live in this Vulkan-free seam without this file knowing PhysicalResourceRegistry,
+	// or Vulkan, exists -- the same inversion Resource/MemoryBarrier already use for barriers.
+	//
+	// Two lookups, not one: a texture with both eSampled and eStorage usage (a compute LUT
+	// written via imageStore and later sampled by a different node, e.g. the atmosphere LUTs)
+	// occupies a slot in both the sampled and storage bindless arenas at once -- IndexOf and
+	// StorageIndexOf are how a caller says which one it means, since one flat index can't name
+	// both (see PhysicalTexture::GetSampledBindlessIndex's comment, PhysicalResource.hpp).
+	struct BindlessIndexSource {
+		virtual ~BindlessIndexSource() = default;
+		virtual std::uint32_t IndexOf(ResourceId) const = 0;
+		virtual std::uint32_t StorageIndexOf(ResourceId) const = 0;
+	};
+
+	// Per-node execution state, passed to a node's Execute in place of a bare CommandBuffer.
+	// pipeline/pipelineLayout/globalSet/globalSetLayout are opaque Vulkan handles (same trick as
+	// CommandBuffer::vkCmd) -- real bind/push/draw calls are free functions in the Vulkan-aware
+	// include/render/NodeCommands.hpp, not members here.
+	struct NodeContext {
+		CommandBuffer              cmd{};
+		std::uint32_t              width = 0;
+		std::uint32_t              height = 0;
+		std::uint64_t              frameIndex = 0;
+		void*                      pipeline = nullptr;
+		void*                      pipelineLayout = nullptr;
+		void*                      globalSet = nullptr;       // opaque VkDescriptorSet -- the bindless set
+		void*                      globalSetLayout = nullptr; // opaque VkDescriptorSetLayout for the same set
+		std::uint32_t              globalUboOffset = 0;
+		const BindlessIndexSource* bindless = nullptr;
+
+		template <typename K>
+		[[nodiscard]] std::uint32_t Index() const {
+			return bindless ? bindless->IndexOf(IdOf<K>()) : 0u;
+		}
+
+		template <typename K>
+		[[nodiscard]] std::uint32_t StorageIndex() const {
+			return bindless ? bindless->StorageIndexOf(IdOf<K>()) : 0u;
+		}
 	};
 
 	// Per-frame, backend-agnostic render state (resolution, frame index, ...). Named
@@ -71,6 +132,14 @@ namespace brassica::graph {
 		// wrong doesn't fail to compile or throw; it just silently miscomposites, which is
 		// exactly what happened before this field existed (see the migration's post-port fix).
 		std::array<float, 4> clearColor{0.0f, 0.0f, 0.0f, 1.0f};
+
+		// Used only when this realization's AttachmentRole (ResourceState.hpp) is ShadingRate --
+		// VkRenderingFragmentShadingRateAttachmentInfoKHR::shadingRateAttachmentTexelSize, which
+		// has no principled default this layer could pick on its own (it's a per-device minimum,
+		// see ShadingRateAttachmentDesc's comment, PhysicalResource.hpp). 16x16 matches the most
+		// common reported minimum; a node targeting a device with a different minimum must set
+		// this explicitly.
+		std::array<std::uint32_t, 2> shadingRateTexelSize{16, 16};
 	};
 
 	// Returned by Node::Setup for a given frame. isActive drives culling; realizations are

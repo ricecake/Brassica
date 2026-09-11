@@ -1,30 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "doctest/doctest.h"
-
 #include <filesystem>
 #include <fstream>
 
-#include "Shader.hpp"
-#include "passes/PassResource.hpp"
-#include "types/ubo/FrameUBO.hpp"
+#include "doctest/doctest.h"
 #include "vulkan/vulkan.hpp"
 
-TEST_CASE("Vulkan-Hpp RenderResources Types") {
-	brassica::FrameGraphTexture::Desc desc;
-	desc.extent = vk::Extent2D{1920, 1080};
-	desc.format = vk::Format::eR8G8B8A8Unorm;
-
-	CHECK(desc.extent.width == 1920);
-	CHECK(desc.extent.height == 1080);
-	CHECK(desc.format == vk::Format::eR8G8B8A8Unorm);
-
-	vk::Image fakeImage{reinterpret_cast<VkImage>(0x12345)};
-	vk::ImageView fakeView{reinterpret_cast<VkImageView>(0x6789A)};
-
-	brassica::FrameGraphTexture texture(fakeImage, fakeView);
-	CHECK(texture.image == fakeImage);
-	CHECK(texture.imageView == fakeView);
-}
+#include "Shader.hpp"
+#include "types/ubo/FrameUBO.hpp"
 
 TEST_CASE("FrameUBO Struct Size and Alignment") {
 	CHECK(sizeof(brassica::FrameUBO) == 32);
@@ -76,18 +58,13 @@ void main() {
 }
 )";
 
-	shaderc::Compiler compiler;
+	shaderc::Compiler       compiler;
 	shaderc::CompileOptions options;
 	options.SetOptimizationLevel(shaderc_optimization_level_performance);
 	options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_4);
 	options.SetTargetSpirv(shaderc_spirv_version_1_6);
 
-	auto result = compiler.CompileGlslToSpv(
-		vertSource,
-		shaderc_glsl_vertex_shader,
-		"TestVertexShader",
-		options
-	);
+	auto result = compiler.CompileGlslToSpv(vertSource, shaderc_glsl_vertex_shader, "TestVertexShader", options);
 
 	CHECK(result.GetCompilationStatus() == shaderc_compilation_status_success);
 	std::vector<uint32_t> spirv(result.cbegin(), result.cend());
@@ -192,18 +169,13 @@ void main() {
 }
 )";
 
-	shaderc::Compiler compiler;
+	shaderc::Compiler       compiler;
 	shaderc::CompileOptions options;
 	options.SetOptimizationLevel(shaderc_optimization_level_performance);
 	options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_4);
 	options.SetTargetSpirv(shaderc_spirv_version_1_6);
 
-	auto result = compiler.CompileGlslToSpv(
-		meshSource,
-		shaderc_glsl_mesh_shader,
-		"TestMeshShader",
-		options
-	);
+	auto result = compiler.CompileGlslToSpv(meshSource, shaderc_glsl_mesh_shader, "TestMeshShader", options);
 
 	CHECK(result.GetCompilationStatus() == shaderc_compilation_status_success);
 	std::vector<uint32_t> spirv(result.cbegin(), result.cend());

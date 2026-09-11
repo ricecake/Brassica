@@ -3,19 +3,21 @@
 
 #include "Engine.hpp"
 #include "graph/Graph.hpp"
+#include "graph/Node.hpp"
 #include "graph/PhysicalRegistry.hpp"
-#include "passes/DeferredPass.hpp"
-#include "passes/GradientPass.hpp"
-#include "passes/TerrainPass.hpp"
+#include "passes/DeferredNode.hpp"
+#include "passes/GradientNode.hpp"
+#include "passes/TerrainNode.hpp"
 
 using namespace brassica;
 
 // Real GradientNode/TerrainNode/DeferredNode registered into a real graph::Graph -- genuine
 // integration coverage the old fg::-based version of this test never had (it exercised
 // hand-written MockGradientPass/MockGBufferPass/MockDeferredPass lambdas, never the real pass
-// classes). Gated on a real headless device, same pattern as
-// tests/test_headless.cpp/test_physical_backend.cpp, since TerrainPass/DeferredPass build real
-// Vulkan pipelines (and TerrainPass compiles real mesh/task shaders) in their constructors.
+// classes). Gated on a real headless device, same pattern as tests/test_headless.cpp/
+// test_physical_backend.cpp -- none of these three nodes need a real device to construct
+// anymore (no more Pass classes building a real Vulkan pipeline in their constructor), but
+// engine.Init() itself still does elsewhere in the engine, so this stays gated the same way.
 //
 // Only Setup()+Compile() are exercised here, matching the old test's own scope (it never called
 // fg.execute() either) -- this proves the real production nodes compose into a renderable,
@@ -32,48 +34,22 @@ TEST_CASE("Real GradientNode/TerrainNode/DeferredNode compose into a renderable,
 		return;
 	}
 
-	vk::Device   device = engine.GetDevice();
-	vk::Instance instance = engine.GetInstance();
-
 	{
-		// A minimal, valid (if trivial) stand-in for the real global descriptor set 0 layout --
-		// TerrainPass/DeferredPass's pipeline layouts reference it by slot, so it must be a real
-		// vk::DescriptorSetLayout, even though nothing in this test binds an actual descriptor
-		// set to it. Scoped in a nested block, along with every other device-dependent object
-		// below, so all of it is destroyed before engine.Cleanup() tears down the device --
-		// Vulkan handles held by locals must not outlive the device that owns them.
-		vk::DescriptorSetLayout globalSet0Layout =
-			device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo{});
-
-		GradientPass gradientPass(device, vk::Format::eR16G16B16A16Sfloat);
-		TerrainPass  terrainPass(instance, device, globalSet0Layout);
-		DeferredPass deferredPass(device, globalSet0Layout, vk::Format::eB8G8R8A8Unorm);
-
-		graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
-
 		graph::Graph frameGraph;
-		frameGraph.Register<GradientNode>(GradientNode{.pass = &gradientPass, .extent = {1280, 720}});
-		frameGraph.Register<TerrainNode>(
-			TerrainNode{
-				.pass = &terrainPass,
-				.extent = {1280, 720},
-				.globalDescriptorSet = nullptr,
-				.pushConstants = {},
-			}
-		);
-		frameGraph.Register<DeferredNode>(
-			DeferredNode{
-				.pass = &deferredPass,
-				.registry = &registry,
-				.extent = {1280, 720},
-				.swapchainFormat = vk::Format::eB8G8R8A8Unorm,
-				.globalDescriptorSet = nullptr,
-				.activeFrame = 0,
-				.clipmapImageView = nullptr,
-				.clipmapSampler = nullptr,
-				.pushConstants = {},
-			}
-		);
+		// TerrainClipmapTexture has no producer node -- it's registered once, directly into the
+		// registry, at Engine::Init (unexercised here, this test never provisions/executes) --
+		// so a plain Import declares it for Compile()'s validation, matching Engine.cpp's real
+		// per-frame graph exactly.
+		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
+		// pipelineLibrary/shader/terrainAS pointers stay null on all three nodes -- this test's
+		// scope is Setup()+Compile() only (see the header comment above), and Execute (the only
+		// place those fields are read) is never called here.
+		frameGraph.Register<GradientNode>(GradientNode{.extent = {1280, 720}});
+		frameGraph.Register<TerrainNode>(TerrainNode{.extent = {1280, 720}});
+		frameGraph.Register<DeferredNode>(DeferredNode{
+			.extent = {1280, 720},
+			.swapchainFormat = vk::Format::eB8G8R8A8Unorm,
+		});
 
 		graph::FrameContext ctx{.width = 1280, .height = 720};
 		frameGraph.Setup(ctx);
@@ -81,16 +57,16 @@ TEST_CASE("Real GradientNode/TerrainNode/DeferredNode compose into a renderable,
 		auto compileResult = frameGraph.Compile();
 		REQUIRE(compileResult.has_value());
 
-		// Real cross-node edges, not just "it compiled": Gradient and Terrain share no
-		// dependency between them, so they must land in the same stage (provably independent);
-		// Deferred depends on both of their outputs (G-buffer, gradient background, TLAS), so it
-		// must land strictly later.
+		// Real cross-node edges, not just "it compiled": Gradient and the clipmap Import share
+		// no dependency with anything, so they land in the first stage (provably independent);
+		// Terrain now declares Read<TerrainClipmapTexture> (a real, declared dependency rather
+		// than a raw view/sampler smuggled in with no graph edge), so it must land strictly
+		// after the Import; Deferred depends on Terrain's outputs too, so it lands later still.
 		const auto& schedule = frameGraph.GetSchedule();
-		REQUIRE(schedule.stages.size() == 2);
+		REQUIRE(schedule.stages.size() == 3);
 		CHECK(schedule.stages[0].nodes.size() == 2);
 		CHECK(schedule.stages[1].nodes.size() == 1);
-
-		device.destroyDescriptorSetLayout(globalSet0Layout);
+		CHECK(schedule.stages[2].nodes.size() == 1);
 	}
 
 	engine.Cleanup();

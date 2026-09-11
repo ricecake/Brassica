@@ -84,6 +84,14 @@ namespace brassica::graph {
 
 		void Add(NodeHandle handle) { m_nodes.push_back(std::move(handle)); }
 
+		// Non-null only when node `index` is a Subgraph -- lets a backend recurse into its
+		// inner graph with the same treatment (Provision/barrier-synthesis/DynamicRendering) it
+		// gives this graph, instead of falling through to ExecuteNode/Subgraph::Execute's naive
+		// per-node loop. See PhysicalExecutionBackend::RunSchedule.
+		[[nodiscard]] Graph* InnerGraphOfNode(std::size_t index) {
+			return index < m_nodes.size() ? m_nodes[index].InnerGraphIfAny() : nullptr;
+		}
+
 		void Setup(const FrameContext& ctx) {
 			m_recipes.clear();
 			m_recipes.reserve(m_nodes.size());
@@ -99,31 +107,180 @@ namespace brassica::graph {
 		// sit at each stage boundary. This is the single biggest correctness gain over
 		// external/FrameGraph, which culls by refcount but executes in registration order and
 		// never batches a barrier at all.
-		std::expected<void, ValidationError> Compile() {
+		//
+		// externallyProvided is for a Subgraph's own inner graph (Frame.hpp): its Resources are
+		// its *net* interface (Spec::Unsatisfied), so a key in that set has, by construction, no
+		// producer inside this graph at all -- the parent supplies it. Without naming that here,
+		// ValidateRuntime would report it missing every time, which is exactly backwards: an
+		// unsatisfied input is a Subgraph's interface, not a bug. A root Graph/Frame has none of
+		// these, hence the empty default -- Frame already asserts full renderability itself
+		// (Validation.hpp's AssertRenderable), so nothing is lost by requiring every input to be
+		// a real producer or Import there.
+		std::expected<void, ValidationError> Compile(std::span<const ResourceId> externallyProvided = {}) {
 			std::vector<NodeDescriptor> descriptors;
 			descriptors.reserve(m_nodes.size());
 			for (const auto& node : m_nodes) {
 				descriptors.push_back(node.Descriptor());
 			}
 
-			if (auto result = ValidateRuntime(descriptors, {}); !result) {
+			if (auto result = ValidateRuntime(descriptors, externallyProvided); !result) {
 				return result;
 			}
 
-			const std::vector<Edge> edges = CollectEdges(descriptors);
-			const std::size_t       n = descriptors.size();
+			const std::size_t n = descriptors.size();
+
+			// Version lifting: a consumer that declares key K (base B, version V) binds to the
+			// highest version of B any strictly-lower-phase node produces, if one exists -- so a
+			// downstream reader of "whatever the latest state is" (plain Read<Swapchain>, version
+			// 0) doesn't need to know an earlier phase used Modify<Swapchain, 2> internally.
+			// Materialized per-node rather than mutated in place: NodeDescriptor::consumes is a
+			// span into per-type static storage (ResourceKey.hpp's kIdArray) that every other
+			// consumer of the type relies on staying untouched.
+			std::vector<std::vector<ResourceId>> liftedConsumes(n);
+			for (std::size_t consumer = 0; consumer < n; ++consumer) {
+				liftedConsumes[consumer].assign(
+					descriptors[consumer].consumes.begin(),
+					descriptors[consumer].consumes.end()
+				);
+				for (ResourceId& key : liftedConsumes[consumer]) {
+					const ResourceId base = key->versionBase ? key->versionBase : key;
+					std::uint32_t    bestVersion = key->version;
+					ResourceId       bestKey = key;
+					for (std::size_t producer = 0; producer < n; ++producer) {
+						if (producer == consumer || descriptors[producer].phase >= descriptors[consumer].phase) {
+							continue;
+						}
+						for (ResourceId produced : descriptors[producer].produces) {
+							const ResourceId producedBase = produced->versionBase ? produced->versionBase : produced;
+							if (producedBase == base && produced->version > bestVersion) {
+								bestVersion = produced->version;
+								bestKey = produced;
+							}
+						}
+					}
+					key = bestKey;
+				}
+			}
+
+			std::vector<NodeDescriptor> effective = descriptors;
+			for (std::size_t i = 0; i < n; ++i) {
+				effective[i].consumes = liftedConsumes[i];
+			}
+
+			const std::vector<Edge> allEdges = CollectEdges(effective);
+
+			// Classify by phase relationship, using the *original* declared phases (lifting never
+			// changes a node's own phase). A same-phase edge levels within its phase partition
+			// below. A cross-phase edge is either already satisfied by construction (forward --
+			// keep, so SynthesizeBarrier still emits the real memory dependency), the expected
+			// shape of two same-key writers a phase apart (backward, consumer also produces the
+			// key -- drop silently, ordering comes from phase, not resource flow: this is exactly
+			// what lets DeferredNode and a later WaterNode both plain Modify<Swapchain> without a
+			// version number between them), or a genuine phase violation (backward, consumer is a
+			// pure reader -- error).
+			std::vector<Edge> intraPhaseEdges;
+			std::vector<Edge> crossPhaseEdges;
+			for (const Edge& edge : allEdges) {
+				const Phase producerPhase = descriptors[edge.producer].phase;
+				const Phase consumerPhase = descriptors[edge.consumer].phase;
+				if (producerPhase == consumerPhase) {
+					intraPhaseEdges.push_back(edge);
+					continue;
+				}
+				if (producerPhase < consumerPhase) {
+					crossPhaseEdges.push_back(edge);
+					continue;
+				}
+
+				const auto& consumerProduces = descriptors[edge.consumer].produces;
+				const bool  consumerAlsoProduces = std::find(
+													   consumerProduces.begin(),
+													   consumerProduces.end(),
+													   edge.key
+												   ) != consumerProduces.end();
+				if (consumerAlsoProduces) {
+					continue;
+				}
+
+				return std::unexpected(
+					ValidationError{
+						.message = "phase violation: '" + std::string(descriptors[edge.consumer].name) + "' (phase " +
+							std::to_string(static_cast<std::int32_t>(consumerPhase)) + ") requires '" +
+							std::string(edge.key->name) + "', but its only producer, '" +
+							std::string(descriptors[edge.producer].name) + "', runs in a later phase (" +
+							std::to_string(static_cast<std::int32_t>(producerPhase)) +
+							") -- a later phase cannot satisfy an earlier phase's input",
+						.missing = {edge.key},
+					}
+				);
+			}
+
+			// Partition into phase groups in ascending phase order and level within each group
+			// using only that group's own edges. A node in a later-phase group therefore lands
+			// after every earlier-phase node's stage even with zero resource dependency between
+			// them (Phase's whole purpose), and grouping this way means a phase can never
+			// manufacture a false cross-phase cycle -- only genuinely same-phase edges ever feed
+			// one LevelNodes call together.
+			std::vector<Phase> phaseOrder;
+			for (const auto& d : descriptors) {
+				if (std::find(phaseOrder.begin(), phaseOrder.end(), d.phase) == phaseOrder.end()) {
+					phaseOrder.push_back(d.phase);
+				}
+			}
+			std::sort(phaseOrder.begin(), phaseOrder.end());
 
 			std::vector<std::size_t> nodeStage(n, 0);
 			m_schedule.stages.clear();
-			for (auto& level : LevelNodes(n, edges)) {
-				const std::size_t stageIndex = m_schedule.stages.size();
-				for (std::size_t index : level) {
-					nodeStage[index] = stageIndex;
+			for (Phase phase : phaseOrder) {
+				std::vector<std::size_t> group;
+				for (std::size_t i = 0; i < n; ++i) {
+					if (descriptors[i].phase == phase) {
+						group.push_back(i);
+					}
 				}
-				m_schedule.stages.push_back(ScheduleStage{std::move(level), {}, {}});
+
+				std::vector<Edge> groupEdges;
+				for (const Edge& edge : intraPhaseEdges) {
+					if (descriptors[edge.consumer].phase == phase) {
+						groupEdges.push_back(edge);
+					}
+				}
+
+				std::vector<std::vector<std::size_t>> levels = LevelNodes(n, group, groupEdges);
+
+				std::size_t scheduled = 0;
+				for (const auto& level : levels) {
+					scheduled += level.size();
+				}
+				if (scheduled < group.size()) {
+					std::vector<std::size_t> placed;
+					for (const auto& level : levels) {
+						placed.insert(placed.end(), level.begin(), level.end());
+					}
+					std::string message = "graph contains a circular dependency; these nodes never "
+										  "reach zero remaining dependencies:";
+					for (std::size_t index : group) {
+						if (std::find(placed.begin(), placed.end(), index) == placed.end()) {
+							message += ' ';
+							message += descriptors[index].name;
+						}
+					}
+					return std::unexpected(ValidationError{.message = std::move(message), .missing = {}});
+				}
+
+				for (auto& level : levels) {
+					const std::size_t stageIndex = m_schedule.stages.size();
+					for (std::size_t index : level) {
+						nodeStage[index] = stageIndex;
+					}
+					m_schedule.stages.push_back(ScheduleStage{std::move(level), {}, {}});
+				}
 			}
 
-			for (const Edge& edge : edges) {
+			for (const Edge& edge : intraPhaseEdges) {
+				SynthesizeBarrier(descriptors, nodeStage, edge);
+			}
+			for (const Edge& edge : crossPhaseEdges) {
 				SynthesizeBarrier(descriptors, nodeStage, edge);
 			}
 
@@ -134,21 +291,37 @@ namespace brassica::graph {
 			return {};
 		}
 
-		void Execute(CommandBuffer& cmd) {
+		void Execute(NodeContext& ctx) {
 			for (const auto& stage : m_schedule.stages) {
 				for (std::size_t index : stage.nodes) {
-					m_nodes[index].Execute(cmd);
+					m_nodes[index].Execute(ctx);
 				}
 			}
+		}
+
+		// Legacy entry point for callers that only have a bare CommandBuffer (no pipeline/
+		// bindless state to offer) -- wraps it in a default-initialized NodeContext and defers
+		// to the overload above. PhysicalExecutionBackend::Execute builds a real NodeContext
+		// per node instead of going through this.
+		void Execute(CommandBuffer& cmd) {
+			NodeContext ctx{};
+			ctx.cmd = cmd;
+			Execute(ctx);
 		}
 
 		// Executes a single scheduled node by index, bracketed by nothing itself -- callers
 		// that need to interleave per-node work (barrier flushes, dynamic-rendering begin/end)
 		// use this instead of the batch Execute() above.
-		void ExecuteNode(std::size_t index, CommandBuffer& cmd) {
+		void ExecuteNode(std::size_t index, NodeContext& ctx) {
 			if (index < m_nodes.size()) {
-				m_nodes[index].Execute(cmd);
+				m_nodes[index].Execute(ctx);
 			}
+		}
+
+		void ExecuteNode(std::size_t index, CommandBuffer& cmd) {
+			NodeContext ctx{};
+			ctx.cmd = cmd;
+			ExecuteNode(index, ctx);
 		}
 
 		[[nodiscard]] const Schedule& GetSchedule() const { return m_schedule; }
@@ -186,17 +359,20 @@ namespace brassica::graph {
 			return edges;
 		}
 
-		// BFS layering (longest-path-from-source levels): repeatedly peel off every node whose
-		// dependencies are already fully satisfied by prior levels. A node only leaves the
-		// frontier once every one of its producers has been placed, so level(v) == 1 +
-		// max(level(u)) over all direct producers u -- and no two nodes in the same level can
-		// have an edge between them, which is exactly the "provably independent" property
-		// Schedule promises.
-		static std::vector<std::vector<std::size_t>> LevelNodes(std::size_t n, const std::vector<Edge>& edges) {
+		// BFS layering (longest-path-from-source levels) restricted to one phase group: repeatedly
+		// peel off every group member whose dependencies (within this group's own edges) are
+		// already fully satisfied by prior levels. A node only leaves the frontier once every one
+		// of its producers has been placed, so level(v) == 1 + max(level(u)) over all direct
+		// producers u -- and no two nodes in the same level can have an edge between them, which
+		// is exactly the "provably independent" property Schedule promises. `n` sizes the
+		// dependents/indegree vectors to the full node count so `group`'s indices (global, not
+		// contiguous) can index directly into them; only entries named by `group` are ever read.
+		static std::vector<std::vector<std::size_t>>
+		LevelNodes(std::size_t n, std::span<const std::size_t> group, const std::vector<Edge>& edges) {
 			std::vector<std::vector<std::size_t>> dependents(n);
 			std::vector<std::size_t>              indegree(n, 0);
 
-			for (std::size_t consumer = 0; consumer < n; ++consumer) {
+			for (std::size_t consumer : group) {
 				std::vector<std::size_t> producers;
 				for (const Edge& edge : edges) {
 					if (edge.consumer != consumer) {
@@ -212,9 +388,9 @@ namespace brassica::graph {
 			}
 
 			std::vector<std::size_t> frontier;
-			for (std::size_t i = 0; i < n; ++i) {
-				if (indegree[i] == 0) {
-					frontier.push_back(i);
+			for (std::size_t index : group) {
+				if (indegree[index] == 0) {
+					frontier.push_back(index);
 				}
 			}
 
@@ -236,11 +412,18 @@ namespace brassica::graph {
 			return levels;
 		}
 
-		// A node's access to a key it touches: ReadWrite if the key appears in both its
-		// consumes and produces (Modify<K>), Write if produces-only, Read otherwise.
+		// A node's access to a key it touches: ReadWrite if the key's base appears in both its
+		// consumes and produces, Write if produces-only, Read otherwise. Matches by resolved base
+		// rather than exact id so a node consuming VersionOf<K, N-1> and producing VersionOf<K, N>
+		// (Modify<K, N>) reports ReadWrite for either version's edge -- both versions name the one
+		// physical resource PhysicalResourceRegistry::ResolveId resolves them to, so a plain
+		// exact-id match would wrongly report Read for the consumed (lower) version. For any
+		// unversioned key this collapses to exact-id matching, unchanged from before.
 		static AccessKind AccessOf(const NodeDescriptor& node, ResourceId key) {
-			const bool reads = std::find(node.consumes.begin(), node.consumes.end(), key) != node.consumes.end();
-			const bool writes = std::find(node.produces.begin(), node.produces.end(), key) != node.produces.end();
+			const ResourceId base = key->versionBase ? key->versionBase : key;
+			auto             matchesBase = [base](ResourceId id) { return id == base || id->versionBase == base; };
+			const bool       reads = std::any_of(node.consumes.begin(), node.consumes.end(), matchesBase);
+			const bool       writes = std::any_of(node.produces.begin(), node.produces.end(), matchesBase);
 			if (reads && writes) {
 				return AccessKind::ReadWrite;
 			}

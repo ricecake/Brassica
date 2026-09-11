@@ -288,6 +288,7 @@ namespace brassica {
 			}
 		}
 
+		++generation;
 		return true;
 	}
 
@@ -314,8 +315,13 @@ namespace brassica {
 		shaderc::Compiler       compiler;
 		shaderc::CompileOptions options;
 		options.SetOptimizationLevel(shaderc_optimization_level_performance);
-		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_4);
-		options.SetTargetSpirv(shaderc_spirv_version_1_6);
+		// Must match CompileFromSource's target exactly (vulkan_1_3/spirv_1_5) -- the engine's
+		// actual device target is Vulkan 1.3 (Engine.cpp's VK_MAKE_API_VERSION(0, 1, 3, 0)), and a
+		// hot-reloaded shader compiled against a newer target than the boot-time compile is a
+		// latent, silent divergence: harmless only as long as no shader actually uses anything the
+		// higher target would allow but the device doesn't guarantee.
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+		options.SetTargetSpirv(shaderc_spirv_version_1_5);
 
 		auto result = compiler.CompileGlslToSpv(newSource, shaderKind, filePath.c_str(), options);
 		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
@@ -348,6 +354,7 @@ namespace brassica {
 		includedFiles = std::move(newIncludedFiles);
 		spirvCode = std::move(newSpirv);
 		shaderModule = newModule;
+		++generation;
 		return true;
 	}
 

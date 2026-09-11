@@ -116,7 +116,11 @@ namespace brassica::graph {
 					derived = DeriveAccelerationStructureState(mb.access, mb.dstDomain);
 				}
 
-				auto& entry = coalesced[mb.resource];
+				// Keyed by the resolved id, not mb.resource directly: two different versions of one
+				// key (VersionedKey<K,1>, VersionedKey<K,2>) name the same PhysicalTexture, and must
+				// coalesce into one barrier against it rather than two EmitImageBarrier calls racing
+				// to mutate the same tracked state.
+				auto& entry = coalesced[registry.ResolveId(mb.resource)];
 				if (!entry.tex && !entry.buf && !entry.as) {
 					entry.tex = tex;
 					entry.buf = buf;

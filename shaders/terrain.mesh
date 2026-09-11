@@ -1,18 +1,10 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
 #extension GL_EXT_fragment_shading_rate : require
+#include "bindless.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 121, max_primitives = 200) out;
-
-layout(set = 0, binding = 0) uniform FrameUBO {
-	float time;
-	uint  frameIndex;
-	uint  globalSeed;
-	uint  frameRandom;
-} ubo;
-
-layout(set = 1, binding = 0) uniform sampler2DArray terrainClipmap;
 
 layout(push_constant) uniform TerrainPushConstants {
 	mat4  viewProj;
@@ -20,6 +12,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uint  clipmapIndex;
 } params;
 
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
@@ -82,7 +75,7 @@ void main() {
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
 
 	vec2 uv = sampleToroidalUV(worldPos.xz, lodLevel);
-	vec4 texSample = texture(terrainClipmap, vec3(uv, float(lodLevel)));
+	vec4 texSample = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv, float(lodLevel)));
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
@@ -101,7 +94,7 @@ void main() {
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending for CDLOD transition
 
 			vec2 uvNext = sampleToroidalUV(worldPos.xz, lodLevel + 1);
-			vec4 texNext = texture(terrainClipmap, vec3(uvNext, float(lodLevel + 1)));
+			vec4 texNext = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uvNext, float(lodLevel + 1)));
 			float nextHeight = texNext.r;
 			vec3 nextNormal = texNext.gba;
 

@@ -51,8 +51,17 @@ namespace brassica::graph {
 		std::array<char, N> buf{};
 		std::size_t         len = 0;
 
+		// Bounds-checked: a versioned or history-wrapped key's TypeName() (VersionedKey<...>,
+		// History<...>) is far longer than a bare key's, so a frame with enough missing keys can
+		// overrun a fixed buffer that only ever budgeted for bare names. Truncating silently here
+		// is far better than the alternative -- buf[len++] with no bound check turns into an
+		// out-of-bounds std::array subscript in a constant expression, which fails as a confusing
+		// "not a constant expression" error instead of the diagnostic this exists to produce.
 		constexpr void append(std::string_view s) {
 			for (char c : s) {
+				if (len >= buf.size()) {
+					return;
+				}
 				buf[len++] = c;
 			}
 		}

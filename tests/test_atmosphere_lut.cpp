@@ -1,14 +1,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "doctest/doctest.h"
-
 #include <cstddef>
 #include <string>
+
+#include "doctest/doctest.h"
 
 #include "Engine.hpp"
 #include "graph/Graph.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
-#include "passes/AtmosphereLUTPass.hpp"
+#include "passes/AtmosphereLUTNode.hpp"
+#include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/AtmospherePushConstants.hpp"
 
@@ -36,32 +37,46 @@ TEST_CASE("AtmospherePushConstants Struct Layout and Size") {
 	CHECK(push.atmosphereHeight == doctest::Approx(100.0f));
 }
 
+// offsetof checks for the two node-specific wrapper structs live in AtmosphereLUTNode.hpp itself
+// (static_assert, so a drift fails to compile everywhere rather than only here) -- this test is
+// just the GPU-independent "does sizeof/offsetof math work the way the shaders assume" sanity
+// check the struct-layout test above already established the pattern for.
+TEST_CASE(
+	"TransmittanceLUTPushConstants/MultiScatteringLUTPushConstants place their bindless "
+	"index fields where the shaders expect"
+) {
+	CHECK(offsetof(brassica::TransmittanceLUTPushConstants, outIndex) == 80);
+	CHECK(offsetof(brassica::MultiScatteringLUTPushConstants, outIndex) == 80);
+	CHECK(offsetof(brassica::MultiScatteringLUTPushConstants, transmittanceIndex) == 84);
+}
+
 TEST_CASE("Atmosphere Shaders Compilation") {
 	brassica::ComputeShader transShader;
-	bool transLoaded = transShader.LoadFromFile("shaders/atmosphere/transmittance_lut.comp");
+	bool                    transLoaded = transShader.LoadFromFile("shaders/atmosphere/transmittance_lut.comp");
 	CHECK(transLoaded);
 	if (transLoaded) {
 		std::string transSource = transShader.GetSource();
 		CHECK(transSource.find("#version 460") != std::string::npos);
-		CHECK(transSource.find("outTransmittance") != std::string::npos);
-		CHECK(transSource.find("AtmospherePushConstants") != std::string::npos);
+		CHECK(transSource.find("uImagesRGBA32F") != std::string::npos);
+		CHECK(transSource.find("TransmittancePushConstants") != std::string::npos);
 	}
 
 	brassica::ComputeShader multiShader;
-	bool multiLoaded = multiShader.LoadFromFile("shaders/atmosphere/multiscattering_lut.comp");
+	bool                    multiLoaded = multiShader.LoadFromFile("shaders/atmosphere/multiscattering_lut.comp");
 	CHECK(multiLoaded);
 	if (multiLoaded) {
 		std::string multiSource = multiShader.GetSource();
 		CHECK(multiSource.find("#version 460") != std::string::npos);
-		CHECK(multiSource.find("outMultiScattering") != std::string::npos);
-		CHECK(multiSource.find("u_transmittanceLUT") != std::string::npos);
+		CHECK(multiSource.find("uImagesRGBA32F") != std::string::npos);
+		CHECK(multiSource.find("SAMPLE_LINEAR") != std::string::npos);
 	}
 }
 
 // Real TransmittanceLUTNode/MultiScatteringLUTNode through the real PhysicalExecutionBackend --
-// genuine coverage of the regeneration throttle (AtmosphereLUTPass::ShouldRegenerate/
-// MarkRegenerated) the old fg-dependent version of this test never had (it only checked that
-// RegisterPass populated the blackboard, using a null device that never actually built anything).
+// genuine coverage of the regeneration throttle (AtmosphereRegenerationState::ShouldRegenerate/
+// MarkRegenerated, replacing AtmosphereLUTPass's identically-behaved original) the old
+// fg-dependent version of this test never had (it only checked that RegisterPass populated the
+// blackboard, using a null device that never actually built anything).
 // Gated on a real headless device since this exercises real compute dispatches; see
 // tests/test_headless.cpp for the skip pattern.
 TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually change") {
@@ -78,16 +93,27 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 	vk::Device device = engine.GetDevice();
 
 	{
-		brassica::AtmosphereLUTPass          pass(device);
+		brassica::ComputeShader transShader;
+		brassica::ComputeShader multiShader;
+		REQUIRE(transShader.CompileComputeFromFile(device, "shaders/atmosphere/transmittance_lut.comp"));
+		REQUIRE(multiShader.CompileComputeFromFile(device, "shaders/atmosphere/multiscattering_lut.comp"));
+
+		brassica::render::PipelineLibrary         pipelineLibrary(device, nullptr);
+		brassica::AtmosphereRegenerationState     throttle{};
 		brassica::graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
 		brassica::graph::PhysicalExecutionBackend backend(registry);
 
 		vk::CommandPool pool = device.createCommandPool(
-			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, 0}
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				0,
+			}
 		);
-		vk::CommandBuffer vkCmd =
-			device.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
-				.front();
+		vk::CommandBuffer vkCmd = device
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
 		vk::Queue queue = device.getQueue(0, 0);
 
 		// Runs one "frame" of just the two LUT nodes and returns whether TransmittanceLUTNode
@@ -98,12 +124,18 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 		// never change, so identity alone can't distinguish "regenerated" from "throttled".
 		auto runFrame = [&](const brassica::AtmospherePushConstants& push) {
 			brassica::graph::Graph g;
-			g.Register<brassica::TransmittanceLUTNode>(
-				brassica::TransmittanceLUTNode{.pass = &pass, .registry = &registry, .activeFrame = 0, .push = push}
-			);
-			g.Register<brassica::MultiScatteringLUTNode>(
-				brassica::MultiScatteringLUTNode{.pass = &pass, .registry = &registry, .activeFrame = 0, .push = push}
-			);
+			g.Register<brassica::TransmittanceLUTNode>(brassica::TransmittanceLUTNode{
+				.pipelineLibrary = &pipelineLibrary,
+				.shader = &transShader,
+				.throttle = &throttle,
+				.atmosphere = push,
+			});
+			g.Register<brassica::MultiScatteringLUTNode>(brassica::MultiScatteringLUTNode{
+				.pipelineLibrary = &pipelineLibrary,
+				.shader = &multiShader,
+				.throttle = &throttle,
+				.atmosphere = push,
+			});
 
 			brassica::graph::FrameContext ctx{.width = 256, .height = 64};
 
@@ -137,8 +169,14 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 		// And immediately throttles again once caught up to the new parameters.
 		CHECK_FALSE(runFrame(push2));
 
+		pipelineLibrary.Reset();
+		transShader.Destroy(device);
+		multiShader.Destroy(device);
 		device.destroyCommandPool(pool);
 	}
+
+	CHECK(engine.GetValidationErrorCount() == 0);
+	CHECK(engine.GetValidationWarningCount() == 0);
 
 	engine.Cleanup();
 }
