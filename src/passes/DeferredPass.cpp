@@ -33,7 +33,8 @@ namespace brassica {
 		// Binding 3: Background sampler
 		// Binding 4: Terrain Clipmap Texture Array sampler
 		// Binding 5: Acceleration Structure (TLAS)
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		// Binding 6: Terrain AABB Storage Buffer
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		for (uint32_t i = 0; i < 5; ++i) {
 			bindings[i].setBinding(i);
 			bindings[i].setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
@@ -45,14 +46,20 @@ namespace brassica {
 		bindings[5].setDescriptorCount(1);
 		bindings[5].setStageFlags(vk::ShaderStageFlagBits::eFragment);
 
+		bindings[6].setBinding(6);
+		bindings[6].setDescriptorType(vk::DescriptorType::eStorageBuffer);
+		bindings[6].setDescriptorCount(1);
+		bindings[6].setStageFlags(vk::ShaderStageFlagBits::eFragment);
+
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		gbufferSetLayout = dev.createDescriptorSetLayout(layoutInfo);
 
 		// Pool
-		std::array<vk::DescriptorPoolSize, 2> poolSizes{};
+		std::array<vk::DescriptorPoolSize, 3> poolSizes{};
 		poolSizes[0].setType(vk::DescriptorType::eCombinedImageSampler).setDescriptorCount(5 * FRAME_OVERLAP);
 		poolSizes[1].setType(vk::DescriptorType::eAccelerationStructureKHR).setDescriptorCount(1 * FRAME_OVERLAP);
+		poolSizes[2].setType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1 * FRAME_OVERLAP);
 
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setMaxSets(FRAME_OVERLAP);

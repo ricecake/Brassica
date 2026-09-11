@@ -18,6 +18,16 @@ layout(set = 1, binding = 3) uniform sampler2D backgroundTex;
 layout(set = 1, binding = 4) uniform sampler2DArray terrainClipmap;
 layout(set = 1, binding = 5) uniform accelerationStructureEXT topLevelAS;
 
+struct TerrainAABBData {
+	float bounds[6]; // 0: minX, 1: minY, 2: minZ, 3: maxX, 4: maxY, 5: maxZ
+	float lod;
+	float padding;
+};
+
+layout(set = 1, binding = 6, std430) readonly buffer TerrainAABBBuffer {
+	TerrainAABBData aabbData[];
+};
+
 layout(push_constant) uniform TerrainPushConstants {
 	mat4  viewProj;
 	vec4  cameraPos;
@@ -42,44 +52,50 @@ vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
 	return fract(texelCoord / float(textureDim));
 }
 
-// Calculate the LOD level based on the sample's Chebyshev distance
-uint calculateRayLOD(vec2 sampleXZ) {
-	vec2 dists = abs(sampleXZ - params.cameraPos.xz);
-	float maxDist = max(dists.x, dists.y);
+// Raymarch terrain heightmap strictly inside the candidate AABB's hit interval [tNear, tFar]
+bool checkTerrainAABBIntersection(
+	vec3 rayOrigin,
+	vec3 rayDir,
+	vec3 boxMin,
+	vec3 boxMax,
+	uint stepLod,
+	out float hitT
+) {
+	vec3 invDir = 1.0 / (abs(rayDir) + vec3(1e-6)) * sign(rayDir);
+	vec3 t0 = (boxMin - rayOrigin) * invDir;
+	vec3 t1 = (boxMax - rayOrigin) * invDir;
+	vec3 tMinVec = min(t0, t1);
+	vec3 tMaxVec = max(t0, t1);
 
-	float baseRadius = 272.0;
+	float tNear = max(max(tMinVec.x, tMinVec.y), max(tMinVec.z, 0.0));
+	float tFar = min(min(tMaxVec.x, tMaxVec.y), tMaxVec.z);
 
-	if (maxDist < baseRadius) {
-		return 0;
+	if (tNear >= tFar) {
+		hitT = 0.0;
+		return false;
 	}
 
-	float lodFloat = ceil(log2(maxDist / baseRadius));
-	return uint(clamp(lodFloat, 0.0, 7.0));
-}
+	float baseTexelSize = (params.cameraPos.w > 0.0) ? params.cameraPos.w : 0.5;
+	float texelSize = baseTexelSize * pow(2.0, float(stepLod));
+	float stepSize = max(0.5, texelSize * 0.5);
 
-// Update the intersection function to use dynamic LODs
-bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
-	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
-	int numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
+	int numSteps = int(ceil((tFar - tNear) / stepSize));
+	numSteps = clamp(numSteps, 1, 128);
+	float actualStep = (tFar - tNear) / float(numSteps);
 
-	float rayLength = 500.0;
-	for (int i = 1; i <= numSteps; ++i) {
-		float t = (float(i) / float(numSteps)) * rayLength;
+	for (int i = 0; i < numSteps; ++i) {
+		float t = tNear + (float(i) + 0.5) * actualStep;
 		vec3 samplePos = rayOrigin + rayDir * t;
 
-		// Fetch the appropriate LOD for the current spatial step
-		uint stepLod = calculateRayLOD(samplePos.xz);
-
 		vec2 uv = sampleToroidalUV(samplePos.xz, stepLod);
-		// Sample the specific array layer matching the LOD
-		vec4 texSample = texture(terrainClipmap, vec3(uv, float(stepLod)));
-		float terrainHeight = texSample.r;
+		float terrainHeight = texture(terrainClipmap, vec3(uv, float(stepLod))).r;
 
 		if (samplePos.y <= terrainHeight) {
 			hitT = t;
 			return true;
 		}
 	}
+
 	hitT = 0.0;
 	return false;
 }
@@ -114,21 +130,20 @@ void main() {
 		// Ray Query Shadows
 		float shadowFactor = 1.0;
 
-		// Inside main(), replace the existing rayOrigin assignment:
 		if (diff > 0.001) {
-			vec3 rayOrigin = pos + norm * 0.1; // Base offset to avoid standard self-shadowing
+			float distToCam = length(pos - params.cameraPos.xyz);
+			vec3 rayOrigin = pos + norm * clamp(0.05 * distToCam * 0.01 + 0.2, 0.2, 2.0);
 
-			// Sample the absolute highest-detail terrain height at this coordinate
+			// Sample highest-detail terrain height at this coordinate
 			vec2 uv0 = sampleToroidalUV(pos.xz, 0);
 			float trueHeight0 = texture(terrainClipmap, vec3(uv0, 0.0)).r;
 
-			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
-			if (rayOrigin.y < trueHeight0 + 0.1) {
-				rayOrigin.y = trueHeight0 + 0.1;
+			// Dynamically push the ray origin above the LOD 0 surface if geometry is buried
+			if (rayOrigin.y < trueHeight0 + 0.2) {
+				rayOrigin.y = trueHeight0 + 0.2;
 			}
 
-			float shadowRayTMax = 1000.0;
-
+			float shadowRayTMax = 16000.0;
 
 			rayQueryEXT rq;
 			rayQueryInitializeEXT(
@@ -142,13 +157,17 @@ void main() {
 				shadowRayTMax
 			);
 
-			float camDistToShaded = length(pos);
-
 			while (rayQueryProceedEXT(rq)) {
 				uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);
 				if (candidateType == gl_RayQueryCandidateIntersectionAABBEXT) {
+					uint primID = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+					TerrainAABBData box = aabbData[primID];
+					vec3 boxMin = vec3(box.bounds[0], box.bounds[1], box.bounds[2]);
+					vec3 boxMax = vec3(box.bounds[3], box.bounds[4], box.bounds[5]);
+					uint stepLod = uint(box.lod);
+
 					float hitT;
-					if (checkTerrainAABBIntersection(rayOrigin, lightDir, camDistToShaded, hitT)) {
+					if (checkTerrainAABBIntersection(rayOrigin, lightDir, boxMin, boxMax, stepLod, hitT)) {
 						rayQueryGenerateIntersectionEXT(rq, hitT);
 					}
 				}
