@@ -411,3 +411,42 @@ TEST_CASE("ToDot renders nodes, recurses into a populated subgraph, and draws th
 	CHECK(dot.find("gold") != std::string::npos);       // PreviousFrame/NextFrame fill color
 	CHECK(dot.find("purple") != std::string::npos);     // the PreviousFrame -> NextFrame temporal edge
 }
+
+namespace {
+	struct PhaseKeyA {};
+	struct PhaseKeyB {};
+
+	struct PhaseSource {
+		using Resources = Declares<Create<PhaseKeyA>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void   Execute(CommandBuffer&) {}
+	};
+
+	struct PhasePass1 {
+		using Resources = Declares<Phase<PhaseKeyA, PhaseKeyB>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void   Execute(CommandBuffer&) {}
+	};
+
+	struct PhasePass2 {
+		using Resources = Declares<Modify<PhaseKeyB>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void   Execute(CommandBuffer&) {}
+	};
+} // namespace
+
+TEST_CASE("Phase operation orders sequential passes without circular dependencies") {
+	Graph graph;
+	graph.Register<PhasePass2>();  // Index 0: consumes PhaseKeyB, produces PhaseKeyB
+	graph.Register<PhasePass1>();  // Index 1: consumes PhaseKeyA, produces PhaseKeyB
+	graph.Register<PhaseSource>(); // Index 2: produces PhaseKeyA
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	REQUIRE(schedule.stages.size() == 3);
+	CHECK(StageOf(schedule, 2) == 0); // PhaseSource runs in stage 0
+	CHECK(StageOf(schedule, 1) == 1); // PhasePass1 runs in stage 1
+	CHECK(StageOf(schedule, 0) == 2); // PhasePass2 runs in stage 2
+}

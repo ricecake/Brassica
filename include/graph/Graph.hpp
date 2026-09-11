@@ -100,6 +100,10 @@ namespace brassica::graph {
 		// external/FrameGraph, which culls by refcount but executes in registration order and
 		// never batches a barrier at all.
 		std::expected<void, ValidationError> Compile() {
+			if (m_recipes.size() < m_nodes.size()) {
+				Setup(FrameContext{});
+			}
+
 			std::vector<NodeDescriptor> descriptors;
 			descriptors.reserve(m_nodes.size());
 			for (const auto& node : m_nodes) {
@@ -113,9 +117,18 @@ namespace brassica::graph {
 			const std::vector<Edge> edges = CollectEdges(descriptors);
 			const std::size_t       n = descriptors.size();
 
+			auto        levels = LevelNodes(n, edges);
+			std::size_t scheduledCount = 0;
+			for (const auto& lvl : levels) {
+				scheduledCount += lvl.size();
+			}
+			if (scheduledCount < n) {
+				return std::unexpected(ValidationError{.message = "graph contains a circular dependency / cycle", .missing = {}});
+			}
+
 			std::vector<std::size_t> nodeStage(n, 0);
 			m_schedule.stages.clear();
-			for (auto& level : LevelNodes(n, edges)) {
+			for (auto& level : levels) {
 				const std::size_t stageIndex = m_schedule.stages.size();
 				for (std::size_t index : level) {
 					nodeStage[index] = stageIndex;

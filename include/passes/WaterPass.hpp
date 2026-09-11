@@ -68,7 +68,7 @@ namespace brassica {
 			graph::Read<GBufferPosition>,
 			graph::Read<GBufferDepth>,
 			graph::Read<GBufferAlbedo>,
-			graph::Modify<Swapchain>>;
+			graph::Phase<LitSwapchain, Swapchain>>;
 
 		WaterPass*                       pass;
 		graph::PhysicalResourceRegistry* registry;
