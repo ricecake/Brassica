@@ -128,14 +128,6 @@ void main() {
 	lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
 	lodColor = mix(sand, lodColor, smoothstep(-2.0, 5.0, height));
 	lodColor = mix(lodColor, snow, smoothstep(700.0, 800.0, height));
-
-	// Translucent blue water layer over areas where terrain height is below zero
-	if (height < 0.0) {
-		vec3 waterColor = vec3(0.05, 0.45, 0.85);
-		float depth = -height;
-		float waterAlpha = clamp(0.35 + depth * 0.04, 0.35, 0.85);
-		lodColor = mix(lodColor, waterColor, waterAlpha);
-	}
 	// lodColor += vec3(1,0,0) * lodLevel;
 	// lodColor = vec3(0.1, 0.1, lodLevel/7.0);
 	// lodColor = vec3(step(5.0, lodLevel), 0.1, lodLevel/7.0);

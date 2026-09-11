@@ -684,7 +684,9 @@ namespace brassica::graph {
 			.width = width,
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
-			.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eDepthStencilAttachment),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled
+			),
 		};
 	}
 

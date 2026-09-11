@@ -346,6 +346,7 @@ namespace brassica {
 			GetPipelineCache()
 		);
 		waterPass = std::make_unique<WaterPass>(
+			instance,
 			device,
 			globalSet0Layout,
 			GetSwapchainFormat(),

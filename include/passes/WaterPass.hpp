@@ -21,6 +21,7 @@ namespace brassica {
 	class WaterPass: public RenderPass {
 	public:
 		WaterPass(
+			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
 			vk::Format              colorFormat,
@@ -30,6 +31,7 @@ namespace brassica {
 		~WaterPass() override;
 
 		void InitPipeline(
+			vk::Instance            instance,
 			vk::Device              device,
 			vk::DescriptorSetLayout globalSet0Layout,
 			vk::Format              colorFormat,
@@ -43,8 +45,12 @@ namespace brassica {
 
 		[[nodiscard]] vk::Sampler GetSampler() const { return sampler; }
 
+		[[nodiscard]] const DispatchLoaderDynamic& GetDls() const { return dls; }
+
 	private:
-		VertexShader   vertShader;
+		DispatchLoaderDynamic dls;
+
+		MeshShader     meshShader;
 		FragmentShader fragShader;
 
 		static constexpr uint32_t FRAME_OVERLAP = 2;
@@ -92,9 +98,9 @@ namespace brassica {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferNormal>(),
+					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Read,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 				}
 			);
 			r.realizations.push_back(
@@ -125,7 +131,7 @@ namespace brassica {
 			imageInfos[1]
 				.setSampler(sampler)
 				.setImageView(depthTex ? depthTex->GetView() : nullptr)
-				.setImageLayout(vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+				.setImageLayout(depthTex ? depthTex->GetCurrentLayout() : vk::ImageLayout::eShaderReadOnlyOptimal);
 			imageInfos[2]
 				.setSampler(sampler)
 				.setImageView(albTex ? albTex->GetView() : nullptr)
@@ -170,13 +176,13 @@ namespace brassica {
 
 			vkCmd.pushConstants(
 				pass->GetPipelineLayout(),
-				vk::ShaderStageFlagBits::eFragment,
+				vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(TerrainPushConstants),
 				&pushConstants
 			);
 
-			vkCmd.draw(3, 1, 0, 0);
+			pass->DrawMeshTasksEXT(vkCmd, 32, 32, 1, pass->GetDls());
 		}
 	};
 
