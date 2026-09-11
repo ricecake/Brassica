@@ -78,6 +78,7 @@ namespace brassica {
 		uint32_t                         activeFrame;
 		vk::ImageView                    clipmapImageView;
 		vk::Sampler                      clipmapSampler;
+		vk::Buffer                       terrainAABBBuffer{nullptr};
 		TerrainPushConstants             pushConstants;
 
 		graph::Recipe Setup(const graph::FrameContext&) {
@@ -161,6 +162,22 @@ namespace brassica {
 				asWrite.setDescriptorCount(1);
 				asWrite.setPNext(&asInfo);
 				descriptorWrites.push_back(asWrite);
+			}
+
+			vk::DescriptorBufferInfo aabbBufferInfo{};
+			if (terrainAABBBuffer) {
+				aabbBufferInfo.setBuffer(terrainAABBBuffer);
+				aabbBufferInfo.setOffset(0);
+				aabbBufferInfo.setRange(VK_WHOLE_SIZE);
+
+				vk::WriteDescriptorSet aabbWrite{};
+				aabbWrite.setDstSet(currentGbufferSet);
+				aabbWrite.setDstBinding(6);
+				aabbWrite.setDstArrayElement(0);
+				aabbWrite.setDescriptorType(vk::DescriptorType::eStorageBuffer);
+				aabbWrite.setDescriptorCount(1);
+				aabbWrite.setBufferInfo(aabbBufferInfo);
+				descriptorWrites.push_back(aabbWrite);
 			}
 
 			pass->GetDevice().updateDescriptorSets(descriptorWrites, nullptr);

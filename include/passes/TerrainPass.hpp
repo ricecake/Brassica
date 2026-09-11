@@ -23,6 +23,17 @@ namespace brassica {
 		glm::uvec4 lodOffsets4_7{0u};             // Toroidal offsets for LOD 4-7
 	};
 
+	struct TerrainAABBData {
+		float minX;
+		float minY;
+		float minZ;
+		float maxX;
+		float maxY;
+		float maxZ;
+		float lod;
+		float padding;
+	};
+
 	class TerrainPass: public RenderPass {
 	public:
 		TerrainPass(
@@ -52,6 +63,8 @@ namespace brassica {
 		);
 
 		[[nodiscard]] vk::AccelerationStructureKHR GetTLAS() const { return tlas; }
+
+		[[nodiscard]] vk::Buffer GetAABBBuffer() const { return aabbBuffer.buffer; }
 
 		[[nodiscard]] vk::DescriptorSet GetTerrainDescriptorSet() const { return terrainDescriptorSet; }
 
