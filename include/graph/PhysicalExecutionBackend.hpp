@@ -32,6 +32,8 @@ namespace brassica::graph {
 			std::vector<vk::RenderingAttachmentInfo> colorAttachments;
 			vk::RenderingAttachmentInfo              depthAttachment{};
 			bool                                     hasDepth = false;
+			vk::RenderingFragmentShadingRateAttachmentInfoKHR shadingRateAttachmentInfo{};
+			bool                                     hasShadingRateAttachment = false;
 			std::uint32_t                            renderWidth = 0;
 			std::uint32_t                            renderHeight = 0;
 
@@ -39,6 +41,19 @@ namespace brassica::graph {
 				if (r.desc.kind != ResourceDesc::Kind::Image2D && r.desc.kind != ResourceDesc::Kind::Image3D) {
 					continue;
 				}
+
+				auto usage = static_cast<vk::ImageUsageFlags>(r.desc.usageMask);
+				if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR) {
+					auto tex = registry.GetTexture(r.key);
+					if (tex && tex->GetView()) {
+						shadingRateAttachmentInfo.imageView = tex->GetView();
+						shadingRateAttachmentInfo.imageLayout = tex->GetCurrentLayout();
+						shadingRateAttachmentInfo.shadingRateAttachmentTexelSize = vk::Extent2D{16, 16};
+						hasShadingRateAttachment = true;
+					}
+					continue;
+				}
+
 				if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite) {
 					// A Read realization is sampled through a descriptor, not attached. Attaching
 					// it here would ask dynamic rendering to write into a resource the barrier
@@ -107,6 +122,9 @@ namespace brassica::graph {
 				colorAttachments.empty() ? nullptr : colorAttachments.data(),
 				hasDepth ? &depthAttachment : nullptr,
 			};
+			if (hasShadingRateAttachment) {
+				renderingInfo.pNext = &shadingRateAttachmentInfo;
+			}
 			cmd.beginRendering(renderingInfo);
 			return true;
 		}

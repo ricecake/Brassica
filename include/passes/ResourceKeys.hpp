@@ -31,4 +31,6 @@ namespace brassica {
 
 	struct MultiScatteringLUT {};
 
+	struct ShadingRateMap {};
+
 } // namespace brassica

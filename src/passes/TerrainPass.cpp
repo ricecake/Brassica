@@ -488,9 +488,16 @@ namespace brassica {
 			vk::PipelineDynamicStateCreateInfo dynamicState{};
 			dynamicState.setDynamicStates(dynamicStates);
 
+			VkPipelineFragmentShadingRateStateCreateInfoKHR shadingRateState{};
+			shadingRateState.sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR;
+			shadingRateState.fragmentSize = {1, 1};
+			shadingRateState.combinerOps[0] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR;
+			shadingRateState.combinerOps[1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR;
+
 			vk::PipelineRenderingCreateInfo renderingCreateInfo{};
 			renderingCreateInfo.setColorAttachmentFormats(colorFormats);
 			renderingCreateInfo.setDepthAttachmentFormat(depthFormat);
+			renderingCreateInfo.setPNext(&shadingRateState);
 
 			vk::GraphicsPipelineCreateInfo pipelineInfo{};
 			pipelineInfo.setPNext(&renderingCreateInfo);

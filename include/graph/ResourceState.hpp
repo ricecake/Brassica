@@ -171,7 +171,16 @@ namespace brassica::graph {
 			return ResourceState{vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eAllCommands, acc};
 		}
 
-		// Read. Storage is checked before Sampled deliberately: a combined Storage|Sampled
+		// Read.
+		if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR) {
+			return ResourceState{
+				vk::ImageLayout::eFragmentShadingRateAttachmentOptimalKHR,
+				vk::PipelineStageFlagBits2::eFragmentShadingRateAttachmentKHR,
+				vk::AccessFlagBits2::eFragmentShadingRateAttachmentReadKHR,
+			};
+		}
+
+		// Storage is checked before Sampled deliberately: a combined Storage|Sampled
 		// resource (e.g. ComputeStorageImageDesc) must use eGeneral, since a storage-image
 		// descriptor requires it and a sampler can legally read from eGeneral, but the reverse
 		// isn't true. AccessKind can't distinguish "read via imageLoad" from "read via a

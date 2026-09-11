@@ -109,6 +109,7 @@ namespace brassica {
 	// node's Execute() was rejected (a real use-after-free risk against in-flight frames).
 	struct TerrainNode {
 		using Resources = graph::Declares<
+			graph::Read<ShadingRateMap>,
 			graph::Create<GBufferPosition>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferAlbedo>,
@@ -127,6 +128,16 @@ namespace brassica {
 			// background instead" (see ResourceRealization::clearColor's comment,
 			// Execution.hpp). Applied to all three color targets, matching the pre-migration
 			// TerrainPass exactly, even though only albedo's alpha is actually read.
+			uint32_t mapWidth = (ctx.width + 15) / 16;
+			uint32_t mapHeight = (ctx.height + 15) / 16;
+
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<ShadingRateMap>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ShadingRateAttachmentDesc(mapWidth, mapHeight, vk::Format::eR8Uint),
+				}
+			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferPosition>(),
