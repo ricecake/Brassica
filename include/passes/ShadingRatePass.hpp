@@ -106,8 +106,6 @@ namespace brassica {
 			uint32_t mapWidth = (extent.width + 15) / 16;
 			uint32_t mapHeight = (extent.height + 15) / 16;
 
-			pass->BindForDispatch(vkCmd);
-
 			if (globalDescriptorSet) {
 				vkCmd.bindDescriptorSets(
 					vk::PipelineBindPoint::eCompute,
