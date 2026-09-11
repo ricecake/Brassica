@@ -47,6 +47,14 @@ namespace brassica::graph {
 		using Produces = TypeList<To>;
 	};
 
+	// Phase<From, To> captures a temporal evolution / phase transition of a resource
+	// (e.g. Swapchain -> LitSwapchain) where From and To share the underlying physical allocation.
+	template <ResourceRef From, ResourceRef To>
+	struct Phase {
+		using Consumes = TypeList<From>;
+		using Produces = TypeList<To>;
+	};
+
 	// Lowers a list of operations to a single canonical ResourceInterface.
 	template <typename... Ops>
 	using Declares =

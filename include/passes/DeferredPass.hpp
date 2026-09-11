@@ -68,7 +68,7 @@ namespace brassica {
 			graph::Read<GBufferAlbedo>,
 			graph::Read<GradientBackground>,
 			graph::Read<TerrainTLAS>,
-			graph::Transform<Swapchain, LitSwapchain>>;
+			graph::Phase<Swapchain, LitSwapchain>>;
 
 		DeferredPass*                    pass;
 		graph::PhysicalResourceRegistry* registry;

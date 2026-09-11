@@ -1,0 +1,96 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
+layout(triangles, max_vertices = 121, max_primitives = 200) out;
+
+layout(set = 0, binding = 0) uniform FrameUBO {
+	float time;
+	uint  frameIndex;
+	uint  globalSeed;
+	uint  frameRandom;
+} ubo;
+
+layout(push_constant) uniform TerrainPushConstants {
+	mat4  viewProj;
+	vec4  cameraPos;   // xyz = camera position, w = baseTexelSize
+	uvec4 gridParams;  // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 lodOffsets0_3;
+	uvec4 lodOffsets4_7;
+} params;
+
+layout(location = 0) out vec3 outWorldPos[];
+layout(location = 1) out vec3 outNormal[];
+layout(location = 2) out vec2 outUV[];
+
+// Wave generation function in mesh shader for procedural waves
+float getWaterHeight(vec2 worldXZ, float time) {
+	float w1 = sin(worldXZ.x * 0.05 + time * 2.0) * 0.8;
+	float w2 = cos(worldXZ.y * 0.05 + time * 1.5) * 0.8;
+	float w3 = sin((worldXZ.x + worldXZ.y) * 0.03 + time * 2.5) * 0.5;
+	float w4 = cos((worldXZ.x * 0.8 - worldXZ.y * 0.6) * 0.1 + time * 3.0) * 0.3;
+	return w1 + w2 + w3 + w4;
+}
+
+vec3 calculateWaterNormal(vec2 worldXZ, float time) {
+	float eps = 0.2;
+	float hL = getWaterHeight(worldXZ - vec2(eps, 0.0), time);
+	float hR = getWaterHeight(worldXZ + vec2(eps, 0.0), time);
+	float hD = getWaterHeight(worldXZ - vec2(0.0, eps), time);
+	float hU = getWaterHeight(worldXZ + vec2(0.0, eps), time);
+
+	vec3 N = vec3(hL - hR, 2.0 * eps, hD - hU);
+	return normalize(N);
+}
+
+void main() {
+	uint meshletCol = gl_WorkGroupID.x;
+	uint meshletRow = gl_WorkGroupID.y;
+	uint numCols = gl_NumWorkGroups.x;
+	uint numRows = gl_NumWorkGroups.y;
+
+	SetMeshOutputsEXT(121, 200);
+
+	uint lx = gl_LocalInvocationID.x;
+	uint ly = gl_LocalInvocationID.y;
+	uint vertexIndex = ly * 11 + lx;
+
+	float meshletSize = 64.0; // Size of each meshlet in world units
+
+	// Snap center to camera position so water seamlessly follows camera
+	vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
+	vec3 meshletMin = vec3(
+		cameraSnap.x + (float(meshletCol) - float(numCols) * 0.5) * meshletSize,
+		0.0,
+		cameraSnap.y + (float(meshletRow) - float(numRows) * 0.5) * meshletSize
+	);
+
+	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
+	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
+
+	// Calculate height and normal
+	float waterBaseHeight = 0.0;
+	float waveHeight = getWaterHeight(worldPos.xz, ubo.time);
+	worldPos.y = waterBaseHeight + waveHeight;
+
+	vec3 N = calculateWaterNormal(worldPos.xz, ubo.time);
+
+	vec4 clipPos = params.viewProj * vec4(worldPos, 1.0);
+	gl_MeshVerticesEXT[vertexIndex].gl_Position = clipPos;
+
+	outWorldPos[vertexIndex] = worldPos;
+	outNormal[vertexIndex] = N;
+	outUV[vertexIndex] = vec2(float(lx) / 10.0, float(ly) / 10.0);
+
+	// Primitive topology: 10x10 quad grid (200 triangles)
+	if (lx < 10 && ly < 10) {
+		uint quadIdx = ly * 10 + lx;
+		uint v0 = ly * 11 + lx;
+		uint v1 = ly * 11 + (lx + 1);
+		uint v2 = (ly + 1) * 11 + lx;
+		uint v3 = (ly + 1) * 11 + (lx + 1);
+
+		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
+		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
+	}
+}

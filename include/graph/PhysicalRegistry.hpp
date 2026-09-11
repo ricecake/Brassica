@@ -51,6 +51,24 @@ namespace brassica::graph {
 			m_globalBinding = binding;
 		}
 
+		void RegisterAlias(ResourceId aliasId, ResourceId targetId) {
+			m_aliases[aliasId] = targetId;
+		}
+
+		template <ResourceRef Alias, ResourceRef Target>
+		void RegisterAlias() {
+			RegisterAlias(IdOf<Alias>(), IdOf<Target>());
+		}
+
+		[[nodiscard]] ResourceId ResolveId(ResourceId id) const {
+			auto it = m_aliases.find(id);
+			while (it != m_aliases.end()) {
+				id = it->second;
+				it = m_aliases.find(id);
+			}
+			return id;
+		}
+
 		// initialLayout/hasDefinedContents describe what the caller already knows about this
 		// import -- see PhysicalTexture's Imported constructor. Defaults are right for a
 		// resource re-imported fresh every frame (e.g. the swapchain: about to be fully
@@ -65,7 +83,8 @@ namespace brassica::graph {
 			vk::ImageLayout     initialLayout = vk::ImageLayout::eUndefined,
 			bool                hasDefinedContents = false
 		) {
-			m_textures[id] = std::make_shared<PhysicalTexture>(image, view, desc, initialLayout, hasDefinedContents);
+			m_textures[ResolveId(id)] =
+				std::make_shared<PhysicalTexture>(image, view, desc, initialLayout, hasDefinedContents);
 		}
 
 		void RegisterImportedBuffer(
@@ -74,7 +93,7 @@ namespace brassica::graph {
 			const ResourceDesc& desc,
 			bool                hasDefinedContents = false
 		) {
-			m_buffers[id] = std::make_shared<PhysicalBuffer>(buffer, desc, hasDefinedContents);
+			m_buffers[ResolveId(id)] = std::make_shared<PhysicalBuffer>(buffer, desc, hasDefinedContents);
 		}
 
 		template <ResourceRef K>
@@ -97,7 +116,7 @@ namespace brassica::graph {
 		// caller-supplied to describe here (see PhysicalAccelerationStructure's class comment,
 		// PhysicalResource.hpp) -- the handle itself is the entire state.
 		void RegisterImportedAccelerationStructure(ResourceId id, vk::AccelerationStructureKHR as) {
-			m_accelStructs[id] = std::make_shared<PhysicalAccelerationStructure>(as);
+			m_accelStructs[ResolveId(id)] = std::make_shared<PhysicalAccelerationStructure>(as);
 		}
 
 		template <ResourceRef K>
@@ -106,7 +125,7 @@ namespace brassica::graph {
 		}
 
 		[[nodiscard]] std::uint32_t GetBindlessIndex(ResourceId id) const {
-			auto it = m_bindlessIndices.find(id);
+			auto it = m_bindlessIndices.find(ResolveId(id));
 			return it != m_bindlessIndices.end() ? it->second : UINT32_MAX;
 		}
 
@@ -116,7 +135,7 @@ namespace brassica::graph {
 		}
 
 		[[nodiscard]] std::shared_ptr<const PhysicalTexture> GetTexture(ResourceId id) const {
-			auto it = m_textures.find(id);
+			auto it = m_textures.find(ResolveId(id));
 			return it != m_textures.end() ? it->second : nullptr;
 		}
 
@@ -132,7 +151,7 @@ namespace brassica::graph {
 		// side of the barrier-synthesis seam is allowed to touch tracked state, rather than
 		// relying on `mutable` fields that every const-holding caller could otherwise corrupt.
 		[[nodiscard]] std::shared_ptr<PhysicalTexture> GetTexture(ResourceId id) {
-			auto it = m_textures.find(id);
+			auto it = m_textures.find(ResolveId(id));
 			return it != m_textures.end() ? it->second : nullptr;
 		}
 
@@ -142,7 +161,7 @@ namespace brassica::graph {
 		}
 
 		[[nodiscard]] std::shared_ptr<const PhysicalBuffer> GetBuffer(ResourceId id) const {
-			auto it = m_buffers.find(id);
+			auto it = m_buffers.find(ResolveId(id));
 			return it != m_buffers.end() ? it->second : nullptr;
 		}
 
@@ -152,7 +171,7 @@ namespace brassica::graph {
 		}
 
 		[[nodiscard]] std::shared_ptr<PhysicalBuffer> GetBuffer(ResourceId id) {
-			auto it = m_buffers.find(id);
+			auto it = m_buffers.find(ResolveId(id));
 			return it != m_buffers.end() ? it->second : nullptr;
 		}
 
@@ -163,7 +182,7 @@ namespace brassica::graph {
 
 		[[nodiscard]] std::shared_ptr<const PhysicalAccelerationStructure>
 		GetAccelerationStructure(ResourceId id) const {
-			auto it = m_accelStructs.find(id);
+			auto it = m_accelStructs.find(ResolveId(id));
 			return it != m_accelStructs.end() ? it->second : nullptr;
 		}
 
@@ -173,7 +192,7 @@ namespace brassica::graph {
 		}
 
 		[[nodiscard]] std::shared_ptr<PhysicalAccelerationStructure> GetAccelerationStructure(ResourceId id) {
-			auto it = m_accelStructs.find(id);
+			auto it = m_accelStructs.find(ResolveId(id));
 			return it != m_accelStructs.end() ? it->second : nullptr;
 		}
 
@@ -214,7 +233,8 @@ namespace brassica::graph {
 					}
 
 					for (const auto& r : recipe.realizations) {
-						auto& lt = lifetimes[r.key];
+						ResourceId resolvedKey = ResolveId(r.key);
+						auto&      lt = lifetimes[resolvedKey];
 						lt.firstPass = std::min(lt.firstPass, stageIndex);
 						lt.lastPass = std::max(lt.lastPass, stageIndex);
 
@@ -237,12 +257,12 @@ namespace brassica::graph {
 						)
 																  .layout;
 
-						auto [it, inserted] = stageImageLayouts.try_emplace(r.key, derivedLayout);
+						auto [it, inserted] = stageImageLayouts.try_emplace(resolvedKey, derivedLayout);
 						if (!inserted && it->second != derivedLayout) {
 							throw std::runtime_error(
 								"PhysicalResourceRegistry::Provision: two nodes in the same schedule "
 								"stage derive different target layouts for resource '" +
-								std::string(r.key->name) + "'"
+								std::string(resolvedKey->name) + "'"
 							);
 						}
 					}
@@ -270,16 +290,18 @@ namespace brassica::graph {
 							continue;
 						}
 
-						auto texIt = m_textures.find(r.key);
+						ResourceId resolvedKey = ResolveId(r.key);
+
+						auto texIt = m_textures.find(resolvedKey);
 						if (texIt != m_textures.end() && texIt->second->IsImported()) {
 							continue;
 						}
-						auto bufIt = m_buffers.find(r.key);
+						auto bufIt = m_buffers.find(resolvedKey);
 						if (bufIt != m_buffers.end() && bufIt->second->IsImported()) {
 							continue;
 						}
 
-						realizationsToProvision[r.key] = r;
+						realizationsToProvision[resolvedKey] = r;
 					}
 				}
 			}
@@ -303,6 +325,7 @@ namespace brassica::graph {
 			m_buffers.clear();
 			m_accelStructs.clear();
 			m_bindlessIndices.clear();
+			m_aliases.clear();
 			m_imagePool.Reset();
 			m_bufferPool.Reset();
 			m_nextBindlessIndex = 0;
@@ -388,6 +411,7 @@ namespace brassica::graph {
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalBuffer>>                m_buffers;
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalAccelerationStructure>> m_accelStructs;
 		std::unordered_map<ResourceId, std::uint32_t>                                  m_bindlessIndices;
+		std::unordered_map<ResourceId, ResourceId>                                     m_aliases;
 
 		vk::DescriptorSet m_globalDescriptorSet{};
 		std::uint32_t     m_globalBinding = 0;

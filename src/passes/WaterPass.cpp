@@ -10,6 +10,7 @@
 namespace brassica {
 
 	WaterPass::WaterPass(
+		vk::Instance            instance,
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		vk::Format              colorFmt,
@@ -18,7 +19,7 @@ namespace brassica {
 	):
 		RenderPass("WaterPass", dev, colorFmt) {
 		CreateDescriptorResources(dev);
-		InitPipeline(dev, globalSet0Layout, colorFmt, watcher, pCache);
+		InitPipeline(instance, dev, globalSet0Layout, colorFmt, watcher, pCache);
 	}
 
 	WaterPass::~WaterPass() {
@@ -36,7 +37,9 @@ namespace brassica {
 			bindings[i].setBinding(i);
 			bindings[i].setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
 			bindings[i].setDescriptorCount(1);
-			bindings[i].setStageFlags(vk::ShaderStageFlagBits::eFragment);
+			bindings[i].setStageFlags(
+				vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment
+			);
 		}
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
@@ -90,25 +93,30 @@ namespace brassica {
 	}
 
 	void WaterPass::InitPipeline(
+		vk::Instance            instance,
 		vk::Device              dev,
 		vk::DescriptorSetLayout globalSet0Layout,
 		vk::Format              colorFmt,
 		ShaderWatcher*          watcher,
 		vk::PipelineCache       pCache
 	) {
-		if (!vertShader.CompileVertexFromFile(dev, "shaders/water.vert")) {
-			spdlog::error("Failed to compile water.vert shader file");
+		dls.init(instance, dev);
+
+		if (!meshShader.CompileMeshFromFile(dev, "shaders/water.mesh")) {
+			spdlog::error("Failed to compile water.mesh shader file");
 		}
 
 		if (!fragShader.CompileFragmentFromFile(dev, "shaders/water.frag")) {
 			spdlog::error("Failed to compile water.frag shader file");
 		}
 
-		SetShaders(&vertShader, &fragShader);
+		SetShaders(&meshShader, &fragShader);
 
 		std::array<vk::DescriptorSetLayout, 2> setLayouts = {globalSet0Layout, waterSetLayout};
 		vk::PushConstantRange                  pushConstantRange{};
-		pushConstantRange.setStageFlags(vk::ShaderStageFlagBits::eFragment);
+		pushConstantRange.setStageFlags(
+			vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment
+		);
 		pushConstantRange.setOffset(0);
 		pushConstantRange.setSize(sizeof(TerrainPushConstants));
 

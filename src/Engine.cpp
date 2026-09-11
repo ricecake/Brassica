@@ -346,6 +346,7 @@ namespace brassica {
 			GetPipelineCache()
 		);
 		waterPass = std::make_unique<WaterPass>(
+			instance,
 			device,
 			globalSet0Layout,
 			GetSwapchainFormat(),
@@ -758,6 +759,7 @@ namespace brassica {
 		// {eUndefined, hasDefinedContents=false}, which is correct here -- DeferredNode's
 		// Modify<Swapchain> fully overwrites every pixel via a fullscreen triangle, so there is
 		// nothing worth preserving from whatever the driver left behind after the last present.
+		physicalRegistry.RegisterAlias<LitSwapchain, Swapchain>();
 		physicalRegistry.RegisterImportedTexture<Swapchain>(
 			swapchainImages[swapchainImageIndex],
 			swapchainImageViews[swapchainImageIndex],
