@@ -13,6 +13,7 @@
 #include "InputHandler.hpp"
 #include "passes/DeferredPass.hpp"
 #include "passes/GradientPass.hpp"
+#include "passes/ShadingRatePass.hpp"
 #include "passes/TerrainPass.hpp"
 #include "ShaderWatcher.hpp"
 #include "TaskScheduler.h"
@@ -169,9 +170,10 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		std::unique_ptr<GradientPass> gradientPass;
-		std::unique_ptr<TerrainPass>  terrainPass;
-		std::unique_ptr<DeferredPass> deferredPass;
+		std::unique_ptr<GradientPass>    gradientPass;
+		std::unique_ptr<ShadingRatePass> shadingRatePass;
+		std::unique_ptr<TerrainPass>     terrainPass;
+		std::unique_ptr<DeferredPass>    deferredPass;
 
 		TerrainClipmap       terrainClipmap;
 		AsyncTerrainUploader terrainUploader;

@@ -677,6 +677,24 @@ namespace brassica::graph {
 		};
 	}
 
+	inline ResourceDesc ShadingRateAttachmentDesc(
+		std::uint32_t width,
+		std::uint32_t height,
+		vk::Format    format = vk::Format::eR8Uint
+	) {
+		return ResourceDesc{
+			.kind = ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.formatCode = static_cast<std::uint32_t>(format),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR |
+				vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
 	inline ResourceDesc
 	DepthBufferDesc(std::uint32_t width, std::uint32_t height, vk::Format format = vk::Format::eD32Sfloat) {
 		return ResourceDesc{

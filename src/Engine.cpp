@@ -229,6 +229,11 @@ namespace brassica {
 				terrainPass.reset();
 			}
 
+			if (shadingRatePass) {
+				shadingRatePass->DestroyPipeline();
+				shadingRatePass.reset();
+			}
+
 			terrainUploader.Cleanup();
 			terrainClipmap.Cleanup();
 
@@ -329,6 +334,8 @@ namespace brassica {
 
 		gradientPass =
 			std::make_unique<GradientPass>(device, vk::Format::eR16G16B16A16Sfloat, &shaderWatcher, GetPipelineCache());
+		shadingRatePass =
+			std::make_unique<ShadingRatePass>(device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
 		terrainPass =
 			std::make_unique<TerrainPass>(instance, device, globalSet0Layout, &shaderWatcher, GetPipelineCache());
 		deferredPass = std::make_unique<DeferredPass>(
@@ -818,6 +825,13 @@ namespace brassica {
 			.clipmapImageView = terrainClipmap.GetImageView(),
 			.clipmapSampler = terrainClipmap.GetSampler(),
 			.pushConstants = terrainPush,
+		});
+		frameGraph.Register<ShadingRateNode>(ShadingRateNode{
+			.pass = shadingRatePass.get(),
+			.registry = &physicalRegistry,
+			.extent = extent,
+			.globalDescriptorSet = globalDescriptorSets[activeFrame],
+			.sampler = deferredPass->GetSampler(),
 		});
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};

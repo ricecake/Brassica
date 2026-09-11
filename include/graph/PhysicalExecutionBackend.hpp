@@ -32,6 +32,8 @@ namespace brassica::graph {
 			std::vector<vk::RenderingAttachmentInfo> colorAttachments;
 			vk::RenderingAttachmentInfo              depthAttachment{};
 			bool                                     hasDepth = false;
+			vk::RenderingFragmentShadingRateAttachmentInfoKHR shadingRateAttachmentInfo{};
+			bool                                     hasShadingRateAttachment = false;
 			std::uint32_t                            renderWidth = 0;
 			std::uint32_t                            renderHeight = 0;
 
@@ -39,6 +41,19 @@ namespace brassica::graph {
 				if (r.desc.kind != ResourceDesc::Kind::Image2D && r.desc.kind != ResourceDesc::Kind::Image3D) {
 					continue;
 				}
+
+				auto usage = static_cast<vk::ImageUsageFlags>(r.desc.usageMask);
+				if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR) {
+					auto tex = registry.GetTexture(r.key);
+					if (tex && tex->GetView()) {
+						shadingRateAttachmentInfo.imageView = tex->GetView();
+						shadingRateAttachmentInfo.imageLayout = tex->GetCurrentLayout();
+						shadingRateAttachmentInfo.shadingRateAttachmentTexelSize = vk::Extent2D{16, 16};
+						hasShadingRateAttachment = true;
+					}
+					continue;
+				}
+
 				if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite) {
 					// A Read realization is sampled through a descriptor, not attached. Attaching
 					// it here would ask dynamic rendering to write into a resource the barrier
@@ -107,6 +122,9 @@ namespace brassica::graph {
 				colorAttachments.empty() ? nullptr : colorAttachments.data(),
 				hasDepth ? &depthAttachment : nullptr,
 			};
+			if (hasShadingRateAttachment) {
+				renderingInfo.pNext = &shadingRateAttachmentInfo;
+			}
 			cmd.beginRendering(renderingInfo);
 			return true;
 		}
@@ -143,6 +161,70 @@ namespace brassica::graph {
 			// 4. The graph's opaque CommandBuffer handle, viewed as real Vulkan at this boundary
 			// only -- Execution.hpp's CommandBuffer stays untouched and Vulkan-free.
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(cmd.vkCmd));
+
+			// Clear uninitialized fragment shading rate attachments to 0 (1x1 shading rate) on first use
+			for (const auto& recipe : recipes) {
+				for (const auto& r : recipe.realizations) {
+					auto usage = static_cast<vk::ImageUsageFlags>(r.desc.usageMask);
+					if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR) {
+						if (auto tex = m_registry.GetTexture(r.key)) {
+							if (!tex->HasDefinedContents()) {
+								vk::ClearColorValue       clearColor(0u, 0u, 0u, 0u);
+								vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+								vk::ImageMemoryBarrier2 clearBarrier{};
+								clearBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe);
+								clearBarrier.setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
+								clearBarrier.setDstAccessMask(vk::AccessFlagBits2::eTransferWrite);
+								clearBarrier.setOldLayout(tex->GetCurrentLayout());
+								clearBarrier.setNewLayout(vk::ImageLayout::eTransferDstOptimal);
+								clearBarrier.setImage(tex->GetImage());
+								clearBarrier.setSubresourceRange(range);
+
+								vk::DependencyInfo depInfo{};
+								depInfo.setImageMemoryBarriers(clearBarrier);
+								vkCmd.pipelineBarrier2(depInfo);
+
+								vkCmd.clearColorImage(
+									tex->GetImage(),
+									vk::ImageLayout::eTransferDstOptimal,
+									clearColor,
+									range
+								);
+
+								vk::ImageMemoryBarrier2 postClearBarrier{};
+								postClearBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
+								postClearBarrier.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
+								postClearBarrier.setDstStageMask(
+									vk::PipelineStageFlagBits2::eFragmentShadingRateAttachmentKHR
+								);
+								postClearBarrier.setDstAccessMask(
+									vk::AccessFlagBits2::eFragmentShadingRateAttachmentReadKHR
+								);
+								postClearBarrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal);
+								postClearBarrier.setNewLayout(
+									vk::ImageLayout::eFragmentShadingRateAttachmentOptimalKHR
+								);
+								postClearBarrier.setImage(tex->GetImage());
+								postClearBarrier.setSubresourceRange(range);
+
+								vk::DependencyInfo postDepInfo{};
+								postDepInfo.setImageMemoryBarriers(postClearBarrier);
+								vkCmd.pipelineBarrier2(postDepInfo);
+
+								tex->SetCurrentLayout(
+									vk::ImageLayout::eFragmentShadingRateAttachmentOptimalKHR
+								);
+								tex->SetLastStageAccess(
+									vk::PipelineStageFlagBits2::eFragmentShadingRateAttachmentKHR,
+									vk::AccessFlagBits2::eFragmentShadingRateAttachmentReadKHR
+								);
+								tex->SetHasDefinedContents(true);
+							}
+						}
+					}
+				}
+			}
 
 			// 5. Staged execution. Nodes within a stage are provably independent of each other
 			// (ScheduleStage's documented invariant), so per-node barriers between them would be

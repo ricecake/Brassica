@@ -1,0 +1,83 @@
+#version 460
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform FrameUBO {
+	float time;
+	uint  frameIndex;
+	uint  globalSeed;
+	uint  frameRandom;
+} ubo;
+
+layout(set = 1, binding = 0) uniform sampler2D gBufferNormal;
+layout(set = 1, binding = 1) uniform sampler2D gBufferDepth;
+layout(set = 1, binding = 2, r8ui) uniform writeonly uimage2D shadingRateMap;
+
+// Vulkan Fragment Shading Rate flags (16x16 texel tiles)
+// 0 = 1x1 (1 invocation per fragment)
+// 5 = 2x2 (1 invocation per 2x2 region: (1 << 2) | 1)
+// 10 = 4x4 (1 invocation per 4x4 region: (2 << 2) | 2)
+const uint SHADING_RATE_1X1 = 0u;
+const uint SHADING_RATE_2X2 = 5u;
+const uint SHADING_RATE_4X4 = 10u;
+
+float rand(vec2 co) {
+	return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void main() {
+	ivec2 tileCoord = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 tileDimensions = imageSize(shadingRateMap);
+
+	if (tileCoord.x >= tileDimensions.x || tileCoord.y >= tileDimensions.y) {
+		return;
+	}
+
+	// Each tile corresponds to a 16x16 pixel block in screen space
+	ivec2 screenTileStart = tileCoord * 16;
+	vec2 screenSize = vec2(tileDimensions * 16);
+
+	// Sample center and corners of the 16x16 tile to evaluate local geometry/depth variance
+	vec2 uvCenter = (vec2(screenTileStart) + vec2(8.0)) / screenSize;
+	vec2 uvTL     = (vec2(screenTileStart) + vec2(2.0)) / screenSize;
+	vec2 uvTR     = (vec2(screenTileStart) + vec2(14.0, 2.0)) / screenSize;
+	vec2 uvBL     = (vec2(screenTileStart) + vec2(2.0, 14.0)) / screenSize;
+	vec2 uvBR     = (vec2(screenTileStart) + vec2(14.0)) / screenSize;
+
+	float depthC  = texture(gBufferDepth, uvCenter).r;
+	float depthTL = texture(gBufferDepth, uvTL).r;
+	float depthTR = texture(gBufferDepth, uvTR).r;
+	float depthBL = texture(gBufferDepth, uvBL).r;
+	float depthBR = texture(gBufferDepth, uvBR).r;
+
+	vec3 normC  = texture(gBufferNormal, uvCenter).xyz;
+	vec3 normTL = texture(gBufferNormal, uvTL).xyz;
+	vec3 normTR = texture(gBufferNormal, uvTR).xyz;
+
+	float depthDiff = max(max(abs(depthC - depthTL), abs(depthC - depthTR)),
+	                      max(abs(depthC - depthBL), abs(depthC - depthBR)));
+
+	float normDiff = max(length(normC - normTL), length(normC - normTR));
+
+	// Higher threshold -> lower detail -> larger shading rate tile (4x4)
+	// Low threshold -> high detail -> full shading rate (1x1)
+	uint rate = SHADING_RATE_1X1;
+	if (depthDiff < 0.0005 && normDiff < 0.05) {
+		rate = SHADING_RATE_4X4;
+	} else if (depthDiff < 0.002 && normDiff < 0.15) {
+		rate = SHADING_RATE_2X2;
+	}
+
+	// Apply temporal jitter back-pressure:
+	// A pseudo-random jitter based on tile coord and frame random seed
+	float jitter = rand(vec2(tileCoord) + vec2(float(ubo.frameRandom & 1023u)));
+	if (jitter < 0.25) {
+		// Slide rate back up towards higher quality (smaller fragment size / 1x1)
+		if (rate == SHADING_RATE_4X4) {
+			rate = SHADING_RATE_2X2;
+		} else if (rate == SHADING_RATE_2X2) {
+			rate = SHADING_RATE_1X1;
+		}
+	}
+
+	imageStore(shadingRateMap, tileCoord, uvec4(rate, 0u, 0u, 0u));
+}
