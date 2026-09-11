@@ -11,7 +11,6 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/ComputePass.hpp"
-#include "passes/PassResource.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "Shader.hpp"
 #include "types/AtmospherePushConstants.hpp"

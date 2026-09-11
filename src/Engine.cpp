@@ -7,6 +7,8 @@
 #include "spdlog/spdlog.h"
 
 #include "graph/PhysicalExecutionBackend.hpp"
+#include "graph/Dot.hpp"
+#include "graph/Node.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace brassica {
@@ -835,6 +837,7 @@ namespace brassica {
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainPass->GetTLAS());
 
 		graph::Graph frameGraph;
+		frameGraph.Register<graph::Import<Swapchain>>(graph::Import<Swapchain>());
 		frameGraph.Register<GradientNode>(GradientNode{.pass = gradientPass.get(), .extent = extent});
 		frameGraph.Register<TerrainNode>(TerrainNode{
 			.pass = terrainPass.get(),

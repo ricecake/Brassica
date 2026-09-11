@@ -10,6 +10,7 @@
 namespace brassica {
 
 	struct Swapchain {};
+	struct LitSwapchain {};
 
 	struct GradientBackground {};
 

@@ -62,7 +62,7 @@ namespace brassica {
 			graph::Read<GBufferPosition>,
 			graph::Read<GBufferDepth>,
 			graph::Read<GBufferAlbedo>,
-			graph::Modify<Swapchain>>;
+			graph::Modify<LitSwapchain>>;
 
 		WaterPass*                       pass;
 		graph::PhysicalResourceRegistry* registry;
@@ -74,13 +74,34 @@ namespace brassica {
 		vk::Sampler                      clipmapSampler;
 		TerrainPushConstants             pushConstants;
 
-		graph::Recipe Setup(const graph::FrameContext&) {
+		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<Swapchain>(),
+					.key = graph::IdOf<LitSwapchain>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::ColorAttachmentDesc(extent.width, extent.height, swapchainFormat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferPosition>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferNormal>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferAlbedo>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
 				}
 			);
 			return r;

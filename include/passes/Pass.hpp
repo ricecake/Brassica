@@ -6,8 +6,6 @@
 
 #include "vulkan/vulkan.hpp"
 
-#include "passes/PassResource.hpp"
-
 namespace brassica {
 
 	class Pass {
