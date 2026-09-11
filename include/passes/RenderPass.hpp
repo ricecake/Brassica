@@ -39,8 +39,7 @@ namespace brassica {
 			bool                                     enableDepthWrite = false,
 			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess,
 			vk::CullModeFlags                        cullMode = vk::CullModeFlagBits::eBack,
-			vk::PipelineCache                        pipelineCache = nullptr,
-			bool                                     enableBlend = false
+			vk::PipelineCache                        pipelineCache = nullptr
 		);
 
 		void InitRenderPipeline(
@@ -53,8 +52,7 @@ namespace brassica {
 			bool                                     enableDepthWrite = false,
 			vk::CompareOp                            depthCompareOp = vk::CompareOp::eLess,
 			vk::CullModeFlags                        cullMode = vk::CullModeFlagBits::eBack,
-			vk::PipelineCache                        pipelineCache = nullptr,
-			bool                                     enableBlend = false
+			vk::PipelineCache                        pipelineCache = nullptr
 		);
 
 		// Binds the pipeline and sets the dynamic viewport/scissor for a full-frame draw. Does

@@ -46,8 +46,7 @@ namespace brassica {
 		bool                                     enableDepthWrite,
 		vk::CompareOp                            depthCompareOp,
 		vk::CullModeFlags                        cullMode,
-		vk::PipelineCache                        pCache,
-		bool                                     enableBlend
+		vk::PipelineCache                        pCache
 	) {
 		std::vector<vk::Format> fmts;
 		if (colorFmt != vk::Format::eUndefined) {
@@ -63,8 +62,7 @@ namespace brassica {
 			enableDepthWrite,
 			depthCompareOp,
 			cullMode,
-			pCache,
-			enableBlend
+			pCache
 		);
 	}
 
@@ -78,8 +76,7 @@ namespace brassica {
 		bool                                     enableDepthWrite,
 		vk::CompareOp                            depthCompareOp,
 		vk::CullModeFlags                        cullMode,
-		vk::PipelineCache                        pCache,
-		bool                                     enableBlend
+		vk::PipelineCache                        pCache
 	) {
 		colorFormats.assign(colorFmts.begin(), colorFmts.end());
 		depthFormat = depthFmt;
@@ -92,7 +89,7 @@ namespace brassica {
 		storedSetLayouts.assign(setLayouts.begin(), setLayouts.end());
 		storedPushConstants.assign(pushConstants.begin(), pushConstants.end());
 
-		auto buildPipeline = [this, enableBlend]() {
+		auto buildPipeline = [this]() {
 			if (!vertOrMeshShader || !fragShader) {
 				spdlog::error("Cannot build RenderPass pipeline for {}: shaders not set.", name);
 				return;
@@ -151,17 +148,7 @@ namespace brassica {
 					vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
 					vk::ColorComponentFlagBits::eA
 				);
-				if (enableBlend) {
-					colorBlendAttachments[i].setBlendEnable(VK_TRUE);
-					colorBlendAttachments[i].setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha);
-					colorBlendAttachments[i].setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
-					colorBlendAttachments[i].setColorBlendOp(vk::BlendOp::eAdd);
-					colorBlendAttachments[i].setSrcAlphaBlendFactor(vk::BlendFactor::eOne);
-					colorBlendAttachments[i].setDstAlphaBlendFactor(vk::BlendFactor::eZero);
-					colorBlendAttachments[i].setAlphaBlendOp(vk::BlendOp::eAdd);
-				} else {
-					colorBlendAttachments[i].setBlendEnable(VK_FALSE);
-				}
+				colorBlendAttachments[i].setBlendEnable(VK_FALSE);
 			}
 
 			vk::PipelineColorBlendStateCreateInfo colorBlending{};
