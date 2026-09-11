@@ -37,8 +37,8 @@ vec3 getFineWaterNormal(vec2 worldXZ, float time, vec3 baseNormal) {
 }
 
 void main() {
-	// Reconstruct screen space UVs from frag coord
-	vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(gPosition, 0));
+	ivec2 texDim = textureSize(gPosition, 0);
+	vec2 screenUV = (texDim.x > 0 && texDim.y > 0) ? (gl_FragCoord.xy / vec2(texDim)) : inUV;
 
 	vec4 albedoSample = texture(gAlbedo, screenUV);
 	vec3 terrainPos = texture(gPosition, screenUV).rgb;
@@ -56,8 +56,8 @@ void main() {
 		distToTerrain = 1e6;
 	}
 
-	// If terrain is in front of water, discard water fragment
-	if (distToTerrain < distToWater) {
+	// Discard if terrain is strictly in front of water (with 0.1 margin for depth precision)
+	if (hasTerrain && distToTerrain < distToWater - 0.1) {
 		discard;
 	}
 

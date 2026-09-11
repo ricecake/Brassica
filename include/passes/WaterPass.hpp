@@ -68,7 +68,7 @@ namespace brassica {
 			graph::Read<GBufferPosition>,
 			graph::Read<GBufferDepth>,
 			graph::Read<GBufferAlbedo>,
-			graph::Modify<LitSwapchain>>;
+			graph::Modify<Swapchain>>;
 
 		WaterPass*                       pass;
 		graph::PhysicalResourceRegistry* registry;
@@ -84,7 +84,7 @@ namespace brassica {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<LitSwapchain>(),
+					.key = graph::IdOf<Swapchain>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::ColorAttachmentDesc(extent.width, extent.height, swapchainFormat),
 				}
