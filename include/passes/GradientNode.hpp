@@ -59,19 +59,26 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
-			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};
+			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
+			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
+			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
 
 			render::GraphicsPipelineRequest request{
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
+				.setLayouts = setLayouts,
 			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
+			}
+
+			vk::DescriptorSet globalSet = static_cast<VkDescriptorSet>(ctx.globalSet);
+			if (globalSet) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
 			}
 
 			vk::Extent2D extent{ctx.width, ctx.height};
