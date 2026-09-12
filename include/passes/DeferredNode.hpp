@@ -26,7 +26,6 @@ namespace brassica {
 	// TerrainPushConstants). The trailing six are bindless indices, filled in by
 	// DeferredNode::Execute every frame -- everything else is supplied once, at construction.
 	struct DeferredPushConstants {
-		glm::vec4  cameraPos{0.0f, 10.0f, 20.0f, 0.5f}; // xyz = camera position, w = baseTexelSize
 		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::uvec4 lodOffsets0_3{0u};
 		glm::uvec4 lodOffsets4_7{0u};

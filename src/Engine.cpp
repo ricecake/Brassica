@@ -828,6 +828,7 @@ namespace brassica {
 
 		if (globalUboMapped[activeFrame]) {
 			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
+			vmaFlushAllocation(allocator, globalUboAllocations[activeFrame], 0, sizeof(FrameUBO));
 		}
 
 		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
@@ -890,6 +891,8 @@ namespace brassica {
 
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
+		frameGraph.RegisterRef(transmittanceNode);
+		frameGraph.RegisterRef(multiScatteringNode);
 		frameGraph.RegisterRef(gradientNode);
 		frameGraph.RegisterRef(terrainNode);
 		frameGraph.RegisterRef(deferredNode);

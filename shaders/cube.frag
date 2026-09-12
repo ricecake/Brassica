@@ -4,14 +4,7 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec4 inAlbedo;
 
-layout(set = 0, binding = 0) uniform FrameUBO {
-	float time;
-	float fov;
-	float aspectRatio;
-	uint  frameIndex;
-	uint  globalSeed;
-	uint  frameRandom;
-} ubo;
+#include "bindless.glsl"
 
 layout(location = 0) out vec4 gPosition;
 layout(location = 1) out vec4 gNormal;

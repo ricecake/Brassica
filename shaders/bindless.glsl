@@ -4,7 +4,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 // Global Frame UBO at set 0, binding 0
-layout(set = 0, binding = 0) uniform FrameUBO {
+layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	mat4 uViewMatrix;
 	mat4 uInvViewMatrix;
 	mat4 uProjMatrix;
