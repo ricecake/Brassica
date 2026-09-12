@@ -8,20 +8,24 @@
 #include "passes/WaterNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "VulkanCompat.hpp"
 
 using namespace brassica;
 
 namespace {
 
-	// Stands in for TerrainNode + DeferredNode: writes the two G-buffer inputs WaterNode reads
+	// Stands in for TerrainNode + DeferredNode: writes the G-buffer inputs WaterNode reads
 	// and the Swapchain target it composites onto, with nothing in its own Execute -- this test
 	// is about WaterNode's own pipeline/barrier/blend correctness, not about rendering a real
 	// scene into the G-buffer first. graph::Phase::Default (its default), strictly before
 	// WaterNode's Phase::Late, is what makes a plain Modify<Swapchain> on both nodes -- with no
 	// version number between them -- schedule correctly; see WaterNode.hpp's own comment.
 	struct FakeSceneProducer {
-		using Resources =
-			graph::Declares<graph::Create<GBufferPosition>, graph::Create<GBufferAlbedo>, graph::Modify<Swapchain>>;
+		using Resources = graph::Declares<
+			graph::Create<GBufferPosition>,
+			graph::Create<GBufferAlbedo>,
+			graph::Create<GBufferNormal>,
+			graph::Modify<Swapchain>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -44,6 +48,13 @@ namespace {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferNormal>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
 					.key = graph::IdOf<Swapchain>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
@@ -56,8 +67,8 @@ namespace {
 	};
 
 	// Minimal real bindless set -- just enough for water.frag's SAMPLE_NEAREST(gPositionIndex/
-	// gAlbedoIndex, ...) to resolve real descriptors: binding 0 (sampled 2D) is what
-	// PhysicalRegistry writes GBufferPosition/GBufferAlbedo's indices into, binding 2 (samplers)
+	// gAlbedoIndex/gNormalIndex, ...) to resolve real descriptors: binding 0 (sampled 2D) is what
+	// PhysicalRegistry writes GBufferPosition/GBufferAlbedo/GBufferNormal's indices into, binding 2 (samplers)
 	// needs a real sampler written at BRASSICA_SAMPLER_NEAREST_CLAMP's index (0) since the
 	// shader indexes it unconditionally. No array/storage/AS bindings -- WaterNode never touches
 	// them. Mirrors test_physical_backend.cpp's own CreateBindlessTestSet, trimmed to what this
@@ -91,9 +102,6 @@ namespace {
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindingCount(2);
-		// Bindings must be given by real binding number, not array index -- binding 1 is
-		// deliberately absent (WaterNode never touches the array binding), so this can't just be
-		// setBindings(layoutBindings) with contiguous indices 0/1.
 		std::array<vk::DescriptorSetLayoutBinding, 2> bindingArray{layoutBindings[0], layoutBindings[1]};
 		layoutInfo.setBindings(bindingArray);
 		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
@@ -117,8 +125,6 @@ namespace {
 		allocInfo.setSetLayouts(result.layout);
 		vk::DescriptorSet set = device.allocateDescriptorSets(allocInfo).front();
 
-		// Written once at BRASSICA_SAMPLER_NEAREST_CLAMP's real index (0) -- matches
-		// Engine::InitGlobalDescriptors's own nearest+clamp catalog entry.
 		vk::SamplerCreateInfo samplerInfo{};
 		samplerInfo.setMagFilter(vk::Filter::eNearest);
 		samplerInfo.setMinFilter(vk::Filter::eNearest);
@@ -138,8 +144,6 @@ namespace {
 		result.bindings.set = set;
 		result.bindings.layout = result.layout;
 		result.bindings.sampledImage2DBinding = 0;
-		// sampledImage2DArrayBinding/storageImageBinding/accelerationStructureBinding stay 0 --
-		// WaterNode never resolves an index through any of those arenas.
 		return result;
 	}
 
@@ -151,10 +155,6 @@ namespace {
 
 } // namespace
 
-// WaterNode is the Node/Pass unification's explicit acceptance test (authored fresh, not
-// ported) and the first real consumer of GraphicsPipelineState::enableBlend outside a synthetic
-// PipelineLibrary test -- unlike DeferredNode/TerrainNode, it needs no mesh-shader/ray-query
-// features, so this actually runs here rather than only compiling.
 TEST_CASE(
 	"WaterNode composites over an existing scene via real alpha blending, at the correct phase, with no "
 	"validation errors"
@@ -180,18 +180,14 @@ TEST_CASE(
 									  )
 									  .front();
 
-		// water.frag includes bindless.glsl, whose BRASSICA_SAMPLER_* macros need these
-		// registered before compiling -- exactly as Engine::InitGlobalDescriptors does for
-		// real. Without this, the literal "[[BRASSICA_SAMPLER_NEAREST_CLAMP]]" tokens stay in
-		// the source and fail to parse as GLSL.
 		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
 		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
 		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
 		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
 
-		VertexShader   vertShader;
+		MeshShader     meshShader;
 		FragmentShader fragShader;
-		REQUIRE(vertShader.CompileVertexFromFile(vkDevice, "shaders/water.vert"));
+		REQUIRE(meshShader.CompileMeshFromFile(vkDevice, "shaders/water.mesh"));
 		REQUIRE(fragShader.CompileFragmentFromFile(vkDevice, "shaders/water.frag"));
 		Shader::ClearConstants();
 
@@ -204,12 +200,16 @@ TEST_CASE(
 
 		constexpr vk::Format kSwapchainFormat = vk::Format::eR8G8B8A8Unorm;
 
+		DispatchLoaderDynamic dls;
+		dls.init(vkDevice);
+
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{.extent = {256, 256}, .swapchainFormat = kSwapchainFormat});
 		graph.Register<WaterNode>(WaterNode{
 			.pipelineLibrary = &pipelineLibrary,
-			.vertShader = &vertShader,
+			.meshShader = &meshShader,
 			.fragShader = &fragShader,
+			.dls = &dls,
 			.extent = vk::Extent2D{256, 256},
 			.swapchainFormat = kSwapchainFormat,
 		});
@@ -221,10 +221,6 @@ TEST_CASE(
 		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
 		vkCmd.end();
 
-		// Real cross-phase edge, not just "it compiled": FakeSceneProducer (Phase::Default) and
-		// WaterNode (Phase::Late) both declare a plain Modify<Swapchain> with no version number
-		// between them -- exactly the case Modify's own comment (graph/Declaration.hpp)
-		// describes -- so they must land in two separate, strictly-ordered stages.
 		const auto& schedule = graph.GetSchedule();
 		REQUIRE(schedule.stages.size() == 2);
 		CHECK(schedule.stages[0].nodes.size() == 1);
@@ -236,7 +232,7 @@ TEST_CASE(
 		device.GetQueue().waitIdle();
 
 		pipelineLibrary.Reset();
-		vertShader.Destroy(vkDevice);
+		meshShader.Destroy(vkDevice);
 		fragShader.Destroy(vkDevice);
 		DestroyWaterBindlessSet(vkDevice, bindlessSet);
 		vkDevice.destroyCommandPool(pool);

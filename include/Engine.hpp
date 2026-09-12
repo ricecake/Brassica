@@ -184,7 +184,7 @@ namespace brassica {
 		TaskShader     terrainTaskShader;
 		MeshShader     terrainMeshShader;
 		FragmentShader terrainFragShader;
-		VertexShader   waterVertShader;
+		MeshShader     waterMeshShader;
 		FragmentShader waterFragShader;
 
 		// What's left of the old TerrainPass once its pipeline/shader ownership moved above --

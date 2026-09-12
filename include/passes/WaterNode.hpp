@@ -12,14 +12,18 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "VulkanCompat.hpp"
 
 namespace brassica {
 
 	struct WaterPushConstants {
+		glm::vec4     cameraPos{0.0f, 10.0f, 20.0f, 0.0f}; // xyz = camera position, w = time
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
+		std::uint32_t gNormalIndex{0};
+		std::uint32_t padding{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -34,8 +38,11 @@ namespace brassica {
 	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
 	// so this is what actually proves the blend-state plumbing works for something real.
 	struct WaterNode {
-		using Resources =
-			graph::Declares<graph::Read<GBufferPosition>, graph::Read<GBufferAlbedo>, graph::Modify<Swapchain>>;
+		using Resources = graph::Declares<
+			graph::Read<GBufferPosition>,
+			graph::Read<GBufferAlbedo>,
+			graph::Read<GBufferNormal>,
+			graph::Modify<Swapchain>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
@@ -52,12 +59,13 @@ namespace brassica {
 			.enableShadingRate = false,
 		};
 
-		render::PipelineLibrary* pipelineLibrary = nullptr;
-		VertexShader*            vertShader = nullptr;
-		FragmentShader*          fragShader = nullptr;
-		vk::Extent2D             extent;
-		vk::Format               swapchainFormat = vk::Format::eUndefined;
-		WaterPushConstants       push{};
+		render::PipelineLibrary*     pipelineLibrary = nullptr;
+		MeshShader*                  meshShader = nullptr;
+		FragmentShader*              fragShader = nullptr;
+		const DispatchLoaderDynamic* dls = nullptr;
+		vk::Extent2D                 extent;
+		vk::Format                   swapchainFormat = vk::Format::eUndefined;
+		WaterPushConstants           push{};
 
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -74,14 +82,17 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
+			push.gNormalIndex = ctx.Index<GBufferNormal>();
 
-			std::array<GraphicsShader*, 2>         stages{vertShader, fragShader};
+			std::array<GraphicsShader*, 2>         stages{meshShader, fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
 			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(WaterPushConstants)}
-			};
-			render::GraphicsPipelineRequest request{
+			std::array<vk::PushConstantRange, 1>   pushConstantRanges{vk::PushConstantRange{
+				vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
+				0,
+				sizeof(WaterPushConstants)
+			}};
+			render::GraphicsPipelineRequest        request{
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
@@ -107,13 +118,15 @@ namespace brassica {
 
 			vkCmd.pushConstants(
 				resolved.layout,
-				vk::ShaderStageFlagBits::eFragment,
+				vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(WaterPushConstants),
 				&push
 			);
 
-			vkCmd.draw(3, 1, 0, 0);
+			if (dls) {
+				vkCmd.drawMeshTasksEXT(1, 1, 1, *dls);
+			}
 		}
 	};
 

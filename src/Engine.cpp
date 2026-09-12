@@ -232,7 +232,7 @@ namespace brassica {
 			terrainTaskShader.Destroy(device);
 			terrainMeshShader.Destroy(device);
 			terrainFragShader.Destroy(device);
-			waterVertShader.Destroy(device);
+			waterMeshShader.Destroy(device);
 			waterFragShader.Destroy(device);
 
 			CleanupGlobalUBO();
@@ -367,13 +367,13 @@ namespace brassica {
 		shaderWatcher.RegisterShader(&deferredVertShader);
 		shaderWatcher.RegisterShader(&deferredFragShader);
 
-		if (!waterVertShader.CompileVertexFromFile(device, "shaders/water.vert")) {
-			spdlog::error("Failed to compile water.vert shader file");
+		if (!waterMeshShader.CompileMeshFromFile(device, "shaders/water.mesh")) {
+			spdlog::error("Failed to compile water.mesh shader file");
 		}
 		if (!waterFragShader.CompileFragmentFromFile(device, "shaders/water.frag")) {
 			spdlog::error("Failed to compile water.frag shader file");
 		}
-		shaderWatcher.RegisterShader(&waterVertShader);
+		shaderWatcher.RegisterShader(&waterMeshShader);
 		shaderWatcher.RegisterShader(&waterFragShader);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
@@ -943,10 +943,16 @@ namespace brassica {
 		});
 		frameGraph.Register<WaterNode>(WaterNode{
 			.pipelineLibrary = &pipelineLibrary,
-			.vertShader = &waterVertShader,
+			.meshShader = &waterMeshShader,
 			.fragShader = &waterFragShader,
+			.dls = &terrainAS.GetDls(),
 			.extent = extent,
 			.swapchainFormat = format,
+			.push = WaterPushConstants{
+				.cameraPos = glm::vec4(camera.position, static_cast<float>(currentTime)),
+				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
+				.waterLevel = 0.0f,
+			},
 		});
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
