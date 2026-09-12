@@ -225,12 +225,7 @@ namespace brassica {
 			terrainClipmap.Cleanup();
 
 			pipelineLibrary.Reset();
-			gradientNode.Destroy(device);
-			terrainNode.Destroy(device);
-			deferredNode.Destroy(device);
-			waterNode.Destroy(device);
-			transmittanceNode.Destroy(device);
-			multiScatteringNode.Destroy(device);
+			nodeRegistry.Destroy(device);
 
 			CleanupGlobalUBO();
 			CleanupGlobalDescriptors();
@@ -326,12 +321,14 @@ namespace brassica {
 
 		terrainAS.Init(instance, device);
 
-		gradientNode.Init(device, &pipelineLibrary, &shaderWatcher);
-		terrainNode.Init(device, &pipelineLibrary, &terrainAS, &shaderWatcher);
-		deferredNode.Init(device, &pipelineLibrary, GetSwapchainFormat(), &shaderWatcher);
-		waterNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
-		transmittanceNode.Init(device, &pipelineLibrary, &shaderWatcher);
-		multiScatteringNode.Init(device, &pipelineLibrary, &shaderWatcher);
+		graph::NodeInitParams nodeInitParams{
+			.device = device,
+			.pipelineLibrary = &pipelineLibrary,
+			.shaderWatcher = &shaderWatcher,
+			.terrainAS = &terrainAS,
+			.swapchainFormat = GetSwapchainFormat(),
+		};
+		nodeRegistry.Init(nodeInitParams);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
@@ -877,23 +874,23 @@ namespace brassica {
 		);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
-		terrainNode.SetFrameParams(terrainPush);
-		deferredNode.SetFrameParams(DeferredPushConstants{
-			.gridParams = terrainPush.gridParams,
-			.lodOffsets0_3 = terrainPush.lodOffsets0_3,
-			.lodOffsets4_7 = terrainPush.lodOffsets4_7,
-		});
-		waterNode.SetFrameParams(WaterPushConstants{
-			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
-			.waterLevel = 0.0f,
-		});
+		graph::NodeFrameParams frameParams{
+			.terrainPush = terrainPush,
+			.deferredPush = DeferredPushConstants{
+				.gridParams = terrainPush.gridParams,
+				.lodOffsets0_3 = terrainPush.lodOffsets0_3,
+				.lodOffsets4_7 = terrainPush.lodOffsets4_7,
+			},
+			.waterPush = WaterPushConstants{
+				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
+				.waterLevel = 0.0f,
+			},
+		};
+		nodeRegistry.UpdateFrameParams(frameParams);
 
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
-		frameGraph.RegisterRef(gradientNode);
-		frameGraph.RegisterRef(terrainNode);
-		frameGraph.RegisterRef(deferredNode);
-		frameGraph.RegisterRef(waterNode);
+		nodeRegistry.PopulateGraph<GradientNode, TerrainNode, DeferredNode, WaterNode>(frameGraph);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);

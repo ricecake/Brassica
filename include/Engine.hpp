@@ -10,13 +10,9 @@
 
 #include "EngineConstants.hpp"
 #include "GLFW/glfw3.h"
+#include "graph/NodeRegistry.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "InputHandler.hpp"
-#include "passes/AtmosphereLUTNode.hpp"
-#include "passes/DeferredNode.hpp"
-#include "passes/GradientNode.hpp"
-#include "passes/TerrainNode.hpp"
-#include "passes/WaterNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -135,6 +131,15 @@ namespace brassica {
 
 		void OnFramebufferResize(int width, int height);
 
+		graph::DefaultNodeRegistry& GetNodeRegistry() { return nodeRegistry; }
+		const graph::DefaultNodeRegistry& GetNodeRegistry() const { return nodeRegistry; }
+
+		template <typename T>
+		T& GetNode() { return nodeRegistry.GetNode<T>(); }
+
+		template <typename T>
+		const T& GetNode() const { return nodeRegistry.GetNode<T>(); }
+
 	private:
 		void InitWindow();
 		bool InitVulkan();
@@ -174,13 +179,8 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		// Persistent Standalone Render Nodes
-		GradientNode           gradientNode;
-		TerrainNode            terrainNode;
-		DeferredNode           deferredNode;
-		WaterNode              waterNode;
-		TransmittanceLUTNode   transmittanceNode;
-		MultiScatteringLUTNode multiScatteringNode;
+		// Persistent Standalone Render Node Registry & Graph Factory
+		graph::DefaultNodeRegistry nodeRegistry;
 
 		// What's left of the old TerrainPass once its pipeline/shader ownership moved above --
 		// the terrain BLAS/TLAS build, unchanged, now living in terrain/ rather than passes/
