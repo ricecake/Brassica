@@ -4,7 +4,7 @@
 #include "bindless.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
-layout(triangles, max_vertices = 121, max_primitives = 200) out;
+layout(triangles, max_vertices = 161, max_primitives = 280) out;
 
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets
@@ -50,7 +50,7 @@ void main() {
 	uint meshletID = payload.meshletIDs[taskIndex];
 	uint lodLevel = payload.lodLevels[taskIndex];
 
-	SetMeshOutputsEXT(121, 200);
+	SetMeshOutputsEXT(161, 280);
 
 	uint lx = gl_LocalInvocationID.x;
 	uint ly = gl_LocalInvocationID.y;
@@ -133,6 +133,29 @@ void main() {
 
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
+	// Generate skirt vertex for boundary vertices to seal tile seams
+	if (lx == 0 || lx == 10 || ly == 0 || ly == 10) {
+		uint skirtID;
+		if (ly == 0) {
+			skirtID = lx;
+		} else if (ly == 10) {
+			skirtID = 11 + lx;
+		} else if (lx == 0) {
+			skirtID = 22 + (ly - 1);
+		} else {
+			skirtID = 31 + (ly - 1);
+		}
+		uint skirtIdx = 121 + skirtID;
+
+		float skirtDepth = max(10.0, meshletSize * 0.1);
+		vec3 skirtPos = worldPos - vec3(0.0, skirtDepth, 0.0);
+
+		gl_MeshVerticesEXT[skirtIdx].gl_Position = uViewProjMatrix * vec4(skirtPos, 1.0);
+		outPosition[skirtIdx] = skirtPos;
+		outNormal[skirtIdx] = normal;
+		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
+	}
+
 	// Determine shading rate based on clipmap LOD
 	int shadingRate = 0; // Default 1x1
 
@@ -177,5 +200,70 @@ void main() {
 
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
+	}
+
+	// Generate skirt primitives along outer boundary edges
+	if (ly == 0 && lx < 10) { // Top edge
+		uint v0 = lx;
+		uint v1 = lx + 1;
+		uint k0 = 121 + lx;
+		uint k1 = 121 + lx + 1;
+		uint primIdx = 200 + lx * 2;
+
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
+
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+	}
+
+	if (ly == 10 && lx < 10) { // Bottom edge
+		uint v0 = 110 + lx;
+		uint v1 = 110 + lx + 1;
+		uint k0 = 121 + 11 + lx;
+		uint k1 = 121 + 11 + lx + 1;
+		uint primIdx = 220 + lx * 2;
+
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
+
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+	}
+
+	if (lx == 0 && ly < 10) { // Left edge
+		uint v0 = ly * 11;
+		uint v1 = (ly + 1) * 11;
+		uint k0 = (ly == 0) ? 121 : (121 + 22 + (ly - 1));
+		uint k1 = (ly + 1 == 10) ? 132 : (121 + 22 + ly);
+		uint primIdx = 240 + ly * 2;
+
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
+
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+	}
+
+	if (lx == 10 && ly < 10) { // Right edge
+		uint v0 = ly * 11 + 10;
+		uint v1 = (ly + 1) * 11 + 10;
+		uint k0 = (ly == 0) ? 131 : (121 + 31 + (ly - 1));
+		uint k1 = (ly + 1 == 10) ? 142 : (121 + 31 + ly);
+		uint primIdx = 260 + ly * 2;
+
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
+		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
+
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 }
