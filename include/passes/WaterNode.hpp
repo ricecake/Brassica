@@ -12,18 +12,19 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "ShaderWatcher.hpp"
 #include "VulkanCompat.hpp"
 
 namespace brassica {
 
+	class ShaderWatcher;
+
 	struct WaterPushConstants {
-		glm::vec4     cameraPos{0.0f, 10.0f, 20.0f, 0.0f}; // xyz = camera position, w = time
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
-		std::uint32_t padding{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -60,20 +61,48 @@ namespace brassica {
 		};
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
-		MeshShader*                  meshShader = nullptr;
-		FragmentShader*              fragShader = nullptr;
+		MeshShader                   meshShader;
+		FragmentShader               fragShader;
 		const DispatchLoaderDynamic* dls = nullptr;
-		vk::Extent2D                 extent;
 		vk::Format                   swapchainFormat = vk::Format::eUndefined;
 		WaterPushConstants           push{};
 
-		graph::Recipe Setup(const graph::FrameContext&) {
+		void Init(
+			vk::Device                   device,
+			render::PipelineLibrary*     library,
+			const DispatchLoaderDynamic* dispatchLoader,
+			vk::Format                   format,
+			ShaderWatcher*               watcher = nullptr
+		) {
+			pipelineLibrary = library;
+			dls = dispatchLoader;
+			swapchainFormat = format;
+			meshShader.CompileMeshFromFile(device, "shaders/water.mesh");
+			fragShader.CompileFragmentFromFile(device, "shaders/water.frag");
+			if (watcher) {
+				RegisterShaders(*watcher);
+			}
+		}
+
+		void RegisterShaders(ShaderWatcher& watcher) {
+			watcher.RegisterShader(&meshShader);
+			watcher.RegisterShader(&fragShader);
+		}
+
+		void Destroy(vk::Device device) {
+			meshShader.Destroy(device);
+			fragShader.Destroy(device);
+		}
+
+		void SetFrameParams(const WaterPushConstants& p) { push = p; }
+
+		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<Swapchain>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(extent.width, extent.height, swapchainFormat),
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
 				}
 			);
 			return r;
@@ -84,7 +113,7 @@ namespace brassica {
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 
-			std::array<GraphicsShader*, 2>         stages{meshShader, fragShader};
+			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
 			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{vk::PushConstantRange{
@@ -111,6 +140,7 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
 			}
 
+			vk::Extent2D extent{ctx.width, ctx.height};
 			vk::Viewport
 				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 			vkCmd.setViewport(0, viewport);
@@ -124,7 +154,7 @@ namespace brassica {
 				&push
 			);
 
-			if (dls) {
+			if (dls && dls->vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(1, 1, 1, *dls);
 			}
 		}

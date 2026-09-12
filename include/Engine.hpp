@@ -12,6 +12,7 @@
 #include "GLFW/glfw3.h"
 #include "graph/PhysicalRegistry.hpp"
 #include "InputHandler.hpp"
+#include "passes/AtmosphereLUTNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/GradientNode.hpp"
 #include "passes/TerrainNode.hpp"
@@ -173,19 +174,13 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		// GradientNode/DeferredNode own no persistent state of their own (constructed fresh
-		// every frame, see pipelineLibrary's comment above) -- these four shaders are their
-		// entire persistent footprint, replacing what the deleted GradientPass/DeferredPass
-		// used to own.
-		VertexShader   gradientVertShader;
-		FragmentShader gradientFragShader;
-		VertexShader   deferredVertShader;
-		FragmentShader deferredFragShader;
-		TaskShader     terrainTaskShader;
-		MeshShader     terrainMeshShader;
-		FragmentShader terrainFragShader;
-		MeshShader     waterMeshShader;
-		FragmentShader waterFragShader;
+		// Persistent Standalone Render Nodes
+		GradientNode           gradientNode;
+		TerrainNode            terrainNode;
+		DeferredNode           deferredNode;
+		WaterNode              waterNode;
+		TransmittanceLUTNode   transmittanceNode;
+		MultiScatteringLUTNode multiScatteringNode;
 
 		// What's left of the old TerrainPass once its pipeline/shader ownership moved above --
 		// the terrain BLAS/TLAS build, unchanged, now living in terrain/ rather than passes/

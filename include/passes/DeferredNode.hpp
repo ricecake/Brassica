@@ -12,8 +12,11 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
+
+	class ShaderWatcher;
 
 	// Mirrors deferred.frag's push_constant block exactly. The first four fields are the same
 	// toroidal-clipmap-sampling parameters TerrainNode's TerrainPushConstants carries (needed
@@ -23,7 +26,6 @@ namespace brassica {
 	// TerrainPushConstants). The trailing six are bindless indices, filled in by
 	// DeferredNode::Execute every frame -- everything else is supplied once, at construction.
 	struct DeferredPushConstants {
-		glm::vec4  cameraPos{0.0f, 10.0f, 20.0f, 0.5f}; // xyz = camera position, w = baseTexelSize
 		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::uvec4 lodOffsets0_3{0u};
 		glm::uvec4 lodOffsets4_7{0u};
@@ -64,19 +66,45 @@ namespace brassica {
 		};
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-		VertexShader*            vertShader = nullptr;
-		FragmentShader*          fragShader = nullptr;
-		vk::Extent2D             extent;
+		VertexShader             vertShader;
+		FragmentShader           fragShader;
 		vk::Format               swapchainFormat = vk::Format::eUndefined;
 		DeferredPushConstants    push{};
 
-		graph::Recipe Setup(const graph::FrameContext&) {
+		void Init(
+			vk::Device               device,
+			render::PipelineLibrary* library,
+			vk::Format               format,
+			ShaderWatcher*           watcher = nullptr
+		) {
+			pipelineLibrary = library;
+			swapchainFormat = format;
+			vertShader.CompileVertexFromFile(device, "shaders/deferred.vert");
+			fragShader.CompileFragmentFromFile(device, "shaders/deferred.frag");
+			if (watcher) {
+				RegisterShaders(*watcher);
+			}
+		}
+
+		void RegisterShaders(ShaderWatcher& watcher) {
+			watcher.RegisterShader(&vertShader);
+			watcher.RegisterShader(&fragShader);
+		}
+
+		void Destroy(vk::Device device) {
+			vertShader.Destroy(device);
+			fragShader.Destroy(device);
+		}
+
+		void SetFrameParams(const DeferredPushConstants& p) { push = p; }
+
+		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<Swapchain>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(extent.width, extent.height, swapchainFormat),
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
 				}
 			);
 			return r;
@@ -90,7 +118,7 @@ namespace brassica {
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.tlasIndex = ctx.Index<TerrainTLAS>();
 
-			std::array<GraphicsShader*, 2>         stages{vertShader, fragShader};
+			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
 			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
@@ -115,6 +143,7 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
 			}
 
+			vk::Extent2D extent{ctx.width, ctx.height};
 			vk::Viewport
 				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 			vkCmd.setViewport(0, viewport);

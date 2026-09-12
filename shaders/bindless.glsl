@@ -3,27 +3,33 @@
 
 #extension GL_EXT_nonuniform_qualifier : require
 
-// Mirrors the engine's one bindless descriptor set (Engine::InitGlobalDescriptors,
-// PhysicalResourceRegistry::BindlessBindings) -- set 0 for any pipeline that doesn't also need
-// FrameUBO (see NodeContext::globalSet's comment for why that merge hasn't happened yet).
+// Global Frame UBO at set 0, binding 0
+layout(std140, set = 0, binding = 0) uniform FrameUBO {
+	mat4 uViewMatrix;
+	mat4 uInvViewMatrix;
+	mat4 uProjMatrix;
+	mat4 uInvProjMatrix;
+	mat4 uViewProjMatrix;
+	mat4 uInvViewProjMatrix;
+	vec4 uCameraPosition;
+	float uTime;
+	float uFov;
+	float uAspectRatio;
+	float uNearPlane;
+	float uFarPlane;
+	uint uFrameIndex;
+	uint uGlobalSeed;
+	uint uFrameRandom;
+};
+
+// Bindless resource catalog in Set 0 (bindings 1..5)
 //
-// Binding 4 (acceleration structures) is deliberately NOT declared here -- see
-// bindless_tlas.glsl. Merely declaring accelerationStructureEXT with GL_EXT_ray_query enabled
-// bakes the RayQueryKHR SPIR-V capability into the shader's module regardless of whether it's
-// ever actually read, and vkCreateShaderModule checks declared capabilities against enabled
-// device features unconditionally -- so every shader that included this file used to fail to
-// load on a device without VK_KHR_ray_query (MinimalDevice, most notably) even if it only ever
-// touched uTextures2D/uSamplers. Only deferred.frag genuinely uses ray query; only it should pay
-// for declaring it.
-layout(set = 0, binding = 0) uniform texture2D uTextures2D[];
-layout(set = 0, binding = 1) uniform texture2DArray uTextureArrays[];
-layout(set = 0, binding = 2) uniform sampler uSamplers[];
-// Format-qualified aliases sharing binding 3 (storage images) -- legal per spec: each entry's
-// real format lives on its own image view, and a shader only ever indexes into the alias whose
-// qualifier matches what it actually bound (NodeContext::StorageIndex<K>() on the C++ side).
-// Only the rgba32f alias exists so far (the two atmosphere LUTs); add a sibling here rather than
-// a new binding if a different format shows up later.
-layout(set = 0, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
+// Binding 5 (acceleration structures) is deliberately NOT declared here -- see
+// bindless_tlas.glsl.
+layout(set = 0, binding = 1) uniform texture2D uTextures2D[];
+layout(set = 0, binding = 2) uniform texture2DArray uTextureArrays[];
+layout(set = 0, binding = 3) uniform sampler uSamplers[];
+layout(set = 0, binding = 4, rgba32f) uniform image2D uImagesRGBA32F[];
 
 // Sampler catalog indices, written once by Engine::InitGlobalDescriptors and injected here via
 // Shader::RegisterConstant's [[NAME]] substitution -- GLSL and C++ read the same catalog by

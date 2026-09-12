@@ -81,19 +81,28 @@ namespace {
 	};
 
 	WaterBindlessSet CreateWaterBindlessSet(vk::Device device) {
-		std::array<vk::DescriptorSetLayoutBinding, 2> layoutBindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 3> layoutBindings{};
+		// Binding 0: FrameUBO
 		layoutBindings[0]
 			.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 1: uTextures2D
+		layoutBindings[1]
+			.setBinding(1)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(8)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		layoutBindings[1]
-			.setBinding(2)
+		// Binding 3: uSamplers
+		layoutBindings[2]
+			.setBinding(3)
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 2> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
+			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 		};
@@ -101,16 +110,16 @@ namespace {
 		bindingFlagsInfo.setBindingFlags(bindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindingCount(2);
-		std::array<vk::DescriptorSetLayoutBinding, 2> bindingArray{layoutBindings[0], layoutBindings[1]};
-		layoutInfo.setBindings(bindingArray);
+		layoutInfo.setBindingCount(3);
+		layoutInfo.setBindings(layoutBindings);
 		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		layoutInfo.pNext = &bindingFlagsInfo;
 
 		WaterBindlessSet result;
 		result.layout = device.createDescriptorSetLayout(layoutInfo);
 
-		std::array<vk::DescriptorPoolSize, 2> poolSizes{
+		std::array<vk::DescriptorPoolSize, 3> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 1},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
 		};
@@ -136,14 +145,16 @@ namespace {
 		samplerImageInfo.setSampler(result.sampler);
 		vk::WriteDescriptorSet samplerWrite{};
 		samplerWrite.setDstSet(set);
-		samplerWrite.setDstBinding(2);
+		samplerWrite.setDstBinding(3);
 		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
 		samplerWrite.setImageInfo(samplerImageInfo);
 		device.updateDescriptorSets(samplerWrite, {});
 
 		result.bindings.set = set;
 		result.bindings.layout = result.layout;
-		result.bindings.sampledImage2DBinding = 0;
+		result.bindings.uboBinding = 0;
+		result.bindings.sampledImage2DBinding = 1;
+		result.bindings.samplerBinding = 3;
 		return result;
 	}
 
@@ -185,12 +196,6 @@ TEST_CASE(
 		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
 		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
 
-		MeshShader     meshShader;
-		FragmentShader fragShader;
-		REQUIRE(meshShader.CompileMeshFromFile(vkDevice, "shaders/water.mesh"));
-		REQUIRE(fragShader.CompileFragmentFromFile(vkDevice, "shaders/water.frag"));
-		Shader::ClearConstants();
-
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
 		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
@@ -203,16 +208,13 @@ TEST_CASE(
 		DispatchLoaderDynamic dls;
 		dls.init(vkDevice);
 
+		WaterNode waterNode;
+		waterNode.Init(vkDevice, &pipelineLibrary, &dls, kSwapchainFormat);
+		Shader::ClearConstants();
+
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{.extent = {256, 256}, .swapchainFormat = kSwapchainFormat});
-		graph.Register<WaterNode>(WaterNode{
-			.pipelineLibrary = &pipelineLibrary,
-			.meshShader = &meshShader,
-			.fragShader = &fragShader,
-			.dls = &dls,
-			.extent = vk::Extent2D{256, 256},
-			.swapchainFormat = kSwapchainFormat,
-		});
+		graph.RegisterRef(waterNode);
 
 		graph::FrameContext ctx{.width = 256, .height = 256};
 
@@ -232,8 +234,7 @@ TEST_CASE(
 		device.GetQueue().waitIdle();
 
 		pipelineLibrary.Reset();
-		meshShader.Destroy(vkDevice);
-		fragShader.Destroy(vkDevice);
+		waterNode.Destroy(vkDevice);
 		DestroyWaterBindlessSet(vkDevice, bindlessSet);
 		vkDevice.destroyCommandPool(pool);
 	}

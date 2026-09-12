@@ -132,6 +132,33 @@ namespace brassica::graph {
 			}
 		};
 
+		template <NodeLike T>
+		struct ErasedRef final: IErased {
+			T* ptr;
+
+			explicit ErasedRef(T& ref): ptr(&ref) {}
+
+			Recipe Setup(const FrameContext& ctx) override { return ptr->Setup(ctx); }
+
+			void Execute(NodeContext& ctx) override { ptr->Execute(ctx); }
+
+			const Graph* InnerGraphIfAny() const override {
+				if constexpr (HasInnerGraph<T>) {
+					return &ptr->InnerGraph();
+				} else {
+					return nullptr;
+				}
+			}
+
+			Graph* InnerGraphIfAny() override {
+				if constexpr (HasInnerGraph<T>) {
+					return &ptr->InnerGraph();
+				} else {
+					return nullptr;
+				}
+			}
+		};
+
 		std::unique_ptr<IErased> m_impl;
 		NodeDescriptor           m_desc;
 
@@ -142,6 +169,20 @@ namespace brassica::graph {
 		static NodeHandle Make(Args&&... args) {
 			return NodeHandle(
 				std::make_unique<Erased<T>>(std::forward<Args>(args)...),
+				NodeDescriptor{
+					TypeName<T>(),
+					IdsOf<ConsumesOf<T>>(),
+					IdsOf<ProducesOf<T>>(),
+					NodeKindOf<T>,
+					PhaseOf<T>,
+				}
+			);
+		}
+
+		template <NodeLike T>
+		static NodeHandle MakeRef(T& node) {
+			return NodeHandle(
+				std::make_unique<ErasedRef<T>>(node),
 				NodeDescriptor{
 					TypeName<T>(),
 					IdsOf<ConsumesOf<T>>(),

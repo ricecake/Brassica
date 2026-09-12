@@ -12,9 +12,12 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "ShaderWatcher.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
 
 namespace brassica {
+
+	class ShaderWatcher;
 
 	// Mirrors terrain.task/terrain.mesh's shared push_constant block exactly. clipmapIndex is the
 	// only field the old TerrainPushConstants didn't have -- the terrain clipmap moved from
@@ -24,8 +27,6 @@ namespace brassica {
 	// prefix of a push-constant block it actually uses, and every existing field's offset is
 	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
-		glm::mat4  viewProj{1.0f};
-		glm::vec4  cameraPos{0.0f, 10.0f, 20.0f, 0.5f}; // xyz = camera position, w = baseTexelSize
 		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::uvec4 lodOffsets0_3{0u};             // Toroidal offsets for LOD 0-3
 		glm::uvec4 lodOffsets4_7{0u};             // Toroidal offsets for LOD 4-7
@@ -66,12 +67,41 @@ namespace brassica {
 		};
 
 		render::PipelineLibrary*      pipelineLibrary = nullptr;
-		TaskShader*                   taskShader = nullptr;
-		MeshShader*                   meshShader = nullptr;
-		FragmentShader*               fragShader = nullptr;
+		TaskShader                    taskShader;
+		MeshShader                    meshShader;
+		FragmentShader                fragShader;
 		TerrainAccelerationStructure* terrainAS = nullptr;
-		vk::Extent2D                  extent;
 		TerrainPushConstants          push{};
+
+		void Init(
+			vk::Device                    device,
+			render::PipelineLibrary*      library,
+			TerrainAccelerationStructure* as,
+			ShaderWatcher*                watcher = nullptr
+		) {
+			pipelineLibrary = library;
+			terrainAS = as;
+			taskShader.CompileTaskFromFile(device, "shaders/terrain.task");
+			meshShader.CompileMeshFromFile(device, "shaders/terrain.mesh");
+			fragShader.CompileFragmentFromFile(device, "shaders/terrain.frag");
+			if (watcher) {
+				RegisterShaders(*watcher);
+			}
+		}
+
+		void RegisterShaders(ShaderWatcher& watcher) {
+			watcher.RegisterShader(&taskShader);
+			watcher.RegisterShader(&meshShader);
+			watcher.RegisterShader(&fragShader);
+		}
+
+		void Destroy(vk::Device device) {
+			taskShader.Destroy(device);
+			meshShader.Destroy(device);
+			fragShader.Destroy(device);
+		}
+
+		void SetFrameParams(const TerrainPushConstants& p) { push = p; }
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -129,7 +159,7 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 
-			std::array<GraphicsShader*, 3> stages{taskShader, meshShader, fragShader};
+			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
 				vk::Format::eR16G16B16A16Sfloat,
 				vk::Format::eR16G16B16A16Sfloat,
@@ -161,6 +191,7 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
 			}
 
+			vk::Extent2D extent{ctx.width, ctx.height};
 			vk::Viewport
 				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 			vkCmd.setViewport(0, viewport);
@@ -174,12 +205,10 @@ namespace brassica {
 				&push
 			);
 
-			// Dispatch task groups: ceil(totalMeshlets / 32). drawMeshTasksEXT needs the
-			// mesh-shader extension's dynamic dispatch loader -- borrowed from
-			// TerrainAccelerationStructure, which already owns one for its own AS calls, rather
-			// than every ported node initializing its own.
 			uint32_t taskGroupCount = (push.gridParams.z + 31) / 32;
-			vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
+			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
+				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
+			}
 		}
 	};
 

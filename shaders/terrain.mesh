@@ -7,8 +7,6 @@ layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 121, max_primitives = 200) out;
 
 layout(push_constant) uniform TerrainPushConstants {
-	mat4  viewProj;
-	vec4  cameraPos;
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
@@ -16,7 +14,7 @@ layout(push_constant) uniform TerrainPushConstants {
 } params;
 
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
-	float baseTexelSize = params.cameraPos.w;
+	float baseTexelSize = uCameraPosition.w;
 	float texelSize = baseTexelSize * pow(2.0, float(level));
 	uint textureDim = (params.gridParams.w > 0u) ? params.gridParams.w : 1088u;
 
@@ -24,7 +22,7 @@ vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
 	uint packed = offsets[level % 4];
 	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
 
-	vec2 centerWorldPos = floor(params.cameraPos.xz / texelSize) * texelSize;
+	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
 	vec2 deltaWorld = worldXZ - centerWorldPos;
 	vec2 texelCoord = deltaWorld / texelSize + vec2(float(textureDim) * 0.5) + vec2(gridOffset);
 
@@ -68,7 +66,7 @@ void main() {
 	float baseMeshletSize = 32.0;
 	float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
 
-	vec2 cameraSnap = floor(params.cameraPos.xz / meshletSize) * meshletSize;
+	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 	vec3 meshletMin = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
 
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
@@ -80,7 +78,7 @@ void main() {
 	vec3 normal = texSample.gba;
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
 
-	vec2 offsetDist = abs(worldPos.xz - params.cameraPos.xz);
+	vec2 offsetDist = abs(worldPos.xz - uCameraPosition.xz);
 	float distToCam = max(offsetDist.x, offsetDist.y); // CDLOD Chebyshev/box distance metric
 	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
 
@@ -107,7 +105,7 @@ void main() {
 
 	worldPos.y = height;
 
-	vec4 clipPos = params.viewProj * vec4(worldPos, 1.0);
+	vec4 clipPos = uViewProjMatrix * vec4(worldPos, 1.0);
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = clipPos;
 
 	outPosition[vertexIndex] = worldPos;
@@ -162,7 +160,7 @@ void main() {
 		bool cullQuad = false;
 		if (lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(params.cameraPos.xz / prevMeshletSize) * prevMeshletSize;
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;

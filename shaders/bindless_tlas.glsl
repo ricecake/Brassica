@@ -9,6 +9,6 @@
 // loadable on a device without VK_KHR_ray_query (MinimalDevice, most test coverage).
 #extension GL_EXT_ray_query : enable
 
-layout(set = 0, binding = 4) uniform accelerationStructureEXT uTLAS[];
+layout(set = 0, binding = 5) uniform accelerationStructureEXT uTLAS[];
 
 #endif // BRASSICA_BINDLESS_TLAS_GLSL

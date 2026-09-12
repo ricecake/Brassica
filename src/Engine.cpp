@@ -225,15 +225,12 @@ namespace brassica {
 			terrainClipmap.Cleanup();
 
 			pipelineLibrary.Reset();
-			gradientVertShader.Destroy(device);
-			gradientFragShader.Destroy(device);
-			deferredVertShader.Destroy(device);
-			deferredFragShader.Destroy(device);
-			terrainTaskShader.Destroy(device);
-			terrainMeshShader.Destroy(device);
-			terrainFragShader.Destroy(device);
-			waterMeshShader.Destroy(device);
-			waterFragShader.Destroy(device);
+			gradientNode.Destroy(device);
+			terrainNode.Destroy(device);
+			deferredNode.Destroy(device);
+			waterNode.Destroy(device);
+			transmittanceNode.Destroy(device);
+			multiScatteringNode.Destroy(device);
 
 			CleanupGlobalUBO();
 			CleanupGlobalDescriptors();
@@ -327,54 +324,14 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		// Exact same literal path GradientPass::InitPipeline used to compile from -- not
-		// shaderDir above, deliberately: Shader::LoadFromFile's fallback search (bin/,
-		// <build>/bin/, ...) already finds it wherever it actually lives, so preserving the
-		// literal preserves behavior exactly rather than changing which path resolution wins.
-		if (!gradientVertShader.CompileVertexFromFile(device, "shaders/gradient.vert")) {
-			spdlog::error("Failed to compile gradient.vert shader file");
-		}
-		if (!gradientFragShader.CompileFragmentFromFile(device, "shaders/gradient.frag")) {
-			spdlog::error("Failed to compile gradient.frag shader file");
-		}
-		// No rebuild callback needed: GradientNode calls PipelineLibrary::ResolveCached every
-		// frame with a request keyed partly on these shaders' generation numbers, so a bare
-		// recompile-in-place here (ShaderWatcher's default behavior with no callback) already
-		// invalidates the cache entry on the very next frame.
-		shaderWatcher.RegisterShader(&gradientVertShader);
-		shaderWatcher.RegisterShader(&gradientFragShader);
-
 		terrainAS.Init(instance, device);
-		if (!terrainTaskShader.CompileTaskFromFile(device, "shaders/terrain.task")) {
-			spdlog::error("Failed to compile terrain.task shader file");
-		}
-		if (!terrainMeshShader.CompileMeshFromFile(device, "shaders/terrain.mesh")) {
-			spdlog::error("Failed to compile terrain.mesh shader file");
-		}
-		if (!terrainFragShader.CompileFragmentFromFile(device, "shaders/terrain.frag")) {
-			spdlog::error("Failed to compile terrain.frag shader file");
-		}
-		shaderWatcher.RegisterShader(&terrainTaskShader);
-		shaderWatcher.RegisterShader(&terrainMeshShader);
-		shaderWatcher.RegisterShader(&terrainFragShader);
 
-		if (!deferredVertShader.CompileVertexFromFile(device, "shaders/deferred.vert")) {
-			spdlog::error("Failed to compile deferred.vert shader file");
-		}
-		if (!deferredFragShader.CompileFragmentFromFile(device, "shaders/deferred.frag")) {
-			spdlog::error("Failed to compile deferred.frag shader file");
-		}
-		shaderWatcher.RegisterShader(&deferredVertShader);
-		shaderWatcher.RegisterShader(&deferredFragShader);
-
-		if (!waterMeshShader.CompileMeshFromFile(device, "shaders/water.mesh")) {
-			spdlog::error("Failed to compile water.mesh shader file");
-		}
-		if (!waterFragShader.CompileFragmentFromFile(device, "shaders/water.frag")) {
-			spdlog::error("Failed to compile water.frag shader file");
-		}
-		shaderWatcher.RegisterShader(&waterMeshShader);
-		shaderWatcher.RegisterShader(&waterFragShader);
+		gradientNode.Init(device, &pipelineLibrary, &shaderWatcher);
+		terrainNode.Init(device, &pipelineLibrary, &terrainAS, &shaderWatcher);
+		deferredNode.Init(device, &pipelineLibrary, GetSwapchainFormat(), &shaderWatcher);
+		waterNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
+		transmittanceNode.Init(device, &pipelineLibrary, &shaderWatcher);
+		multiScatteringNode.Init(device, &pipelineLibrary, &shaderWatcher);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
@@ -853,16 +810,38 @@ namespace brassica {
 		camera.UpdateMatrices(aspect);
 
 		FrameUBO ubo{};
+		ubo.viewMatrix = camera.viewMatrix;
+		ubo.invViewMatrix = camera.invViewMatrix;
+		ubo.projMatrix = camera.projMatrix;
+		ubo.invProjMatrix = camera.invProjMatrix;
+		ubo.viewProjMatrix = camera.viewProjMatrix;
+		ubo.invViewProjMatrix = camera.invViewProjMatrix;
+		ubo.cameraPosition = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
 		ubo.time = static_cast<float>(currentTime);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
+		ubo.nearPlane = camera.nearPlane;
+		ubo.farPlane = camera.farPlane;
 		ubo.frameIndex = frameNumber;
 		ubo.globalSeed = globalSeed;
 		ubo.frameRandom = static_cast<uint32_t>(rng());
 
 		if (globalUboMapped[activeFrame]) {
 			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
+			vmaFlushAllocation(allocator, globalUboAllocations[activeFrame], 0, sizeof(FrameUBO));
 		}
+
+		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
+		bindlessBindings.set = globalDescriptorSets[activeFrame];
+		bindlessBindings.sets.assign(globalDescriptorSets, globalDescriptorSets + FRAME_OVERLAP);
+		bindlessBindings.layout = bindlessSetLayout;
+		bindlessBindings.uboBinding = 0;
+		bindlessBindings.sampledImage2DBinding = 1;
+		bindlessBindings.sampledImage2DArrayBinding = 2;
+		bindlessBindings.samplerBinding = 3;
+		bindlessBindings.storageImageBinding = 4;
+		bindlessBindings.accelerationStructureBinding = 5;
+		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 
 		terrainUploader.Poll();
 
@@ -873,8 +852,6 @@ namespace brassica {
 		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
-		terrainPush.viewProj = camera.viewProjMatrix;
-		terrainPush.cameraPos = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
 		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, TERRAIN_MAP_DIM);
 
 		glm::uvec4 offsets0_3{0u};
@@ -893,67 +870,33 @@ namespace brassica {
 		terrainPush.lodOffsets0_3 = offsets0_3;
 		terrainPush.lodOffsets4_7 = offsets4_7;
 
-		// TLAS build stays fully out-of-band: its own transient command pool/queue, its own
-		// camera-movement throttle, its own synchronous device.waitIdle() -- unchanged from
-		// before this migration. Only the *result* flows into the graph, registered just like
-		// the swapchain above. See the AccelerationStructure resource-kind plan for why moving
-		// the build itself into the graph's command buffer was rejected (a real use-after-free
-		// risk against frames still in flight).
 		terrainAS.BuildOrUpdate(
 			allocator,
-			glm::vec3(terrainPush.cameraPos),
-			terrainPush.cameraPos.w,
+			camera.position,
+			terrainClipmap.GetBaseTexelSize(),
 			terrainPush.gridParams.x
 		);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
-		// The terrain clipmap has no producer node -- it's registered once at Engine::Init and
-		// never rewritten by anything in the graph -- so a plain Import (Node.hpp) declares it
-		// for validation purposes, same idea as the swapchain would need if DeferredNode's own
-		// Modify<Swapchain> didn't already self-satisfy that requirement.
+		terrainNode.SetFrameParams(terrainPush);
+		deferredNode.SetFrameParams(DeferredPushConstants{
+			.gridParams = terrainPush.gridParams,
+			.lodOffsets0_3 = terrainPush.lodOffsets0_3,
+			.lodOffsets4_7 = terrainPush.lodOffsets4_7,
+		});
+		waterNode.SetFrameParams(WaterPushConstants{
+			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
+			.waterLevel = 0.0f,
+		});
+
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
-		frameGraph.Register<GradientNode>(GradientNode{
-			.pipelineLibrary = &pipelineLibrary,
-			.vertShader = &gradientVertShader,
-			.fragShader = &gradientFragShader,
-			.extent = extent,
-		});
-		frameGraph.Register<TerrainNode>(TerrainNode{
-			.pipelineLibrary = &pipelineLibrary,
-			.taskShader = &terrainTaskShader,
-			.meshShader = &terrainMeshShader,
-			.fragShader = &terrainFragShader,
-			.terrainAS = &terrainAS,
-			.extent = extent,
-			.push = terrainPush,
-		});
-		frameGraph.Register<DeferredNode>(DeferredNode{
-			.pipelineLibrary = &pipelineLibrary,
-			.vertShader = &deferredVertShader,
-			.fragShader = &deferredFragShader,
-			.extent = extent,
-			.swapchainFormat = format,
-			.push = DeferredPushConstants{
-				.cameraPos = terrainPush.cameraPos,
-				.gridParams = terrainPush.gridParams,
-				.lodOffsets0_3 = terrainPush.lodOffsets0_3,
-				.lodOffsets4_7 = terrainPush.lodOffsets4_7,
-			},
-		});
-		frameGraph.Register<WaterNode>(WaterNode{
-			.pipelineLibrary = &pipelineLibrary,
-			.meshShader = &waterMeshShader,
-			.fragShader = &waterFragShader,
-			.dls = &terrainAS.GetDls(),
-			.extent = extent,
-			.swapchainFormat = format,
-			.push = WaterPushConstants{
-				.cameraPos = glm::vec4(camera.position, static_cast<float>(currentTime)),
-				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
-				.waterLevel = 0.0f,
-			},
-		});
+		frameGraph.RegisterRef(transmittanceNode);
+		frameGraph.RegisterRef(multiScatteringNode);
+		frameGraph.RegisterRef(gradientNode);
+		frameGraph.RegisterRef(terrainNode);
+		frameGraph.RegisterRef(deferredNode);
+		frameGraph.RegisterRef(waterNode);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);
@@ -1084,36 +1027,98 @@ namespace brassica {
 	}
 
 	void Engine::InitGlobalUBO() {
-		// 1. Set 0 Layout
-		vk::DescriptorSetLayoutBinding layoutBinding{};
-		layoutBinding.setBinding(0);
-		layoutBinding.setDescriptorType(vk::DescriptorType::eUniformBuffer);
-		layoutBinding.setDescriptorCount(1);
-		layoutBinding.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		InitGlobalDescriptors();
+	}
+
+	void Engine::CleanupGlobalUBO() {
+		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
+			if (globalUboBuffers[i] && globalUboAllocations[i]) {
+				vmaDestroyBuffer(allocator, globalUboBuffers[i], globalUboAllocations[i]);
+				globalUboBuffers[i] = nullptr;
+				globalUboAllocations[i] = nullptr;
+				globalUboMapped[i] = nullptr;
+			}
+		}
+	}
+
+	void Engine::InitGlobalDescriptors() {
+		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		// Binding 0: FrameUBO
+		bindings[0]
+			.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 1: uTextures2D
+		bindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(maxBindlessSampledImages)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 2: uTextureArrays
+		bindings[2]
+			.setBinding(2)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(64)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 3: uSamplers
+		bindings[3]
+			.setBinding(3)
+			.setDescriptorType(vk::DescriptorType::eSampler)
+			.setDescriptorCount(4)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 4: uImagesRGBA32F
+		bindings[4]
+			.setBinding(4)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setDescriptorCount(256)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 5: uTLAS
+		bindings[5]
+			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
+			.setDescriptorCount(4)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+
+		std::array<vk::DescriptorBindingFlags, 6> bindingFlags{
+			vk::DescriptorBindingFlags{},
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlags{},
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound,
+		};
+		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+		bindingFlagsInfo.setBindingFlags(bindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(layoutBinding);
-		globalSet0Layout = device.createDescriptorSetLayout(layoutInfo);
+		layoutInfo.setBindings(bindings);
+		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
+		layoutInfo.pNext = &bindingFlagsInfo;
+		bindlessSetLayout = device.createDescriptorSetLayout(layoutInfo);
+		globalSet0Layout = bindlessSetLayout;
 
-		// 2. Descriptor Pool
-		vk::DescriptorPoolSize poolSize{};
-		poolSize.setType(vk::DescriptorType::eUniformBuffer);
-		poolSize.setDescriptorCount(FRAME_OVERLAP);
-
+		std::array<vk::DescriptorPoolSize, 5> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, (maxBindlessSampledImages + 64) * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4 * FRAME_OVERLAP},
+		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
+		poolInfo.setPoolSizes(poolSizes);
 		poolInfo.setMaxSets(FRAME_OVERLAP);
-		poolInfo.setPoolSizes(poolSize);
-		globalDescriptorPool = device.createDescriptorPool(poolInfo);
+		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind);
+		bindlessDescriptorPool = device.createDescriptorPool(poolInfo);
+		globalDescriptorPool = bindlessDescriptorPool;
 
-		// 3. Allocate Descriptor Sets & UBO Buffers
-		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, globalSet0Layout);
+		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, bindlessSetLayout);
 		vk::DescriptorSetAllocateInfo        allocInfo{};
-		allocInfo.setDescriptorPool(globalDescriptorPool);
+		allocInfo.setDescriptorPool(bindlessDescriptorPool);
 		allocInfo.setSetLayouts(layouts);
 
 		auto allocatedSets = device.allocateDescriptorSets(allocInfo);
-
-		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
+		for (size_t i = 0; i < FRAME_OVERLAP; ++i) {
 			globalDescriptorSets[i] = allocatedSets[i];
 
 			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -1147,112 +1152,18 @@ namespace brassica {
 			bufferDescInfo.setOffset(0);
 			bufferDescInfo.setRange(sizeof(FrameUBO));
 
-			vk::WriteDescriptorSet descriptorWrite{};
-			descriptorWrite.setDstSet(globalDescriptorSets[i]);
-			descriptorWrite.setDstBinding(0);
-			descriptorWrite.setDstArrayElement(0);
-			descriptorWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
-			descriptorWrite.setBufferInfo(bufferDescInfo);
+			vk::WriteDescriptorSet uboWrite{};
+			uboWrite.setDstSet(globalDescriptorSets[i]);
+			uboWrite.setDstBinding(0);
+			uboWrite.setDstArrayElement(0);
+			uboWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+			uboWrite.setBufferInfo(bufferDescInfo);
 
-			device.updateDescriptorSets(descriptorWrite, nullptr);
+			device.updateDescriptorSets(uboWrite, nullptr);
 		}
-	}
+		bindlessDescriptorSet = globalDescriptorSets[0];
 
-	void Engine::CleanupGlobalUBO() {
-		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
-			if (globalUboBuffers[i] && globalUboAllocations[i]) {
-				vmaDestroyBuffer(allocator, globalUboBuffers[i], globalUboAllocations[i]);
-				globalUboBuffers[i] = nullptr;
-				globalUboAllocations[i] = nullptr;
-				globalUboMapped[i] = nullptr;
-			}
-		}
-
-		if (globalDescriptorPool) {
-			device.destroyDescriptorPool(globalDescriptorPool);
-			globalDescriptorPool = nullptr;
-		}
-
-		if (globalSet0Layout) {
-			device.destroyDescriptorSetLayout(globalSet0Layout);
-			globalSet0Layout = nullptr;
-		}
-	}
-
-	// The bindless set: PhysicalResourceRegistry writes into bindings 0/1/3/4 as textures are
-	// provisioned (see PhysicalRegistry.hpp's AssignAndWriteBindlessIndices); this function's
-	// only job is to create the layout/pool/set those writes land in, and to populate the one
-	// binding the registry never touches itself -- the sampler catalog. Deliberately separate
-	// from InitGlobalUBO/globalSet0Layout -- see the comment on this class's bindlessSetLayout.
-	void Engine::InitGlobalDescriptors() {
-		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
-		bindings[0]
-			.setBinding(0)
-			.setDescriptorType(vk::DescriptorType::eSampledImage)
-			.setDescriptorCount(maxBindlessSampledImages)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		bindings[1]
-			.setBinding(1)
-			.setDescriptorType(vk::DescriptorType::eSampledImage)
-			.setDescriptorCount(64)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		bindings[2]
-			.setBinding(2)
-			.setDescriptorType(vk::DescriptorType::eSampler)
-			.setDescriptorCount(4)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		bindings[3]
-			.setBinding(3)
-			.setDescriptorType(vk::DescriptorType::eStorageImage)
-			.setDescriptorCount(256)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		bindings[4]
-			.setBinding(4)
-			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
-			.setDescriptorCount(4)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-
-		// The sampler catalog (binding 2) is written once, below, right after allocation -- never
-		// partially bound or update-after-bind, unlike the other four, which the registry writes
-		// into over the course of the run as textures/an AS get provisioned.
-		std::array<vk::DescriptorBindingFlags, 5> bindingFlags{
-			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlags{},
-			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::ePartiallyBound, // AS: no eUpdateAfterBind -- see
-			// PhysicalRegistry.hpp's RegisterImportedAccelerationStructure comment for why.
-		};
-		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
-		bindingFlagsInfo.setBindingFlags(bindingFlags);
-
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(bindings);
-		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
-		layoutInfo.pNext = &bindingFlagsInfo;
-		bindlessSetLayout = device.createDescriptorSetLayout(layoutInfo);
-
-		std::array<vk::DescriptorPoolSize, 4> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
-			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
-		};
-		vk::DescriptorPoolCreateInfo poolInfo{};
-		poolInfo.setPoolSizes(poolSizes);
-		poolInfo.setMaxSets(1);
-		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind);
-		bindlessDescriptorPool = device.createDescriptorPool(poolInfo);
-
-		vk::DescriptorSetAllocateInfo allocInfo{};
-		allocInfo.setDescriptorPool(bindlessDescriptorPool);
-		allocInfo.setSetLayouts(bindlessSetLayout);
-		bindlessDescriptorSet = device.allocateDescriptorSets(allocInfo).front();
-
-		// Sampler catalog: 4 engine-owned entries, matching the real configs already hand-picked
-		// by existing passes -- {nearest+clamp (DeferredPass today), linear+clamp
-		// (AtmosphereLUTPass/water today), linear+repeat+mipmap (the terrain clipmap's own
-		// config, TerrainClipmap.cpp), nearest+repeat}. Written once, here, never rewritten.
+		// Sampler catalog: 4 engine-owned entries
 		auto makeSampler = [&](vk::Filter filter, vk::SamplerAddressMode addressMode, bool mipmap) {
 			vk::SamplerCreateInfo info{};
 			info.setMagFilter(filter)
@@ -1270,9 +1181,6 @@ namespace brassica {
 		bindlessSamplers[2] = makeSampler(vk::Filter::eLinear, vk::SamplerAddressMode::eRepeat, true);
 		bindlessSamplers[3] = makeSampler(vk::Filter::eNearest, vk::SamplerAddressMode::eRepeat, false);
 
-		// Registered once, permanently -- every subsequent shader compile (including hot
-		// reloads) sees the same [[NAME]] substitution, so shaders/bindless.glsl's
-		// BRASSICA_SAMPLER_* macros can never disagree with this catalog's real indices.
 		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
 		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
 		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
@@ -1282,21 +1190,26 @@ namespace brassica {
 		for (std::uint32_t i = 0; i < 4; ++i) {
 			samplerInfos[i].setSampler(bindlessSamplers[i]);
 		}
-		vk::WriteDescriptorSet samplerWrite{};
-		samplerWrite.setDstSet(bindlessDescriptorSet);
-		samplerWrite.setDstBinding(2);
-		samplerWrite.setDstArrayElement(0);
-		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
-		samplerWrite.setImageInfo(samplerInfos);
-		device.updateDescriptorSets(samplerWrite, {});
+		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
+			vk::WriteDescriptorSet samplerWrite{};
+			samplerWrite.setDstSet(globalDescriptorSets[i]);
+			samplerWrite.setDstBinding(3);
+			samplerWrite.setDstArrayElement(0);
+			samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
+			samplerWrite.setImageInfo(samplerInfos);
+			device.updateDescriptorSets(samplerWrite, {});
+		}
 
 		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
-		bindlessBindings.set = bindlessDescriptorSet;
+		bindlessBindings.set = globalDescriptorSets[0];
+		bindlessBindings.sets.assign(globalDescriptorSets, globalDescriptorSets + FRAME_OVERLAP);
 		bindlessBindings.layout = bindlessSetLayout;
-		bindlessBindings.sampledImage2DBinding = 0;
-		bindlessBindings.sampledImage2DArrayBinding = 1;
-		bindlessBindings.storageImageBinding = 3;
-		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.uboBinding = 0;
+		bindlessBindings.sampledImage2DBinding = 1;
+		bindlessBindings.sampledImage2DArrayBinding = 2;
+		bindlessBindings.samplerBinding = 3;
+		bindlessBindings.storageImageBinding = 4;
+		bindlessBindings.accelerationStructureBinding = 5;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 	}
 
@@ -1310,10 +1223,12 @@ namespace brassica {
 		if (bindlessDescriptorPool) {
 			device.destroyDescriptorPool(bindlessDescriptorPool);
 			bindlessDescriptorPool = nullptr;
+			globalDescriptorPool = nullptr;
 		}
 		if (bindlessSetLayout) {
 			device.destroyDescriptorSetLayout(bindlessSetLayout);
 			bindlessSetLayout = nullptr;
+			globalSet0Layout = nullptr;
 		}
 	}
 
