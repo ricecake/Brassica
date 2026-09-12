@@ -154,7 +154,7 @@ namespace brassica {
 				&push
 			);
 
-			if (dls) {
+			if (dls && dls->vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(1, 1, 1, *dls);
 			}
 		}

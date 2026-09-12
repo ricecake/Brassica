@@ -206,7 +206,7 @@ namespace brassica {
 			);
 
 			uint32_t taskGroupCount = (push.gridParams.z + 31) / 32;
-			if (terrainAS) {
+			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
 			}
 		}
