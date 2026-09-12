@@ -50,9 +50,7 @@ namespace brassica {
 		// fragment shader is a couple of texture reads and arithmetic, not the kind of expensive
 		// per-pixel work VRS exists to coarsen (Terrain's LOD shading, Deferred's ray-query
 		// shadows) -- and running it at full resolution avoids any risk of blocky artifacts at a
-		// translucent blend boundary. It's also what makes WaterNode the one real, visible node
-		// in this migration that's fully testable on a device without mesh-shader/ray-query/VRS
-		// support (tests/test_water_node.cpp) rather than only compiling.
+		// translucent blend boundary.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.enableBlend = true,
@@ -126,7 +124,7 @@ namespace brassica {
 				&push
 			);
 
-			if (dls) {
+			if (dls && dls->vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(1, 1, 1, *dls);
 			}
 		}
