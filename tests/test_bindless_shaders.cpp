@@ -2,6 +2,7 @@
 #include "doctest/doctest.h"
 
 #include "passes/TerrainNode.hpp"
+#include "passes/WaterNode.hpp"
 #include "Shader.hpp"
 
 using namespace brassica;
@@ -67,15 +68,19 @@ TEST_CASE("TerrainPushConstants is exactly as large as terrain.task/terrain.mesh
 	CHECK(sizeof(TerrainPushConstants) == 132);
 }
 
-TEST_CASE("water.vert/water.frag compile to valid SPIR-V against the real bindless.glsl substitution") {
+TEST_CASE("water.mesh/water.frag compile to valid SPIR-V against the real bindless.glsl substitution") {
 	RegisterBindlessSamplerConstants();
 
-	VertexShader   vert;
+	MeshShader     mesh;
 	FragmentShader frag;
-	CHECK(vert.CompileVertexFromFile(vk::Device{}, "shaders/water.vert"));
+	CHECK(mesh.CompileMeshFromFile(vk::Device{}, "shaders/water.mesh"));
 	CHECK(frag.CompileFragmentFromFile(vk::Device{}, "shaders/water.frag"));
-	CHECK(!vert.GetSPIRV().empty());
+	CHECK(!mesh.GetSPIRV().empty());
 	CHECK(!frag.GetSPIRV().empty());
 
 	Shader::ClearConstants();
+}
+
+TEST_CASE("WaterPushConstants is exactly as large as water.mesh/water.frag's shared push_constant block") {
+	CHECK(sizeof(WaterPushConstants) == 48);
 }
