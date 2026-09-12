@@ -180,17 +180,6 @@ TEST_CASE(
 									  )
 									  .front();
 
-		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
-		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
-		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
-		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
-
-		MeshShader     meshShader;
-		FragmentShader fragShader;
-		REQUIRE(meshShader.CompileMeshFromFile(vkDevice, "shaders/water.mesh"));
-		REQUIRE(fragShader.CompileFragmentFromFile(vkDevice, "shaders/water.frag"));
-		Shader::ClearConstants();
-
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
 		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
@@ -203,16 +192,12 @@ TEST_CASE(
 		DispatchLoaderDynamic dls;
 		dls.init(vkDevice);
 
+		WaterNode waterNode;
+		waterNode.Init(vkDevice, &pipelineLibrary, &dls, kSwapchainFormat);
+
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{.extent = {256, 256}, .swapchainFormat = kSwapchainFormat});
-		graph.Register<WaterNode>(WaterNode{
-			.pipelineLibrary = &pipelineLibrary,
-			.meshShader = &meshShader,
-			.fragShader = &fragShader,
-			.dls = &dls,
-			.extent = vk::Extent2D{256, 256},
-			.swapchainFormat = kSwapchainFormat,
-		});
+		graph.RegisterRef(waterNode);
 
 		graph::FrameContext ctx{.width = 256, .height = 256};
 
@@ -232,8 +217,7 @@ TEST_CASE(
 		device.GetQueue().waitIdle();
 
 		pipelineLibrary.Reset();
-		meshShader.Destroy(vkDevice);
-		fragShader.Destroy(vkDevice);
+		waterNode.Destroy(vkDevice);
 		DestroyWaterBindlessSet(vkDevice, bindlessSet);
 		vkDevice.destroyCommandPool(pool);
 	}

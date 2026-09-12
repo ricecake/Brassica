@@ -39,6 +39,9 @@ namespace brassica {
 		glm::mat4                viewMatrix{1.0f};
 		glm::mat4                projMatrix{1.0f};
 		glm::mat4                viewProjMatrix{1.0f};
+		glm::mat4                invViewMatrix{1.0f};
+		glm::mat4                invProjMatrix{1.0f};
+		glm::mat4                invViewProjMatrix{1.0f};
 		std::array<glm::vec4, 6> frustumPlanes{}; // Left, Right, Bottom, Top, Near, Far
 
 		// Direction vectors
@@ -63,6 +66,10 @@ namespace brassica {
 			projMatrix[1][1] *= -1.0f; // Vulkan inverted Y
 
 			viewProjMatrix = projMatrix * viewMatrix;
+
+			invViewMatrix = glm::inverse(viewMatrix);
+			invProjMatrix = glm::inverse(projMatrix);
+			invViewProjMatrix = glm::inverse(viewProjMatrix);
 
 			// Extract frustum planes from viewProjMatrix (Gribb-Hartmann method)
 			const glm::mat4& m = viewProjMatrix;

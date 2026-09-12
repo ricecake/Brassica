@@ -9,7 +9,7 @@
 #include "types/ubo/FrameUBO.hpp"
 
 TEST_CASE("FrameUBO Struct Size and Alignment") {
-	CHECK(sizeof(brassica::FrameUBO) == 32);
+	CHECK(sizeof(brassica::FrameUBO) == 432);
 	CHECK(alignof(brassica::FrameUBO) == 16);
 }
 
@@ -152,9 +152,18 @@ layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 3, max_primitives = 1) out;
 
 layout(set = 0, binding = 0) uniform FrameUBO {
+	mat4 viewMatrix;
+	mat4 invViewMatrix;
+	mat4 projMatrix;
+	mat4 invProjMatrix;
+	mat4 viewProjMatrix;
+	mat4 invViewProjMatrix;
+	vec4 cameraPosition;
 	float time;
 	float fov;
 	float aspectRatio;
+	float nearPlane;
+	float farPlane;
 	uint frameIndex;
 	uint globalSeed;
 	uint frameRandom;

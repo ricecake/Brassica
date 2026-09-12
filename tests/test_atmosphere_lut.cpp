@@ -93,15 +93,18 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 	vk::Device device = engine.GetDevice();
 
 	{
-		brassica::ComputeShader transShader;
-		brassica::ComputeShader multiShader;
-		REQUIRE(transShader.CompileComputeFromFile(device, "shaders/atmosphere/transmittance_lut.comp"));
-		REQUIRE(multiShader.CompileComputeFromFile(device, "shaders/atmosphere/multiscattering_lut.comp"));
-
 		brassica::render::PipelineLibrary         pipelineLibrary(device, nullptr);
 		brassica::AtmosphereRegenerationState     throttle{};
 		brassica::graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
 		brassica::graph::PhysicalExecutionBackend backend(registry);
+
+		brassica::TransmittanceLUTNode transNode;
+		transNode.Init(device, &pipelineLibrary);
+		transNode.throttle = &throttle;
+
+		brassica::MultiScatteringLUTNode multiNode;
+		multiNode.Init(device, &pipelineLibrary);
+		multiNode.throttle = &throttle;
 
 		vk::CommandPool pool = device.createCommandPool(
 			vk::CommandPoolCreateInfo{
@@ -123,19 +126,12 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 		// producing node ran, and these two LUTs' descs (fixed 256x64/32x32 R32G32B32A32Sfloat)
 		// never change, so identity alone can't distinguish "regenerated" from "throttled".
 		auto runFrame = [&](const brassica::AtmospherePushConstants& push) {
+			transNode.atmosphere = push;
+			multiNode.atmosphere = push;
+
 			brassica::graph::Graph g;
-			g.Register<brassica::TransmittanceLUTNode>(brassica::TransmittanceLUTNode{
-				.pipelineLibrary = &pipelineLibrary,
-				.shader = &transShader,
-				.throttle = &throttle,
-				.atmosphere = push,
-			});
-			g.Register<brassica::MultiScatteringLUTNode>(brassica::MultiScatteringLUTNode{
-				.pipelineLibrary = &pipelineLibrary,
-				.shader = &multiShader,
-				.throttle = &throttle,
-				.atmosphere = push,
-			});
+			g.RegisterRef(transNode);
+			g.RegisterRef(multiNode);
 
 			brassica::graph::FrameContext ctx{.width = 256, .height = 64};
 
@@ -170,8 +166,8 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 		CHECK_FALSE(runFrame(push2));
 
 		pipelineLibrary.Reset();
-		transShader.Destroy(device);
-		multiShader.Destroy(device);
+		transNode.Destroy(device);
+		multiNode.Destroy(device);
 		device.destroyCommandPool(pool);
 	}
 

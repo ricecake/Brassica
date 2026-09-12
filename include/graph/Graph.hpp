@@ -82,6 +82,11 @@ namespace brassica::graph {
 			Add(NodeHandle::Make<T>(std::forward<Args>(args)...));
 		}
 
+		template <NodeLike T>
+		void RegisterRef(T& node) {
+			Add(NodeHandle::MakeRef<T>(node));
+		}
+
 		void Add(NodeHandle handle) { m_nodes.push_back(std::move(handle)); }
 
 		// Non-null only when node `index` is a Subgraph -- lets a backend recurse into its

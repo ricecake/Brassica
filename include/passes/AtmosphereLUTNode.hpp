@@ -13,9 +13,12 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "ShaderWatcher.hpp"
 #include "types/AtmospherePushConstants.hpp"
 
 namespace brassica {
+
+	class ShaderWatcher;
 
 	// Replaces AtmosphereLUTPass::ShouldRegenerate/MarkRegenerated. Both LUTs are only rebuilt
 	// when the atmosphere parameters actually change (mirroring TerrainAccelerationStructure's
@@ -75,9 +78,22 @@ namespace brassica {
 		using Resources = graph::Declares<graph::Create<TransmittanceLUT>>;
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
-		ComputeShader*               shader = nullptr;
-		AtmosphereRegenerationState* throttle = nullptr;
+		ComputeShader                shader;
+		AtmosphereRegenerationState  localThrottle{};
+		AtmosphereRegenerationState* throttle = &localThrottle;
 		AtmospherePushConstants      atmosphere{};
+
+		void Init(vk::Device device, render::PipelineLibrary* library, ShaderWatcher* watcher = nullptr) {
+			pipelineLibrary = library;
+			shader.CompileComputeFromFile(device, "shaders/atmosphere/transmittance_lut.comp");
+			if (watcher) {
+				watcher->RegisterShader(&shader);
+			}
+		}
+
+		void Destroy(vk::Device device) {
+			shader.Destroy(device);
+		}
 
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::Recipe r{
@@ -105,7 +121,7 @@ namespace brassica {
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TransmittanceLUTPushConstants)}
 			};
 			render::ComputePipelineRequest request{
-				.shader = shader,
+				.shader = &shader,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};
@@ -142,9 +158,22 @@ namespace brassica {
 		using Resources = graph::Declares<graph::Read<TransmittanceLUT>, graph::Create<MultiScatteringLUT>>;
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
-		ComputeShader*               shader = nullptr;
-		AtmosphereRegenerationState* throttle = nullptr;
+		ComputeShader                shader;
+		AtmosphereRegenerationState  localThrottle{};
+		AtmosphereRegenerationState* throttle = &localThrottle;
 		AtmospherePushConstants      atmosphere{};
+
+		void Init(vk::Device device, render::PipelineLibrary* library, ShaderWatcher* watcher = nullptr) {
+			pipelineLibrary = library;
+			shader.CompileComputeFromFile(device, "shaders/atmosphere/multiscattering_lut.comp");
+			if (watcher) {
+				watcher->RegisterShader(&shader);
+			}
+		}
+
+		void Destroy(vk::Device device) {
+			shader.Destroy(device);
+		}
 
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::Recipe r{
@@ -180,7 +209,7 @@ namespace brassica {
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(MultiScatteringLUTPushConstants)}
 			};
 			render::ComputePipelineRequest request{
-				.shader = shader,
+				.shader = &shader,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};

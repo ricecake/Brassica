@@ -10,29 +10,41 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
-	// Trivial case for the node/pass unification: no descriptors, no push constants, a fixed
-	// pair of shaders and a fixed output format. Replaces the old GradientPass -- there is no
-	// persistent Pass object anymore; the node is reconstructed fresh every frame (see
-	// Engine::gradientVertShader/gradientFragShader and Engine::pipelineLibrary, which are what
-	// actually persist), and ResolveCached makes re-resolving the same request every frame a
-	// cache hit rather than a real pipeline rebuild.
+	class ShaderWatcher;
+
 	struct GradientNode {
 		using Resources = graph::Declares<graph::Create<GradientBackground>>;
 
-		// Only cullMode needs to move off GraphicsPipelineState's own defaults -- a fullscreen
-		// triangle drawn eBack (the default) would be culled depending on winding, exactly like
-		// GradientPass::InitPipeline's explicit vk::CullModeFlagBits::eNone used to guard against.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 		};
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-		VertexShader*            vertShader = nullptr;
-		FragmentShader*          fragShader = nullptr;
-		vk::Extent2D             extent;
+		VertexShader             vertShader;
+		FragmentShader           fragShader;
+
+		void Init(vk::Device device, render::PipelineLibrary* library, ShaderWatcher* watcher = nullptr) {
+			pipelineLibrary = library;
+			vertShader.CompileVertexFromFile(device, "shaders/gradient.vert");
+			fragShader.CompileFragmentFromFile(device, "shaders/gradient.frag");
+			if (watcher) {
+				RegisterShaders(*watcher);
+			}
+		}
+
+		void RegisterShaders(ShaderWatcher& watcher) {
+			watcher.RegisterShader(&vertShader);
+			watcher.RegisterShader(&fragShader);
+		}
+
+		void Destroy(vk::Device device) {
+			vertShader.Destroy(device);
+			fragShader.Destroy(device);
+		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -47,7 +59,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			std::array<GraphicsShader*, 2> stages{vertShader, fragShader};
+			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};
 
 			render::GraphicsPipelineRequest request{
@@ -62,6 +74,7 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
 			}
 
+			vk::Extent2D extent{ctx.width, ctx.height};
 			vk::Viewport
 				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 			vkCmd.setViewport(0, viewport);
