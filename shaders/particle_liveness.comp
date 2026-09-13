@@ -55,11 +55,22 @@ void main() {
 		return;
 	}
 
+	if (uParticles[idx].lifetime <= 0.0) {
+		uParticles[idx].lifetime = 5.0;
+		uParticles[idx].maxLifetime = 5.0;
+
+		float xOffset = float((idx * 17u) % 200u) - 100.0;
+		float zOffset = float((idx * 31u) % 200u) - 100.0;
+		float yOffset = 50.0 + float((idx * 13u) % 50u);
+
+		uParticles[idx].position = vec4(xOffset, yOffset, zOffset, 1.0);
+		uParticles[idx].velocity = vec4(sin(float(idx)) * 2.0, 1.0, cos(float(idx)) * 2.0, 0.0);
+	}
+
+	uParticles[idx].lifetime -= uPush.deltaTime;
+
 	if (uParticles[idx].lifetime > 0.0) {
-		uParticles[idx].lifetime -= uPush.deltaTime;
-		if (uParticles[idx].lifetime > 0.0) {
-			uint aliveSlot = atomicAdd(uIndirectCommand.groupCountX, 1);
-			uAliveIndices[aliveSlot] = idx;
-		}
+		uint aliveSlot = atomicAdd(uIndirectCommand.groupCountX, 1);
+		uAliveIndices[aliveSlot] = idx;
 	}
 }

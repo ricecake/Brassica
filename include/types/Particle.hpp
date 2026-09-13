@@ -7,12 +7,12 @@ namespace brassica {
 
 	// Particle definition holding position, velocity, misc, type, lifetime, and maxLifetime.
 	struct Particle {
-		glm::vec4     position{0.0f, 0.0f, 0.0f, 1.0f};
-		glm::vec4     velocity{0.0f, 0.0f, 0.0f, 0.0f};
-		glm::vec4     misc{0.0f}; // Miscellaneous purpose vector
+		glm::vec4     position{0.0f, 50.0f, 0.0f, 1.0f}; // Default above terrain height (Y = 50.0)
+		glm::vec4     velocity{0.0f, 2.0f, 0.0f, 0.0f};  // Gentle upward velocity
+		glm::vec4     misc{0.0f};                        // Miscellaneous purpose vector
 		std::uint32_t type{0};
-		float         lifetime{0.0f};
-		float         maxLifetime{1.0f};
+		float         lifetime{5.0f};                    // Marked alive initially (5.0s lifetime)
+		float         maxLifetime{5.0f};
 		std::uint32_t padding{0};
 	};
 
@@ -20,10 +20,10 @@ namespace brassica {
 
 	// Particle type properties defining visual and physical characteristics for a particle type.
 	struct ParticleType {
-		glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
-		float     size{0.1f};
-		float     gravityScale{1.0f};
-		float     drag{0.0f};
+		glm::vec4 color{1.0f, 0.9f, 0.1f, 1.0f}; // Bright yellow/gold color
+		float     size{10.0f};                   // 10.0-unit billboard size for ease of visibility
+		float     gravityScale{0.1f};
+		float     drag{0.05f};
 		float     padding{0.0f};
 	};
 
