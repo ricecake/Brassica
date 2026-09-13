@@ -580,20 +580,31 @@ namespace brassica {
 			auto pAliveBuf = registry->GetBuffer<ParticleAliveBuffer>();
 			auto pIndirectBuf = registry->GetBuffer<ParticleIndirectBuffer>();
 
-			if (!pBuf || !pTypeBuf || !pAliveBuf || !pIndirectBuf) return;
+			std::vector<vk::DescriptorBufferInfo> bufferInfos;
+			bufferInfos.reserve(4);
+			std::vector<vk::WriteDescriptorSet> writes;
+			writes.reserve(4);
 
-			vk::DescriptorBufferInfo b0{pBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
-			vk::DescriptorBufferInfo b1{pTypeBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
-			vk::DescriptorBufferInfo b2{pAliveBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
-			vk::DescriptorBufferInfo b3{pIndirectBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+			if (pBuf && pBuf->GetBuffer()) {
+				bufferInfos.push_back({pBuf->GetBuffer(), 0, VK_WHOLE_SIZE});
+				writes.push_back(vk::WriteDescriptorSet{particleSet, 0, 0, 1, vk::DescriptorType::eStorageBuffer, nullptr, &bufferInfos.back()});
+			}
+			if (pTypeBuf && pTypeBuf->GetBuffer()) {
+				bufferInfos.push_back({pTypeBuf->GetBuffer(), 0, VK_WHOLE_SIZE});
+				writes.push_back(vk::WriteDescriptorSet{particleSet, 1, 0, 1, vk::DescriptorType::eStorageBuffer, nullptr, &bufferInfos.back()});
+			}
+			if (pAliveBuf && pAliveBuf->GetBuffer()) {
+				bufferInfos.push_back({pAliveBuf->GetBuffer(), 0, VK_WHOLE_SIZE});
+				writes.push_back(vk::WriteDescriptorSet{particleSet, 2, 0, 1, vk::DescriptorType::eStorageBuffer, nullptr, &bufferInfos.back()});
+			}
+			if (pIndirectBuf && pIndirectBuf->GetBuffer()) {
+				bufferInfos.push_back({pIndirectBuf->GetBuffer(), 0, VK_WHOLE_SIZE});
+				writes.push_back(vk::WriteDescriptorSet{particleSet, 3, 0, 1, vk::DescriptorType::eStorageBuffer, nullptr, &bufferInfos.back()});
+			}
 
-			std::array<vk::WriteDescriptorSet, 4> writes{};
-			writes[0].setDstSet(particleSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
-			writes[1].setDstSet(particleSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b1);
-			writes[2].setDstSet(particleSet).setDstBinding(2).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b2);
-			writes[3].setDstSet(particleSet).setDstBinding(3).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b3);
-
-			device.updateDescriptorSets(writes, nullptr);
+			if (!writes.empty()) {
+				device.updateDescriptorSets(writes, nullptr);
+			}
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
