@@ -4,7 +4,7 @@
 #include "bindless.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
-layout(triangles, max_vertices = 161, max_primitives = 280) out;
+layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets
@@ -50,7 +50,7 @@ void main() {
 	uint meshletID = payload.meshletIDs[taskIndex];
 	uint lodLevel = payload.lodLevels[taskIndex];
 
-	SetMeshOutputsEXT(161, 280);
+	SetMeshOutputsEXT(141, 240);
 
 	uint lx = gl_LocalInvocationID.x;
 	uint ly = gl_LocalInvocationID.y;
@@ -133,17 +133,18 @@ void main() {
 
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
-	// Generate skirt vertex for boundary vertices to seal tile seams
-	if (lx == 0 || lx == 10 || ly == 0 || ly == 10) {
+	// Generate skirt vertex for boundary vertices (sampled every 2 units to fit within Vulkan 256 primitive limit)
+	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
+	if (isBoundarySample) {
 		uint skirtID;
 		if (ly == 0) {
-			skirtID = lx;
+			skirtID = lx / 2;
 		} else if (ly == 10) {
-			skirtID = 11 + lx;
+			skirtID = 6 + lx / 2;
 		} else if (lx == 0) {
-			skirtID = 22 + (ly - 1);
+			skirtID = 12 + (ly / 2 - 1);
 		} else {
-			skirtID = 31 + (ly - 1);
+			skirtID = 16 + (ly / 2 - 1);
 		}
 		uint skirtIdx = 121 + skirtID;
 
@@ -202,13 +203,14 @@ void main() {
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
-	// Generate skirt primitives along outer boundary edges
-	if (ly == 0 && lx < 10) { // Top edge
+	// Generate skirt primitives along outer boundary edges (5 segments per edge, total 40 triangles)
+	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
+		uint s = lx / 2;
 		uint v0 = lx;
-		uint v1 = lx + 1;
-		uint k0 = 121 + lx;
-		uint k1 = 121 + lx + 1;
-		uint primIdx = 200 + lx * 2;
+		uint v1 = lx + 2;
+		uint k0 = 121 + s;
+		uint k1 = 121 + s + 1;
+		uint primIdx = 200 + s * 2;
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
@@ -219,12 +221,13 @@ void main() {
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
-	if (ly == 10 && lx < 10) { // Bottom edge
+	if (ly == 10 && lx < 10 && lx % 2 == 0) { // Bottom edge
+		uint s = lx / 2;
 		uint v0 = 110 + lx;
-		uint v1 = 110 + lx + 1;
-		uint k0 = 121 + 11 + lx;
-		uint k1 = 121 + 11 + lx + 1;
-		uint primIdx = 220 + lx * 2;
+		uint v1 = 110 + lx + 2;
+		uint k0 = 121 + 6 + s;
+		uint k1 = 121 + 6 + s + 1;
+		uint primIdx = 210 + s * 2;
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
@@ -235,12 +238,13 @@ void main() {
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
-	if (lx == 0 && ly < 10) { // Left edge
+	if (lx == 0 && ly < 10 && ly % 2 == 0) { // Left edge
+		uint s = ly / 2;
 		uint v0 = ly * 11;
-		uint v1 = (ly + 1) * 11;
-		uint k0 = (ly == 0) ? 121 : (121 + 22 + (ly - 1));
-		uint k1 = (ly + 1 == 10) ? 132 : (121 + 22 + ly);
-		uint primIdx = 240 + ly * 2;
+		uint v1 = (ly + 2) * 11;
+		uint k0 = (s == 0) ? 121 : (121 + 12 + (s - 1));
+		uint k1 = (s + 1 == 5) ? 127 : (121 + 12 + s);
+		uint primIdx = 220 + s * 2;
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
@@ -251,12 +255,13 @@ void main() {
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
-	if (lx == 10 && ly < 10) { // Right edge
+	if (lx == 10 && ly < 10 && ly % 2 == 0) { // Right edge
+		uint s = ly / 2;
 		uint v0 = ly * 11 + 10;
-		uint v1 = (ly + 1) * 11 + 10;
-		uint k0 = (ly == 0) ? 131 : (121 + 31 + (ly - 1));
-		uint k1 = (ly + 1 == 10) ? 142 : (121 + 31 + ly);
-		uint primIdx = 260 + ly * 2;
+		uint v1 = (ly + 2) * 11 + 10;
+		uint k0 = (s == 0) ? 126 : (121 + 16 + (s - 1));
+		uint k1 = (s + 1 == 5) ? 132 : (121 + 16 + s);
+		uint primIdx = 230 + s * 2;
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
