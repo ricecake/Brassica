@@ -10,6 +10,7 @@
 
 #include "EngineConstants.hpp"
 #include "GLFW/glfw3.h"
+#include "graph/Frame.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "InputHandler.hpp"
 #include "passes/AtmosphereLUTNode.hpp"
@@ -31,9 +32,12 @@
 
 namespace brassica {
 
+	using EngineTemporal = graph::TypeList<GBufferDepth>;
+
 	struct EngineOptions {
 		bool     headless{false};
 		uint32_t maxFrames{0};
+		bool     dumpDot{false};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
 			EngineOptions opts;
@@ -56,6 +60,11 @@ namespace brassica {
 						} catch (...) {
 						}
 					}
+				} else if (
+					arg == "--dot" || arg == "-dot" || arg == "--dump-dot" || arg == "--dump-graph-dot" ||
+					arg == "--dump-graph" || arg == "--print-dot"
+				) {
+					opts.dumpDot = true;
 				}
 			}
 			return opts;
@@ -144,6 +153,7 @@ namespace brassica {
 
 		void RecreateSwapchain();
 		void DrawFrame();
+		void BuildFrameGraph(graph::Graph& frameGraph);
 
 		GLFWwindow* window{nullptr};
 		uint32_t    frameNumber{0};

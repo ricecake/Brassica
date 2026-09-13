@@ -3,6 +3,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 
 #include "spdlog/spdlog.h"
 
@@ -369,6 +370,36 @@ namespace brassica {
 		camera.UpdateMatrices(16.0f / 9.0f);
 		lastFrameTime = glfwGetTime();
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
+
+		if (options.dumpDot) {
+			graph::Graph frameGraph;
+			BuildFrameGraph(frameGraph);
+			vk::Extent2D extent = GetSwapchainExtent();
+			if (extent.width == 0 || extent.height == 0) {
+				extent = vk::Extent2D{1280, 720};
+			}
+			graph::FrameContext ctx{.width = extent.width, .height = extent.height, .frameIndex = 0};
+			frameGraph.Setup(ctx);
+			if (auto compileRes = frameGraph.Compile(); !compileRes) {
+				spdlog::critical("Frame graph compilation failed: {}", compileRes.error().message);
+				std::exit(EXIT_FAILURE);
+			}
+			std::cout << graph::ToDot(frameGraph, "Brassica Frame Graph") << std::endl;
+			std::exit(0);
+		}
+	}
+
+	void Engine::BuildFrameGraph(graph::Graph& frameGraph) {
+		frameGraph.Register<graph::Import<Swapchain>>();
+		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
+		frameGraph.Register<graph::PreviousFrame<EngineTemporal>>();
+		frameGraph.RegisterRef(transmittanceNode);
+		frameGraph.RegisterRef(multiScatteringNode);
+		frameGraph.RegisterRef(gradientNode);
+		frameGraph.RegisterRef(terrainNode);
+		frameGraph.RegisterRef(deferredNode);
+		frameGraph.RegisterRef(waterNode);
+		frameGraph.Register<graph::NextFrame<EngineTemporal>>();
 	}
 
 	void Engine::UpdateCamera(float deltaTime) {
@@ -491,6 +522,7 @@ namespace brassica {
 		vkb::InstanceBuilder builder;
 		builder.set_app_name("Brassica")
 			.require_api_version(chosenMajor, chosenMinor, 0)
+			.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
 			.set_debug_callback(Engine::VulkanDebugCallback)
 			.set_debug_callback_user_data_pointer(this);
 
@@ -889,13 +921,7 @@ namespace brassica {
 		);
 
 		graph::Graph frameGraph;
-		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
-		frameGraph.RegisterRef(transmittanceNode);
-		frameGraph.RegisterRef(multiScatteringNode);
-		frameGraph.RegisterRef(gradientNode);
-		frameGraph.RegisterRef(terrainNode);
-		frameGraph.RegisterRef(deferredNode);
-		frameGraph.RegisterRef(waterNode);
+		BuildFrameGraph(frameGraph);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);
@@ -912,39 +938,8 @@ namespace brassica {
 			// this was already the migration plan's own recommendation before shipping true.
 			backend.Execute(frameGraph, ctx, graphCmd, false);
 		} catch (const std::exception& e) {
-			spdlog::error("Frame graph execution failed: {}", e.what());
-			frame.commandBuffer.end();
-
-			// backend.Execute throws before recording anything into frame.commandBuffer
-			// (Provision, which is where this can fail, runs before the command buffer is ever
-			// touched) -- so this is submitting an empty but valid begin/end pair, purely to
-			// consume frame.swapchainSemaphore's signal from the acquire above. Skipping the
-			// submit entirely would leave that semaphore signaled, and the next time this frame
-			// slot's semaphore is reused for acquireNextImageKHR (FRAME_OVERLAP frames from now),
-			// the validation layer correctly flags "Semaphore must not be currently signaled".
-			// presentKHR is skipped on purpose: the swapchain image's layout was never
-			// transitioned to ePresentSrcKHR (the graph never ran), so presenting it now would be
-			// invalid -- this frame is simply dropped, not shown with stale/undefined content.
-			vk::CommandBufferSubmitInfo cmdSubmitInfo{};
-			cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
-
-			vk::SemaphoreSubmitInfo waitInfo{};
-			waitInfo.setSemaphore(frame.swapchainSemaphore);
-			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-
-			vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
-			frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
-			frameTimelineSignalInfo.setValue(frameNumber + 1);
-			frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
-
-			vk::SubmitInfo2 recoverySubmitInfo{};
-			recoverySubmitInfo.setWaitSemaphoreInfos(waitInfo);
-			recoverySubmitInfo.setSignalSemaphoreInfos(frameTimelineSignalInfo);
-			recoverySubmitInfo.setCommandBufferInfos(cmdSubmitInfo);
-			graphicsQueue.submit2(recoverySubmitInfo, nullptr);
-
-			frameNumber++;
-			return;
+			spdlog::critical("Frame graph execution failed: {}", e.what());
+			std::exit(EXIT_FAILURE);
 		}
 
 		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
