@@ -1,13 +1,73 @@
+
+const float PI = 3.14159265359;
+const float PHI = 1.618033988749894848204586834;
+
+const mat3 GOLD = mat3(
+-0.571464913, +0.814921382, +0.096597072,
+-0.278044873, -0.303026659, +0.911518454,
++0.772087367, +0.494042493, +0.399753815);
+
+const int bayer4x4[16] = int[](
+		0,  8,  2, 10,
+	12,  4, 14,  6,
+		3, 11,  1,  9,
+	15,  7, 13,  5
+);
+
+float safeDiv(float a, float b) {
+    return (b != 0.0) ? (a / b) : 0.0;
+}
+
+float luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// A standard 32-bit integer hash
+uint hash(uint x) {
+	x ^= x >> 16;
+	x *= 0x7feb352dU;
+	x ^= x >> 15;
+	x *= 0x846ca68bU;
+	x ^= x >> 16;
+	return x;
+}
+
+float pcg_hash(uint seed) {
+    uint state = seed * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return float((word >> 22u) ^ word) / 4294967295.0;
+}
+
+vec3 hemisphereSample(vec2 uv, vec3 normal) {
+	float phi = 2.0 * PI * uv.x;
+	float cosTheta = sqrt(1.0 - uv.y);
+	float sinTheta = sqrt(uv.y);
+	vec3 localDir = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+	vec3 up = abs(normal.z) < 0.999 ? vec3(0, 0, 1) : vec3(1, 0, 0);
+	vec3 tangent = normalize(cross(up, normal));
+	vec3 bitangent = cross(normal, tangent);
+	return tangent * localDir.x + bitangent * localDir.y + normal * localDir.z;
+}
+
+ivec2 involute(ivec2 curr, uint dim, uint seed) {
+	// Assuming N is a power of 2, mask = N - 1
+	uint mask = dim - 1;
+	uint S = uint(curr.x) + uint(curr.y);
+
+	// Generate arbitrary non-linear noise based on the invariant sum
+	uint noise = hash(seed ^ hash(S));
+
+	// Clear the lowest bit of the noise, then insert the opposite parity of S
+	uint F = (noise & ~1u) | ((S + 1u) & 1u);
+
+	// Apply the transformation
+	uint x_new = (curr.y + F) & mask;
+	uint y_new = (curr.x - F) & mask;
+	return ivec2(x_new, y_new);
+}
+
+
 float dot_noise(vec3 p, float phase) {
-    #ifndef PHI
-    #define PHI 1.618033988749894848204586834
-    #endif
-
-    const mat3 GOLD = mat3(
-    -0.571464913, +0.814921382, +0.096597072,
-    -0.278044873, -0.303026659, +0.911518454,
-    +0.772087367, +0.494042493, +0.399753815);
-
     vec3 rotated_p1 = GOLD * p;
     vec3 rotated_p2 = PHI * p * GOLD;
 
@@ -34,15 +94,6 @@ float dot_noise_fbm(vec3 p, float oct, float phase) {
 }
 
 vec3 cross_noise(vec3 p, float phase) {
-    #ifndef PHI
-    #define PHI 1.618033988749894848204586834
-    #endif
-
-    const mat3 GOLD = mat3(
-    -0.571464913, +0.814921382, +0.096597072,
-    -0.278044873, -0.303026659, +0.911518454,
-    +0.772087367, +0.494042493, +0.399753815);
-
     vec3 rotated_p1 = GOLD * p;
     vec3 rotated_p2 = PHI * p * GOLD;
 
@@ -68,3 +119,133 @@ vec3 cross_noise_fbm(vec3 p, float oct, float phase) {
        return val / max_amp;
 }
 
+float roundToEvenPlaces(float value, float places) {
+	float shift = pow(10.0, places);
+	return roundEven(value * shift) / shift;
+}
+
+float roundToPlaces(float value, float places) {
+	float shift = pow(10.0, places);
+	return round(value * shift) / shift;
+}
+
+float terraceSmooth(float h, float numSteps, float slopeCoarseness) {
+    float stepId = floor(h * numSteps);
+    float fractional = fract(h * numSteps);
+
+    // Smooth the transition edge between steps
+    // slopeCoarseness: 0.0 = perfectly sharp, 1.0 = completely smooth
+    float edge = smoothstep(0.0, slopeCoarseness, fractional);
+
+    return (stepId + edge) / numSteps;
+}
+
+// High-quality 32-bit integer hash to generate deterministic pseudo-random seeds
+uint hashUint(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+// Hierarchical Base-4 Owen Scramble for a 32-bit Morton Code
+uint owenScrambleBase4(uint mortonCode, uint seed) {
+    uint scrambled = 0U;
+    uint currentSeed = seed;
+
+    // Process 16 pairs of bits (32 bits total for a 2D Morton code)
+    // We go from the highest-significance digit to the lowest
+    for (int i = 15; i >= 0; i--) {
+        // Extract the current base-4 digit (2 bits)
+        uint digitShift = uint(i * 2);
+        uint digit = (mortonCode >> digitShift) & 3U;
+
+        // Generate a pseudo-random 2-bit permutation based on the structural path history
+        // Mixing the current path seed with a hash creates the hierarchical scrambling
+        currentSeed = hashUint(currentSeed ^ (digit + uint(i)));
+        uint permutation = currentSeed & 3U;
+
+        // Apply the permutation (XOR is standard for Owen scrambling)
+        uint scrambledDigit = digit ^ permutation;
+
+        // Reconstruct the scrambled code
+        scrambled |= (scrambledDigit << digitShift);
+
+        // Feed the scrambled digit forward to downstream children to preserve hierarchy
+        currentSeed ^= scrambledDigit;
+    }
+
+    return scrambled;
+}
+
+// Spreads 16 bits of a uint out to every other bit (32 bits total)
+uint part1by1(uint n) {
+    n &= 0x0000ffffu;                  // n = ---- ---- ---- ---- fedc ba98 7654 3210
+    n = (n ^ (n <<  8u)) & 0x00ff00ffu; // n = ---- ---- fedc ba98 ---- ---- 7654 3210
+    n = (n ^ (n <<  4u)) & 0x0f0f0f0fu; // n = ---- fedc ---- ba98 ---- 7654 ---- 3210
+    n = (n ^ (n <<  2u)) & 0x33333333u; // n = --fe --dc --ba --98 --76 --54 --32 --10
+    n = (n ^ (n <<  1u)) & 0x55555555u; // n = f e d c b a 9 8 7 6 5 4 3 2 1 0
+    return n;
+}
+
+// Compacts every other bit of a 32-bit uint back into 16 contiguous bits
+uint unpart1by1(uint n) {
+    n &= 0x55555555u;                  // n = f e d c b a 9 8 7 6 5 4 3 2 1 0
+    n = (n ^ (n >>  1u)) & 0x33333333u; // n = --fe --dc --ba --98 --76 --54 --32 --10
+    n = (n ^ (n >>  2u)) & 0x0f0f0f0fu; // n = ---- fedc ---- ba98 ---- 7654 ---- 3210
+    n = (n ^ (n >>  4u)) & 0x00ff00ffu; // n = ---- ---- fedc ba98 ---- ---- 7654 3210
+    n = (n ^ (n >>  8u)) & 0x0000ffffu; // n = ---- ---- ---- ---- fedc ba98 7654 3210
+    return n;
+}
+
+// ENCODE: Interleaves two 16-bit values into a 32-bit index
+uint encodeMorton2D(uvec2 coords) {
+    return part1by1(coords.x) | (part1by1(coords.y) << 1u);
+}
+
+// DECODE: Extracts two 16-bit coordinates from a 32-bit Morton code
+uvec2 decodeMorton2D(uint code) {
+    return uvec2(
+        unpart1by1(code),
+        unpart1by1(code >> 1u)
+    );
+}
+
+uint mortonOwenScramble(uvec2 p, uint seed) {
+	uint morton = encodeMorton2D(p);
+	return owenScrambleBase4(morton, seed);
+}
+
+float mortonOwenThreshold(ivec2 uv, int FrameId) {
+	// float temporalShift = fract(float(FrameId) * 0.61803398);
+    uint code = mortonOwenScramble(uvec2(uv), uint(FrameId));
+    return fract(uintBitsToFloat(code));// + temporalShift);
+}
+
+float mortonOwenThreshold(vec2 uv, int FrameId) {
+    return mortonOwenThreshold(ivec2(uv*8192), FrameId);
+}
+
+float henyeyGreenstein(float g, float cosTheta) {
+	float g2 = g * g;
+	return (1.0 - g2) / (4.0 * PI * pow(max(0.0001, 1.0 + g2 - 2.0 * g * cosTheta), 1.5));
+}
+
+float remap(float value, float low1, float high1, float low2, float high2) {
+	return low2 + (value - low1) * (high2 - low2) / max(0.0001, (high1 - low1));
+}
+
+float bayer4x4StepPhase(ivec2 pixel, int index) {
+	return float(bayer4x4[((pixel.x & 3) * 4 + (pixel.y & 3)) % 16]) / 16.0;
+}
+
+float InterleavedGradientNoise(vec2 uv, int FrameId){
+	// uv += float(FrameId)  * (vec2(47, 17) * 0.695f);
+	//vec3 magic = vec3( 12.9898, 78.233, 43758.5453123 );
+	const vec3 magic = vec3( 0.06711056f, 0.00583715f, 52.9829189f );
+	float spatialJitter = fract(magic.z * fract(dot(uv, magic.xy)));
+	float temporalShift = fract(float(FrameId) * 0.61803398);
+	return fract(spatialJitter + temporalShift);
+}
