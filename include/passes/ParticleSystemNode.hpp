@@ -33,6 +33,7 @@ namespace brassica {
 
 	struct ParticleResetNode {
 		using Resources = graph::Declares<graph::Modify<ParticleIndirectBuffer>>;
+		static constexpr graph::Phase kPhase = graph::Phase::Early;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
@@ -221,6 +222,8 @@ namespace brassica {
 			graph::Read<ParticleAliveBuffer>,
 			graph::Read<ParticleIndirectBuffer>>;
 
+		static constexpr graph::Phase kPhase = graph::Phase::Late;
+
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
 		std::uint32_t            maxParticles{1024};
@@ -333,6 +336,8 @@ namespace brassica {
 			graph::Read<ParticleAliveBuffer>,
 			graph::Read<ParticleIndirectBuffer>,
 			graph::Modify<Swapchain>>;
+
+		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -480,7 +485,14 @@ namespace brassica {
 		}
 	};
 
-	using ParticleSystemSpec = graph::FrameSpec<ParticleResetNode, ParticleLivenessNode, ParticleBehaviorNode, ParticleRenderNode>;
+	// using ParticleSystemSpec = graph::FrameSpec<ParticleResetNode, ParticleLivenessNode, ParticleBehaviorNode, ParticleRenderNode>;
+	using ParticleSystemSpec = graph::FrameSpec<
+		graph::Import<ParticleTypeBuffer>,
+		ParticleResetNode,
+		ParticleLivenessNode,
+		ParticleBehaviorNode,
+		ParticleRenderNode
+	>;
 	using ParticleSystemSubgraph = graph::Subgraph<ParticleSystemSpec>;
 
 	struct ParticleSystemNode {
@@ -535,6 +547,8 @@ namespace brassica {
 			renderNode.Init(device, library, dispatchLoader, format, particleSetLayout, particleSet, watcher);
 
 			auto& inner = m_subgraph.InnerGraph();
+			// inner.Register<graph::Import<ParticleTypeBuffer>>();
+
 			inner.RegisterRef(resetNode);
 			inner.RegisterRef(livenessNode);
 			inner.RegisterRef(behaviorNode);
