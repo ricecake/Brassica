@@ -489,13 +489,108 @@ namespace brassica {
 
 		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
-		SubgraphType m_subgraph;
+		SubgraphType            m_subgraph;
+		vk::DescriptorSetLayout particleSetLayout{nullptr};
+		vk::DescriptorPool      particleDescriptorPool{nullptr};
+		vk::DescriptorSet       particleSet{nullptr};
+
+		ParticleResetNode    resetNode;
+		ParticleLivenessNode livenessNode;
+		ParticleBehaviorNode behaviorNode;
+		ParticleRenderNode   renderNode;
+
+		void Init(
+			vk::Device                   device,
+			render::PipelineLibrary*     library,
+			const DispatchLoaderDynamic* dispatchLoader,
+			vk::Format                   format,
+			ShaderWatcher*               watcher = nullptr
+		) {
+			std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+			bindings[0].setBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
+			bindings[1].setBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
+			bindings[2].setBinding(2).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
+			bindings[3].setBinding(3).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
+
+			vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+			layoutInfo.setBindings(bindings);
+			particleSetLayout = device.createDescriptorSetLayout(layoutInfo);
+
+			std::array<vk::DescriptorPoolSize, 1> poolSizes{
+				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16}
+			};
+			vk::DescriptorPoolCreateInfo poolInfo{};
+			poolInfo.setPoolSizes(poolSizes);
+			poolInfo.setMaxSets(4);
+			particleDescriptorPool = device.createDescriptorPool(poolInfo);
+
+			vk::DescriptorSetAllocateInfo allocInfo{};
+			allocInfo.setDescriptorPool(particleDescriptorPool);
+			allocInfo.setSetLayouts(particleSetLayout);
+			particleSet = device.allocateDescriptorSets(allocInfo).front();
+
+			resetNode.Init(device, library, particleSetLayout, particleSet, watcher);
+			livenessNode.Init(device, library, particleSetLayout, particleSet, watcher);
+			behaviorNode.Init(device, library, particleSetLayout, particleSet, watcher);
+			renderNode.Init(device, library, dispatchLoader, format, particleSetLayout, particleSet, watcher);
+
+			auto& inner = m_subgraph.InnerGraph();
+			inner.RegisterRef(resetNode);
+			inner.RegisterRef(livenessNode);
+			inner.RegisterRef(behaviorNode);
+			inner.RegisterRef(renderNode);
+		}
+
+		void Destroy(vk::Device device) {
+			resetNode.Destroy(device);
+			livenessNode.Destroy(device);
+			behaviorNode.Destroy(device);
+			renderNode.Destroy(device);
+
+			if (particleDescriptorPool) {
+				device.destroyDescriptorPool(particleDescriptorPool);
+				particleDescriptorPool = nullptr;
+			}
+			if (particleSetLayout) {
+				device.destroyDescriptorSetLayout(particleSetLayout);
+				particleSetLayout = nullptr;
+			}
+		}
+
+		void UpdateDescriptorSet(vk::Device device, const graph::PhysicalResourceRegistry* registry) {
+			if (!registry || !particleSet || !device) return;
+
+			auto pBuf = registry->GetBuffer<ParticleBuffer>();
+			auto pTypeBuf = registry->GetBuffer<ParticleTypeBuffer>();
+			auto pAliveBuf = registry->GetBuffer<ParticleAliveBuffer>();
+			auto pIndirectBuf = registry->GetBuffer<ParticleIndirectBuffer>();
+
+			if (!pBuf || !pTypeBuf || !pAliveBuf || !pIndirectBuf) return;
+
+			vk::DescriptorBufferInfo b0{pBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+			vk::DescriptorBufferInfo b1{pTypeBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+			vk::DescriptorBufferInfo b2{pAliveBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+			vk::DescriptorBufferInfo b3{pIndirectBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+
+			std::array<vk::WriteDescriptorSet, 4> writes{};
+			writes[0].setDstSet(particleSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
+			writes[1].setDstSet(particleSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b1);
+			writes[2].setDstSet(particleSet).setDstBinding(2).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b2);
+			writes[3].setDstSet(particleSet).setDstBinding(3).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b3);
+
+			device.updateDescriptorSets(writes, nullptr);
+		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			return m_subgraph.Setup(ctx);
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ctx.bindless) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.bindless)) {
+					UpdateDescriptorSet(registry->GetDevice(), registry);
+				}
+			}
 			m_subgraph.Execute(ctx);
 		}
 

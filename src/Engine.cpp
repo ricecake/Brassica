@@ -231,6 +231,7 @@ namespace brassica {
 			waterNode.Destroy(device);
 			transmittanceNode.Destroy(device);
 			multiScatteringNode.Destroy(device);
+			particleSystemNode.Destroy(device);
 
 			CleanupGlobalUBO();
 			CleanupGlobalDescriptors();
@@ -331,6 +332,7 @@ namespace brassica {
 		waterNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
 		transmittanceNode.Init(device, &pipelineLibrary, &shaderWatcher);
 		multiScatteringNode.Init(device, &pipelineLibrary, &shaderWatcher);
+		particleSystemNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
@@ -896,6 +898,7 @@ namespace brassica {
 		frameGraph.RegisterRef(terrainNode);
 		frameGraph.RegisterRef(deferredNode);
 		frameGraph.RegisterRef(waterNode);
+		frameGraph.RegisterRef(particleSystemNode);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);
