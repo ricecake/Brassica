@@ -130,7 +130,7 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
 
 		DispatchLoaderDynamic dls;
-		dls.init(vkDevice);
+		dls.init(device.GetInstance(), vkDevice);
 		dls.vkCmdDrawMeshTasksEXT = nullptr;
 		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
 
