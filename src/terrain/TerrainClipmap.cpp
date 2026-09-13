@@ -16,56 +16,22 @@ namespace brassica {
 		FastNoise::SmartNode<FastNoise::DomainScale> detailScale;
 		FastNoise::SmartNode<FastNoise::DomainScale> maskScale;
 		FastNoise::SmartNode<FastNoise::DomainScale> biomeScale;
-		FastNoise::SmartNode<FastNoise::DomainScale> land;
+		FastNoise::SmartNode<> land;
 
 		TerrainNoiseGenerators() {
-			land = FastNoise::New<FastNoise::DomainScale>();
-			auto landGen = FastNoise::NewFromEncodedNodeTree(
+			land = FastNoise::NewFromEncodedNodeTree(
+				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
+
 				// "KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/BAAEAw@CTAABIwhsAAHpEBA=="
 				// "KQkVCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQCHQkUCRAJBgwL7FG4PgQCDQkLAACAs0IQpHA9vxiamZk/IAI@B4B@CwLrkdhPgwD@CBMAAEjCGwAAekQE"
-				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/"
-				"BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
+				// "KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/BAAEAw@CTAABIwhsAAHpEBA=="
+				// "KQkVCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQCHQkUCRAJBgwL7FG4PgQCDQkLAACAs0IQpHA9vxiamZk/IAI@B4B@CwLrkdhPgwD@CBMAAEjCGwAAekQE"
+				// "FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
+				// "FQkNCQs4Aw@BQLj8J1PQQCFQkTCR@CWQzAB@BCQY@AB6RBQCFAkSCf8CABw="
+				// "KQkVCQ0JCzgD@BBAuPwnU9BAIVCRMJE@BBZDMAE@BJBg@AHpEFAIUCRIJ/wIAHBMAAMjCGwAAekQE"
+				// "KQkVCQ0JCzgD@BBAuPwnU9BAIVCRMJE@BBZDMAE@BJBg@APpEFAIUCRIJ/wIAHAM@CEwAAyMIbAAB6RAQ="
+				// "E@BBZEG@BD8JFgIECArXIzwECiQIw/UoPwkuAAE@BJDQAH@BC@AIEAJBw@ABZEED0KV78YZmZmPwQDmpkZPwsAAIA/HAMAAHBCBA=="
 			);
-			land->SetSource(landGen);
-
-			auto simplex = FastNoise::New<FastNoise::Simplex>();
-
-			auto baseFbm = FastNoise::New<FastNoise::FractalFBm>();
-			baseFbm->SetSource(simplex);
-			baseFbm->SetOctaveCount(2);
-			baseFbm->SetLacunarity(2.0f);
-			baseFbm->SetGain(0.5f);
-
-			baseScale = FastNoise::New<FastNoise::DomainScale>();
-			baseScale->SetSource(baseFbm);
-			baseScale->SetScaling(0.01f);
-
-			auto detailFbm = FastNoise::New<FastNoise::FractalFBm>();
-			detailFbm->SetSource(simplex);
-			detailFbm->SetOctaveCount(6);
-			detailFbm->SetLacunarity(2.0f);
-			detailFbm->SetGain(0.5f);
-
-			detailScale = FastNoise::New<FastNoise::DomainScale>();
-			detailScale->SetSource(detailFbm);
-			detailScale->SetScaling(0.4f);
-
-			maskScale = FastNoise::New<FastNoise::DomainScale>();
-			maskScale->SetSource(simplex);
-			maskScale->SetScaling(0.0008f);
-
-			// Domain Warped Worley Noise for Biomes
-			auto cellular = FastNoise::New<FastNoise::CellularDistance>();
-			cellular->SetDistanceFunction(FastNoise::DistanceFunction::Euclidean);
-			cellular->SetReturnType(FastNoise::CellularDistance::ReturnType::Index0);
-
-			auto warp = FastNoise::New<FastNoise::DomainWarpGradient>();
-			warp->SetWarpAmplitude(50.0f);
-			warp->SetSource(cellular);
-
-			biomeScale = FastNoise::New<FastNoise::DomainScale>();
-			biomeScale->SetSource(warp);
-			biomeScale->SetScaling(0.0004f);
 		}
 	};
 

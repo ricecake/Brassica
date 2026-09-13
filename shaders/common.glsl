@@ -1,6 +1,7 @@
 
 const float PI = 3.14159265359;
 const float PHI = 1.618033988749894848204586834;
+const float TAU = 2.0 * PI;
 
 const mat3 GOLD = mat3(
 -0.571464913, +0.814921382, +0.096597072,
@@ -31,6 +32,12 @@ uint hash(uint x) {
 	x ^= x >> 16;
 	return x;
 }
+
+vec2 hash(vec2 p) {
+	p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+	return fract(sin(p) * 43758.5453123) * 2.0 - 1.0;
+}
+
 
 float pcg_hash(uint seed) {
     uint state = seed * 747796405u + 2891336453u;
@@ -248,4 +255,99 @@ float InterleavedGradientNoise(vec2 uv, int FrameId){
 	float spatialJitter = fract(magic.z * fract(dot(uv, magic.xy)));
 	float temporalShift = fract(float(FrameId) * 0.61803398);
 	return fract(spatialJitter + temporalShift);
+}
+
+/**
+ * Simple Phacelle Noise (2D)
+ * Approximates highly directional phasor noise using a 16-sample kernel.
+ *
+ * @param uv  - The sampling position. Scale this to change the density of the noise cells.
+ * @param dir - The desired direction of the ripples. Does not need to be normalized if
+ *              you want direction magnitude to influence the phase gradient.
+ * @return    - A normalized vec2 representing [cos(phase), sin(phase)].
+ *              Extract the .x component for the base wave pattern.
+ */
+vec2 fastSimplePhacelle2d(vec2 uv, vec2 dir) {
+    vec2 cell = floor(uv);
+    vec2 frac = fract(uv);
+
+    float sumCos = 0.0;
+    float sumSin = 0.0;
+    float sumWeight = 0.0;
+
+    // Evaluate 4x4 grid for smooth overlapping kernels
+    for (int y = -1; y <= 2; y++) {
+        for (int x = -1; x <= 2; x++) {
+            vec2 offset = vec2(float(x), float(y));
+            vec2 neighborCell = cell + offset;
+
+            // Generate a random, static phase shift for this specific cell [0, 2PI]
+            float cellPhase = fract(sin(dot(neighborCell, vec2(12.9898, 78.233))) * 43758.5453) * 6.28318530718;
+
+            // Vector from current sampling point to the neighboring cell's origin
+            vec2 delta = offset - frac;
+            float distSq = dot(delta, delta);
+
+            // Kernel falloff weight (using a fast polynomial approximation of a Gaussian)
+            // Cutoff at squared distance 4.0
+            float weight = max(0.0, 1.0 - distSq * 0.25);
+            weight = weight * weight * weight;
+
+            // Project the spatial delta onto the desired direction vector to align the wave,
+            // then add the cell's random phase offset.
+            float phase = cellPhase + dot(dir, delta) * 3.14159265;
+
+            // Accumulate both wave components
+            sumCos += cos(phase) * weight;
+            sumSin += sin(phase) * weight;
+            sumWeight += weight;
+        }
+    }
+
+    // Normalize the accumulated vector to rebuild a clean phase
+    return normalize(vec2(sumCos, sumSin) / (sumWeight + 0.0001));
+}
+
+// The Simple Phacelle Noise function produces a stripe pattern aligned with the input vector.
+// The name Phacelle is a portmanteau of phase and cell, since the function produces a phase by
+// interpolating cosine and sine waves from multiple cells.
+//  - p is the input point being evaluated.
+//  - normDir is the direction of the stripes at this point. It must be a normalized vector.
+//  - freq is the freqency of the stripes within each cell. It's best to keep it close to 1.0.
+//  - offset is the phase offset of the stripes, where 1.0 is a full cycle.
+//  - normalization is the degree of normalization applied, between 0 and 1.
+vec4 PhacelleNoise(in vec2 p, vec2 normDir, float freq, float offset, float normalization) {
+	// Get a vector orthogonal to the input direction, with a
+	// magnitude proportional to the frequency of the stripes.
+	vec2 sideDir = normDir.yx * vec2(-1.0, 1.0) * freq * TAU;
+	offset *= TAU;
+
+	vec2  pInt = floor(p);
+	vec2  pFrac = fract(p);
+	vec2  phaseDir = vec2(0.0);
+	float weightSum = 0.0;
+	for (int i = -1; i <= 2; i++) {
+		for (int j = -1; j <= 2; j++) {
+			vec2 gridOffset = vec2(i, j);
+			vec2 gridPoint = pInt + gridOffset;
+			vec2 randomOffset = hash(gridPoint) * 0.5;
+			vec2 vectorFromCellPoint = pFrac - gridOffset - randomOffset;
+
+			// Bell-shaped weight function
+			float sqrDist = dot(vectorFromCellPoint, vectorFromCellPoint);
+			float weight = exp(-sqrDist * 2.0);
+			weight = max(0.0, weight - 0.01111);
+
+			weightSum += weight;
+			float waveInput = dot(vectorFromCellPoint, sideDir) + offset;
+
+			// Add this cell's cosine and sine wave contributions
+			phaseDir += vec2(cos(waveInput), sin(waveInput)) * weight;
+		}
+	}
+
+	vec2  interpolated = phaseDir / weightSum;
+	float magnitude = sqrt(dot(interpolated, interpolated));
+	magnitude = max(1.0 - normalization, magnitude);
+	return vec4(interpolated / magnitude, sideDir);
 }
