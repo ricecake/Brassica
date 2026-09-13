@@ -128,9 +128,14 @@ namespace brassica::render {
 
 		std::vector<vk::PipelineShaderStageCreateInfo> stages;
 		stages.reserve(request.stages.size());
+		bool hasMeshOrTask = false;
 		for (GraphicsShader* shader : request.stages) {
 			if (shader) {
 				stages.push_back(shader->GetStageCreateInfo());
+				vk::ShaderStageFlagBits stageFlag = shader->GetStageFlag();
+				if (stageFlag == vk::ShaderStageFlagBits::eMeshEXT || stageFlag == vk::ShaderStageFlagBits::eTaskEXT) {
+					hasMeshOrTask = true;
+				}
 			}
 		}
 
@@ -215,8 +220,8 @@ namespace brassica::render {
 		vk::GraphicsPipelineCreateInfo pipelineInfo{};
 		pipelineInfo.setPNext(&renderingCreateInfo);
 		pipelineInfo.setStages(stages);
-		pipelineInfo.setPVertexInputState(&vertexInputInfo);
-		pipelineInfo.setPInputAssemblyState(&inputAssembly);
+		pipelineInfo.setPVertexInputState(hasMeshOrTask ? nullptr : &vertexInputInfo);
+		pipelineInfo.setPInputAssemblyState(hasMeshOrTask ? nullptr : &inputAssembly);
 		pipelineInfo.setPViewportState(&viewportState);
 		pipelineInfo.setPRasterizationState(&rasterizer);
 		pipelineInfo.setPMultisampleState(&multisampling);
