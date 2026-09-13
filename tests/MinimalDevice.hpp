@@ -32,6 +32,7 @@ namespace brassica::testing {
 			vkb::InstanceBuilder instanceBuilder;
 			instanceBuilder.set_app_name("brassica-tests")
 				.require_api_version(1, 3, 0)
+				.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
 				.set_debug_callback(&MinimalDevice::DebugCallback)
 				.set_debug_callback_user_data_pointer(this);
 
