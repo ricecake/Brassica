@@ -207,6 +207,11 @@ TEST_CASE(
 
 		DispatchLoaderDynamic dls;
 		dls.init(vkDevice);
+		// MinimalDevice does not enable VK_EXT_mesh_shader. On Mesa/lavapipe, vkGetDeviceProcAddr
+		// returns a non-null pointer for disabled extension functions. Clear mesh shader function
+		// pointers when extension is not enabled to avoid driver crash.
+		dls.vkCmdDrawMeshTasksEXT = nullptr;
+		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
 
 		WaterNode waterNode;
 		waterNode.Init(vkDevice, &pipelineLibrary, &dls, kSwapchainFormat);

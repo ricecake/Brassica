@@ -1,0 +1,109 @@
+#version 460 core
+#extension GL_EXT_mesh_shader : require
+
+#include "bindless.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 4, max_primitives = 2) out;
+
+struct Particle {
+	vec4 position;
+	vec4 velocity;
+	vec4 misc;
+	uint type;
+	float lifetime;
+	float maxLifetime;
+	uint padding;
+};
+
+struct ParticleType {
+	vec4 color;
+	float size;
+	float gravityScale;
+	float drag;
+	float padding;
+};
+
+struct IndirectCommand {
+	uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+};
+
+layout(std430, set = 1, binding = 0) readonly buffer Particles {
+	Particle uParticles[];
+};
+
+layout(std430, set = 1, binding = 1) readonly buffer ParticleTypes {
+	ParticleType uParticleTypes[];
+};
+
+layout(std430, set = 1, binding = 2) readonly buffer AliveIndices {
+	uint uAliveIndices[];
+};
+
+layout(std430, set = 1, binding = 3) readonly buffer IndirectCommandBuffer {
+	IndirectCommand uIndirectCommand;
+};
+
+layout(location = 0) out struct ParticleVertexOutput {
+	vec4 color;
+	vec2 uv;
+	vec4 misc;
+} OUT[];
+
+void main() {
+	uint liveIdx = gl_WorkGroupID.x;
+	if (liveIdx >= uIndirectCommand.groupCountX) {
+		SetMeshOutputsEXT(0, 0);
+		return;
+	}
+
+	uint particleIdx = uAliveIndices[liveIdx];
+	Particle p = uParticles[particleIdx];
+	ParticleType pType = uParticleTypes[p.type];
+
+	vec3 camPos = uCameraPosition.xyz;
+	vec3 pos = p.position.xyz;
+	vec3 forward = normalize(camPos - pos);
+	vec3 up = vec3(0.0, 1.0, 0.0);
+	if (abs(dot(forward, up)) > 0.99) {
+		up = vec3(1.0, 0.0, 0.0);
+	}
+	vec3 right = normalize(cross(up, forward));
+	up = cross(forward, right);
+
+	float halfSize = pType.size * 0.5;
+
+	vec3 offsets[4] = vec3[4](
+		-right * halfSize - up * halfSize,
+		 right * halfSize - up * halfSize,
+		-right * halfSize + up * halfSize,
+		 right * halfSize + up * halfSize
+	);
+
+	vec2 uvs[4] = vec2[4](
+		vec2(0.0, 0.0),
+		vec2(1.0, 0.0),
+		vec2(0.0, 1.0),
+		vec2(1.0, 1.0)
+	);
+
+	SetMeshOutputsEXT(4, 2);
+
+	for (uint i = 0u; i < 4u; ++i) {
+		vec4 worldPos = vec4(pos + offsets[i], 1.0);
+		gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * worldPos;
+
+		float lifeRatio = clamp(p.lifetime / max(p.maxLifetime, 0.0001), 0.0, 1.0);
+		vec4 finalColor = pType.color;
+		finalColor.a *= lifeRatio;
+
+		OUT[i].color = finalColor;
+		OUT[i].uv = uvs[i];
+		OUT[i].misc = p.misc;
+	}
+
+	gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);
+	gl_PrimitiveTriangleIndicesEXT[1] = uvec3(2, 1, 3);
+}
