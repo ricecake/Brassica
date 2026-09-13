@@ -47,6 +47,8 @@ namespace brassica::graph {
 			m_bufferPool = BufferAliasPool(device, allocator);
 		}
 
+		[[nodiscard]] vk::Device GetDevice() const { return m_device; }
+
 		// The engine's one bindless descriptor set and which binding holds each array -- see
 		// Engine::InitGlobalDescriptors for where these are created. Bindings, not a single
 		// number: unlike the old single-binding placeholder this replaces, a texture may need a

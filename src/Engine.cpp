@@ -7,6 +7,7 @@
 #include "spdlog/spdlog.h"
 
 #include "graph/PhysicalExecutionBackend.hpp"
+#include "graph/Util.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace brassica {
@@ -231,6 +232,7 @@ namespace brassica {
 			waterNode.Destroy(device);
 			transmittanceNode.Destroy(device);
 			multiScatteringNode.Destroy(device);
+			particleSystemNode.Destroy(device);
 
 			CleanupGlobalUBO();
 			CleanupGlobalDescriptors();
@@ -331,6 +333,7 @@ namespace brassica {
 		waterNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
 		transmittanceNode.Init(device, &pipelineLibrary, &shaderWatcher);
 		multiScatteringNode.Init(device, &pipelineLibrary, &shaderWatcher);
+		particleSystemNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
@@ -347,6 +350,28 @@ namespace brassica {
 				graphicsQueue
 			);
 		}
+
+// // Keep this instance alive in your class scope
+// std::shared_ptr<graph::PhysicalBuffer> particleTypeBuffer = std::make_shared<graph::PhysicalBuffer>(
+//     device,
+//     allocator,
+//     graph::StorageBufferDesc(16 * sizeof(ParticleType))
+// );
+
+// physicalRegistry.RegisterImportedBuffer<ParticleTypeBuffer>(
+//     particleTypeBuffer->GetBuffer(),
+//     particleTypeBuffer->GetDesc(),
+//     true // hasDefinedContents = true since it is populated via staging
+// );
+		auto buffer = std::array<ParticleType, 1>{{}};
+		utils::CreateAndRegisterStaticBuffer<ParticleTypeBuffer, ParticleType>(device, allocator);
+
+// // Execute this once during engine/system initialization
+		// physicalRegistry.RegisterImportedBuffer<ParticleTypeBuffer>(
+		// 	particleTypeBuffer,
+		// 	graph::StorageBufferDesc(16 * sizeof(ParticleType)),
+		// 	true // hasDefinedContents = true since the CPU populated it
+		// );
 
 		// Registered once, here -- the clipmap's image/view handles are stable for the engine's
 		// entire lifetime (only its *contents* mutate, via terrainUploader), so re-registering it
@@ -896,6 +921,7 @@ namespace brassica {
 		frameGraph.RegisterRef(terrainNode);
 		frameGraph.RegisterRef(deferredNode);
 		frameGraph.RegisterRef(waterNode);
+		frameGraph.RegisterRef(particleSystemNode);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);
