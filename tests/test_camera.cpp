@@ -36,6 +36,15 @@ TEST_CASE("CameraData Matrix and Frustum Plane Updates") {
 	CHECK(cam.viewMatrix != glm::mat4(1.0f));
 	CHECK(cam.projMatrix != glm::mat4(1.0f));
 	CHECK(cam.viewProjMatrix == cam.projMatrix * cam.viewMatrix);
+	CHECK(cam.invViewMatrix != glm::mat4(1.0f));
+	CHECK(cam.invProjMatrix != glm::mat4(1.0f));
+	CHECK(cam.invViewProjMatrix != glm::mat4(1.0f));
+
+	glm::mat4 identityView = cam.viewMatrix * cam.invViewMatrix;
+	CHECK(identityView[0][0] == doctest::Approx(1.0f));
+	CHECK(identityView[1][1] == doctest::Approx(1.0f));
+	CHECK(identityView[2][2] == doctest::Approx(1.0f));
+	CHECK(identityView[3][3] == doctest::Approx(1.0f));
 
 	// Verify all 6 frustum planes are non-zero and normalized
 	for (int i = 0; i < 6; ++i) {

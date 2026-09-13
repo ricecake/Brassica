@@ -44,10 +44,9 @@ TEST_CASE("Real GradientNode/TerrainNode/DeferredNode compose into a renderable,
 		// pipelineLibrary/shader/terrainAS pointers stay null on all three nodes -- this test's
 		// scope is Setup()+Compile() only (see the header comment above), and Execute (the only
 		// place those fields are read) is never called here.
-		frameGraph.Register<GradientNode>(GradientNode{.extent = {1280, 720}});
-		frameGraph.Register<TerrainNode>(TerrainNode{.extent = {1280, 720}});
+		frameGraph.Register<GradientNode>(GradientNode{});
+		frameGraph.Register<TerrainNode>(TerrainNode{});
 		frameGraph.Register<DeferredNode>(DeferredNode{
-			.extent = {1280, 720},
 			.swapchainFormat = vk::Format::eB8G8R8A8Unorm,
 		});
 

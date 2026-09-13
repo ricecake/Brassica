@@ -54,12 +54,15 @@ namespace brassica::graph {
 		// (or two of them at once -- see PhysicalTexture::GetSampledBindlessIndex's comment), and
 		// an acceleration structure needs its own array entirely.
 		struct BindlessBindings {
-			vk::DescriptorSet       set{};
-			vk::DescriptorSetLayout layout{}; // needed at pipeline-creation time, not just bind time
-			std::uint32_t           sampledImage2DBinding = 0;
-			std::uint32_t           sampledImage2DArrayBinding = 0;
-			std::uint32_t           storageImageBinding = 0;
-			std::uint32_t           accelerationStructureBinding = 0;
+			vk::DescriptorSet              set{};
+			std::vector<vk::DescriptorSet> sets{};
+			vk::DescriptorSetLayout        layout{}; // needed at pipeline-creation time, not just bind time
+			std::uint32_t                  uboBinding = 0;
+			std::uint32_t                  sampledImage2DBinding = 1;
+			std::uint32_t                  sampledImage2DArrayBinding = 2;
+			std::uint32_t                  samplerBinding = 3;
+			std::uint32_t                  storageImageBinding = 4;
+			std::uint32_t                  accelerationStructureBinding = 5;
 		};
 
 		void SetGlobalDescriptorSet(const BindlessBindings& bindings) {
@@ -524,55 +527,68 @@ namespace brassica::graph {
 
 		void
 		WriteSampledImageDescriptor(std::uint32_t index, vk::ImageView view, vk::ImageLayout layout, bool isArray) {
-			if (!m_bindless.set) {
+			if (!m_bindless.layout) {
 				return;
 			}
 			vk::DescriptorImageInfo imageInfo{{}, view, layout};
-			vk::WriteDescriptorSet  write{
-				m_bindless.set,
-				isArray ? m_bindless.sampledImage2DArrayBinding : m_bindless.sampledImage2DBinding,
-				index,
-				1,
-				vk::DescriptorType::eSampledImage,
-				&imageInfo,
-			};
-			m_device.updateDescriptorSets(write, {});
+			auto setsToUpdate = !m_bindless.sets.empty() ? m_bindless.sets : std::vector<vk::DescriptorSet>{m_bindless.set};
+			for (auto set : setsToUpdate) {
+				if (!set)
+					continue;
+				vk::WriteDescriptorSet write{
+					set,
+					isArray ? m_bindless.sampledImage2DArrayBinding : m_bindless.sampledImage2DBinding,
+					index,
+					1,
+					vk::DescriptorType::eSampledImage,
+					&imageInfo,
+				};
+				m_device.updateDescriptorSets(write, {});
+			}
 		}
 
 		void WriteStorageImageDescriptor(std::uint32_t index, vk::ImageView view) {
-			if (!m_bindless.set) {
+			if (!m_bindless.layout) {
 				return;
 			}
-			// Always eGeneral: the only layout a storage image is ever legally accessed through
-			// (DeriveImageState's Storage-usage branches, ResourceState.hpp, agree).
 			vk::DescriptorImageInfo imageInfo{{}, view, vk::ImageLayout::eGeneral};
-			vk::WriteDescriptorSet  write{
-				m_bindless.set,
-				m_bindless.storageImageBinding,
-				index,
-				1,
-				vk::DescriptorType::eStorageImage,
-				&imageInfo,
-			};
-			m_device.updateDescriptorSets(write, {});
+			auto setsToUpdate = !m_bindless.sets.empty() ? m_bindless.sets : std::vector<vk::DescriptorSet>{m_bindless.set};
+			for (auto set : setsToUpdate) {
+				if (!set)
+					continue;
+				vk::WriteDescriptorSet write{
+					set,
+					m_bindless.storageImageBinding,
+					index,
+					1,
+					vk::DescriptorType::eStorageImage,
+					&imageInfo,
+				};
+				m_device.updateDescriptorSets(write, {});
+			}
 		}
 
 		void WriteAccelerationStructureDescriptor(std::uint32_t index, vk::AccelerationStructureKHR as) {
-			if (!m_bindless.set) {
+			if (!m_bindless.layout) {
 				return;
 			}
 			vk::WriteDescriptorSetAccelerationStructureKHR asInfo{};
 			asInfo.setAccelerationStructures(as);
-			vk::WriteDescriptorSet write{
-				m_bindless.set,
-				m_bindless.accelerationStructureBinding,
-				index,
-				1,
-				vk::DescriptorType::eAccelerationStructureKHR,
-				nullptr,
-			};
-			write.pNext = &asInfo;
-			m_device.updateDescriptorSets(write, {});
+			auto setsToUpdate = !m_bindless.sets.empty() ? m_bindless.sets : std::vector<vk::DescriptorSet>{m_bindless.set};
+			for (auto set : setsToUpdate) {
+				if (!set)
+					continue;
+				vk::WriteDescriptorSet write{
+					set,
+					m_bindless.accelerationStructureBinding,
+					index,
+					1,
+					vk::DescriptorType::eAccelerationStructureKHR,
+					nullptr,
+				};
+				write.pNext = &asInfo;
+				m_device.updateDescriptorSets(write, {});
+			}
 		}
 
 		// Assigns and writes whichever of the sampled/storage arrays this texture's usage calls

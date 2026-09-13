@@ -53,12 +53,10 @@ TEST_CASE("GradientNode renders through PhysicalExecutionBackend with no validat
 									  )
 									  .front();
 
-		VertexShader   vertShader;
-		FragmentShader fragShader;
-		REQUIRE(vertShader.CompileVertexFromFile(vkDevice, "shaders/gradient.vert"));
-		REQUIRE(fragShader.CompileFragmentFromFile(vkDevice, "shaders/gradient.frag"));
-
 		render::PipelineLibrary pipelineLibrary(vkDevice, engine.GetPipelineCache());
+
+		GradientNode gradientNode;
+		gradientNode.Init(vkDevice, &pipelineLibrary);
 
 		graph::PhysicalResourceRegistry registry(vkDevice, engine.GetAllocator());
 		graph::PhysicalExecutionBackend backend(registry);
@@ -69,12 +67,7 @@ TEST_CASE("GradientNode renders through PhysicalExecutionBackend with no validat
 		// across frames the same way it does for every other steady-state resource.
 		for (std::uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex) {
 			graph::Graph graph;
-			graph.Register<GradientNode>(GradientNode{
-				.pipelineLibrary = &pipelineLibrary,
-				.vertShader = &vertShader,
-				.fragShader = &fragShader,
-				.extent = vk::Extent2D{256, 256},
-			});
+			graph.RegisterRef(gradientNode);
 
 			graph::FrameContext ctx{.width = 256, .height = 256, .frameIndex = frameIndex};
 
@@ -92,8 +85,7 @@ TEST_CASE("GradientNode renders through PhysicalExecutionBackend with no validat
 		CHECK(registry.GetTexture<GradientBackground>() != nullptr);
 
 		pipelineLibrary.Reset();
-		vertShader.Destroy(vkDevice);
-		fragShader.Destroy(vkDevice);
+		gradientNode.Destroy(vkDevice);
 		vkDevice.destroyCommandPool(pool);
 	}
 

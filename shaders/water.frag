@@ -5,13 +5,11 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform WaterPushConstants {
-	vec4  cameraPos; // xyz = camera position, w = time
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
 } params;
 
 void main() {
@@ -32,12 +30,12 @@ void main() {
 	}
 
 	vec3 waterWorldPos = vec3(terrainPos.x, params.waterLevel, terrainPos.z);
-	float distToCam = length(params.cameraPos.xyz - waterWorldPos);
+	float distToCam = length(uCameraPosition.xyz - waterWorldPos);
 	float closeThreshold = 400.0;
 	float closeFactor = clamp(1.0 - distToCam / closeThreshold, 0.0, 1.0);
 
-	// Wave normal animation based on time (params.cameraPos.w) and world XZ coordinates
-	float time = params.cameraPos.w;
+	// Wave normal animation based on time (uTime) and world XZ coordinates
+	float time = uTime;
 	vec2 worldXZ = terrainPos.xz;
 
 	vec2 waveDir1 = vec2(0.8, 0.6);
@@ -69,7 +67,7 @@ void main() {
 
 	// Specular shine and Fresnel reflection when camera is close
 	vec3 lightDir = normalize(vec3(0.5, 0.8, 0.5));
-	vec3 viewDir = normalize(params.cameraPos.xyz - waterWorldPos);
+	vec3 viewDir = normalize(uCameraPosition.xyz - waterWorldPos);
 	vec3 halfDir = normalize(lightDir + viewDir);
 
 	float NdotH = max(dot(waveNormal, halfDir), 0.0);

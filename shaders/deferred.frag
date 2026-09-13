@@ -6,7 +6,6 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform DeferredPushConstants {
-	vec4  cameraPos; // xyz = camera position, w = baseTexelSize
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
@@ -19,7 +18,7 @@ layout(push_constant) uniform DeferredPushConstants {
 } params;
 
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
-	float baseTexelSize = (params.cameraPos.w > 0.0) ? params.cameraPos.w : 0.5;
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
 	float texelSize = baseTexelSize * pow(2.0, float(level));
 	uint textureDim = (params.gridParams.w > 0u) ? params.gridParams.w : 1088u;
 
@@ -27,7 +26,7 @@ vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
 	uint packed = offsets[level % 4];
 	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
 
-	vec2 centerWorldPos = floor(params.cameraPos.xz / texelSize) * texelSize;
+	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
 	vec2 deltaWorld = worldXZ - centerWorldPos;
 	vec2 texelCoord = deltaWorld / texelSize + vec2(float(textureDim) * 0.5) + vec2(gridOffset);
 
@@ -36,7 +35,7 @@ vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
 
 // Calculate the LOD level based on the sample's Chebyshev distance
 uint calculateRayLOD(vec2 sampleXZ) {
-	vec2 dists = abs(sampleXZ - params.cameraPos.xz);
+	vec2 dists = abs(sampleXZ - uCameraPosition.xz);
 	float maxDist = max(dists.x, dists.y);
 
 	float baseRadius = 272.0;
