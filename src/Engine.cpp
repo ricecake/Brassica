@@ -309,7 +309,6 @@ namespace brassica {
 		globalSeed = rd();
 		rng.seed(globalSeed);
 
-		InitGlobalUBO();
 		InitGlobalDescriptors();
 
 		std::string shaderDir = "shaders";
@@ -1042,6 +1041,9 @@ namespace brassica {
 	}
 
 	void Engine::InitGlobalDescriptors() {
+		if (bindlessSetLayout) {
+			return;
+		}
 		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
