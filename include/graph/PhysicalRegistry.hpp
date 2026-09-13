@@ -30,8 +30,8 @@ namespace brassica::graph {
 	// same-frame borrow.
 	class PhysicalResourceRegistry: public BindlessIndexSource {
 	public:
-		PhysicalResourceRegistry(vk::Device device = {}, VmaAllocator allocator = nullptr):
-			m_device(device), m_allocator(allocator), m_imagePool(device, allocator), m_bufferPool(device, allocator) {}
+		PhysicalResourceRegistry(vk::Device device = {}, VmaAllocator allocator = nullptr, vk::Queue queue = {}):
+			m_device(device), m_allocator(allocator), m_queue(queue), m_imagePool(device, allocator), m_bufferPool(device, allocator) {}
 
 		~PhysicalResourceRegistry() { Reset(); }
 
@@ -40,14 +40,19 @@ namespace brassica::graph {
 		PhysicalResourceRegistry(PhysicalResourceRegistry&&) = default;
 		PhysicalResourceRegistry& operator=(PhysicalResourceRegistry&&) = default;
 
-		void SetDeviceAndAllocator(vk::Device device, VmaAllocator allocator) {
+		void SetDeviceAndAllocator(vk::Device device, VmaAllocator allocator, vk::Queue queue = {}) {
 			m_device = device;
 			m_allocator = allocator;
+			m_queue = queue;
 			m_imagePool = ImageAliasPool(device, allocator);
 			m_bufferPool = BufferAliasPool(device, allocator);
 		}
 
+		void SetQueue(vk::Queue queue) { m_queue = queue; }
+
 		[[nodiscard]] vk::Device GetDevice() const { return m_device; }
+		[[nodiscard]] VmaAllocator GetAllocator() const { return m_allocator; }
+		[[nodiscard]] vk::Queue GetQueue() const { return m_queue; }
 
 		// The engine's one bindless descriptor set and which binding holds each array -- see
 		// Engine::InitGlobalDescriptors for where these are created. Bindings, not a single
@@ -218,6 +223,23 @@ namespace brassica::graph {
 		// under the interface every node's Execute actually has access to (a NodeContext, not a
 		// raw registry pointer).
 		[[nodiscard]] std::uint32_t StorageIndexOf(ResourceId id) const override { return GetStorageBindlessIndex(id); }
+
+		void UploadPredefinedBuffer(
+			ResourceId          id,
+			const void*         data,
+			std::size_t         sizeBytes,
+			const ResourceDesc& desc
+		) override;
+
+		void UploadPredefinedTexture(
+			ResourceId          id,
+			const void*         pixelData,
+			std::size_t         sizeBytes,
+			const ResourceDesc& desc,
+			std::uint32_t       targetLayout
+		) override;
+
+		void WaitIdle() override;
 
 		template <ResourceRef K>
 		[[nodiscard]] std::uint32_t GetBindlessIndex() const {
@@ -793,6 +815,7 @@ namespace brassica::graph {
 
 		vk::Device      m_device{};
 		VmaAllocator    m_allocator = nullptr;
+		vk::Queue       m_queue{};
 		ImageAliasPool  m_imagePool;
 		BufferAliasPool m_bufferPool;
 
@@ -815,3 +838,5 @@ namespace brassica::graph {
 	};
 
 } // namespace brassica::graph
+
+#include "graph/Util.hpp"

@@ -9,7 +9,13 @@
 #include "graph/Execution.hpp"
 #include "graph/ResourceKey.hpp"
 
+#if __has_include("vulkan/vulkan.hpp")
+#include "VulkanCompat.hpp"
+#endif
+
 namespace brassica::graph {
+
+	ResourceDesc StorageBufferDesc(std::uint64_t byteSize);
 
 	// Forward-declared only: Node.hpp needs to hand back a pointer to a node's inner Graph
 	// (for recursive rendering, see Dot.hpp) without depending on Graph.hpp, which itself
@@ -221,6 +227,161 @@ namespace brassica::graph {
 	template <ResourceRef... Ks>
 	struct NodeKindOfT<Import<Ks...>> {
 		static constexpr NodeKind value = NodeKind::Import;
+	};
+
+	template <ResourceRef Key, typename T = std::uint8_t>
+	struct PredefinedBufferNode {
+		using Resources = Declares<Create<Key>>;
+
+		std::vector<T> data;
+		ResourceDesc   desc{};
+		bool           uploaded{false};
+
+		PredefinedBufferNode() = default;
+
+		explicit PredefinedBufferNode(std::span<const T> initialData, const ResourceDesc& customDesc = {})
+			: data(initialData.begin(), initialData.end()), desc(customDesc) {
+			if (desc.byteSize == 0) {
+				desc = StorageBufferDesc(data.size() * sizeof(T));
+			}
+		}
+
+		void SetData(std::span<const T> newData, const ResourceDesc& newDesc = {}) {
+			data.assign(newData.begin(), newData.end());
+			desc = newDesc;
+			if (desc.byteSize == 0) {
+				desc = StorageBufferDesc(data.size() * sizeof(T));
+			}
+			uploaded = false;
+		}
+
+		Recipe Setup(const FrameContext&) {
+			return Recipe{
+				.domain = ExecutionDomain::Host,
+				.isActive = !uploaded,
+				.realizations = {
+					ResourceRealization{
+						.key = IdOf<Key>(),
+						.access = AccessKind::Write,
+						.desc = desc,
+					}
+				}
+			};
+		}
+
+		void Execute(NodeContext& ctx) {
+			if (uploaded) return;
+			if (ctx.bindless) {
+				const_cast<BindlessIndexSource*>(ctx.bindless)->UploadPredefinedBuffer(
+					IdOf<Key>(), data.data(), data.size() * sizeof(T), desc
+				);
+				uploaded = true;
+			}
+		}
+
+		void Reset() { uploaded = false; }
+	};
+
+	template <ResourceRef Key, typename T>
+	struct NodeKindOfT<PredefinedBufferNode<Key, T>> {
+		static constexpr NodeKind value = NodeKind::Import;
+	};
+
+#if __has_include("vulkan/vulkan.hpp")
+	template <ResourceRef Key>
+	struct PredefinedTextureNode {
+		using Resources = Declares<Create<Key>>;
+
+		std::vector<std::uint8_t> pixels;
+		ResourceDesc              desc{};
+		vk::ImageLayout           targetLayout{vk::ImageLayout::eShaderReadOnlyOptimal};
+		bool                      uploaded{false};
+
+		PredefinedTextureNode() = default;
+
+		PredefinedTextureNode(
+			std::span<const std::uint8_t> pixelData,
+			const ResourceDesc&           imageDesc,
+			vk::ImageLayout               layout = vk::ImageLayout::eShaderReadOnlyOptimal
+		) : pixels(pixelData.begin(), pixelData.end()), desc(imageDesc), targetLayout(layout) {}
+
+		void SetData(
+			std::span<const std::uint8_t> newPixels,
+			const ResourceDesc&           newDesc,
+			vk::ImageLayout               newLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+		) {
+			pixels.assign(newPixels.begin(), newPixels.end());
+			desc = newDesc;
+			targetLayout = newLayout;
+			uploaded = false;
+		}
+
+		Recipe Setup(const FrameContext&) {
+			return Recipe{
+				.domain = ExecutionDomain::Host,
+				.isActive = !uploaded,
+				.realizations = {
+					ResourceRealization{
+						.key = IdOf<Key>(),
+						.access = AccessKind::Write,
+						.desc = desc,
+					}
+				}
+			};
+		}
+
+		void Execute(NodeContext& ctx) {
+			if (uploaded) return;
+			if (ctx.bindless) {
+				const_cast<BindlessIndexSource*>(ctx.bindless)->UploadPredefinedTexture(
+					IdOf<Key>(), pixels.data(), pixels.size(), desc, static_cast<std::uint32_t>(targetLayout)
+				);
+				uploaded = true;
+			}
+		}
+
+		void Reset() { uploaded = false; }
+	};
+
+	template <ResourceRef Key>
+	struct NodeKindOfT<PredefinedTextureNode<Key>> {
+		static constexpr NodeKind value = NodeKind::Import;
+	};
+#endif
+
+	template <NodeLike T>
+	struct ExecuteOnce {
+		using Resources = typename T::Resources;
+
+		T    inner{};
+		bool executed{false};
+
+		ExecuteOnce() = default;
+		explicit ExecuteOnce(T n) : inner(std::move(n)) {}
+
+		Recipe Setup(const FrameContext& ctx) {
+			if (executed) {
+				return Recipe{.domain = ExecutionDomain::Host, .isActive = false};
+			}
+			return inner.Setup(ctx);
+		}
+
+		void Execute(NodeContext& ctx) {
+			if (executed) return;
+			inner.Execute(ctx);
+
+			if (ctx.bindless) {
+				const_cast<BindlessIndexSource*>(ctx.bindless)->WaitIdle();
+			}
+			executed = true;
+		}
+
+		void Reset() { executed = false; }
+	};
+
+	template <NodeLike T>
+	struct NodeKindOfT<ExecuteOnce<T>> {
+		static constexpr NodeKind value = NodeKindOf<T>;
 	};
 
 } // namespace brassica::graph

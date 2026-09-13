@@ -485,9 +485,8 @@ namespace brassica {
 		}
 	};
 
-	// using ParticleSystemSpec = graph::FrameSpec<ParticleResetNode, ParticleLivenessNode, ParticleBehaviorNode, ParticleRenderNode>;
 	using ParticleSystemSpec = graph::FrameSpec<
-		graph::Import<ParticleTypeBuffer>,
+		graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType>,
 		ParticleResetNode,
 		ParticleLivenessNode,
 		ParticleBehaviorNode,
@@ -506,6 +505,9 @@ namespace brassica {
 		vk::DescriptorPool      particleDescriptorPool{nullptr};
 		vk::DescriptorSet       particleSet{nullptr};
 
+		graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType> typeBufferNode{
+			std::vector<ParticleType>(16, ParticleType{})
+		};
 		ParticleResetNode    resetNode;
 		ParticleLivenessNode livenessNode;
 		ParticleBehaviorNode behaviorNode;
@@ -547,8 +549,7 @@ namespace brassica {
 			renderNode.Init(device, library, dispatchLoader, format, particleSetLayout, particleSet, watcher);
 
 			auto& inner = m_subgraph.InnerGraph();
-			// inner.Register<graph::Import<ParticleTypeBuffer>>();
-
+			inner.RegisterRef(typeBufferNode);
 			inner.RegisterRef(resetNode);
 			inner.RegisterRef(livenessNode);
 			inner.RegisterRef(behaviorNode);
