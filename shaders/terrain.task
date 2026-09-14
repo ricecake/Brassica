@@ -8,11 +8,16 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 // trailing clipmapIndex field terrain.mesh reads, which is fine -- each stage only needs to
 // declare the prefix it actually uses, not the whole shared range).
 #include "bindless.glsl"
+#include "terrain.glsl"
 
 layout(push_constant) uniform TerrainPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = padding
+	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	uint  visibilityIndex;
 } params;
 
 struct TaskPayload {
@@ -79,6 +84,13 @@ void main() {
 		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -500.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
 		vec3 maxB = minB + vec3(meshletSize, 2000.0, meshletSize);
+
+		if (params.minMaxIndex > 0u) {
+			vec2 centerXZ = vec2(minB.x + meshletSize * 0.5, minB.z + meshletSize * 0.5);
+			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, centerXZ, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+			minB.y = minMax.x - 10.0;
+			maxB.y = minMax.y + 10.0;
+		}
 
 		visible = isAABBVisible(minB, maxB, uViewProjMatrix);
 

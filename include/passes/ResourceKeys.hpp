@@ -36,6 +36,12 @@ namespace brassica {
 	// Read realization and the registration call both use.
 	struct TerrainClipmapTexture {};
 
+	struct TerrainMinMaxTexture {};
+
+	struct TerrainBiomeTexture {};
+
+	struct TerrainTileVisibilityTexture {};
+
 	struct TransmittanceLUT {};
 
 	struct MultiScatteringLUT {};

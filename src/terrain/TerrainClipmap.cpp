@@ -12,27 +12,19 @@
 namespace brassica {
 
 	struct TerrainNoiseGenerators {
-		FastNoise::SmartNode<FastNoise::DomainScale> baseScale;
-		FastNoise::SmartNode<FastNoise::DomainScale> detailScale;
-		FastNoise::SmartNode<FastNoise::DomainScale> maskScale;
-		FastNoise::SmartNode<FastNoise::DomainScale> biomeScale;
-		FastNoise::SmartNode<>                       land;
+		FastNoise::SmartNode<> baseScale;
+		FastNoise::SmartNode<> detailScale;
+		FastNoise::SmartNode<> maskScale;
+		FastNoise::SmartNode<> biomeScale;
+		FastNoise::SmartNode<> land;
 
 		TerrainNoiseGenerators() {
 			land = FastNoise::NewFromEncodedNodeTree(
 				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/"
 				"BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
-
-				// "KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/BAAEAw@CTAABIwhsAAHpEBA=="
-				// "KQkVCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQCHQkUCRAJBgwL7FG4PgQCDQkLAACAs0IQpHA9vxiamZk/IAI@B4B@CwLrkdhPgwD@CBMAAEjCGwAAekQE"
-				// "KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/BAAEAw@CTAABIwhsAAHpEBA=="
-				// "KQkVCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQCHQkUCRAJBgwL7FG4PgQCDQkLAACAs0IQpHA9vxiamZk/IAI@B4B@CwLrkdhPgwD@CBMAAEjCGwAAekQE"
-				// "FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
-				// "FQkNCQs4Aw@BQLj8J1PQQCFQkTCR@CWQzAB@BCQY@AB6RBQCFAkSCf8CABw="
-				// "KQkVCQ0JCzgD@BBAuPwnU9BAIVCRMJE@BBZDMAE@BJBg@AHpEFAIUCRIJ/wIAHBMAAMjCGwAAekQE"
-				// "KQkVCQ0JCzgD@BBAuPwnU9BAIVCRMJE@BBZDMAE@BJBg@APpEFAIUCRIJ/wIAHAM@CEwAAyMIbAAB6RAQ="
-				// "E@BBZEG@BD8JFgIECArXIzwECiQIw/UoPwkuAAE@BJDQAH@BC@AIEAJBw@ABZEED0KV78YZmZmPwQDmpkZPwsAAIA/HAMAAHBCBA=="
 			);
+			biomeScale = FastNoise::NewFromEncodedNodeTree("D4AF34S9AQAAAHgA");
+			maskScale = FastNoise::NewFromEncodedNodeTree("D4AF34S9AQAAAHgA");
 		}
 	};
 
@@ -61,10 +53,10 @@ namespace brassica {
 		float         eps = std::max(0.25f, texelSize);
 
 		auto evalHeight = [&](float x, float z) {
-			float maskVal = gens.maskScale->GenSingle2D(x, z, seed);
-			float baseVal = gens.baseScale->GenSingle2D(x, z, seed);
-			float detailVal = gens.detailScale->GenSingle2D(x, z, seed);
-			float biomeVal = gens.biomeScale->GenSingle2D(x, z, seed);
+			float maskVal = gens.maskScale ? gens.maskScale->GenSingle2D(x, z, seed) : 0.0f;
+			float baseVal = gens.baseScale ? gens.baseScale->GenSingle2D(x, z, seed) : 0.0f;
+			float detailVal = gens.detailScale ? gens.detailScale->GenSingle2D(x, z, seed) : 0.0f;
+			float biomeVal = gens.biomeScale ? gens.biomeScale->GenSingle2D(x, z, seed) : 0.0f;
 
 			return EvalHeightFromComponents(baseVal, detailVal, maskVal, biomeVal);
 		};
@@ -79,7 +71,14 @@ namespace brassica {
 		return glm::vec4(h, normal.x, normal.y, normal.z);
 	}
 
-	static std::vector<glm::vec4> GenerateTerrainRegion(
+	struct TerrainRegionData {
+		std::vector<glm::vec4> heightMap;
+		std::vector<glm::vec4> minMaxMap;
+		std::vector<glm::vec4> biomeMap;
+		std::vector<glm::vec4> visibilityMap;
+	};
+
+	static TerrainRegionData GenerateTerrainRegionData(
 		const ClipmapLevelInfo& info,
 		uint32_t                startX,
 		uint32_t                startZ,
@@ -88,9 +87,15 @@ namespace brassica {
 		int                     deltaX = 0,
 		int                     deltaZ = 0
 	) {
-		std::vector<glm::vec4> stripData(width * height);
-		float                  texelSize = info.texelSize;
-		float                  halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
+		TerrainRegionData data;
+		size_t            size = static_cast<size_t>(width) * height;
+		data.heightMap.resize(size);
+		data.minMaxMap.resize(size);
+		data.biomeMap.resize(size);
+		data.visibilityMap.resize(size);
+
+		float texelSize = info.texelSize;
+		float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
 		float minWorldX = info.centerWorldPos.x - halfExtent;
 		float minWorldZ = info.centerWorldPos.y - halfExtent;
@@ -123,28 +128,15 @@ namespace brassica {
 		uint32_t paddedH = height + 2;
 		size_t   totalPadded = static_cast<size_t>(paddedW) * paddedH;
 
-		std::vector<float> basePatch(totalPadded);
-		std::vector<float> detailPatch(totalPadded);
-		std::vector<float> maskPatch(totalPadded);
-		std::vector<float> biomePatch(totalPadded);
 		std::vector<float> paddedHeights(totalPadded);
+		std::vector<float> biomePatch(totalPadded);
+		std::vector<float> maskPatch(totalPadded);
 
 		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;
 
 		float gridStartX = minWorldX - texelSize;
 		float gridStartZ = minWorldZ - texelSize;
-
-		// gens.baseScale->GenUniformGrid2D(basePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize,
-		// texelSize, seed); gens.detailScale->GenUniformGrid2D(detailPatch.data(), gridStartX, gridStartZ, paddedW,
-		// paddedH, texelSize, texelSize, seed); gens.maskScale->GenUniformGrid2D(maskPatch.data(), gridStartX,
-		// gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
-		// gens.biomeScale->GenUniformGrid2D(biomePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize,
-		// texelSize, seed);
-
-		// for (size_t i = 0; i < totalPadded; ++i) {
-		// 	paddedHeights[i] = EvalHeightFromComponents(basePatch[i], detailPatch[i], maskPatch[i], biomePatch[i]);
-		// }
 
 		gens.land->GenUniformGrid2D(
 			paddedHeights.data(),
@@ -157,6 +149,32 @@ namespace brassica {
 			seed
 		);
 
+		if (gens.biomeScale) {
+			gens.biomeScale->GenUniformGrid2D(
+				biomePatch.data(),
+				gridStartX,
+				gridStartZ,
+				paddedW,
+				paddedH,
+				texelSize,
+				texelSize,
+				seed
+			);
+		}
+
+		if (gens.maskScale) {
+			gens.maskScale->GenUniformGrid2D(
+				maskPatch.data(),
+				gridStartX,
+				gridStartZ,
+				paddedW,
+				paddedH,
+				texelSize,
+				texelSize,
+				seed
+			);
+		}
+
 		float eps = std::max(0.25f, texelSize);
 
 		for (uint32_t z = 0; z < height; ++z) {
@@ -164,7 +182,6 @@ namespace brassica {
 			size_t prevRow = static_cast<size_t>(z) * paddedW;
 			size_t nextRow = static_cast<size_t>(z + 2) * paddedW;
 
-			// Apply toroidal wrap to the Z-axis if this is a full-height deltaX strip
 			uint32_t destZ = (height == TERRAIN_MAP_DIM) ? ((z + info.gridOffset.y) % TERRAIN_MAP_DIM) : z;
 
 			for (uint32_t x = 0; x < width; ++x) {
@@ -175,16 +192,31 @@ namespace brassica {
 				float  hD = paddedHeights[prevRow + colIdx];
 				float  hU = paddedHeights[nextRow + colIdx];
 
+				float hLD = paddedHeights[prevRow + x];
+				float hRD = paddedHeights[prevRow + x + 2];
+				float hLU = paddedHeights[nextRow + x];
+				float hRU = paddedHeights[nextRow + x + 2];
+
+				float minH = std::min({h, hL, hR, hD, hU, hLD, hRD, hLU, hRU});
+				float maxH = std::max({h, hL, hR, hD, hU, hLD, hRD, hLU, hRU});
+				float variance = maxH - minH;
+
+				float biomeVal = std::clamp(biomePatch[rowIdx + colIdx], 0.0f, 1.0f);
+				float maskVal = maskPatch[rowIdx + colIdx];
+
 				glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
 
-				// Apply toroidal wrap to the X-axis if this is a full-width deltaZ strip
 				uint32_t destX = (width == TERRAIN_MAP_DIM) ? ((x + info.gridOffset.x) % TERRAIN_MAP_DIM) : x;
+				size_t   idx = destZ * width + destX;
 
-				stripData[destZ * width + destX] = glm::vec4(h, normal.x, normal.y, normal.z);
+				data.heightMap[idx] = glm::vec4(h, normal.x, normal.y, normal.z);
+				data.minMaxMap[idx] = glm::vec4(minH, maxH, minH, maxH);
+				data.biomeMap[idx] = glm::vec4(biomeVal, variance, 1.0f, maskVal);
+				data.visibilityMap[idx] = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 			}
 		}
 
-		return stripData;
+		return data;
 	}
 
 	TerrainClipmap::~TerrainClipmap() {
@@ -225,7 +257,7 @@ namespace brassica {
 			levelInfos[i].gridOffset = glm::ivec2(0);
 		}
 
-		CreateTextureArray();
+		CreateTextureArrays();
 		CreateSampler();
 	}
 
@@ -248,14 +280,27 @@ namespace brassica {
 			    std::abs(deltaZ) >= static_cast<int>(TERRAIN_MAP_DIM)) {
 				info.centerWorldPos = newCenter;
 				info.gridOffset = glm::ivec2(0);
-				auto mapData = GenerateLevelMap(l);
-				uploader.UploadLevelAsync(l, mapData, image, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
+				auto levelData = GenerateLevelData(l);
+				uploader.UploadLevelAsync(l, levelData.heightMap, image, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
+				uploader.UploadLevelAsync(l, levelData.minMaxMap, minmaxImage, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
+				uploader.UploadLevelAsync(l, levelData.biomeMap, biomeImage, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
+				uploader.UploadLevelAsync(
+					l,
+					levelData.visibilityMap,
+					visibilityImage,
+					TERRAIN_MAP_DIM,
+					TERRAIN_MAP_DIM,
+					queue
+				);
 				continue;
 			}
 
 			info.centerWorldPos = newCenter;
 
-			std::vector<glm::vec4>           updateBuffer;
+			std::vector<glm::vec4>           updateHeightBuffer;
+			std::vector<glm::vec4>           updateMinMaxBuffer;
+			std::vector<glm::vec4>           updateBiomeBuffer;
+			std::vector<glm::vec4>           updateVisibilityBuffer;
 			std::vector<vk::BufferImageCopy> copyRegions;
 
 			if (deltaX != 0) {
@@ -264,11 +309,18 @@ namespace brassica {
 												  : ((info.gridOffset.x + deltaX + static_cast<int>(TERRAIN_MAP_DIM)) %
 												     static_cast<int>(TERRAIN_MAP_DIM));
 
-				std::vector<glm::vec4> stripData =
-					GenerateTerrainRegion(info, 0, 0, stripWidth, TERRAIN_MAP_DIM, deltaX, 0);
+				TerrainRegionData stripData =
+					GenerateTerrainRegionData(info, 0, 0, stripWidth, TERRAIN_MAP_DIM, deltaX, 0);
 
-				size_t baseOffset = updateBuffer.size() * sizeof(glm::vec4);
-				updateBuffer.insert(updateBuffer.end(), stripData.begin(), stripData.end());
+				size_t baseOffset = updateHeightBuffer.size() * sizeof(glm::vec4);
+				updateHeightBuffer.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
+				updateMinMaxBuffer.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
+				updateBiomeBuffer.insert(updateBiomeBuffer.end(), stripData.biomeMap.begin(), stripData.biomeMap.end());
+				updateVisibilityBuffer.insert(
+					updateVisibilityBuffer.end(),
+					stripData.visibilityMap.begin(),
+					stripData.visibilityMap.end()
+				);
 
 				if (startDstX + stripWidth <= TERRAIN_MAP_DIM) {
 					vk::BufferImageCopy copyRegion{};
@@ -321,11 +373,18 @@ namespace brassica {
 												  : ((info.gridOffset.y + deltaZ + static_cast<int>(TERRAIN_MAP_DIM)) %
 												     static_cast<int>(TERRAIN_MAP_DIM));
 
-				std::vector<glm::vec4> stripData =
-					GenerateTerrainRegion(info, 0, 0, TERRAIN_MAP_DIM, stripHeight, 0, deltaZ);
+				TerrainRegionData stripData =
+					GenerateTerrainRegionData(info, 0, 0, TERRAIN_MAP_DIM, stripHeight, 0, deltaZ);
 
-				size_t baseOffset = updateBuffer.size() * sizeof(glm::vec4);
-				updateBuffer.insert(updateBuffer.end(), stripData.begin(), stripData.end());
+				size_t baseOffset = updateHeightBuffer.size() * sizeof(glm::vec4);
+				updateHeightBuffer.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
+				updateMinMaxBuffer.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
+				updateBiomeBuffer.insert(updateBiomeBuffer.end(), stripData.biomeMap.begin(), stripData.biomeMap.end());
+				updateVisibilityBuffer.insert(
+					updateVisibilityBuffer.end(),
+					stripData.visibilityMap.begin(),
+					stripData.visibilityMap.end()
+				);
 
 				if (startDstZ + stripHeight <= TERRAIN_MAP_DIM) {
 					vk::BufferImageCopy copyRegion{};
@@ -374,8 +433,11 @@ namespace brassica {
 					info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
 			}
 
-			if (!updateBuffer.empty() && !copyRegions.empty()) {
-				uploader.UploadRegionAsync(l, updateBuffer, copyRegions, image, queue);
+			if (!updateHeightBuffer.empty() && !copyRegions.empty()) {
+				uploader.UploadRegionAsync(l, updateHeightBuffer, copyRegions, image, queue);
+				uploader.UploadRegionAsync(l, updateMinMaxBuffer, copyRegions, minmaxImage, queue);
+				uploader.UploadRegionAsync(l, updateBiomeBuffer, copyRegions, biomeImage, queue);
+				uploader.UploadRegionAsync(l, updateVisibilityBuffer, copyRegions, visibilityImage, queue);
 			}
 		}
 	}
@@ -386,47 +448,60 @@ namespace brassica {
 				device.destroySampler(sampler);
 				sampler = nullptr;
 			}
-			if (imageView) {
-				device.destroyImageView(imageView);
-				imageView = nullptr;
-			}
-			if (image && allocation && allocator != VK_NULL_HANDLE) {
-				vmaDestroyImage(allocator, image, allocation);
-				image = nullptr;
-				allocation = VK_NULL_HANDLE;
-			}
+			auto destroyArrayImage = [&](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc) {
+				if (view) {
+					device.destroyImageView(view);
+					view = nullptr;
+				}
+				if (img && alloc && allocator != VK_NULL_HANDLE) {
+					vmaDestroyImage(allocator, img, alloc);
+					img = nullptr;
+					alloc = VK_NULL_HANDLE;
+				}
+			};
+			destroyArrayImage(image, imageView, allocation);
+			destroyArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
+			destroyArrayImage(biomeImage, biomeImageView, biomeAllocation);
+			destroyArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
 		}
 	}
 
-	void TerrainClipmap::CreateTextureArray() {
-		VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-		imageInfo.imageType = VK_IMAGE_TYPE_2D;
-		imageInfo.extent = VkExtent3D{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 1};
-		imageInfo.mipLevels = 1;
-		imageInfo.arrayLayers = numLODs;
-		imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
-		imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	void TerrainClipmap::CreateTextureArrays() {
+		auto createArrayImage = [&](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc) {
+			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			imageInfo.imageType = VK_IMAGE_TYPE_2D;
+			imageInfo.extent = VkExtent3D{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 1};
+			imageInfo.mipLevels = 1;
+			imageInfo.arrayLayers = numLODs;
+			imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-		VmaAllocationCreateInfo allocInfo{};
-		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			VmaAllocationCreateInfo allocInfo{};
+			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-		VkImage vkImg = VK_NULL_HANDLE;
-		if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &vkImg, &allocation, nullptr) != VK_SUCCESS) {
-			spdlog::error("Failed to create TerrainClipmap texture array image!");
-			return;
-		}
-		image = vkImg;
+			VkImage vkImg = VK_NULL_HANDLE;
+			if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &vkImg, &alloc, nullptr) != VK_SUCCESS) {
+				spdlog::error("Failed to create TerrainClipmap texture array image!");
+				return;
+			}
+			img = vkImg;
 
-		vk::ImageViewCreateInfo viewInfo{};
-		viewInfo.setImage(image);
-		viewInfo.setViewType(vk::ImageViewType::e2DArray);
-		viewInfo.setFormat(vk::Format::eR32G32B32A32Sfloat);
-		viewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLODs));
-		imageView = device.createImageView(viewInfo);
+			vk::ImageViewCreateInfo viewInfo{};
+			viewInfo.setImage(img);
+			viewInfo.setViewType(vk::ImageViewType::e2DArray);
+			viewInfo.setFormat(vk::Format::eR32G32B32A32Sfloat);
+			viewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLODs));
+			view = device.createImageView(viewInfo);
+		};
+
+		createArrayImage(image, imageView, allocation);
+		createArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
+		createArrayImage(biomeImage, biomeImageView, biomeAllocation);
+		createArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
 	}
 
 	void TerrainClipmap::CreateSampler() {
@@ -446,7 +521,18 @@ namespace brassica {
 	}
 
 	std::vector<glm::vec4> TerrainClipmap::GenerateLevelMap(uint32_t levelIndex) const {
-		return GenerateTerrainRegion(levelInfos[levelIndex], 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
+		return GenerateTerrainRegionData(levelInfos[levelIndex], 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0).heightMap;
+	}
+
+	TerrainClipmap::TerrainLevelData TerrainClipmap::GenerateLevelData(uint32_t levelIndex) const {
+		TerrainRegionData region =
+			GenerateTerrainRegionData(levelInfos[levelIndex], 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
+		return TerrainLevelData{
+			.heightMap = std::move(region.heightMap),
+			.minMaxMap = std::move(region.minMaxMap),
+			.biomeMap = std::move(region.biomeMap),
+			.visibilityMap = std::move(region.visibilityMap)
+		};
 	}
 
 	std::vector<glm::vec4> TerrainClipmap::GenerateSineWaveMap(
@@ -463,7 +549,7 @@ namespace brassica {
 		info.centerWorldPos = centerWorldPos;
 		info.gridOffset = glm::ivec2(0);
 
-		return GenerateTerrainRegion(info, 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
+		return GenerateTerrainRegionData(info, 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0).heightMap;
 	}
 
 } // namespace brassica

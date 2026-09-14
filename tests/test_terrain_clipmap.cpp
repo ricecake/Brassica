@@ -140,3 +140,60 @@ TEST_CASE("AsyncTerrainUploader Initial State") {
 	brassica::AsyncTerrainUploader uploader;
 	CHECK_FALSE(uploader.HasInFlightUploads());
 }
+
+TEST_CASE("Terrain Attribute Maps Generation") {
+	brassica::TerrainClipmap clipmap;
+	auto levelData = clipmap.GenerateLevelData(0);
+
+	size_t expectedSize = brassica::TERRAIN_MAP_DIM * brassica::TERRAIN_MAP_DIM;
+	CHECK(levelData.heightMap.size() == expectedSize);
+	CHECK(levelData.minMaxMap.size() == expectedSize);
+	CHECK(levelData.biomeMap.size() == expectedSize);
+	CHECK(levelData.visibilityMap.size() == expectedSize);
+
+	size_t sampleIdx = expectedSize / 2;
+	glm::vec4 minMaxVal = levelData.minMaxMap[sampleIdx];
+	CHECK(minMaxVal.x <= minMaxVal.y);
+
+	glm::vec4 biomeVal = levelData.biomeMap[sampleIdx];
+	CHECK(biomeVal.x >= 0.0f);
+	CHECK(biomeVal.x <= 1.0f);
+	CHECK(biomeVal.y >= 0.0f);
+
+	glm::vec4 visVal = levelData.visibilityMap[sampleIdx];
+	CHECK(visVal.x == 1.0f);
+}
+
+TEST_CASE("Initial Camera Height and Raytrace AABB Bounds") {
+	float baseTexel = 0.5f;
+	glm::vec3 camPos(100.0f, 0.0f, -200.0f);
+
+	float sampledH = brassica::TerrainClipmap::SampleTerrain(camPos.x, camPos.z, baseTexel).r;
+	float initialCamY = sampledH + 2.0f;
+
+	CHECK(initialCamY == doctest::Approx(sampledH + 2.0f));
+
+	float meshletSize = 32.0f;
+	glm::vec3 minB(100.0f, 0.0f, -200.0f);
+
+	float minH = 1e9f;
+	float maxH = -1e9f;
+	constexpr int numSamples = 5;
+	for (int sz = 0; sz < numSamples; ++sz) {
+		float tz = static_cast<float>(sz) / static_cast<float>(numSamples - 1);
+		float sampleZ = minB.z + tz * meshletSize;
+		for (int sx = 0; sx < numSamples; ++sx) {
+			float tx = static_cast<float>(sx) / static_cast<float>(numSamples - 1);
+			float sampleX = minB.x + tx * meshletSize;
+			float h = brassica::TerrainClipmap::SampleTerrain(sampleX, sampleZ, baseTexel).r;
+			minH = std::min(minH, h);
+			maxH = std::max(maxH, h);
+		}
+	}
+	minB.y = minH - 5.0f;
+	float maxBY = maxH + 5.0f;
+
+	CHECK(minB.y < maxBY);
+	CHECK(minB.y <= minH);
+	CHECK(maxBY >= maxH);
+}

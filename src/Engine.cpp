@@ -353,47 +353,74 @@ namespace brassica {
 		particleSystemNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
+		float initialTerrainHeight =
+			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, terrainClipmap.GetBaseTexelSize()).r;
+		camera.position.y = initialTerrainHeight + 2.0f;
+
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
 
-		// Async upload initial heightmaps
+		// Async upload initial heightmaps & terrain attribute maps
 		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
-			auto mapData = terrainClipmap.GenerateLevelMap(l);
+			auto mapData = terrainClipmap.GenerateLevelData(l);
 			terrainUploader.UploadLevelAsync(
 				l,
-				mapData,
+				mapData.heightMap,
 				terrainClipmap.GetImage(),
+				TERRAIN_MAP_DIM,
+				TERRAIN_MAP_DIM,
+				graphicsQueue
+			);
+			terrainUploader.UploadLevelAsync(
+				l,
+				mapData.minMaxMap,
+				terrainClipmap.GetMinMaxImage(),
+				TERRAIN_MAP_DIM,
+				TERRAIN_MAP_DIM,
+				graphicsQueue
+			);
+			terrainUploader.UploadLevelAsync(
+				l,
+				mapData.biomeMap,
+				terrainClipmap.GetBiomeImage(),
+				TERRAIN_MAP_DIM,
+				TERRAIN_MAP_DIM,
+				graphicsQueue
+			);
+			terrainUploader.UploadLevelAsync(
+				l,
+				mapData.visibilityMap,
+				terrainClipmap.GetVisibilityImage(),
 				TERRAIN_MAP_DIM,
 				TERRAIN_MAP_DIM,
 				graphicsQueue
 			);
 		}
 
-		// // Keep this instance alive in your class scope
-		// std::shared_ptr<graph::PhysicalBuffer> particleTypeBuffer = std::make_shared<graph::PhysicalBuffer>(
-		//     device,
-		//     allocator,
-		//     graph::StorageBufferDesc(16 * sizeof(ParticleType))
-		// );
-
-		// physicalRegistry.RegisterImportedBuffer<ParticleTypeBuffer>(
-		//     particleTypeBuffer->GetBuffer(),
-		//     particleTypeBuffer->GetDesc(),
-		//     true // hasDefinedContents = true since it is populated via staging
-		// );
-
-		// Registered once, here -- the clipmap's image/view handles are stable for the engine's
-		// entire lifetime (only its *contents* mutate, via terrainUploader), so re-registering it
-		// every frame would just churn a fresh bindless index for no reason (RegisterImportedTexture
-		// has no desc-match reuse the way ProvisionTexture does for owned resources). Real state,
-		// not the eUndefined/false defaults: the uploader always leaves the image in
-		// eShaderReadOnlyOptimal by the time its timeline semaphore signals (AsyncTerrainUploader.cpp),
-		// and DrawFrame's submission already waits on that semaphore before this image is ever
-		// touched -- see RegisterImportedTexture's own comment on why a long-lived import must pass
-		// its real state.
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),
 			terrainClipmap.GetImageView(),
 			TerrainClipmapDesc(terrainClipmap.GetNumLODs()),
+			vk::ImageLayout::eShaderReadOnlyOptimal,
+			/*hasDefinedContents=*/true
+		);
+		physicalRegistry.RegisterImportedTexture<TerrainMinMaxTexture>(
+			terrainClipmap.GetMinMaxImage(),
+			terrainClipmap.GetMinMaxImageView(),
+			TerrainMinMaxDesc(terrainClipmap.GetNumLODs()),
+			vk::ImageLayout::eShaderReadOnlyOptimal,
+			/*hasDefinedContents=*/true
+		);
+		physicalRegistry.RegisterImportedTexture<TerrainBiomeTexture>(
+			terrainClipmap.GetBiomeImage(),
+			terrainClipmap.GetBiomeImageView(),
+			TerrainBiomeDesc(terrainClipmap.GetNumLODs()),
+			vk::ImageLayout::eShaderReadOnlyOptimal,
+			/*hasDefinedContents=*/true
+		);
+		physicalRegistry.RegisterImportedTexture<TerrainTileVisibilityTexture>(
+			terrainClipmap.GetVisibilityImage(),
+			terrainClipmap.GetVisibilityImageView(),
+			TerrainTileVisibilityDesc(terrainClipmap.GetNumLODs()),
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			/*hasDefinedContents=*/true
 		);
@@ -938,6 +965,9 @@ namespace brassica {
 
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
+		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
+		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.RegisterRef(transmittanceNode);
 		frameGraph.RegisterRef(multiScatteringNode);
 		frameGraph.RegisterRef(gradientNode);
