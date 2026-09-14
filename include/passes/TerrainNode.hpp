@@ -181,7 +181,7 @@ namespace brassica {
 				0,
 				sizeof(TerrainPushConstants)
 			}};
-			render::GraphicsPipelineRequest        request{
+			render::GraphicsPipelineRequest      request{
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,

@@ -1125,7 +1125,7 @@ namespace brassica {
 		layoutInfo.setBindings(uboBinding);
 		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
-		vk::DescriptorPoolSize        poolSize{vk::DescriptorType::eUniformBuffer, FRAME_OVERLAP};
+		vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eUniformBuffer, FRAME_OVERLAP};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSize);
 		poolInfo.setMaxSets(FRAME_OVERLAP);

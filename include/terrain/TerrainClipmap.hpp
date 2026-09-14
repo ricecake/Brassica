@@ -108,7 +108,7 @@ namespace brassica {
 		vk::ImageView visibilityImageView{nullptr};
 		VmaAllocation visibilityAllocation{VK_NULL_HANDLE};
 
-		vk::Sampler   sampler{nullptr};
+		vk::Sampler sampler{nullptr};
 
 		std::vector<ClipmapLevelInfo> levelInfos;
 

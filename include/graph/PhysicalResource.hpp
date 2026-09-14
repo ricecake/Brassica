@@ -550,8 +550,8 @@ namespace brassica::graph {
 				VmaAllocationCreateInfo allocInfo{};
 				allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 				if (m_desc.hostAccess == HostAccess::Mapped) {
-					allocInfo.flags =
-						VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+					allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+						VMA_ALLOCATION_CREATE_MAPPED_BIT;
 				}
 
 				VmaAllocationInfo allocResult{};

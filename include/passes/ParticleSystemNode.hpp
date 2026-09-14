@@ -115,10 +115,10 @@ namespace brassica {
 		// scheduled before Liveness/Behavior/Render every frame -- so refreshing here is exactly
 		// once per frame, before anything that reads the set.
 		inline void RefreshParticleDescriptorSet(
-			ParticleDescriptorCache&                cache,
-			vk::Device                              device,
-			vk::DescriptorSet                       particleSet,
-			const graph::PhysicalResourceRegistry*  registry
+			ParticleDescriptorCache&               cache,
+			vk::Device                             device,
+			vk::DescriptorSet                      particleSet,
+			const graph::PhysicalResourceRegistry* registry
 		) {
 			if (!registry || !particleSet) {
 				return;
@@ -147,11 +147,11 @@ namespace brassica {
 		}
 
 		inline void BindParticleSets(
-			vk::CommandBuffer          cmd,
-			vk::PipelineBindPoint      bindPoint,
-			vk::PipelineLayout         layout,
-			const graph::NodeContext&  ctx,
-			vk::DescriptorSet          particleSet
+			vk::CommandBuffer         cmd,
+			vk::PipelineBindPoint     bindPoint,
+			vk::PipelineLayout        layout,
+			const graph::NodeContext& ctx,
+			vk::DescriptorSet         particleSet
 		) {
 			std::array<vk::DescriptorSet, 3> sets{
 				static_cast<VkDescriptorSet>(ctx.frameSet),
@@ -169,11 +169,11 @@ namespace brassica {
 		using Resources = graph::Declares<graph::Modify<ParticleIndirectBuffer>>;
 		static constexpr graph::Phase kPhase = graph::Phase::Early;
 
-		render::PipelineLibrary*         pipelineLibrary = nullptr;
-		ComputeShader                    compShader;
-		vk::DescriptorSetLayout          particleSetLayout;
-		vk::DescriptorSet                particleSet;
-		detail::ParticleDescriptorCache  descriptorCache{};
+		render::PipelineLibrary*        pipelineLibrary = nullptr;
+		ComputeShader                   compShader;
+		vk::DescriptorSetLayout         particleSetLayout;
+		vk::DescriptorSet               particleSet;
+		detail::ParticleDescriptorCache descriptorCache{};
 
 		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
 			pipelineLibrary = services.pipelineLibrary;

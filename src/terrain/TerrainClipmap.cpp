@@ -313,8 +313,10 @@ namespace brassica {
 					GenerateTerrainRegionData(info, 0, 0, stripWidth, TERRAIN_MAP_DIM, deltaX, 0);
 
 				size_t baseOffset = updateHeightBuffer.size() * sizeof(glm::vec4);
-				updateHeightBuffer.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
-				updateMinMaxBuffer.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
+				updateHeightBuffer
+					.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
+				updateMinMaxBuffer
+					.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
 				updateBiomeBuffer.insert(updateBiomeBuffer.end(), stripData.biomeMap.begin(), stripData.biomeMap.end());
 				updateVisibilityBuffer.insert(
 					updateVisibilityBuffer.end(),
@@ -377,8 +379,10 @@ namespace brassica {
 					GenerateTerrainRegionData(info, 0, 0, TERRAIN_MAP_DIM, stripHeight, 0, deltaZ);
 
 				size_t baseOffset = updateHeightBuffer.size() * sizeof(glm::vec4);
-				updateHeightBuffer.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
-				updateMinMaxBuffer.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
+				updateHeightBuffer
+					.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
+				updateMinMaxBuffer
+					.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
 				updateBiomeBuffer.insert(updateBiomeBuffer.end(), stripData.biomeMap.begin(), stripData.biomeMap.end());
 				updateVisibilityBuffer.insert(
 					updateVisibilityBuffer.end(),
@@ -521,7 +525,8 @@ namespace brassica {
 	}
 
 	std::vector<glm::vec4> TerrainClipmap::GenerateLevelMap(uint32_t levelIndex) const {
-		return GenerateTerrainRegionData(levelInfos[levelIndex], 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0).heightMap;
+		return GenerateTerrainRegionData(levelInfos[levelIndex], 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0)
+			.heightMap;
 	}
 
 	TerrainClipmap::TerrainLevelData TerrainClipmap::GenerateLevelData(uint32_t levelIndex) const {

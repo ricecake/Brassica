@@ -1,10 +1,11 @@
 #include "terrain/TerrainAccelerationStructure.hpp"
-#include "terrain/TerrainClipmap.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
+
+#include "terrain/TerrainClipmap.hpp"
 
 namespace brassica {
 
@@ -79,8 +80,8 @@ namespace brassica {
 					);
 					glm::vec3 maxB = minB + glm::vec3(meshletSize, 0.0f, meshletSize);
 
-					float minH = 1e9f;
-					float maxH = -1e9f;
+					float         minH = 1e9f;
+					float         maxH = -1e9f;
 					constexpr int numSamples = 5;
 					for (int sz = 0; sz < numSamples; ++sz) {
 						float tz = static_cast<float>(sz) / static_cast<float>(numSamples - 1);
