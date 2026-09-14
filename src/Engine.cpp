@@ -1,5 +1,5 @@
 #include "Engine.hpp"
-
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -48,10 +48,26 @@ namespace brassica {
 			window = nullptr;
 			return;
 		}
-		glfwInit();
+
+		// unsetenv("WAYLAND_DISPLAY");
+
+		if (!glfwInit()) {
+			const char* desc;
+			glfwGetError(&desc);
+			spdlog::critical("glfwInit failed: {}", desc ? desc : "Unknown");
+			std::exit(-1);
+		}
+
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 		window = glfwCreateWindow(1280, 720, "Brassica Engine", nullptr, nullptr);
+
+		if (!window) {
+			const char* desc;
+			glfwGetError(&desc);
+			spdlog::critical("glfwCreateWindow failed: {}", desc ? desc : "Unknown");
+			std::exit(-1);
+		}
 
 		glfwSetWindowUserPointer(window, this);
 
@@ -512,6 +528,19 @@ namespace brassica {
 				}
 			}
 		}
+		else {
+			uint32_t count = 0;
+			const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&count);
+			if(glfwExtensions) {
+				for (int i = 0; i < count; i++) {
+					builder.enable_extension(glfwExtensions[i]);
+				}
+			}
+			else {
+				spdlog::critical("glfw initialization error!");
+				std::exit(-1);
+			}
+		}
 
 		auto inst_res = builder.request_validation_layers(true).build();
 		if (!inst_res) {
@@ -544,8 +573,12 @@ namespace brassica {
 			}
 			surface = c_surface;
 		} else {
-			VkSurfaceKHR c_surface;
-			glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
+			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
+			VkResult res = glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
+			if (res != VK_SUCCESS) {
+				spdlog::critical("Failed to create GLFW surface: {}", static_cast<int>(res));
+				return false;
+			}
 			surface = c_surface;
 		}
 
