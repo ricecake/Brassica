@@ -1,4 +1,5 @@
 #include "Engine.hpp"
+
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -527,16 +528,14 @@ namespace brassica {
 					}
 				}
 			}
-		}
-		else {
-			uint32_t count = 0;
+		} else {
+			uint32_t     count = 0;
 			const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&count);
-			if(glfwExtensions) {
+			if (glfwExtensions) {
 				for (int i = 0; i < count; i++) {
 					builder.enable_extension(glfwExtensions[i]);
 				}
-			}
-			else {
+			} else {
 				spdlog::critical("glfw initialization error!");
 				std::exit(-1);
 			}
@@ -574,7 +573,7 @@ namespace brassica {
 			surface = c_surface;
 		} else {
 			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
-			VkResult res = glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
+			VkResult     res = glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
 			if (res != VK_SUCCESS) {
 				spdlog::critical("Failed to create GLFW surface: {}", static_cast<int>(res));
 				return false;

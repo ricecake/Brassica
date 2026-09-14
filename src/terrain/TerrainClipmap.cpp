@@ -16,11 +16,12 @@ namespace brassica {
 		FastNoise::SmartNode<FastNoise::DomainScale> detailScale;
 		FastNoise::SmartNode<FastNoise::DomainScale> maskScale;
 		FastNoise::SmartNode<FastNoise::DomainScale> biomeScale;
-		FastNoise::SmartNode<> land;
+		FastNoise::SmartNode<>                       land;
 
 		TerrainNoiseGenerators() {
 			land = FastNoise::NewFromEncodedNodeTree(
-				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
+				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/"
+				"BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
 
 				// "KQkOCRYCFwkZCQYAAEAcRgwCEwkQ@B+kQwAQ@BkL@BekQS/wAABAOamRNCBAMK16M+Cv8BAAwK/wQABAL/BAAEAw@CTAABIwhsAAHpEBA=="
 				// "KQkVCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQCHQkUCRAJBgwL7FG4PgQCDQkLAACAs0IQpHA9vxiamZk/IAI@B4B@CwLrkdhPgwD@CBMAAEjCGwAAekQE"
