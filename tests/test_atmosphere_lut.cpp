@@ -98,12 +98,14 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 		brassica::graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
 		brassica::graph::PhysicalExecutionBackend backend(registry);
 
+		brassica::render::NodeServices services{.device = device, .pipelineLibrary = &pipelineLibrary};
+
 		brassica::TransmittanceLUTNode transNode;
-		transNode.Init(device, &pipelineLibrary);
+		transNode.Init(services);
 		transNode.throttle = &throttle;
 
 		brassica::MultiScatteringLUTNode multiNode;
-		multiNode.Init(device, &pipelineLibrary);
+		multiNode.Init(services);
 		multiNode.throttle = &throttle;
 
 		vk::CommandPool pool = device.createCommandPool(

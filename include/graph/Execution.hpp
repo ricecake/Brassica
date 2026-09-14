@@ -18,6 +18,17 @@ namespace brassica::graph {
 
 	enum class AccessKind : std::uint8_t { Read, Write, ReadWrite };
 
+	// Governs whether a resource's underlying buffer is CPU-writable, and if so, how a write
+	// reaches the GPU. None (the default): today's behavior exactly, device-local only, no
+	// host-mapping -- zero change for any existing caller. Staged: the buffer/texture stays
+	// device-local; a CPU write goes through a registry-owned staging buffer and a real
+	// copyBuffer/copyBufferToImage on the graph's own command buffer -- zero consumer-side
+	// obligations, the destination handle never changes. Mapped (buffers only): one
+	// PhysicalBuffer with FRAME_OVERLAP CPU-visible sub-ranges and no copy command at all -- an
+	// explicit opt-in for a node author willing to index data[frameIndex % FRAME_OVERLAP]
+	// themselves in-shader, in exchange for skipping the staging copy.
+	enum class HostAccess : std::uint8_t { None, Staged, Mapped };
+
 	// Coarse ordering between nodes, independent of resource flow: "this pass belongs after
 	// deferred shading" without naming everything deferred shading touches. Int-backed and spaced
 	// so callers can insert a new band between existing ones without renumbering anything, the same
@@ -61,6 +72,7 @@ namespace brassica::graph {
 		std::uint32_t formatCode = 0;
 		std::uint32_t usageMask = 0;
 		std::uint64_t byteSize = 0;
+		HostAccess    hostAccess = HostAccess::None;
 	};
 
 	// Opaque per-resource bindless-index lookup. Implemented by PhysicalResourceRegistry
@@ -87,19 +99,31 @@ namespace brassica::graph {
 	};
 
 	// Per-node execution state, passed to a node's Execute in place of a bare CommandBuffer.
-	// pipeline/pipelineLayout/globalSet/globalSetLayout are opaque Vulkan handles (same trick as
-	// CommandBuffer::vkCmd) -- real bind/push/draw calls are free functions in the Vulkan-aware
-	// include/render/NodeCommands.hpp, not members here.
+	// pipeline/pipelineLayout/frameSet/frameSetLayout/globalSet/globalSetLayout are opaque
+	// Vulkan handles (same trick as CommandBuffer::vkCmd) -- real bind/push/draw calls are free
+	// functions in the Vulkan-aware include/render/NodeCommands.hpp, not members here.
 	struct NodeContext {
-		CommandBuffer              cmd{};
-		std::uint32_t              width = 0;
-		std::uint32_t              height = 0;
-		std::uint64_t              frameIndex = 0;
-		void*                      pipeline = nullptr;
-		void*                      pipelineLayout = nullptr;
-		void*                      globalSet = nullptr;       // opaque VkDescriptorSet -- the bindless set
-		void*                      globalSetLayout = nullptr; // opaque VkDescriptorSetLayout for the same set
-		std::uint32_t              globalUboOffset = 0;
+		CommandBuffer cmd{};
+		std::uint32_t width = 0;
+		std::uint32_t height = 0;
+		std::uint64_t frameIndex = 0;
+		void*         pipeline = nullptr;
+		void*         pipelineLayout = nullptr;
+
+		// Set 0, always bound: just the per-frame UBO (camera/time/frame data). Genuinely
+		// double-buffered on the physical side (one instance per frame-in-flight) since its
+		// contents are CPU-written fresh every frame -- see PhysicalResourceRegistry's comment
+		// on why this is deliberately a *different* descriptor set than the bindless one below,
+		// not folded into it.
+		void* frameSet = nullptr;       // opaque VkDescriptorSet
+		void* frameSetLayout = nullptr; // opaque VkDescriptorSetLayout for the same set
+
+		// Set 1, always bound: the bindless resource catalog. One instance, never duplicated
+		// per frame -- a resource's descriptor is written once at creation and read for the
+		// rest of its life.
+		void* globalSet = nullptr;       // opaque VkDescriptorSet -- the bindless set
+		void* globalSetLayout = nullptr; // opaque VkDescriptorSetLayout for the same set
+
 		const BindlessIndexSource* bindless = nullptr;
 
 		template <typename K>

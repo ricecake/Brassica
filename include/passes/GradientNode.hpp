@@ -8,6 +8,7 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -16,7 +17,7 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	struct GradientNode {
+	struct GradientNode: render::NodeRegistrar<GradientNode> {
 		using Resources = graph::Declares<graph::Create<GradientBackground>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -27,12 +28,12 @@ namespace brassica {
 		VertexShader             vertShader;
 		FragmentShader           fragShader;
 
-		void Init(vk::Device device, render::PipelineLibrary* library, ShaderWatcher* watcher = nullptr) {
-			pipelineLibrary = library;
-			vertShader.CompileVertexFromFile(device, "shaders/gradient.vert");
-			fragShader.CompileFragmentFromFile(device, "shaders/gradient.frag");
-			if (watcher) {
-				RegisterShaders(*watcher);
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			vertShader.CompileVertexFromFile(services.device, "shaders/gradient.vert");
+			fragShader.CompileFragmentFromFile(services.device, "shaders/gradient.frag");
+			if (services.shaderWatcher) {
+				RegisterShaders(*services.shaderWatcher);
 			}
 		}
 
@@ -61,7 +62,10 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
-			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
 
 			render::GraphicsPipelineRequest request{
 				.stages = stages,
@@ -76,9 +80,12 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
 			}
 
-			vk::DescriptorSet globalSet = static_cast<VkDescriptorSet>(ctx.globalSet);
-			if (globalSet) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
 			}
 
 			vk::Extent2D extent{ctx.width, ctx.height};
@@ -89,5 +96,7 @@ namespace brassica {
 			vkCmd.draw(3, 1, 0, 0);
 		}
 	};
+
+	BRASSICA_REGISTER_NODE(GradientNode);
 
 } // namespace brassica

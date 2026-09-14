@@ -1,4 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <cstring>
+
 #include "doctest/doctest.h"
 
 #include "graph/Graph.hpp"
@@ -8,6 +10,7 @@
 #include "passes/WaterNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "types/ubo/FrameUBO.hpp"
 #include "VulkanCompat.hpp"
 
 using namespace brassica;
@@ -25,6 +28,7 @@ namespace {
 			graph::Create<GBufferPosition>,
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
+			graph::Create<GBufferDepth>,
 			graph::Modify<Swapchain>>;
 
 		vk::Extent2D extent;
@@ -55,6 +59,13 @@ namespace {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferDepth>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
 					.key = graph::IdOf<Swapchain>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
@@ -66,43 +77,102 @@ namespace {
 		void Execute(graph::NodeContext&) {}
 	};
 
-	// Minimal real bindless set -- just enough for water.frag's SAMPLE_NEAREST(gPositionIndex/
-	// gAlbedoIndex/gNormalIndex, ...) to resolve real descriptors: binding 0 (sampled 2D) is what
-	// PhysicalRegistry writes GBufferPosition/GBufferAlbedo/GBufferNormal's indices into, binding 2 (samplers)
-	// needs a real sampler written at BRASSICA_SAMPLER_NEAREST_CLAMP's index (0) since the
-	// shader indexes it unconditionally. No array/storage/AS bindings -- WaterNode never touches
-	// them. Mirrors test_physical_backend.cpp's own CreateBindlessTestSet, trimmed to what this
-	// node actually needs.
+	// Real frame set (set 0) + bindless set (set 1), mirroring Engine's real split
+	// (InitFrameSet/InitGlobalDescriptors) rather than the old single merged set: WaterNode now
+	// binds both unconditionally, so this fixture needs a real, defined FrameUBO buffer behind
+	// the frame set's binding 0 (bindless.glsl's FrameUBO block is statically read by
+	// water.frag/water.mesh via uCameraPosition/uTime, so an unwritten descriptor there would be
+	// a real, if harmless-content, validation gap). The bindless set carries just enough for
+	// water.frag's SAMPLE_NEAREST(gPositionIndex/gAlbedoIndex/gNormalIndex, ...) to resolve real
+	// descriptors: binding 0 (sampled 2D) is what PhysicalRegistry writes GBufferPosition/
+	// GBufferAlbedo/GBufferNormal's indices into, binding 2 (samplers) needs a real sampler
+	// written at BRASSICA_SAMPLER_NEAREST_CLAMP's index (0) since the shader indexes it
+	// unconditionally. No array/storage/AS bindings -- WaterNode never touches them. Mirrors
+	// test_physical_backend.cpp's own CreateBindlessTestSet, trimmed to what this node needs.
 	struct WaterBindlessSet {
+		vk::DescriptorSetLayout frameLayout{};
+		vk::DescriptorPool      framePool{};
+		vk::Buffer              frameUboBuffer{};
+		VmaAllocation           frameUboAllocation{};
+
 		vk::DescriptorSetLayout                           layout{};
 		vk::DescriptorPool                                pool{};
 		vk::Sampler                                       sampler{};
 		graph::PhysicalResourceRegistry::BindlessBindings bindings{};
 	};
 
-	WaterBindlessSet CreateWaterBindlessSet(vk::Device device) {
-		std::array<vk::DescriptorSetLayoutBinding, 3> layoutBindings{};
-		// Binding 0: FrameUBO
-		layoutBindings[0]
-			.setBinding(0)
+	WaterBindlessSet CreateWaterBindlessSet(vk::Device device, VmaAllocator allocator) {
+		WaterBindlessSet result;
+
+		// -- Frame set (set 0): just the FrameUBO --
+		vk::DescriptorSetLayoutBinding uboBinding{};
+		uboBinding.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 1: uTextures2D
-		layoutBindings[1]
-			.setBinding(1)
+		vk::DescriptorSetLayoutCreateInfo frameLayoutInfo{};
+		frameLayoutInfo.setBindings(uboBinding);
+		result.frameLayout = device.createDescriptorSetLayout(frameLayoutInfo);
+
+		vk::DescriptorPoolSize        framePoolSize{vk::DescriptorType::eUniformBuffer, 1};
+		vk::DescriptorPoolCreateInfo framePoolInfo{};
+		framePoolInfo.setPoolSizes(framePoolSize);
+		framePoolInfo.setMaxSets(1);
+		result.framePool = device.createDescriptorPool(framePoolInfo);
+
+		vk::DescriptorSetAllocateInfo frameAllocInfo{};
+		frameAllocInfo.setDescriptorPool(result.framePool);
+		frameAllocInfo.setSetLayouts(result.frameLayout);
+		vk::DescriptorSet frameSet = device.allocateDescriptorSets(frameAllocInfo).front();
+
+		VkBufferCreateInfo frameBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		frameBufferInfo.size = sizeof(FrameUBO);
+		frameBufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+		VmaAllocationCreateInfo frameAllocCreateInfo{};
+		frameAllocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		frameAllocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+			VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VkBuffer          frameBuffer = VK_NULL_HANDLE;
+		VmaAllocationInfo frameAllocResultInfo{};
+		vmaCreateBuffer(
+			allocator,
+			&frameBufferInfo,
+			&frameAllocCreateInfo,
+			&frameBuffer,
+			&result.frameUboAllocation,
+			&frameAllocResultInfo
+		);
+		result.frameUboBuffer = frameBuffer;
+		if (frameAllocResultInfo.pMappedData) {
+			// Zeroed, not real camera data -- this test never asserts on FrameUBO-derived pixel
+			// values, only that the descriptor is real and defined (an unwritten uniform-buffer
+			// descriptor read by a shader that statically uses it is what this fixture exists to
+			// avoid).
+			std::memset(frameAllocResultInfo.pMappedData, 0, sizeof(FrameUBO));
+		}
+
+		vk::DescriptorBufferInfo frameBufferDescInfo{result.frameUboBuffer, 0, sizeof(FrameUBO)};
+		vk::WriteDescriptorSet   uboWrite{};
+		uboWrite.setDstSet(frameSet);
+		uboWrite.setDstBinding(0);
+		uboWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+		uboWrite.setBufferInfo(frameBufferDescInfo);
+		device.updateDescriptorSets(uboWrite, nullptr);
+
+		// -- Bindless set (set 1): sampled 2D + sampler catalog --
+		std::array<vk::DescriptorSetLayoutBinding, 2> layoutBindings{};
+		layoutBindings[0]
+			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(8)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 3: uSamplers
-		layoutBindings[2]
-			.setBinding(3)
+		layoutBindings[1]
+			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
-			vk::DescriptorBindingFlags{},
+		std::array<vk::DescriptorBindingFlags, 2> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 		};
@@ -110,16 +180,13 @@ namespace {
 		bindingFlagsInfo.setBindingFlags(bindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindingCount(3);
+		layoutInfo.setBindingCount(2);
 		layoutInfo.setBindings(layoutBindings);
 		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		layoutInfo.pNext = &bindingFlagsInfo;
-
-		WaterBindlessSet result;
 		result.layout = device.createDescriptorSetLayout(layoutInfo);
 
-		std::array<vk::DescriptorPoolSize, 3> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 1},
+		std::array<vk::DescriptorPoolSize, 2> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
 		};
@@ -145,23 +212,29 @@ namespace {
 		samplerImageInfo.setSampler(result.sampler);
 		vk::WriteDescriptorSet samplerWrite{};
 		samplerWrite.setDstSet(set);
-		samplerWrite.setDstBinding(3);
+		samplerWrite.setDstBinding(2);
 		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
 		samplerWrite.setImageInfo(samplerImageInfo);
 		device.updateDescriptorSets(samplerWrite, {});
 
 		result.bindings.set = set;
 		result.bindings.layout = result.layout;
-		result.bindings.uboBinding = 0;
-		result.bindings.sampledImage2DBinding = 1;
-		result.bindings.samplerBinding = 3;
+		result.bindings.sampledImage2DBinding = 0;
+		result.bindings.samplerBinding = 2;
+		result.bindings.frameSet = frameSet;
+		result.bindings.frameSetLayout = result.frameLayout;
 		return result;
 	}
 
-	void DestroyWaterBindlessSet(vk::Device device, WaterBindlessSet& s) {
+	void DestroyWaterBindlessSet(vk::Device device, VmaAllocator allocator, WaterBindlessSet& s) {
 		device.destroySampler(s.sampler);
 		device.destroyDescriptorPool(s.pool);
 		device.destroyDescriptorSetLayout(s.layout);
+		if (s.frameUboBuffer && s.frameUboAllocation) {
+			vmaDestroyBuffer(allocator, s.frameUboBuffer, s.frameUboAllocation);
+		}
+		device.destroyDescriptorPool(s.framePool);
+		device.destroyDescriptorSetLayout(s.frameLayout);
 	}
 
 } // namespace
@@ -199,7 +272,7 @@ TEST_CASE(
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
 		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
-		WaterBindlessSet                bindlessSet = CreateWaterBindlessSet(vkDevice);
+		WaterBindlessSet                bindlessSet = CreateWaterBindlessSet(vkDevice, device.GetAllocator());
 		registry.SetGlobalDescriptorSet(bindlessSet.bindings);
 		graph::PhysicalExecutionBackend backend(registry);
 
@@ -214,7 +287,14 @@ TEST_CASE(
 		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
 
 		WaterNode waterNode;
-		waterNode.Init(vkDevice, &pipelineLibrary, &dls, kSwapchainFormat);
+		waterNode.Init(
+			render::NodeServices{
+				.device = vkDevice,
+				.pipelineLibrary = &pipelineLibrary,
+				.dispatchLoader = &dls,
+				.swapchainFormat = kSwapchainFormat,
+			}
+		);
 		Shader::ClearConstants();
 
 		graph::Graph graph;
@@ -240,7 +320,7 @@ TEST_CASE(
 
 		pipelineLibrary.Reset();
 		waterNode.Destroy(vkDevice);
-		DestroyWaterBindlessSet(vkDevice, bindlessSet);
+		DestroyWaterBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);
 		vkDevice.destroyCommandPool(pool);
 	}
 

@@ -170,6 +170,21 @@ namespace brassica::graph {
 			};
 		}
 
+		// A pure Transfer-domain write (StagedWriterNode's shape: a bare copyBufferToImage into a
+		// TransferDst-only image, not an attachment) has exactly one valid destination layout --
+		// eTransferDstOptimal -- so it doesn't need the broad eGeneral fallback below, which exists
+		// for usage combinations this table doesn't otherwise recognize. ReadWrite is deliberately
+		// excluded: there's no single optimal layout for simultaneous transfer src+dst on one
+		// image, so that case still wants the conservative eGeneral fallback.
+		if (domain == ExecutionDomain::Transfer && access == AccessKind::Write &&
+		    (usage & vk::ImageUsageFlagBits::eTransferDst)) {
+			return ResourceState{
+				vk::ImageLayout::eTransferDstOptimal,
+				vk::PipelineStageFlagBits2::eAllTransfer,
+				vk::AccessFlagBits2::eTransferWrite,
+			};
+		}
+
 		if (isWrite) {
 			if (IsDepthFormat(format) && (usage & vk::ImageUsageFlagBits::eDepthStencilAttachment)) {
 				vk::AccessFlags2 acc = vk::AccessFlagBits2::eDepthStencilAttachmentWrite;

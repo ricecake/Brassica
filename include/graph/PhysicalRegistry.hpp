@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "EngineConstants.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Graph.hpp"
 #include "graph/PhysicalResource.hpp"
@@ -60,22 +61,36 @@ namespace brassica::graph {
 
 		[[nodiscard]] vk::Queue GetQueue() const { return m_queue; }
 
-		// The engine's one bindless descriptor set and which binding holds each array -- see
-		// Engine::InitGlobalDescriptors for where these are created. Bindings, not a single
-		// number: unlike the old single-binding placeholder this replaces, a texture may need a
-		// slot in the sampled-2D array, the sampled-2D-array array, or the storage-image array
-		// (or two of them at once -- see PhysicalTexture::GetSampledBindlessIndex's comment), and
-		// an acceleration structure needs its own array entirely.
+		// The engine's one bindless descriptor set (set 1) and which binding holds each array --
+		// see Engine::InitGlobalDescriptors for where these are created. Bindings, not a single
+		// number: a texture may need a slot in the sampled-2D array, the sampled-2D-array array,
+		// or the storage-image array (or two of them at once -- see
+		// PhysicalTexture::GetSampledBindlessIndex's comment), and an acceleration structure
+		// needs its own array entirely.
+		//
+		// Deliberately one instance, never duplicated per frame: a resource's descriptor is
+		// written once at creation and read for the rest of its life, so unlike the frame set
+		// below there is no in-flight copy to keep separate. (An earlier version of this folded
+		// the per-frame UBO into this same set, which forced duplicating the whole set -- and
+		// therefore every one of these writes -- per frame just for the UBO's sake, reintroducing
+		// exactly the in-flight write hazard bindless indexing exists to avoid. The UBO now lives
+		// in its own always-bound frameSet/frameSetLayout below, which this registry never writes
+		// to -- it's only carried here as a pass-through so PhysicalExecutionBackend::Execute has
+		// one place to read both sets from.)
 		struct BindlessBindings {
-			vk::DescriptorSet              set{};
-			std::vector<vk::DescriptorSet> sets{};
-			vk::DescriptorSetLayout        layout{}; // needed at pipeline-creation time, not just bind time
-			std::uint32_t                  uboBinding = 0;
-			std::uint32_t                  sampledImage2DBinding = 1;
-			std::uint32_t                  sampledImage2DArrayBinding = 2;
-			std::uint32_t                  samplerBinding = 3;
-			std::uint32_t                  storageImageBinding = 4;
-			std::uint32_t                  accelerationStructureBinding = 5;
+			vk::DescriptorSet       set{};
+			vk::DescriptorSetLayout layout{}; // needed at pipeline-creation time, not just bind time
+			std::uint32_t           sampledImage2DBinding = 0;
+			std::uint32_t           sampledImage2DArrayBinding = 1;
+			std::uint32_t           samplerBinding = 2;
+			std::uint32_t           storageImageBinding = 3;
+			std::uint32_t           accelerationStructureBinding = 4;
+
+			// The always-bound frame set (set 0) -- just the per-frame UBO. Genuinely varies by
+			// active frame index (Engine::DrawFrame rebuilds this every frame); this registry
+			// never writes into it.
+			vk::DescriptorSet       frameSet{};
+			vk::DescriptorSetLayout frameSetLayout{};
 		};
 
 		void SetGlobalDescriptorSet(const BindlessBindings& bindings) {
@@ -91,6 +106,13 @@ namespace brassica::graph {
 		[[nodiscard]] vk::DescriptorSet GetBindlessDescriptorSet() const { return m_bindless.set; }
 
 		[[nodiscard]] vk::DescriptorSetLayout GetBindlessDescriptorSetLayout() const { return m_bindless.layout; }
+
+		// The always-bound per-frame UBO set -- what PhysicalExecutionBackend::Execute reads to
+		// populate NodeContext::frameSet/frameSetLayout. This registry only carries these
+		// through; it never writes to them (see BindlessBindings's comment above).
+		[[nodiscard]] vk::DescriptorSet GetFrameDescriptorSet() const { return m_bindless.frameSet; }
+
+		[[nodiscard]] vk::DescriptorSetLayout GetFrameDescriptorSetLayout() const { return m_bindless.frameSetLayout; }
 
 		// Maps any VersionedKey<K, N> id to the id of the one physical resource every version
 		// shares -- derived purely from ResourceTypeInfo::versionBase (ResourceKey.hpp), so a node
@@ -374,6 +396,7 @@ namespace brassica::graph {
 			m_sampledArrayArena.ProcessRetirements(frameIndex);
 			m_storageArena.ProcessRetirements(frameIndex);
 			m_accelStructArena.ProcessRetirements(frameIndex);
+			ProcessBufferRetirements(frameIndex);
 
 			std::unordered_map<ResourceId, TemporalLifetime> lifetimes;
 			for (std::size_t stageIndex = 0; stageIndex < schedule.stages.size(); ++stageIndex) {
@@ -475,7 +498,7 @@ namespace brassica::graph {
 
 			for (const auto& [id, r] : realizationsToProvision) {
 				if (r.desc.kind == ResourceDesc::Kind::Buffer) {
-					ProvisionBuffer(id, r.desc, lifetimes[id], enableAliasing);
+					ProvisionBuffer(id, r.desc, lifetimes[id], enableAliasing, frameIndex);
 				} else { // Image2D / Image3D
 					ProvisionTexture(id, r.desc, lifetimes[id], enableAliasing, frameIndex);
 				}
@@ -557,71 +580,55 @@ namespace brassica::graph {
 
 		void
 		WriteSampledImageDescriptor(std::uint32_t index, vk::ImageView view, vk::ImageLayout layout, bool isArray) {
-			if (!m_bindless.layout) {
+			if (!m_bindless.set) {
 				return;
 			}
 			vk::DescriptorImageInfo imageInfo{{}, view, layout};
-			auto setsToUpdate = !m_bindless.sets.empty() ? m_bindless.sets
-														 : std::vector<vk::DescriptorSet>{m_bindless.set};
-			for (auto set : setsToUpdate) {
-				if (!set)
-					continue;
-				vk::WriteDescriptorSet write{
-					set,
-					isArray ? m_bindless.sampledImage2DArrayBinding : m_bindless.sampledImage2DBinding,
-					index,
-					1,
-					vk::DescriptorType::eSampledImage,
-					&imageInfo,
-				};
-				m_device.updateDescriptorSets(write, {});
-			}
+			vk::WriteDescriptorSet  write{
+				m_bindless.set,
+				isArray ? m_bindless.sampledImage2DArrayBinding : m_bindless.sampledImage2DBinding,
+				index,
+				1,
+				vk::DescriptorType::eSampledImage,
+				&imageInfo,
+			};
+			m_device.updateDescriptorSets(write, {});
 		}
 
 		void WriteStorageImageDescriptor(std::uint32_t index, vk::ImageView view) {
-			if (!m_bindless.layout) {
+			if (!m_bindless.set) {
 				return;
 			}
+			// Always eGeneral: the only layout a storage image is ever legally accessed through
+			// (DeriveImageState's Storage-usage branches, ResourceState.hpp, agree).
 			vk::DescriptorImageInfo imageInfo{{}, view, vk::ImageLayout::eGeneral};
-			auto setsToUpdate = !m_bindless.sets.empty() ? m_bindless.sets
-														 : std::vector<vk::DescriptorSet>{m_bindless.set};
-			for (auto set : setsToUpdate) {
-				if (!set)
-					continue;
-				vk::WriteDescriptorSet write{
-					set,
-					m_bindless.storageImageBinding,
-					index,
-					1,
-					vk::DescriptorType::eStorageImage,
-					&imageInfo,
-				};
-				m_device.updateDescriptorSets(write, {});
-			}
+			vk::WriteDescriptorSet  write{
+				m_bindless.set,
+				m_bindless.storageImageBinding,
+				index,
+				1,
+				vk::DescriptorType::eStorageImage,
+				&imageInfo,
+			};
+			m_device.updateDescriptorSets(write, {});
 		}
 
 		void WriteAccelerationStructureDescriptor(std::uint32_t index, vk::AccelerationStructureKHR as) {
-			if (!m_bindless.layout) {
+			if (!m_bindless.set) {
 				return;
 			}
 			vk::WriteDescriptorSetAccelerationStructureKHR asInfo{};
 			asInfo.setAccelerationStructures(as);
-			auto setsToUpdate = !m_bindless.sets.empty() ? m_bindless.sets
-														 : std::vector<vk::DescriptorSet>{m_bindless.set};
-			for (auto set : setsToUpdate) {
-				if (!set)
-					continue;
-				vk::WriteDescriptorSet write{
-					set,
-					m_bindless.accelerationStructureBinding,
-					index,
-					1,
-					vk::DescriptorType::eAccelerationStructureKHR,
-					nullptr,
-				};
-				write.pNext = &asInfo;
-				m_device.updateDescriptorSets(write, {});
-			}
+			vk::WriteDescriptorSet write{
+				m_bindless.set,
+				m_bindless.accelerationStructureBinding,
+				index,
+				1,
+				vk::DescriptorType::eAccelerationStructureKHR,
+				nullptr,
+			};
+			write.pNext = &asInfo;
+			m_device.updateDescriptorSets(write, {});
 		}
 
 		// Assigns and writes whichever of the sampled/storage arrays this texture's usage calls
@@ -807,16 +814,76 @@ namespace brassica::graph {
 			m_textures[id] = std::move(tex);
 		}
 
-		void ProvisionBuffer(ResourceId id, const ResourceDesc& desc, TemporalLifetime lifetime, bool enableAliasing) {
+		void ProvisionBuffer(
+			ResourceId          id,
+			const ResourceDesc& desc,
+			TemporalLifetime    lifetime,
+			bool                enableAliasing,
+			std::uint64_t       frameIndex
+		) {
 			auto existingIt = m_buffers.find(id);
 			if (existingIt != m_buffers.end() && !existingIt->second->IsImported()) {
-				if (existingIt->second->GetDesc().byteSize == desc.byteSize) {
-					return;
+				auto&       existing = *existingIt->second;
+				const auto& existingDesc = existing.GetDesc();
+
+				// usageMask/hostAccess matter here too, not just byteSize -- same reason as
+				// ProvisionTexture's identical check above: a change to either with the same size
+				// would otherwise silently keep the stale buffer, and DeriveBufferState derives its
+				// barrier decisions from GetDesc().usageMask.
+				if (existingDesc.usageMask == desc.usageMask && existingDesc.hostAccess == desc.hostAccess) {
+					if (desc.hostAccess == HostAccess::None) {
+						if (existingDesc.byteSize == desc.byteSize) {
+							return; // already provisioned with a matching description
+						}
+					} else if (desc.byteSize <= existing.SliceStride()) {
+						// Grow-only: a request that still fits the existing per-slot capacity just
+						// adjusts the logical size in place -- no reallocation, no retirement, same
+						// handle any bound descriptor already references.
+						existing.SetLogicalSize(desc.byteSize);
+						return;
+					}
 				}
 			}
 
-			m_buffers[id] = enableAliasing ? m_bufferPool.Acquire(desc, lifetime.firstPass, lifetime.lastPass)
-										   : std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc);
+			const bool          hostWrite = desc.hostAccess != HostAccess::None;
+			const std::uint32_t ringSlots = desc.hostAccess == HostAccess::Mapped ? brassica::FRAME_OVERLAP : 1;
+
+			// A host-write buffer (Staged or Mapped) bypasses the alias pool unconditionally, for
+			// two independent reasons: (1) BufferAliasPool blocks allocate device-local-only
+			// (requiredFlags = eDeviceLocal) with no host-access flags, so Mapped specifically
+			// would silently get non-mappable memory; (2) aliasing assumes a resource's lifetime
+			// is scoped to this frame's stage range (BufferAliasPool/ImageAliasPool's whole reason
+			// to exist), but a host-write resource is explicitly meant to persist *across* frames
+			// -- aliasing it would let some unrelated same-frame resource's next-frame write
+			// silently stomp it.
+			std::shared_ptr<PhysicalBuffer> newBuffer;
+			if (enableAliasing && !hostWrite) {
+				newBuffer = m_bufferPool.Acquire(desc, lifetime.firstPass, lifetime.lastPass);
+			} else if (hostWrite) {
+				newBuffer = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc, ringSlots);
+			} else {
+				newBuffer = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc);
+			}
+
+			if (existingIt != m_buffers.end() && !existingIt->second->IsImported()) {
+				// The buffer being replaced (a grow past capacity, or a usage/hostAccess change)
+				// might still be referenced by a command buffer recorded before this replacement
+				// and not yet retired by the GPU -- same reason, same shape, as
+				// RetireBindlessIndices below.
+				RetireBuffer(existingIt->second, frameIndex);
+			}
+
+			m_buffers[id] = std::move(newBuffer);
+		}
+
+		// Same shape, same reason, as BindlessArena::Retire: held by shared_ptr, not destroyed,
+		// until enough frames have passed that nothing still in flight can reference it.
+		void RetireBuffer(std::shared_ptr<PhysicalBuffer> buffer, std::uint64_t frameIndex) {
+			m_retiringBuffers.emplace_back(frameIndex + brassica::FRAME_OVERLAP, std::move(buffer));
+		}
+
+		void ProcessBufferRetirements(std::uint64_t frameIndex) {
+			std::erase_if(m_retiringBuffers, [&](const auto& entry) { return entry.first <= frameIndex; });
 		}
 
 		vk::Device      m_device{};
@@ -828,6 +895,11 @@ namespace brassica::graph {
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalTexture>>               m_textures;
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalBuffer>>                m_buffers;
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalAccelerationStructure>> m_accelStructs;
+
+		// See RetireBuffer/ProcessBufferRetirements -- a host-write buffer ProvisionBuffer just
+		// replaced (grow-past-capacity, or a usage/hostAccess change), held until it's safe to
+		// actually drop the last shared_ptr to it.
+		std::vector<std::pair<std::uint64_t, std::shared_ptr<PhysicalBuffer>>> m_retiringBuffers;
 
 		// Keyed by the History target's base id (never by the History<K> id itself). Both slots
 		// are Owning and allocated once, lazily, on the first frame that declares a History<K>

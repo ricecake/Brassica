@@ -9,7 +9,9 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -38,12 +40,8 @@ namespace brassica {
 	// The first real consumer of GraphicsPipelineState::enableBlend outside a synthetic test --
 	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
 	// so this is what actually proves the blend-state plumbing works for something real.
-	struct WaterNode {
-		using Resources = graph::Declares<
-			graph::Read<GBufferPosition>,
-			graph::Read<GBufferAlbedo>,
-			graph::Read<GBufferNormal>,
-			graph::Modify<Swapchain>>;
+	struct WaterNode: render::NodeRegistrar<WaterNode> {
+		using Resources = graph::Declares<GBuffer<graph::Read>, graph::Modify<Swapchain>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
@@ -67,20 +65,14 @@ namespace brassica {
 		vk::Format                   swapchainFormat = vk::Format::eUndefined;
 		WaterPushConstants           push{};
 
-		void Init(
-			vk::Device                   device,
-			render::PipelineLibrary*     library,
-			const DispatchLoaderDynamic* dispatchLoader,
-			vk::Format                   format,
-			ShaderWatcher*               watcher = nullptr
-		) {
-			pipelineLibrary = library;
-			dls = dispatchLoader;
-			swapchainFormat = format;
-			meshShader.CompileMeshFromFile(device, "shaders/water.mesh");
-			fragShader.CompileFragmentFromFile(device, "shaders/water.frag");
-			if (watcher) {
-				RegisterShaders(*watcher);
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			dls = services.dispatchLoader;
+			swapchainFormat = services.swapchainFormat;
+			meshShader.CompileMeshFromFile(services.device, "shaders/water.mesh");
+			fragShader.CompileFragmentFromFile(services.device, "shaders/water.frag");
+			if (services.shaderWatcher) {
+				RegisterShaders(*services.shaderWatcher);
 			}
 		}
 
@@ -94,7 +86,10 @@ namespace brassica {
 			fragShader.Destroy(device);
 		}
 
-		void SetFrameParams(const WaterPushConstants& p) { push = p; }
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			push.waterColor = p.waterColor;
+			push.waterLevel = p.waterLevel;
+		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -115,8 +110,11 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
-			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{vk::PushConstantRange{
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
 				vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(WaterPushConstants)
@@ -135,9 +133,12 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
 			}
 
-			vk::DescriptorSet globalSet = static_cast<VkDescriptorSet>(ctx.globalSet);
-			if (globalSet) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
 			}
 
 			vk::Extent2D extent{ctx.width, ctx.height};
@@ -159,5 +160,7 @@ namespace brassica {
 			}
 		}
 	};
+
+	BRASSICA_REGISTER_NODE(WaterNode);
 
 } // namespace brassica

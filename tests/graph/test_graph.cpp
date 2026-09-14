@@ -219,6 +219,27 @@ namespace {
 	static_assert(IsSubsetOf<TypeList<char>, TypeList<int, char>>);
 	static_assert(!IsSubsetOf<TypeList<char, double>, TypeList<int, char>>);
 
+	// -- compile-time checks: Group ---------------------------------------------------
+	// Group<Op, Ks...> is just Declares<Op<Ks>...> under a discoverable name -- these prove it
+	// expands identically to writing the operations out by hand, both alone and composed inside a
+	// larger Declares<...> alongside a sibling op that overlaps one of the group's own keys (Dedup
+	// must still collapse that overlap to one, matching the first-occurrence-wins rule the runtime
+	// Graph::Compile() tests below already depend on).
+
+	static_assert(std::is_same_v<
+				   Declares<Group<Read, GBufferAlbedo, GBufferNormal>>::Consumes,
+				   Declares<Read<GBufferAlbedo>, Read<GBufferNormal>>::Consumes>);
+	static_assert(std::is_same_v<
+				   Declares<Group<Read, GBufferAlbedo, GBufferNormal>>::Produces,
+				   Declares<Read<GBufferAlbedo>, Read<GBufferNormal>>::Produces>);
+
+	static_assert(std::is_same_v<
+				   Declares<Group<Read, GBufferAlbedo, GBufferNormal>, Modify<Swapchain>>::Consumes,
+				   Declares<Read<GBufferAlbedo>, Read<GBufferNormal>, Modify<Swapchain>>::Consumes>);
+	static_assert(std::is_same_v<
+				   Declares<Group<Create, GBufferAlbedo, GBufferNormal>, Create<GBufferAlbedo>>::Produces,
+				   Declares<Create<GBufferAlbedo>, Create<GBufferNormal>>::Produces>);
+
 	// -- compile-time checks: resource keys ------------------------------------------
 
 	static_assert(ResourceKey<GBufferAlbedo> && !ResourceKey<int>);

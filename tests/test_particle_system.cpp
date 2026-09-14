@@ -1,4 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <cstring>
+
 #include "doctest/doctest.h"
 
 #include "graph/Graph.hpp"
@@ -10,6 +12,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/Particle.hpp"
+#include "types/ubo/FrameUBO.hpp"
 #include "VulkanCompat.hpp"
 
 using namespace brassica;
@@ -134,17 +137,24 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		dls.vkCmdDrawMeshTasksEXT = nullptr;
 		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
 
+		render::NodeServices services{
+			.device = vkDevice,
+			.pipelineLibrary = &pipelineLibrary,
+			.dispatchLoader = &dls,
+			.swapchainFormat = vk::Format::eR8G8B8A8Unorm,
+		};
+
 		ParticleResetNode resetNode;
-		resetNode.Init(vkDevice, &pipelineLibrary, particleSetLayout, nullptr);
+		resetNode.Init(services, particleSetLayout, nullptr);
 
 		ParticleLivenessNode livenessNode;
-		livenessNode.Init(vkDevice, &pipelineLibrary, particleSetLayout, nullptr);
+		livenessNode.Init(services, particleSetLayout, nullptr);
 
 		ParticleBehaviorNode behaviorNode;
-		behaviorNode.Init(vkDevice, &pipelineLibrary, particleSetLayout, nullptr);
+		behaviorNode.Init(services, particleSetLayout, nullptr);
 
 		ParticleRenderNode renderNode;
-		renderNode.Init(vkDevice, &pipelineLibrary, &dls, vk::Format::eR8G8B8A8Unorm, particleSetLayout, nullptr);
+		renderNode.Init(services, particleSetLayout, nullptr);
 
 		resetNode.Destroy(vkDevice);
 		livenessNode.Destroy(vkDevice);
@@ -154,6 +164,262 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		Shader::ClearConstants();
 
 		vkDevice.destroyDescriptorSetLayout(particleSetLayout);
+		vkDevice.destroyCommandPool(pool);
+	}
+}
+
+// DIAGNOSTIC -- investigating a live report of "descriptor set 2 binding N used in
+// dispatch/draw but never updated via vkUpdateDescriptorSets", i.e. ParticleSystemNode's
+// UpdateDescriptorSet guard (!pBuf || !pTypeBuf || !pAliveBuf || !pIndirectBuf) is returning
+// early on every frame. This drives the 3 compute sub-nodes through a real Provision() (no
+// ParticleRenderNode/mesh shaders, so it runs even without VK_EXT_mesh_shader) and checks which
+// of the 4 buffers, if any, comes back null.
+TEST_CASE("DIAGNOSTIC: particle buffers are all provisioned after one real frame") {
+	brassica::testing::MinimalDevice device;
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
+		);
+		vk::CommandBuffer vkCmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+
+		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
+		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
+
+		std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+		for (uint32_t i = 0; i < 4; ++i) {
+			bindings[i]
+				.setBinding(i)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setDescriptorCount(1)
+				.setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
+		}
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.setBindings(bindings);
+		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
+
+		// A real, bound-but-never-updated set -- matches the reported bug's actual condition
+		// (allocated, bound at dispatch time, but vkUpdateDescriptorSets never ran on it) rather
+		// than a completely unbound set 2, which crashes instead of just validation-erroring.
+		std::array<vk::DescriptorPoolSize, 1> particlePoolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 4}
+		};
+		vk::DescriptorPoolCreateInfo particlePoolInfo{};
+		particlePoolInfo.setPoolSizes(particlePoolSizes);
+		particlePoolInfo.setMaxSets(1);
+		vk::DescriptorPool particlePool = vkDevice.createDescriptorPool(particlePoolInfo);
+
+		vk::DescriptorSetAllocateInfo particleSetAllocInfo{};
+		particleSetAllocInfo.setDescriptorPool(particlePool);
+		particleSetAllocInfo.setSetLayouts(particleSetLayout);
+		vk::DescriptorSet particleSet = vkDevice.allocateDescriptorSets(particleSetAllocInfo).front();
+
+		DispatchLoaderDynamic dls;
+		dls.init(device.GetInstance(), vkDevice);
+
+		render::NodeServices services{
+			.device = vkDevice,
+			.pipelineLibrary = &pipelineLibrary,
+			.dispatchLoader = &dls,
+			.swapchainFormat = vk::Format::eR8G8B8A8Unorm,
+		};
+
+		graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType> typeBufferNode{
+			std::vector<ParticleType>(16, ParticleType{})
+		};
+		ParticleResetNode    resetNode;
+		ParticleLivenessNode livenessNode;
+		ParticleBehaviorNode behaviorNode;
+		resetNode.Init(services, particleSetLayout, particleSet);
+		livenessNode.Init(services, particleSetLayout, particleSet);
+		behaviorNode.Init(services, particleSetLayout, particleSet);
+
+		graph::Graph g;
+		g.RegisterRef(typeBufferNode);
+		g.RegisterRef(resetNode);
+		g.RegisterRef(livenessNode);
+		g.RegisterRef(behaviorNode);
+
+		// Real frame set (set 0, a defined FrameUBO) + real bindless set (set 1, sampled-image[8]
+		// + sampler[1]) -- mirrors test_water_node.cpp's CreateWaterBindlessSet fixture.
+		// EnsureFallbackTexture (called by SetGlobalDescriptorSet) writes a real descriptor into
+		// the bindless set's binding 0 unconditionally, so an empty/zero-binding layout there
+		// crashes (VUID-VkWriteDescriptorSet-dstBinding-10009) rather than just validation-erroring
+		// -- confirmed by hand while building this fixture, not a hypothetical.
+		vk::DescriptorSetLayoutBinding frameUboBinding{};
+		frameUboBinding.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		vk::DescriptorSetLayoutCreateInfo frameLayoutInfo{};
+		frameLayoutInfo.setBindings(frameUboBinding);
+		vk::DescriptorSetLayout frameLayout = vkDevice.createDescriptorSetLayout(frameLayoutInfo);
+
+		vk::DescriptorPoolSize      framePoolSize{vk::DescriptorType::eUniformBuffer, 1};
+		vk::DescriptorPoolCreateInfo framePoolInfo{};
+		framePoolInfo.setPoolSizes(framePoolSize);
+		framePoolInfo.setMaxSets(1);
+		vk::DescriptorPool framePool = vkDevice.createDescriptorPool(framePoolInfo);
+
+		vk::DescriptorSetAllocateInfo frameAllocInfo{};
+		frameAllocInfo.setDescriptorPool(framePool);
+		frameAllocInfo.setSetLayouts(frameLayout);
+		vk::DescriptorSet frameSet = vkDevice.allocateDescriptorSets(frameAllocInfo).front();
+
+		VkBufferCreateInfo frameBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		frameBufferInfo.size = sizeof(FrameUBO);
+		frameBufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+		VmaAllocationCreateInfo frameAllocCreateInfo{};
+		frameAllocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		frameAllocCreateInfo.flags =
+			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VkBuffer          frameUboBuffer = VK_NULL_HANDLE;
+		VmaAllocation     frameUboAllocation = nullptr;
+		VmaAllocationInfo frameAllocResultInfo{};
+		vmaCreateBuffer(
+			device.GetAllocator(),
+			&frameBufferInfo,
+			&frameAllocCreateInfo,
+			&frameUboBuffer,
+			&frameUboAllocation,
+			&frameAllocResultInfo
+		);
+		if (frameAllocResultInfo.pMappedData) {
+			std::memset(frameAllocResultInfo.pMappedData, 0, sizeof(FrameUBO));
+		}
+
+		vk::DescriptorBufferInfo frameBufferDescInfo{frameUboBuffer, 0, sizeof(FrameUBO)};
+		vk::WriteDescriptorSet   uboWrite{};
+		uboWrite.setDstSet(frameSet);
+		uboWrite.setDstBinding(0);
+		uboWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+		uboWrite.setBufferInfo(frameBufferDescInfo);
+		vkDevice.updateDescriptorSets(uboWrite, nullptr);
+
+		std::array<vk::DescriptorSetLayoutBinding, 2> globalLayoutBindings{};
+		globalLayoutBindings[0]
+			.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		globalLayoutBindings[1]
+			.setBinding(2)
+			.setDescriptorType(vk::DescriptorType::eSampler)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+
+		std::array<vk::DescriptorBindingFlags, 2> globalBindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlags{},
+		};
+		vk::DescriptorSetLayoutBindingFlagsCreateInfo globalBindingFlagsInfo{};
+		globalBindingFlagsInfo.setBindingFlags(globalBindingFlags);
+
+		vk::DescriptorSetLayoutCreateInfo globalLayoutInfo{};
+		globalLayoutInfo.setBindingCount(2);
+		globalLayoutInfo.setBindings(globalLayoutBindings);
+		globalLayoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
+		globalLayoutInfo.pNext = &globalBindingFlagsInfo;
+		vk::DescriptorSetLayout globalLayout = vkDevice.createDescriptorSetLayout(globalLayoutInfo);
+
+		std::array<vk::DescriptorPoolSize, 2> globalPoolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+		};
+		vk::DescriptorPoolCreateInfo globalPoolInfo{};
+		globalPoolInfo.setPoolSizes(globalPoolSizes);
+		globalPoolInfo.setMaxSets(1);
+		globalPoolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind);
+		vk::DescriptorPool globalPool = vkDevice.createDescriptorPool(globalPoolInfo);
+
+		vk::DescriptorSetAllocateInfo globalAllocInfo{};
+		globalAllocInfo.setDescriptorPool(globalPool);
+		globalAllocInfo.setSetLayouts(globalLayout);
+		vk::DescriptorSet globalSet = vkDevice.allocateDescriptorSets(globalAllocInfo).front();
+
+		vk::SamplerCreateInfo samplerInfo{};
+		samplerInfo.setMagFilter(vk::Filter::eNearest);
+		samplerInfo.setMinFilter(vk::Filter::eNearest);
+		samplerInfo.setAddressModeU(vk::SamplerAddressMode::eClampToEdge);
+		samplerInfo.setAddressModeV(vk::SamplerAddressMode::eClampToEdge);
+		vk::Sampler sampler = vkDevice.createSampler(samplerInfo);
+
+		vk::DescriptorImageInfo samplerImageInfo{};
+		samplerImageInfo.setSampler(sampler);
+		vk::WriteDescriptorSet samplerWrite{};
+		samplerWrite.setDstSet(globalSet);
+		samplerWrite.setDstBinding(2);
+		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
+		samplerWrite.setImageInfo(samplerImageInfo);
+		vkDevice.updateDescriptorSets(samplerWrite, {});
+
+		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		registry.SetGlobalDescriptorSet(
+			graph::PhysicalResourceRegistry::BindlessBindings{
+				.set = globalSet,
+				.layout = globalLayout,
+				.sampledImage2DBinding = 0,
+				.samplerBinding = 2,
+				.frameSet = frameSet,
+				.frameSetLayout = frameLayout,
+			}
+		);
+		graph::PhysicalExecutionBackend backend(registry);
+
+		graph::FrameContext ctx{.width = 64, .height = 64, .frameIndex = 0};
+
+		vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		graph::CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+		backend.Execute(g, ctx, cmd, false);
+		vkCmd.end();
+
+		vk::SubmitInfo submitInfo{};
+		submitInfo.setCommandBuffers(vkCmd);
+		device.GetQueue().submit(submitInfo);
+		device.GetQueue().waitIdle();
+
+		auto pBuf = registry.GetBuffer<ParticleBuffer>();
+		auto pTypeBuf = registry.GetBuffer<ParticleTypeBuffer>();
+		auto pAliveBuf = registry.GetBuffer<ParticleAliveBuffer>();
+		auto pIndirectBuf = registry.GetBuffer<ParticleIndirectBuffer>();
+
+		MESSAGE("ParticleBuffer: ", (pBuf ? "OK" : "NULL"));
+		MESSAGE("ParticleTypeBuffer: ", (pTypeBuf ? "OK" : "NULL"));
+		MESSAGE("ParticleAliveBuffer: ", (pAliveBuf ? "OK" : "NULL"));
+		MESSAGE("ParticleIndirectBuffer: ", (pIndirectBuf ? "OK" : "NULL"));
+
+		CHECK(pBuf != nullptr);
+		CHECK(pTypeBuf != nullptr);
+		CHECK(pAliveBuf != nullptr);
+		CHECK(pIndirectBuf != nullptr);
+
+		resetNode.Destroy(vkDevice);
+		livenessNode.Destroy(vkDevice);
+		behaviorNode.Destroy(vkDevice);
+
+		Shader::ClearConstants();
+		vkDevice.destroySampler(sampler);
+		vkDevice.destroyDescriptorPool(particlePool);
+		vkDevice.destroyDescriptorPool(globalPool);
+		vkDevice.destroyDescriptorSetLayout(particleSetLayout);
+		vkDevice.destroyDescriptorSetLayout(globalLayout);
+		if (frameUboBuffer && frameUboAllocation) {
+			vmaDestroyBuffer(device.GetAllocator(), frameUboBuffer, frameUboAllocation);
+		}
+		vkDevice.destroyDescriptorPool(framePool);
+		vkDevice.destroyDescriptorSetLayout(frameLayout);
 		vkDevice.destroyCommandPool(pool);
 	}
 }
@@ -211,6 +477,13 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload and block until
 	auto physTex = registry.GetTexture<TestTexKey>();
 	REQUIRE(physTex != nullptr);
 	CHECK(physTex->HasDefinedContents() == true);
+
+	// TestBufKey's default StorageBufferDesc is exactly the shape ParticleSystemNode's real
+	// typeBufferNode uses (ParticleSystemNode.hpp) -- until StorageBufferDesc gained eTransferDst
+	// (PhysicalResource.hpp), bufNode.Execute's cmd.copyBuffer above was a live
+	// VUID-vkCmdCopyBuffer-dstBuffer-00120 that nothing in this file was checking for.
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
 }
 
 TEST_CASE("ExecuteOnce wrapper executes inner node once and skips subsequent runs") {

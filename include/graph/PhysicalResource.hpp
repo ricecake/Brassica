@@ -46,6 +46,10 @@ namespace brassica::graph {
 			};
 		}
 
+		inline std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment) {
+			return alignment == 0 ? value : ((value + alignment - 1) / alignment) * alignment;
+		}
+
 	} // namespace detail
 
 	// Move-only RAII owner of a Vulkan image, in one of three modes:
@@ -337,8 +341,28 @@ namespace brassica::graph {
 		// device isn't needed to create a buffer (unlike a texture's view), but is still taken
 		// here and stored so the aliased-mode destructor can call m_device.destroyBuffer(...)
 		// -- keeps PhysicalTexture and PhysicalBuffer construction symmetric for callers.
-		PhysicalBuffer(vk::Device device, VmaAllocator allocator, const ResourceDesc& desc):
-			m_device(device), m_allocator(allocator), m_desc(desc), m_ownership(Ownership::Owning) {
+		//
+		// ringSlots/sliceAlignment only take effect when desc.hostAccess == HostAccess::Mapped --
+		// for every other desc (the overwhelming majority, and every caller before this
+		// constructor gained these params) they're ignored outright, so byteSize-for-byteSize
+		// this allocates identically to before. When they do apply, the real buffer is
+		// AlignUp(desc.byteSize, sliceAlignment) * ringSlots bytes -- desc.byteSize itself stays
+		// each slot's *logical* size, which is what a consumer's copy/read region should use.
+		PhysicalBuffer(
+			vk::Device          device,
+			VmaAllocator        allocator,
+			const ResourceDesc& desc,
+			std::uint32_t       ringSlots = 1,
+			std::uint64_t       sliceAlignment = 16
+		):
+			m_device(device),
+			m_allocator(allocator),
+			m_desc(desc),
+			m_ownership(Ownership::Owning),
+			m_ringSlots(desc.hostAccess == HostAccess::Mapped ? std::max<std::uint32_t>(ringSlots, 1) : 1),
+			m_sliceStride(
+				desc.hostAccess == HostAccess::Mapped ? detail::AlignUp(desc.byteSize, sliceAlignment) : desc.byteSize
+			) {
 			CreateBuffer(nullptr, 0);
 		}
 
@@ -357,6 +381,7 @@ namespace brassica::graph {
 			m_allocator(allocator),
 			m_desc(desc),
 			m_ownership(Ownership::Aliased),
+			m_sliceStride(desc.byteSize),
 			m_lastStage(memoryWasReused ? vk::PipelineStageFlagBits2::eAllCommands : vk::PipelineStageFlags2{}),
 			m_lastAccess(
 				memoryWasReused ? (vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
@@ -371,6 +396,7 @@ namespace brassica::graph {
 			m_buffer(buffer),
 			m_desc(desc),
 			m_ownership(Ownership::Imported),
+			m_sliceStride(desc.byteSize),
 			m_lastStage(hasDefinedContents ? vk::PipelineStageFlagBits2::eAllCommands : vk::PipelineStageFlags2{}),
 			m_lastAccess(
 				hasDefinedContents ? (vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
@@ -390,11 +416,15 @@ namespace brassica::graph {
 			m_allocation(o.m_allocation),
 			m_desc(o.m_desc),
 			m_ownership(o.m_ownership),
+			m_ringSlots(o.m_ringSlots),
+			m_sliceStride(o.m_sliceStride),
+			m_mappedBase(o.m_mappedBase),
 			m_lastStage(o.m_lastStage),
 			m_lastAccess(o.m_lastAccess),
 			m_hasDefinedContents(o.m_hasDefinedContents) {
 			o.m_buffer = nullptr;
 			o.m_allocation = nullptr;
+			o.m_mappedBase = nullptr;
 			o.m_lastStage = {};
 			o.m_lastAccess = {};
 			o.m_hasDefinedContents = false;
@@ -409,12 +439,16 @@ namespace brassica::graph {
 				m_allocation = o.m_allocation;
 				m_desc = o.m_desc;
 				m_ownership = o.m_ownership;
+				m_ringSlots = o.m_ringSlots;
+				m_sliceStride = o.m_sliceStride;
+				m_mappedBase = o.m_mappedBase;
 				m_lastStage = o.m_lastStage;
 				m_lastAccess = o.m_lastAccess;
 				m_hasDefinedContents = o.m_hasDefinedContents;
 
 				o.m_buffer = nullptr;
 				o.m_allocation = nullptr;
+				o.m_mappedBase = nullptr;
 				o.m_lastStage = {};
 				o.m_lastAccess = {};
 				o.m_hasDefinedContents = false;
@@ -429,6 +463,49 @@ namespace brassica::graph {
 		[[nodiscard]] bool IsImported() const { return m_ownership == Ownership::Imported; }
 
 		[[nodiscard]] bool IsAliased() const { return m_ownership == Ownership::Aliased; }
+
+		// Only true for an Owning buffer created with desc.hostAccess == HostAccess::Mapped --
+		// every other buffer (None, Staged, or any Imported/Aliased buffer regardless of desc)
+		// has no CPU-visible mapping through this object at all.
+		[[nodiscard]] bool IsHostMapped() const { return m_mappedBase != nullptr; }
+
+		// Pointer to ring slot `slot % RingSlots()`'s first byte. nullptr when !IsHostMapped().
+		[[nodiscard]] void* MappedSlice(std::uint64_t slot) const {
+			if (!m_mappedBase) {
+				return nullptr;
+			}
+			return static_cast<std::uint8_t*>(m_mappedBase) + (slot % m_ringSlots) * m_sliceStride;
+		}
+
+		// Each ring slot's capacity in bytes -- may exceed GetDesc().byteSize (the logical size
+		// a consumer's copy/read region should use), never less. Equals GetDesc().byteSize
+		// exactly for a non-ring (ringSlots == 1) buffer.
+		[[nodiscard]] std::uint64_t SliceStride() const { return m_sliceStride; }
+
+		[[nodiscard]] std::uint32_t RingSlots() const { return m_ringSlots; }
+
+		// Total real allocation size: SliceStride() * RingSlots(). For a non-ring buffer this
+		// is the capacity ProvisionBuffer's grow-only reallocation (PhysicalRegistry.hpp)
+		// compares a new request's byteSize against, not GetDesc().byteSize itself, which
+		// SetLogicalSize below can leave smaller than what's actually allocated.
+		[[nodiscard]] std::uint64_t CapacityBytes() const { return m_sliceStride * m_ringSlots; }
+
+		// Flushes one ring slot's writes so a non-coherent host-visible allocation becomes
+		// GPU-visible. vmaFlushAllocation itself already no-ops for a coherent memory type (the
+		// type VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT prefers when one exists),
+		// so this never needs its own coherence check.
+		void FlushSlice(std::uint64_t slot) const {
+			if (!m_allocator || !m_allocation) {
+				return;
+			}
+			vmaFlushAllocation(m_allocator, m_allocation, (slot % m_ringSlots) * m_sliceStride, m_sliceStride);
+		}
+
+		// Updates the logical per-slot size (GetDesc().byteSize) in place, with no reallocation
+		// and no change to the real handle -- valid exactly when newSize <= SliceStride().
+		// ProvisionBuffer is the only caller: it enforces that bound as the "fits in existing
+		// capacity" half of its grow-only policy before calling this.
+		void SetLogicalSize(std::uint64_t newSize) { m_desc.byteSize = newSize; }
 
 		// See PhysicalTexture's identically-named accessors -- same tracked-state contract,
 		// minus a layout (buffers have none).
@@ -450,7 +527,13 @@ namespace brassica::graph {
 			vk::BufferCreateInfo bufferInfo = detail::BuildBufferCreateInfo(m_desc);
 
 			VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
-			VkBuffer           rawBuffer = VK_NULL_HANDLE;
+			// The real allocation may be larger than m_desc.byteSize when this is a Mapped ring
+			// (m_ringSlots > 1, set only by the Owning ctor above) -- CapacityBytes() holds every
+			// slot; m_desc.byteSize stays each slot's logical size, untouched here.
+			if (m_ringSlots > 1) {
+				cBufferInfo.size = m_sliceStride * m_ringSlots;
+			}
+			VkBuffer rawBuffer = VK_NULL_HANDLE;
 
 			if (existingAllocation) {
 				if (vmaCreateAliasingBuffer2(
@@ -466,11 +549,17 @@ namespace brassica::graph {
 			} else {
 				VmaAllocationCreateInfo allocInfo{};
 				allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+				if (m_desc.hostAccess == HostAccess::Mapped) {
+					allocInfo.flags =
+						VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+				}
 
-				if (vmaCreateBuffer(m_allocator, &cBufferInfo, &allocInfo, &rawBuffer, &m_allocation, nullptr) !=
+				VmaAllocationInfo allocResult{};
+				if (vmaCreateBuffer(m_allocator, &cBufferInfo, &allocInfo, &rawBuffer, &m_allocation, &allocResult) !=
 				    VK_SUCCESS) {
 					throw std::runtime_error("Failed to allocate buffer via VMA!");
 				}
+				m_mappedBase = allocResult.pMappedData;
 			}
 			m_buffer = rawBuffer;
 		}
@@ -488,6 +577,7 @@ namespace brassica::graph {
 			}
 			m_buffer = nullptr;
 			m_allocation = nullptr;
+			m_mappedBase = nullptr;
 		}
 
 		vk::Device    m_device{};
@@ -496,6 +586,14 @@ namespace brassica::graph {
 		VmaAllocation m_allocation = nullptr;
 		ResourceDesc  m_desc{};
 		Ownership     m_ownership = Ownership::Imported;
+
+		// Ring/mapping state -- see the Owning ctor's comment. m_ringSlots stays 1 and
+		// m_mappedBase stays null for every buffer that isn't an Owning + HostAccess::Mapped one;
+		// m_sliceStride equals m_desc.byteSize whenever there's no ring, so SliceStride()/
+		// CapacityBytes() are always meaningful even for an Imported or Aliased buffer.
+		std::uint32_t m_ringSlots{1};
+		std::uint64_t m_sliceStride{0};
+		void*         m_mappedBase{nullptr};
 
 		vk::PipelineStageFlags2 m_lastStage{};
 		vk::AccessFlags2        m_lastAccess{};
@@ -793,7 +891,12 @@ namespace brassica::graph {
 	inline ResourceDesc UniformBufferDesc(std::uint64_t byteSize) {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Buffer,
-			.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eUniformBuffer),
+			// eTransferDst: lets UploadPredefinedBuffer's cmd.copyBuffer (Util.hpp) target this
+			// buffer directly -- without it, every uniform buffer this preset creates is a live
+			// VUID-vkCmdCopyBuffer-dstBuffer-00120 the moment anything tries to upload into it.
+			.usageMask = static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eTransferDst
+			),
 			.byteSize = byteSize,
 		};
 	}
@@ -801,7 +904,11 @@ namespace brassica::graph {
 	inline ResourceDesc StorageBufferDesc(std::uint64_t byteSize) {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Buffer,
-			.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer),
+			// eTransferDst: same reason as UniformBufferDesc above -- ParticleSystemNode's
+			// typeBufferNode is exactly this preset, uploaded via UploadPredefinedBuffer.
+			.usageMask = static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst
+			),
 			.byteSize = byteSize,
 		};
 	}
@@ -810,6 +917,64 @@ namespace brassica::graph {
 	// PhysicalAccelerationStructure's class comment for why this kind carries no other state.
 	inline ResourceDesc AccelerationStructureDesc() {
 		return ResourceDesc{.kind = ResourceDesc::Kind::AccelerationStructure};
+	}
+
+	// -- HostAccess presets ----------------------------------------------------------------
+	// Staged/Mapped variants of the two buffer presets above. The underlying allocation only
+	// actually differs for Mapped (PhysicalBuffer's Owning ctor requests host-visible+mapped
+	// memory and a FRAME_OVERLAP ring only when desc.hostAccess == Mapped, PhysicalResource.hpp)
+	// -- Staged keeps the exact same device-local allocation as the plain preset; hostAccess is
+	// only a flag ResourceServices'/BeginHostWrite's staging-ring path (a later stage) reads to
+	// decide how a CPU write reaches this resource, not something PhysicalBuffer itself branches
+	// on for anything but Mapped.
+
+	inline ResourceDesc StagedUniformBufferDesc(std::uint64_t byteSize) {
+		ResourceDesc desc = UniformBufferDesc(byteSize);
+		desc.hostAccess = HostAccess::Staged;
+		return desc;
+	}
+
+	inline ResourceDesc StagedStorageBufferDesc(std::uint64_t byteSize) {
+		ResourceDesc desc = StorageBufferDesc(byteSize);
+		desc.hostAccess = HostAccess::Staged;
+		return desc;
+	}
+
+	inline ResourceDesc MappedUniformBufferDesc(std::uint64_t byteSize) {
+		ResourceDesc desc = UniformBufferDesc(byteSize);
+		desc.hostAccess = HostAccess::Mapped;
+		return desc;
+	}
+
+	inline ResourceDesc MappedStorageBufferDesc(std::uint64_t byteSize) {
+		ResourceDesc desc = StorageBufferDesc(byteSize);
+		desc.hostAccess = HostAccess::Mapped;
+		return desc;
+	}
+
+	// Sampled + TransferDst only -- no eColorAttachment, unlike ColorAttachmentDesc: this is for
+	// an asset-style texture only ever written by a staged CPU copy and read by shaders (matches
+	// UploadPredefinedTexture's own default usage fallback when a caller passes no desc,
+	// Util.hpp), not a render target. Mapped has no texture counterpart -- see HostAccess's own
+	// comment (Execution.hpp) for why a CPU-mapped, optimally-tiled image isn't a shape this
+	// engine supports.
+	//
+	// ProvisionTexture doesn't yet know to bypass the alias pool or compare hostAccess for a
+	// texture the way ProvisionBuffer now does (PhysicalRegistry.hpp) -- deliberately deferred
+	// until a real Staged-texture write path exists to exercise it (this stage's
+	// ResourceServices/NodeContext::Write seam doesn't yet), rather than building it untested now.
+	inline ResourceDesc
+	StagedTextureDesc(std::uint32_t width, std::uint32_t height, vk::Format format = vk::Format::eR8G8B8A8Unorm) {
+		return ResourceDesc{
+			.kind = ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.formatCode = static_cast<std::uint32_t>(format),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+			),
+			.hostAccess = HostAccess::Staged,
+		};
 	}
 
 } // namespace brassica::graph

@@ -1,4 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <cstring>
+
 #include "doctest/doctest.h"
 
 #include "Engine.hpp"
@@ -484,6 +486,150 @@ namespace {
 					.key = IdOf<TestOuterBuffer>(),
 					.access = AccessKind::Write,
 					.desc = StorageBufferDesc(64),
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// -- CPU-write + sync helper: Stage 0 empirical proof --------------------------------------
+	// See .claude/plans/ancient-booping-magpie.md. Proves the *existing*, unmodified barrier
+	// machinery -- ResourceState.hpp's DeriveBufferState Host-write branch (present but never
+	// exercised by a real device before this) and DeriveImageState's Transfer-write path --
+	// produces a validation-clean, data-correct chain for a real CPU write threaded through a
+	// real command buffer across a real frame boundary, before any HostAccess/PhysicalBuffer-ring/
+	// NodeContext::Write production code gets built on top of it. Deliberately hand-rolls the VMA
+	// calls the real mechanism will eventually own (mirrors Util.hpp's existing
+	// UploadPredefinedBuffer/Texture) -- nothing here is meant to survive past this stage.
+
+	struct TestHostBuffer {};
+
+	struct TestStagedTexture {};
+
+	// Host-domain: memcpy directly into a persistently-mapped buffer, no copy command at all.
+	struct HostWriterNode {
+		using Resources = Declares<Create<TestHostBuffer>>;
+
+		void*         mapped = nullptr;
+		std::uint32_t sentinel = 0;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Host};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestHostBuffer>(),
+					.access = AccessKind::Write,
+					.desc = StorageBufferDesc(sizeof(std::uint32_t)),
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {
+			if (mapped) {
+				std::memcpy(mapped, &sentinel, sizeof(sentinel));
+			}
+		}
+	};
+
+	struct HostBufferReaderNode {
+		using Resources = Declares<Read<TestHostBuffer>>;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Compute};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestHostBuffer>(),
+					.access = AccessKind::Read,
+					.desc = StorageBufferDesc(sizeof(std::uint32_t)),
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Transfer-domain: a real copyBufferToImage into a graph-provisioned (not imported) texture,
+	// the shape the real Staged path will use.
+	struct StagedWriterNode {
+		using Resources = Declares<Create<TestStagedTexture>>;
+
+		vk::Buffer    stagingBuffer{};
+		std::uint32_t width = 0;
+		std::uint32_t height = 0;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Transfer};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestStagedTexture>(),
+					.access = AccessKind::Write,
+					.desc = ColorAttachmentDesc(width, height, vk::Format::eR8G8B8A8Unorm),
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext& ctx) {
+			const auto* registry = dynamic_cast<const PhysicalResourceRegistry*>(ctx.bindless);
+			if (!registry) {
+				return;
+			}
+			auto tex = registry->GetTexture<TestStagedTexture>();
+			if (!tex) {
+				return;
+			}
+			vk::CommandBuffer   vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			vk::BufferImageCopy region{};
+			region.setBufferOffset(0)
+				.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+				.setImageExtent({width, height, 1});
+			vkCmd.copyBufferToImage(stagingBuffer, tex->GetImage(), tex->GetCurrentLayout(), region);
+		}
+	};
+
+	struct StagedTextureReaderNode {
+		using Resources = Declares<Read<TestStagedTexture>>;
+
+		std::uint32_t width = 0;
+		std::uint32_t height = 0;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestStagedTexture>(),
+					.access = AccessKind::Read,
+					.desc = ColorAttachmentDesc(width, height, vk::Format::eR8G8B8A8Unorm),
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// -- CPU-write + sync helper: Stage 2 (HostAccess + the PhysicalBuffer ring) --------------
+	// See .claude/plans/ancient-booping-magpie.md. No node-facing write API yet (that's Stage 3)
+	// -- this only exercises real Provision()'s shape for a Mapped buffer: byteSize varies frame
+	// to frame purely to drive ProvisionBuffer's grow-only/retirement paths, not to write data.
+	struct TestMappedRingBuffer {};
+
+	struct MappedRingWriterNode {
+		using Resources = Declares<Create<TestMappedRingBuffer>>;
+
+		std::uint64_t byteSize = sizeof(std::uint32_t);
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Host};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestMappedRingBuffer>(),
+					.access = AccessKind::Write,
+					.desc = MappedStorageBufferDesc(byteSize),
 				}
 			);
 			return r;
@@ -1273,4 +1419,246 @@ TEST_CASE(
 	CHECK(engine.GetValidationWarningCount() == 0);
 
 	engine.Cleanup();
+}
+
+// -- CPU-write + sync helper: Stage 0 empirical proof ------------------------------------------
+// See .claude/plans/ancient-booping-magpie.md. Exercises the *unmodified* barrier-synthesis
+// machinery -- DeriveBufferState's Host-write branch and DeriveImageState's Transfer-domain
+// fallback -- across three real frames, before any HostAccess/ring/NodeContext::Write production
+// code gets built on top of it.
+TEST_CASE(
+	"CPU-write + sync helper Stage 0: a real Host-domain memcpy and a real Transfer-domain "
+	"staged copy both produce validation-clean, data-correct barriers across three frames"
+) {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device   vkDevice = device.GetDevice();
+	VmaAllocator allocator = device.GetAllocator();
+
+	{
+		// eResetCommandBuffer: three frames re-record the same command buffer, same reason as
+		// the History<K> case above.
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				device.GetQueueFamily(),
+			}
+		);
+		vk::CommandBuffer vkCmd = vkDevice
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
+
+		PhysicalResourceRegistry registry(vkDevice, allocator);
+		PhysicalExecutionBackend backend(registry);
+
+		// Hand-rolled host-visible+mapped buffer standing in for the real HostAccess::Mapped
+		// ring this stage exists to justify -- one real vk::Buffer, imported so ProvisionBuffer
+		// never touches it (PhysicalRegistry.hpp's provisioning loop skips any resolvedKey that's
+		// already IsImported() -- see the loop just above ProvisionBuffer/ProvisionTexture), so
+		// the same handle and the same mapped pointer survive all three frames below.
+		VkBufferCreateInfo hostBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		hostBufferInfo.size = sizeof(std::uint32_t);
+		hostBufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+
+		VmaAllocationCreateInfo hostAllocInfo{};
+		hostAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		hostAllocInfo.flags =
+			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer          rawHostBuffer = VK_NULL_HANDLE;
+		VmaAllocation     hostAllocation = nullptr;
+		VmaAllocationInfo hostAllocResult{};
+		vmaCreateBuffer(allocator, &hostBufferInfo, &hostAllocInfo, &rawHostBuffer, &hostAllocation, &hostAllocResult);
+		REQUIRE(hostAllocResult.pMappedData != nullptr);
+
+		registry.RegisterImportedBuffer<TestHostBuffer>(
+			vk::Buffer(rawHostBuffer),
+			StorageBufferDesc(sizeof(std::uint32_t))
+		);
+
+		// Hand-rolled staging buffer for the Transfer-domain copyBufferToImage -- mirrors
+		// UploadPredefinedTexture's own staging buffer exactly (Util.hpp), since that's the real
+		// code path this fixture stands in for.
+		constexpr std::uint32_t kTexWidth = 4;
+		constexpr std::uint32_t kTexHeight = 4;
+		constexpr std::size_t   kTexBytes = std::size_t{kTexWidth} * kTexHeight * 4;
+
+		VkBufferCreateInfo stagingBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		stagingBufferInfo.size = kTexBytes;
+		stagingBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+		VmaAllocationCreateInfo stagingAllocInfo{};
+		stagingAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		stagingAllocInfo.flags =
+			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer          rawStagingBuffer = VK_NULL_HANDLE;
+		VmaAllocation     stagingAllocation = nullptr;
+		VmaAllocationInfo stagingAllocResult{};
+		vmaCreateBuffer(
+			allocator,
+			&stagingBufferInfo,
+			&stagingAllocInfo,
+			&rawStagingBuffer,
+			&stagingAllocation,
+			&stagingAllocResult
+		);
+		REQUIRE(stagingAllocResult.pMappedData != nullptr);
+		std::memset(stagingAllocResult.pMappedData, 0xAB, kTexBytes);
+
+		auto runFrame = [&](std::uint64_t frameIndex, std::uint32_t sentinel) {
+			Graph g;
+			g.Register<HostWriterNode>(HostWriterNode{.mapped = hostAllocResult.pMappedData, .sentinel = sentinel});
+			g.Register<HostBufferReaderNode>();
+			g.Register<StagedWriterNode>(
+				StagedWriterNode{
+					.stagingBuffer = vk::Buffer(rawStagingBuffer),
+					.width = kTexWidth,
+					.height = kTexHeight,
+				}
+			);
+			g.Register<StagedTextureReaderNode>(StagedTextureReaderNode{.width = kTexWidth, .height = kTexHeight});
+
+			FrameContext ctx{.width = kTexWidth, .height = kTexHeight, .frameIndex = frameIndex};
+
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(g, ctx, cmd, false));
+			vkCmd.end();
+
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			device.GetQueue().submit(submitInfo);
+			device.GetQueue().waitIdle();
+		};
+
+		// Distinct frameIndexes/sentinels so frames 1/2 exercise EmitBufferBarrier/
+		// EmitImageBarrier from non-initial tracked state, not just the first-use case, and so
+		// the final readback can only pass if the last frame's write is what actually landed.
+		runFrame(0, 0xAAAAAAAAu);
+		runFrame(1, 0xBBBBBBBBu);
+		runFrame(2, 0xCCCCCCCCu);
+
+		std::uint32_t readBack = 0;
+		std::memcpy(&readBack, hostAllocResult.pMappedData, sizeof(readBack));
+		CHECK(readBack == 0xCCCCCCCCu);
+
+		vmaDestroyBuffer(allocator, rawStagingBuffer, stagingAllocation);
+		vmaDestroyBuffer(allocator, rawHostBuffer, hostAllocation);
+		vkDevice.destroyCommandPool(pool);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+// -- CPU-write + sync helper: Stage 2 -----------------------------------------------------------
+// See .claude/plans/ancient-booping-magpie.md. Provisions a real Mapped ring through real
+// Provision() (PhysicalRegistry.hpp) and checks its shape: ring-slot count/stride, non-overlapping
+// mapped spans, a stable handle while requests fit existing capacity, and a delayed-not-immediate
+// free when a request finally outgrows it.
+TEST_CASE("ProvisionBuffer provisions a real Mapped ring with the correct shape, stable handle, "
+		  "and delayed-not-immediate free on growth") {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				device.GetQueueFamily(),
+			}
+		);
+		vk::CommandBuffer vkCmd = vkDevice
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		PhysicalExecutionBackend backend(registry);
+
+		auto runFrame = [&](std::uint64_t frameIndex, std::uint64_t byteSize) {
+			Graph g;
+			g.Register<MappedRingWriterNode>(MappedRingWriterNode{.byteSize = byteSize});
+
+			FrameContext ctx{.width = 4, .height = 4, .frameIndex = frameIndex};
+
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(g, ctx, cmd, false));
+			vkCmd.end();
+
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			device.GetQueue().submit(submitInfo);
+			device.GetQueue().waitIdle();
+		};
+
+		// Frames 0-2: identical byteSize (4, well within a 16-byte-aligned slot) -- proves the
+		// handle stays stable across repeated same-size requests, not just a single Provision.
+		runFrame(0, sizeof(std::uint32_t));
+
+		auto buf = registry.GetBuffer<TestMappedRingBuffer>();
+		REQUIRE(buf != nullptr);
+		CHECK(buf->RingSlots() == brassica::FRAME_OVERLAP);
+		CHECK(buf->SliceStride() == 16); // AlignUp(4, 16)
+		CHECK(buf->CapacityBytes() == buf->SliceStride() * brassica::FRAME_OVERLAP);
+		CHECK(buf->IsHostMapped());
+
+		void* slice0 = buf->MappedSlice(0);
+		void* slice1 = buf->MappedSlice(1);
+		REQUIRE(slice0 != nullptr);
+		REQUIRE(slice1 != nullptr);
+		CHECK(
+			static_cast<std::uint8_t*>(slice1) - static_cast<std::uint8_t*>(slice0) ==
+			static_cast<std::ptrdiff_t>(buf->SliceStride())
+		);
+
+		vk::Buffer stableHandle = buf->GetBuffer();
+
+		runFrame(1, sizeof(std::uint32_t));
+		runFrame(2, sizeof(std::uint32_t));
+		auto stillSameBuf = registry.GetBuffer<TestMappedRingBuffer>();
+		CHECK(stillSameBuf == buf); // same PhysicalBuffer object, not just an equal-looking one
+		CHECK(stillSameBuf->GetBuffer() == stableHandle);
+		buf.reset();
+		stillSameBuf.reset(); // only oldBuf below should hold a local reference from here on
+
+		// Frame 3: a request that exceeds the existing 16-byte slice stride -- must reallocate.
+		auto oldBuf = registry.GetBuffer<TestMappedRingBuffer>();
+		runFrame(3, 20);
+		auto newBuf = registry.GetBuffer<TestMappedRingBuffer>();
+		CHECK(newBuf != oldBuf);
+		CHECK(newBuf->GetBuffer() != oldBuf->GetBuffer());
+		CHECK(newBuf->SliceStride() >= 20);
+
+		// Not freed immediately: RetireBuffer schedules the drop for frameIndex + FRAME_OVERLAP
+		// (5), so at frame 4 the registry must still be holding its own copy alongside ours.
+		runFrame(4, 20);
+		CHECK(oldBuf.use_count() >= 2);
+
+		// Frame 5 is exactly when ProcessBufferRetirements sweeps it -- proves the queue drains
+		// rather than holding replaced buffers forever.
+		runFrame(5, 20);
+		CHECK(oldBuf.use_count() == 1);
+
+		vkDevice.destroyCommandPool(pool);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
 }

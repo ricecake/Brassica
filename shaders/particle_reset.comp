@@ -9,7 +9,7 @@ struct IndirectCommand {
 	uint groupCountZ;
 };
 
-layout(std430, set = 1, binding = 3) buffer IndirectCommandBuffer {
+layout(std430, set = 2, binding = 3) buffer IndirectCommandBuffer {
 	IndirectCommand uIndirectCommand;
 };
 

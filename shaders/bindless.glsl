@@ -3,7 +3,10 @@
 
 #extension GL_EXT_nonuniform_qualifier : require
 
-// Global Frame UBO at set 0, binding 0
+// Frame UBO in its own always-bound set 0 -- every shader gets ready access to camera/time/
+// frame data without declaring it as a graph resource dependency. Genuinely double-buffered on
+// the C++ side (Engine::frameDescriptorSets), unlike the bindless catalog below, since its
+// contents are CPU-written fresh every frame.
 layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	mat4 uViewMatrix;
 	mat4 uInvViewMatrix;
@@ -22,14 +25,16 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	uint uFrameRandom;
 };
 
-// Bindless resource catalog in Set 0 (bindings 1..5)
+// Bindless resource catalog in Set 1 (bindings 0..4). One descriptor set instance -- never
+// duplicated per frame, since a resource's descriptor is written once at creation and read for
+// the rest of its life.
 //
-// Binding 5 (acceleration structures) is deliberately NOT declared here -- see
+// Binding 4 (acceleration structures) is deliberately NOT declared here -- see
 // bindless_tlas.glsl.
-layout(set = 0, binding = 1) uniform texture2D uTextures2D[];
-layout(set = 0, binding = 2) uniform texture2DArray uTextureArrays[];
-layout(set = 0, binding = 3) uniform sampler uSamplers[];
-layout(set = 0, binding = 4, rgba32f) uniform image2D uImagesRGBA32F[];
+layout(set = 1, binding = 0) uniform texture2D uTextures2D[];
+layout(set = 1, binding = 1) uniform texture2DArray uTextureArrays[];
+layout(set = 1, binding = 2) uniform sampler uSamplers[];
+layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
 
 // Sampler catalog indices, written once by Engine::InitGlobalDescriptors and injected here via
 // Shader::RegisterConstant's [[NAME]] substitution -- GLSL and C++ read the same catalog by

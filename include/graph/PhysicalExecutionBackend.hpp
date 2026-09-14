@@ -363,18 +363,22 @@ namespace brassica::graph {
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(cmd.vkCmd));
 
 			// 4a. One NodeContext, reused across every node this frame (at every nesting level).
-			// pipeline/pipelineLayout/globalUboOffset stay at their defaults -- each ported node
-			// still resolves its own pipeline through its own PipelineLibrary pointer (the
-			// GradientNode/DeferredNode pattern), not through ctx. globalSet is the one
-			// genuinely shared, backend-level handle: the single bindless descriptor set every
-			// ported node binds at set 0. m_registry itself satisfies BindlessIndexSource, so
-			// ctx.Index<K>() already resolves real indices too.
+			// pipeline/pipelineLayout stay at their defaults -- each ported node still resolves
+			// its own pipeline through its own PipelineLibrary pointer (the GradientNode/
+			// DeferredNode pattern), not through ctx. frameSet/globalSet are the two genuinely
+			// shared, backend-level handles every ported node binds: the always-bound per-frame
+			// UBO set (set 0) and the single bindless descriptor set (set 1). m_registry itself
+			// satisfies BindlessIndexSource, so ctx.Index<K>() already resolves real indices too.
 			NodeContext nodeCtx{};
 			nodeCtx.cmd = cmd;
 			nodeCtx.width = ctx.width;
 			nodeCtx.height = ctx.height;
 			nodeCtx.frameIndex = ctx.frameIndex;
 			nodeCtx.bindless = &m_registry;
+			nodeCtx.frameSet = static_cast<void*>(static_cast<VkDescriptorSet>(m_registry.GetFrameDescriptorSet()));
+			nodeCtx.frameSetLayout = static_cast<void*>(
+				static_cast<VkDescriptorSetLayout>(m_registry.GetFrameDescriptorSetLayout())
+			);
 			nodeCtx.globalSet = static_cast<void*>(static_cast<VkDescriptorSet>(m_registry.GetBindlessDescriptorSet()));
 			nodeCtx.globalSetLayout = static_cast<void*>(
 				static_cast<VkDescriptorSetLayout>(m_registry.GetBindlessDescriptorSetLayout())

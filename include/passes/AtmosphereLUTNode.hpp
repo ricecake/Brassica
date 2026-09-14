@@ -11,6 +11,7 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -74,7 +75,7 @@ namespace brassica {
 	// into DeferredNode is a separate feature decision, not part of this migration. Ported and
 	// tested (tests/test_atmosphere_lut.cpp) so it compiles and behaves correctly against the
 	// bindless model, ready for whoever wires it up next.
-	struct TransmittanceLUTNode {
+	struct TransmittanceLUTNode: render::NodeRegistrar<TransmittanceLUTNode> {
 		using Resources = graph::Declares<graph::Create<TransmittanceLUT>>;
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
@@ -83,11 +84,11 @@ namespace brassica {
 		AtmosphereRegenerationState* throttle = &localThrottle;
 		AtmospherePushConstants      atmosphere{};
 
-		void Init(vk::Device device, render::PipelineLibrary* library, ShaderWatcher* watcher = nullptr) {
-			pipelineLibrary = library;
-			shader.CompileComputeFromFile(device, "shaders/atmosphere/transmittance_lut.comp");
-			if (watcher) {
-				watcher->RegisterShader(&shader);
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			shader.CompileComputeFromFile(services.device, "shaders/atmosphere/transmittance_lut.comp");
+			if (services.shaderWatcher) {
+				services.shaderWatcher->RegisterShader(&shader);
 			}
 		}
 
@@ -114,8 +115,11 @@ namespace brassica {
 				.outIndex = ctx.StorageIndex<TransmittanceLUT>(),
 			};
 
-			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TransmittanceLUTPushConstants)}
 			};
 			render::ComputePipelineRequest request{
@@ -130,9 +134,12 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 			}
 
-			vk::DescriptorSet globalSet = static_cast<VkDescriptorSet>(ctx.globalSet);
-			if (globalSet) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, globalSet, nullptr);
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
 
 			vkCmd.pushConstants(
@@ -152,7 +159,9 @@ namespace brassica {
 		}
 	};
 
-	struct MultiScatteringLUTNode {
+	BRASSICA_REGISTER_NODE(TransmittanceLUTNode);
+
+	struct MultiScatteringLUTNode: render::NodeRegistrar<MultiScatteringLUTNode> {
 		using Resources = graph::Declares<graph::Read<TransmittanceLUT>, graph::Create<MultiScatteringLUT>>;
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
@@ -161,11 +170,11 @@ namespace brassica {
 		AtmosphereRegenerationState* throttle = &localThrottle;
 		AtmospherePushConstants      atmosphere{};
 
-		void Init(vk::Device device, render::PipelineLibrary* library, ShaderWatcher* watcher = nullptr) {
-			pipelineLibrary = library;
-			shader.CompileComputeFromFile(device, "shaders/atmosphere/multiscattering_lut.comp");
-			if (watcher) {
-				watcher->RegisterShader(&shader);
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			shader.CompileComputeFromFile(services.device, "shaders/atmosphere/multiscattering_lut.comp");
+			if (services.shaderWatcher) {
+				services.shaderWatcher->RegisterShader(&shader);
 			}
 		}
 
@@ -200,8 +209,11 @@ namespace brassica {
 				.transmittanceIndex = ctx.Index<TransmittanceLUT>(),
 			};
 
-			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(MultiScatteringLUTPushConstants)}
 			};
 			render::ComputePipelineRequest request{
@@ -216,9 +228,12 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 			}
 
-			vk::DescriptorSet globalSet = static_cast<VkDescriptorSet>(ctx.globalSet);
-			if (globalSet) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, globalSet, nullptr);
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
 
 			vkCmd.pushConstants(
@@ -237,5 +252,7 @@ namespace brassica {
 			vkCmd.dispatch(1, 1, 1);
 		}
 	};
+
+	BRASSICA_REGISTER_NODE(MultiScatteringLUTNode);
 
 } // namespace brassica

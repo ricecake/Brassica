@@ -30,19 +30,19 @@ struct IndirectCommand {
 	uint groupCountZ;
 };
 
-layout(std430, set = 1, binding = 0) readonly buffer Particles {
+layout(std430, set = 2, binding = 0) readonly buffer Particles {
 	Particle uParticles[];
 };
 
-layout(std430, set = 1, binding = 1) readonly buffer ParticleTypes {
+layout(std430, set = 2, binding = 1) readonly buffer ParticleTypes {
 	ParticleType uParticleTypes[];
 };
 
-layout(std430, set = 1, binding = 2) readonly buffer AliveIndices {
+layout(std430, set = 2, binding = 2) readonly buffer AliveIndices {
 	uint uAliveIndices[];
 };
 
-layout(std430, set = 1, binding = 3) readonly buffer IndirectCommandBuffer {
+layout(std430, set = 2, binding = 3) readonly buffer IndirectCommandBuffer {
 	IndirectCommand uIndirectCommand;
 };
 

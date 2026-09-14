@@ -16,23 +16,14 @@ namespace brassica::graph {
 
 namespace brassica::utils {
 
+	// Both helpers upload through registry.GetQueue() -- there is no way to route a call
+	// through a different queue than the one the registry was constructed/wired with, so
+	// callers should not read a "transfer queue" parameter into these; there isn't one.
 	template <graph::ResourceRef Key, typename T>
 	std::shared_ptr<graph::PhysicalBuffer> CreateAndRegisterStaticBuffer(
 		graph::PhysicalResourceRegistry& registry,
 		std::span<const T>               data,
-		const graph::ResourceDesc&       desc = {},
-		vk::Queue                        transferQueue = {}
-	);
-
-	template <graph::ResourceRef Key, typename T>
-	std::shared_ptr<graph::PhysicalBuffer> CreateAndRegisterStaticBuffer(
-		vk::Device                       device,
-		VmaAllocator                     allocator,
-		vk::Queue                        transferQueue,
-		vk::CommandPool                  transientPool,
-		graph::PhysicalResourceRegistry& registry,
-		std::span<const T>               data,
-		const graph::ResourceDesc&       desc
+		const graph::ResourceDesc&       desc = {}
 	);
 
 	template <graph::ResourceRef Key>
@@ -40,8 +31,7 @@ namespace brassica::utils {
 		graph::PhysicalResourceRegistry& registry,
 		std::span<const std::uint8_t>    pixelData,
 		const graph::ResourceDesc&       desc,
-		vk::ImageLayout                  targetLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-		vk::Queue                        transferQueue = {}
+		vk::ImageLayout                  targetLayout = vk::ImageLayout::eShaderReadOnlyOptimal
 	);
 
 } // namespace brassica::utils
@@ -54,28 +44,10 @@ namespace brassica::utils {
 	std::shared_ptr<graph::PhysicalBuffer> CreateAndRegisterStaticBuffer(
 		graph::PhysicalResourceRegistry& registry,
 		std::span<const T>               data,
-		const graph::ResourceDesc&       desc,
-		vk::Queue                        transferQueue
-	) {
-		(void)transferQueue;
-		registry.UploadPredefinedBuffer(graph::IdOf<Key>(), data.data(), data.size_bytes(), desc);
-		return registry.GetBuffer<Key>();
-	}
-
-	template <graph::ResourceRef Key, typename T>
-	std::shared_ptr<graph::PhysicalBuffer> CreateAndRegisterStaticBuffer(
-		vk::Device                       device,
-		VmaAllocator                     allocator,
-		vk::Queue                        transferQueue,
-		vk::CommandPool                  transientPool,
-		graph::PhysicalResourceRegistry& registry,
-		std::span<const T>               data,
 		const graph::ResourceDesc&       desc
 	) {
-		(void)device;
-		(void)allocator;
-		(void)transientPool;
-		return CreateAndRegisterStaticBuffer<Key, T>(registry, data, desc, transferQueue);
+		registry.UploadPredefinedBuffer(graph::IdOf<Key>(), data.data(), data.size_bytes(), desc);
+		return registry.GetBuffer<Key>();
 	}
 
 	template <graph::ResourceRef Key>
@@ -83,10 +55,8 @@ namespace brassica::utils {
 		graph::PhysicalResourceRegistry& registry,
 		std::span<const std::uint8_t>    pixelData,
 		const graph::ResourceDesc&       desc,
-		vk::ImageLayout                  targetLayout,
-		vk::Queue                        transferQueue
+		vk::ImageLayout                  targetLayout
 	) {
-		(void)transferQueue;
 		registry.UploadPredefinedTexture(
 			graph::IdOf<Key>(),
 			pixelData.data(),
@@ -181,9 +151,8 @@ namespace brassica::graph {
 
 		const ResourceId resolvedId = ResolveId(id);
 		auto             destTexture = GetTexture(resolvedId);
-		ResourceDesc texDesc;
+		ResourceDesc     texDesc = desc;
 		if (!destTexture) {
-			texDesc = desc;
 			if (texDesc.usageMask == 0) {
 				texDesc.usageMask = static_cast<std::uint32_t>(
 					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
@@ -192,6 +161,14 @@ namespace brassica::graph {
 			destTexture = std::make_shared<PhysicalTexture>(device, allocator, texDesc);
 			AssignAndWriteBindlessIndices(*destTexture);
 			m_textures[resolvedId] = destTexture;
+		} else {
+			// Re-upload into an existing texture (e.g. a second PredefinedTextureNode::SetData
+			// call): texDesc must describe what that texture actually *is*, not the caller's
+			// desc -- the caller may pass a stale or default-constructed one on this path (see
+			// PredefinedTextureNode::SetData, which doesn't require a fresh desc every call), and
+			// the subresource range/copy extent below need the real width/height/mips/layers or
+			// they silently copy the wrong region.
+			texDesc = destTexture->GetDesc();
 		}
 		destTexture->SetHasDefinedContents(true);
 
@@ -277,6 +254,15 @@ namespace brassica::graph {
 				{},
 				barrier2
 			);
+
+			// The two manual barriers above are real, but until now nothing told the registry's
+			// own tracking they happened -- destTexture->GetCurrentLayout() kept reporting
+			// eUndefined (or whatever it was before this call) forever after, silently
+			// desynced from the image's real layout. Only the final state matters here: barrier1's
+			// transitional eTransferDstOptimal is never observed by anything outside this
+			// function, which waits idle before returning.
+			destTexture->SetCurrentLayout(layout);
+			destTexture->SetLastStageAccess(vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead);
 
 			cmd.end();
 

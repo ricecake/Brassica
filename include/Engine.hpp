@@ -12,12 +12,7 @@
 #include "GLFW/glfw3.h"
 #include "graph/PhysicalRegistry.hpp"
 #include "InputHandler.hpp"
-#include "passes/AtmosphereLUTNode.hpp"
-#include "passes/DeferredNode.hpp"
-#include "passes/GradientNode.hpp"
-#include "passes/ParticleSystemNode.hpp"
-#include "passes/TerrainNode.hpp"
-#include "passes/WaterNode.hpp"
+#include "passes/AllNodes.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -175,14 +170,14 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		// Persistent Standalone Render Nodes
-		GradientNode           gradientNode;
-		TerrainNode            terrainNode;
-		DeferredNode           deferredNode;
-		WaterNode              waterNode;
-		TransmittanceLUTNode   transmittanceNode;
-		MultiScatteringLUTNode multiScatteringNode;
-		ParticleSystemNode     particleSystemNode;
+		// Every top-level render node used to be a named member here (GradientNode, TerrainNode,
+		// DeferredNode, WaterNode, TransmittanceLUTNode, MultiScatteringLUTNode,
+		// ParticleSystemNode) with hand-written Init/Destroy/RegisterRef calls in Engine.cpp for
+		// each. They're auto-registered now (render::EngineNodeRegistry, via
+		// render::NodeRegistrar<T> -- see include/render/NodeLifecycle.hpp and
+		// include/passes/AllNodes.hpp) and live in the registry's own storage instead -- Engine
+		// reaches a specific one only where it still needs to (SetFrameParams, in DrawFrame) via
+		// EngineNodeRegistry::Instance().Get<T>().
 
 		// What's left of the old TerrainPass once its pipeline/shader ownership moved above --
 		// the terrain BLAS/TLAS build, unchanged, now living in terrain/ rather than passes/
@@ -199,23 +194,29 @@ namespace brassica {
 		// Vulkan Memory Allocator
 		VmaAllocator allocator{VK_NULL_HANDLE};
 
-		// Global Descriptor Set 0 (FrameUBO)
-		vk::DescriptorSetLayout globalSet0Layout{nullptr};
-		vk::DescriptorPool      globalDescriptorPool{nullptr};
-		vk::Buffer              globalUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
-		VmaAllocation           globalUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
-		void*                   globalUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
-		vk::DescriptorSet       globalDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
+		// Frame set (set 0): just the FrameUBO, always bound by every node regardless of what
+		// else it touches -- every shader gets ready access to camera/time/frame data without
+		// declaring it as a graph resource dependency. Genuinely double-buffered (unlike the
+		// bindless set below): the UBO's contents are CPU-written fresh every frame, so frame
+		// N's write must not land in the copy frame N-1's still-in-flight GPU work may still be
+		// reading.
+		vk::DescriptorSetLayout frameSetLayout{nullptr};
+		vk::DescriptorPool      frameDescriptorPool{nullptr};
+		vk::Buffer              frameUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation           frameUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*                   frameUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
+		vk::DescriptorSet       frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
-		void InitGlobalUBO();
-		void CleanupGlobalUBO();
+		void InitFrameSet();
+		void CleanupFrameSet();
 
-		// The bindless set -- deliberately separate from globalSet0Layout/globalDescriptorSets
-		// above rather than merged into them: FrameUBO's binding needs to stay a plain
-		// eUniformBuffer with no dynamic offset at every existing bind call site until those
-		// call sites are rewritten anyway (the NodeContext/PipelineLibrary work), so folding the
-		// two together now would mean threading a dynamic offset through every one of them just
-		// to add bindings nothing consumes yet. See PhysicalResourceRegistry::BindlessBindings.
+		// The bindless set (set 1): one instance, never duplicated per frame -- a resource's
+		// descriptor is written once at creation and read for the rest of its life, so unlike
+		// the frame set above there is no in-flight copy to keep separate. (An earlier version
+		// of this folded the per-frame UBO into this same set, which forced duplicating the
+		// whole set -- and therefore every bindless descriptor write -- per frame just for the
+		// UBO's sake, reintroducing exactly the in-flight write hazard bindless indexing exists
+		// to avoid. See PhysicalResourceRegistry::BindlessBindings.)
 		vk::DescriptorSetLayout bindlessSetLayout{nullptr};
 		vk::DescriptorPool      bindlessDescriptorPool{nullptr};
 		vk::DescriptorSet       bindlessDescriptorSet{nullptr};

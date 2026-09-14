@@ -9,7 +9,9 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -46,12 +48,9 @@ namespace brassica {
 	// Like GradientNode/DeferredNode, reconstructed fresh every frame -- pipelineLibrary/
 	// taskShader/meshShader/fragShader point at Engine-owned, persistent state, and
 	// ResolveCached makes re-resolving the same request every frame a cache hit.
-	struct TerrainNode {
+	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
 		using Resources = graph::Declares<
-			graph::Create<GBufferPosition>,
-			graph::Create<GBufferNormal>,
-			graph::Create<GBufferAlbedo>,
-			graph::Create<GBufferDepth>,
+			GBuffer<graph::Create>,
 			graph::Create<TerrainTLAS>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
@@ -79,19 +78,14 @@ namespace brassica {
 		TerrainAccelerationStructure* terrainAS = nullptr;
 		TerrainPushConstants          push{};
 
-		void Init(
-			vk::Device                    device,
-			render::PipelineLibrary*      library,
-			TerrainAccelerationStructure* as,
-			ShaderWatcher*                watcher = nullptr
-		) {
-			pipelineLibrary = library;
-			terrainAS = as;
-			taskShader.CompileTaskFromFile(device, "shaders/terrain.task");
-			meshShader.CompileMeshFromFile(device, "shaders/terrain.mesh");
-			fragShader.CompileFragmentFromFile(device, "shaders/terrain.frag");
-			if (watcher) {
-				RegisterShaders(*watcher);
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			terrainAS = services.terrainAS;
+			taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task");
+			meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh");
+			fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag");
+			if (services.shaderWatcher) {
+				RegisterShaders(*services.shaderWatcher);
 			}
 		}
 
@@ -107,7 +101,11 @@ namespace brassica {
 			fragShader.Destroy(device);
 		}
 
-		void SetFrameParams(const TerrainPushConstants& p) { push = p; }
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			push.gridParams = p.terrainGridParams;
+			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
+			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
+		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -174,8 +172,11 @@ namespace brassica {
 				vk::Format::eR16G16B16A16Sfloat,
 				vk::Format::eR8G8B8A8Unorm
 			};
-			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{vk::PushConstantRange{
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
 				0,
 				sizeof(TerrainPushConstants)
@@ -195,9 +196,12 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
 			}
 
-			vk::DescriptorSet globalSet = static_cast<VkDescriptorSet>(ctx.globalSet);
-			if (globalSet) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
 			}
 
 			vk::Extent2D extent{ctx.width, ctx.height};
@@ -220,5 +224,7 @@ namespace brassica {
 			}
 		}
 	};
+
+	BRASSICA_REGISTER_NODE(TerrainNode);
 
 } // namespace brassica

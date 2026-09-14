@@ -56,7 +56,7 @@ TEST_CASE("GradientNode renders through PhysicalExecutionBackend with no validat
 		render::PipelineLibrary pipelineLibrary(vkDevice, engine.GetPipelineCache());
 
 		GradientNode gradientNode;
-		gradientNode.Init(vkDevice, &pipelineLibrary);
+		gradientNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 
 		graph::PhysicalResourceRegistry registry(vkDevice, engine.GetAllocator());
 		graph::PhysicalExecutionBackend backend(registry);

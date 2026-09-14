@@ -243,15 +243,9 @@ namespace brassica {
 			terrainClipmap.Cleanup();
 
 			pipelineLibrary.Reset();
-			gradientNode.Destroy(device);
-			terrainNode.Destroy(device);
-			deferredNode.Destroy(device);
-			waterNode.Destroy(device);
-			transmittanceNode.Destroy(device);
-			multiScatteringNode.Destroy(device);
-			particleSystemNode.Destroy(device);
+			render::EngineNodeRegistry::Instance().DestroyAll(device);
 
-			CleanupGlobalUBO();
+			CleanupFrameSet();
 			CleanupGlobalDescriptors();
 
 			for (int i = 0; i < FRAME_OVERLAP; i++) {
@@ -328,6 +322,7 @@ namespace brassica {
 		globalSeed = rd();
 		rng.seed(globalSeed);
 
+		InitFrameSet();
 		InitGlobalDescriptors();
 
 		std::string shaderDir = "shaders";
@@ -344,13 +339,24 @@ namespace brassica {
 
 		terrainAS.Init(instance, device);
 
-		gradientNode.Init(device, &pipelineLibrary, &shaderWatcher);
-		terrainNode.Init(device, &pipelineLibrary, &terrainAS, &shaderWatcher);
-		deferredNode.Init(device, &pipelineLibrary, GetSwapchainFormat(), &shaderWatcher);
-		waterNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
-		transmittanceNode.Init(device, &pipelineLibrary, &shaderWatcher);
-		multiScatteringNode.Init(device, &pipelineLibrary, &shaderWatcher);
-		particleSystemNode.Init(device, &pipelineLibrary, &terrainAS.GetDls(), GetSwapchainFormat(), &shaderWatcher);
+		render::NodeServices nodeServices{
+			.device = device,
+			.pipelineLibrary = &pipelineLibrary,
+			.shaderWatcher = &shaderWatcher,
+			.terrainAS = &terrainAS,
+			.dispatchLoader = &terrainAS.GetDls(),
+			.swapchainFormat = GetSwapchainFormat(),
+		};
+		// Concrete evidence the CRTP registrar (render::NodeRegistrar<T>, include/render/
+		// NodeLifecycle.hpp) actually survived static-library linking under this build's LTO
+		// (CMAKE_INTERPROCEDURAL_OPTIMIZATION) rather than being silently stripped -- not just
+		// "it compiled." One entry per node listed in include/passes/AllNodes.hpp.
+		spdlog::info(
+			"EngineNodeRegistry: {} auto-registered node type(s)",
+			render::EngineNodeRegistry::Instance().RegisteredTypeCount()
+		);
+		render::EngineNodeRegistry::Instance().CreateAll();
+		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
 		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		float initialTerrainHeight =
@@ -900,21 +906,24 @@ namespace brassica {
 		ubo.globalSeed = globalSeed;
 		ubo.frameRandom = static_cast<uint32_t>(rng());
 
-		if (globalUboMapped[activeFrame]) {
-			std::memcpy(globalUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
-			vmaFlushAllocation(allocator, globalUboAllocations[activeFrame], 0, sizeof(FrameUBO));
+		if (frameUboMapped[activeFrame]) {
+			std::memcpy(frameUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
+			vmaFlushAllocation(allocator, frameUboAllocations[activeFrame], 0, sizeof(FrameUBO));
 		}
 
+		// bindlessBindings.set/layout (set 1) never change frame to frame -- only frameSet
+		// actually varies here, since it's the only piece that's genuinely double-buffered. This
+		// still runs every frame rather than once at init because activeFrame does.
 		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
-		bindlessBindings.set = globalDescriptorSets[activeFrame];
-		bindlessBindings.sets.assign(globalDescriptorSets, globalDescriptorSets + FRAME_OVERLAP);
+		bindlessBindings.set = bindlessDescriptorSet;
 		bindlessBindings.layout = bindlessSetLayout;
-		bindlessBindings.uboBinding = 0;
-		bindlessBindings.sampledImage2DBinding = 1;
-		bindlessBindings.sampledImage2DArrayBinding = 2;
-		bindlessBindings.samplerBinding = 3;
-		bindlessBindings.storageImageBinding = 4;
-		bindlessBindings.accelerationStructureBinding = 5;
+		bindlessBindings.sampledImage2DBinding = 0;
+		bindlessBindings.sampledImage2DArrayBinding = 1;
+		bindlessBindings.samplerBinding = 2;
+		bindlessBindings.storageImageBinding = 3;
+		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.frameSet = frameDescriptorSets[activeFrame];
+		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 
 		terrainUploader.Poll();
@@ -948,33 +957,30 @@ namespace brassica {
 			.BuildOrUpdate(allocator, camera.position, terrainClipmap.GetBaseTexelSize(), terrainPush.gridParams.x);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
-		terrainNode.SetFrameParams(terrainPush);
-		deferredNode.SetFrameParams(
-			DeferredPushConstants{
-				.gridParams = terrainPush.gridParams,
-				.lodOffsets0_3 = terrainPush.lodOffsets0_3,
-				.lodOffsets4_7 = terrainPush.lodOffsets4_7,
-			}
-		);
-		waterNode.SetFrameParams(
-			WaterPushConstants{
-				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
-				.waterLevel = 0.0f,
-			}
-		);
+		// SetFrameParams is a data-flow concern (this frame's camera/water-level/LOD data),
+		// deliberately kept separate from NodeServices/InitAll -- see the CRTP auto-registration
+		// plan's Context section. Unlike Init (once, heterogeneous per node type), every node
+		// that has per-frame data at all shares this one bundle and pulls out whichever fields
+		// it needs (render::HasSetFrameParams, include/render/NodeLifecycle.hpp) -- nodes with no
+		// per-frame data (GradientNode, the atmosphere LUT nodes, ParticleSystemNode) are silently
+		// skipped, so Engine builds exactly one NodeFrameParams and hands it to every registered
+		// node uniformly, the same shape as InitAll/DestroyAll/RegisterAllInto.
+		render::NodeFrameParams frameParams{
+			.terrainGridParams = terrainPush.gridParams,
+			.terrainLodOffsets0_3 = terrainPush.lodOffsets0_3,
+			.terrainLodOffsets4_7 = terrainPush.lodOffsets4_7,
+			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
+			.waterLevel = 0.0f,
+		};
+		auto& nodeRegistry = render::EngineNodeRegistry::Instance();
+		nodeRegistry.SetFrameParamsAll(frameParams);
 
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
-		frameGraph.RegisterRef(transmittanceNode);
-		frameGraph.RegisterRef(multiScatteringNode);
-		frameGraph.RegisterRef(gradientNode);
-		frameGraph.RegisterRef(terrainNode);
-		frameGraph.RegisterRef(deferredNode);
-		frameGraph.RegisterRef(waterNode);
-		frameGraph.RegisterRef(particleSystemNode);
+		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);
@@ -1104,103 +1110,35 @@ namespace brassica {
 		frameNumber++;
 	}
 
-	void Engine::InitGlobalUBO() {
-		InitGlobalDescriptors();
-	}
-
-	void Engine::CleanupGlobalUBO() {
-		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
-			if (globalUboBuffers[i] && globalUboAllocations[i]) {
-				vmaDestroyBuffer(allocator, globalUboBuffers[i], globalUboAllocations[i]);
-				globalUboBuffers[i] = nullptr;
-				globalUboAllocations[i] = nullptr;
-				globalUboMapped[i] = nullptr;
-			}
-		}
-	}
-
-	void Engine::InitGlobalDescriptors() {
-		if (bindlessSetLayout) {
+	void Engine::InitFrameSet() {
+		if (frameSetLayout) {
 			return;
 		}
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
-		// Binding 0: FrameUBO
-		bindings[0]
-			.setBinding(0)
+
+		vk::DescriptorSetLayoutBinding uboBinding{};
+		uboBinding.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 1: uTextures2D
-		bindings[1]
-			.setBinding(1)
-			.setDescriptorType(vk::DescriptorType::eSampledImage)
-			.setDescriptorCount(maxBindlessSampledImages)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 2: uTextureArrays
-		bindings[2]
-			.setBinding(2)
-			.setDescriptorType(vk::DescriptorType::eSampledImage)
-			.setDescriptorCount(64)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 3: uSamplers
-		bindings[3]
-			.setBinding(3)
-			.setDescriptorType(vk::DescriptorType::eSampler)
-			.setDescriptorCount(4)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 4: uImagesRGBA32F
-		bindings[4]
-			.setBinding(4)
-			.setDescriptorType(vk::DescriptorType::eStorageImage)
-			.setDescriptorCount(256)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 5: uTLAS
-		bindings[5]
-			.setBinding(5)
-			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
-			.setDescriptorCount(4)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-
-		std::array<vk::DescriptorBindingFlags, 6> bindingFlags{
-			vk::DescriptorBindingFlags{},
-			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlags{},
-			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::ePartiallyBound,
-		};
-		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
-		bindingFlagsInfo.setBindingFlags(bindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(bindings);
-		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
-		layoutInfo.pNext = &bindingFlagsInfo;
-		bindlessSetLayout = device.createDescriptorSetLayout(layoutInfo);
-		globalSet0Layout = bindlessSetLayout;
+		layoutInfo.setBindings(uboBinding);
+		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
-		std::array<vk::DescriptorPoolSize, 5> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, (maxBindlessSampledImages + 64) * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4 * FRAME_OVERLAP},
-		};
+		vk::DescriptorPoolSize        poolSize{vk::DescriptorType::eUniformBuffer, FRAME_OVERLAP};
 		vk::DescriptorPoolCreateInfo poolInfo{};
-		poolInfo.setPoolSizes(poolSizes);
+		poolInfo.setPoolSizes(poolSize);
 		poolInfo.setMaxSets(FRAME_OVERLAP);
-		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind);
-		bindlessDescriptorPool = device.createDescriptorPool(poolInfo);
-		globalDescriptorPool = bindlessDescriptorPool;
+		frameDescriptorPool = device.createDescriptorPool(poolInfo);
 
-		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, bindlessSetLayout);
+		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, frameSetLayout);
 		vk::DescriptorSetAllocateInfo        allocInfo{};
-		allocInfo.setDescriptorPool(bindlessDescriptorPool);
+		allocInfo.setDescriptorPool(frameDescriptorPool);
 		allocInfo.setSetLayouts(layouts);
 
 		auto allocatedSets = device.allocateDescriptorSets(allocInfo);
 		for (size_t i = 0; i < FRAME_OVERLAP; ++i) {
-			globalDescriptorSets[i] = allocatedSets[i];
+			frameDescriptorSets[i] = allocatedSets[i];
 
 			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 			bufferInfo.size = sizeof(FrameUBO);
@@ -1218,23 +1156,23 @@ namespace brassica {
 					&bufferInfo,
 					&allocCreateInfo,
 					&buffer,
-					&globalUboAllocations[i],
+					&frameUboAllocations[i],
 					&allocResultInfo
 				) != VK_SUCCESS) {
-				spdlog::error("Failed to create Global UBO buffer with VMA");
+				spdlog::error("Failed to create frame UBO buffer with VMA");
 				return;
 			}
 
-			globalUboBuffers[i] = buffer;
-			globalUboMapped[i] = allocResultInfo.pMappedData;
+			frameUboBuffers[i] = buffer;
+			frameUboMapped[i] = allocResultInfo.pMappedData;
 
 			vk::DescriptorBufferInfo bufferDescInfo{};
-			bufferDescInfo.setBuffer(globalUboBuffers[i]);
+			bufferDescInfo.setBuffer(frameUboBuffers[i]);
 			bufferDescInfo.setOffset(0);
 			bufferDescInfo.setRange(sizeof(FrameUBO));
 
 			vk::WriteDescriptorSet uboWrite{};
-			uboWrite.setDstSet(globalDescriptorSets[i]);
+			uboWrite.setDstSet(frameDescriptorSets[i]);
 			uboWrite.setDstBinding(0);
 			uboWrite.setDstArrayElement(0);
 			uboWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
@@ -1242,7 +1180,98 @@ namespace brassica {
 
 			device.updateDescriptorSets(uboWrite, nullptr);
 		}
-		bindlessDescriptorSet = globalDescriptorSets[0];
+	}
+
+	void Engine::CleanupFrameSet() {
+		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
+			if (frameUboBuffers[i] && frameUboAllocations[i]) {
+				vmaDestroyBuffer(allocator, frameUboBuffers[i], frameUboAllocations[i]);
+				frameUboBuffers[i] = nullptr;
+				frameUboAllocations[i] = nullptr;
+				frameUboMapped[i] = nullptr;
+			}
+		}
+		if (frameDescriptorPool) {
+			device.destroyDescriptorPool(frameDescriptorPool);
+			frameDescriptorPool = nullptr;
+		}
+		if (frameSetLayout) {
+			device.destroyDescriptorSetLayout(frameSetLayout);
+			frameSetLayout = nullptr;
+		}
+	}
+
+	void Engine::InitGlobalDescriptors() {
+		if (bindlessSetLayout) {
+			return;
+		}
+		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		// Binding 0: uTextures2D
+		bindings[0]
+			.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(maxBindlessSampledImages)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 1: uTextureArrays
+		bindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(64)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 2: uSamplers
+		bindings[2]
+			.setBinding(2)
+			.setDescriptorType(vk::DescriptorType::eSampler)
+			.setDescriptorCount(4)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 3: uImagesRGBA32F
+		bindings[3]
+			.setBinding(3)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setDescriptorCount(256)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 4: uTLAS
+		bindings[4]
+			.setBinding(4)
+			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
+			.setDescriptorCount(4)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+
+		std::array<vk::DescriptorBindingFlags, 5> bindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlags{},
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound,
+		};
+		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+		bindingFlagsInfo.setBindingFlags(bindingFlags);
+
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.setBindings(bindings);
+		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
+		layoutInfo.pNext = &bindingFlagsInfo;
+		bindlessSetLayout = device.createDescriptorSetLayout(layoutInfo);
+
+		// Single instance -- never duplicated per frame, unlike the frame set above: a
+		// resource's descriptor is written once at creation and read for the rest of its life,
+		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
+		std::array<vk::DescriptorPoolSize, 4> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
+			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
+		};
+		vk::DescriptorPoolCreateInfo poolInfo{};
+		poolInfo.setPoolSizes(poolSizes);
+		poolInfo.setMaxSets(1);
+		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind);
+		bindlessDescriptorPool = device.createDescriptorPool(poolInfo);
+
+		vk::DescriptorSetAllocateInfo allocInfo{};
+		allocInfo.setDescriptorPool(bindlessDescriptorPool);
+		allocInfo.setSetLayouts(bindlessSetLayout);
+		bindlessDescriptorSet = device.allocateDescriptorSets(allocInfo).front();
 
 		// Sampler catalog: 4 engine-owned entries
 		auto makeSampler = [&](vk::Filter filter, vk::SamplerAddressMode addressMode, bool mipmap) {
@@ -1271,26 +1300,31 @@ namespace brassica {
 		for (std::uint32_t i = 0; i < 4; ++i) {
 			samplerInfos[i].setSampler(bindlessSamplers[i]);
 		}
-		for (size_t i = 0; i < FRAME_OVERLAP; i++) {
-			vk::WriteDescriptorSet samplerWrite{};
-			samplerWrite.setDstSet(globalDescriptorSets[i]);
-			samplerWrite.setDstBinding(3);
-			samplerWrite.setDstArrayElement(0);
-			samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
-			samplerWrite.setImageInfo(samplerInfos);
-			device.updateDescriptorSets(samplerWrite, {});
-		}
+		vk::WriteDescriptorSet samplerWrite{};
+		samplerWrite.setDstSet(bindlessDescriptorSet);
+		samplerWrite.setDstBinding(2);
+		samplerWrite.setDstArrayElement(0);
+		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
+		samplerWrite.setImageInfo(samplerInfos);
+		device.updateDescriptorSets(samplerWrite, {});
 
+		// Seeds the registry immediately (rather than waiting for the first DrawFrame) so that
+		// Init()'s own RegisterImportedTexture calls (terrain clipmap/min-max/biome/visibility,
+		// below) have a real set to write their bindless descriptors into -- a texture only gets
+		// AssignAndWriteBindlessIndices'd once at registration, so missing this window here would
+		// leave it with an assigned index number but a never-written descriptor. DrawFrame
+		// rebuilds this every frame regardless (frameSet is the only piece that actually varies
+		// frame to frame), so frame 0 here is just a placeholder.
 		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
-		bindlessBindings.set = globalDescriptorSets[0];
-		bindlessBindings.sets.assign(globalDescriptorSets, globalDescriptorSets + FRAME_OVERLAP);
+		bindlessBindings.set = bindlessDescriptorSet;
 		bindlessBindings.layout = bindlessSetLayout;
-		bindlessBindings.uboBinding = 0;
-		bindlessBindings.sampledImage2DBinding = 1;
-		bindlessBindings.sampledImage2DArrayBinding = 2;
-		bindlessBindings.samplerBinding = 3;
-		bindlessBindings.storageImageBinding = 4;
-		bindlessBindings.accelerationStructureBinding = 5;
+		bindlessBindings.sampledImage2DBinding = 0;
+		bindlessBindings.sampledImage2DArrayBinding = 1;
+		bindlessBindings.samplerBinding = 2;
+		bindlessBindings.storageImageBinding = 3;
+		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.frameSet = frameDescriptorSets[0];
+		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 	}
 
@@ -1304,12 +1338,10 @@ namespace brassica {
 		if (bindlessDescriptorPool) {
 			device.destroyDescriptorPool(bindlessDescriptorPool);
 			bindlessDescriptorPool = nullptr;
-			globalDescriptorPool = nullptr;
 		}
 		if (bindlessSetLayout) {
 			device.destroyDescriptorSetLayout(bindlessSetLayout);
 			bindlessSetLayout = nullptr;
-			globalSet0Layout = nullptr;
 		}
 	}
 

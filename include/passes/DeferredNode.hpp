@@ -9,7 +9,9 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -51,12 +53,9 @@ namespace brassica {
 	// point at Engine-owned, persistent state (see Engine::pipelineLibrary/deferredVertShader/
 	// deferredFragShader), and ResolveCached makes re-resolving the same request every frame a
 	// cache hit.
-	struct DeferredNode {
+	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
 		using Resources = graph::Declares<
-			graph::Read<GBufferPosition>,
-			graph::Read<GBufferNormal>,
-			graph::Read<GBufferAlbedo>,
-			graph::Read<GBufferDepth>,
+			GBuffer<graph::Read>,
 			graph::Read<GradientBackground>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
@@ -79,14 +78,13 @@ namespace brassica {
 		vk::Format               swapchainFormat = vk::Format::eUndefined;
 		DeferredPushConstants    push{};
 
-		void
-		Init(vk::Device device, render::PipelineLibrary* library, vk::Format format, ShaderWatcher* watcher = nullptr) {
-			pipelineLibrary = library;
-			swapchainFormat = format;
-			vertShader.CompileVertexFromFile(device, "shaders/deferred.vert");
-			fragShader.CompileFragmentFromFile(device, "shaders/deferred.frag");
-			if (watcher) {
-				RegisterShaders(*watcher);
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			swapchainFormat = services.swapchainFormat;
+			vertShader.CompileVertexFromFile(services.device, "shaders/deferred.vert");
+			fragShader.CompileFragmentFromFile(services.device, "shaders/deferred.frag");
+			if (services.shaderWatcher) {
+				RegisterShaders(*services.shaderWatcher);
 			}
 		}
 
@@ -100,7 +98,11 @@ namespace brassica {
 			fragShader.Destroy(device);
 		}
 
-		void SetFrameParams(const DeferredPushConstants& p) { push = p; }
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			push.gridParams = p.terrainGridParams;
+			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
+			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
+		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -128,8 +130,11 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
-			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(DeferredPushConstants)}
 			};
 			render::GraphicsPipelineRequest request{
@@ -146,9 +151,12 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
 			}
 
-			vk::DescriptorSet globalSet = static_cast<VkDescriptorSet>(ctx.globalSet);
-			if (globalSet) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, globalSet, nullptr);
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
 			}
 
 			vk::Extent2D extent{ctx.width, ctx.height};
@@ -168,5 +176,7 @@ namespace brassica {
 			vkCmd.draw(3, 1, 0, 0);
 		}
 	};
+
+	BRASSICA_REGISTER_NODE(DeferredNode);
 
 } // namespace brassica

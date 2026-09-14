@@ -73,6 +73,14 @@ namespace brassica::graph {
 	using Declares =
 		ResourceInterface<Dedup<Concat<typename Ops::Consumes...>>, Dedup<Concat<typename Ops::Produces...>>>;
 
+	// A named bundle of keys sharing one Op (Read/Create), composable into any Declares<...> call
+	// exactly like a single Op -- legal today with zero other changes, since Declares is duck-typed
+	// on ::Consumes/::Produces and Group<Op, Ks...> is just Declares<Op<Ks>...> under a discoverable
+	// name. Doesn't cover Modify<K, Version> (a different template shape: two params, second
+	// defaulted) -- no group needs that yet; add a second helper if one does.
+	template <template <typename> class Op, ResourceRef... Ks>
+	using Group = Declares<Op<Ks>...>;
+
 	template <typename T>
 	concept DeclaresResources = requires {
 		typename T::Resources::Consumes;
