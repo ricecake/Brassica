@@ -31,6 +31,7 @@ namespace brassica {
 		glm::uvec4 lodOffsets0_3{0u};             // Toroidal offsets for LOD 0-3
 		glm::uvec4 lodOffsets4_7{0u};             // Toroidal offsets for LOD 4-7
 		std::uint32_t clipmapIndex{0};
+		float baseMeshletSize{32.0f};
 	};
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1

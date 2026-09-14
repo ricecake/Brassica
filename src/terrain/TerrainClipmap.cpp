@@ -55,6 +55,14 @@ namespace brassica {
 		return baseOffset + baseVal * baseHeightScale + detailVal * detailHeightScale * detailFactor;
 	}
 
+	float TerrainClipmap::CalculateBaseMeshletSize(const glm::vec3& cameraPos, float fov, float minMeshletSize) {
+		float altitude = std::max(1.0f, cameraPos.y);
+		float tanHalfFov = std::tan(fov * 0.5f);
+		constexpr float targetFactor = 0.4677f;
+		float calculatedSize = targetFactor * altitude * tanHalfFov;
+		return std::max(minMeshletSize, calculatedSize);
+	}
+
 	glm::vec4 TerrainClipmap::SampleTerrain(float worldX, float worldZ, float texelSize) {
 		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;

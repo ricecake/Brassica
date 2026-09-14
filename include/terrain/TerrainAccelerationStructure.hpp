@@ -32,7 +32,7 @@ namespace brassica {
 			dls.init(instance, device);
 		}
 
-		void BuildOrUpdate(VmaAllocator allocator, const glm::vec3& cameraPos, float baseTexelSize, uint32_t numLODs);
+		void BuildOrUpdate(VmaAllocator allocator, const glm::vec3& cameraPos, float baseMeshletSize, uint32_t numLODs);
 
 		// Explicit, not just left to the destructor -- must run while device is still a live
 		// handle, called from Engine::Cleanup() before device.destroy() (mirroring

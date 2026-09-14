@@ -12,6 +12,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
 	uint  clipmapIndex;
+	float baseMeshletSize;
 } params;
 
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
@@ -64,7 +65,7 @@ void main() {
 	uint row = localID / meshletsPerRow;
 	uint col = localID % meshletsPerRow;
 
-	float baseMeshletSize = 32.0;
+	float baseMeshletSize = (params.baseMeshletSize > 0.0) ? params.baseMeshletSize : 32.0;
 	float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
 
 	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
@@ -73,8 +74,12 @@ void main() {
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
 
-	vec2 uv = sampleToroidalUV(worldPos.xz, lodLevel);
-	vec4 texSample = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv, float(lodLevel)));
+	float clipmapLevelOffset = log2(max(1.0, baseMeshletSize / 32.0));
+	float floatSampleLevel = clamp(float(lodLevel) + clipmapLevelOffset, 0.0, float(params.gridParams.x - 1));
+	uint sampleLevel = uint(floor(floatSampleLevel));
+
+	vec2 uv = sampleToroidalUV(worldPos.xz, sampleLevel);
+	vec4 texSample = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv, float(sampleLevel)));
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
@@ -92,8 +97,9 @@ void main() {
 			float alpha = clamp((distToCam - morphStart) / max(morphEnd - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending for CDLOD transition
 
-			vec2 uvNext = sampleToroidalUV(worldPos.xz, lodLevel + 1);
-			vec4 texNext = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uvNext, float(lodLevel + 1)));
+			uint nextSampleLevel = min(sampleLevel + 1u, params.gridParams.x - 1u);
+			vec2 uvNext = sampleToroidalUV(worldPos.xz, nextSampleLevel);
+			vec4 texNext = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uvNext, float(nextSampleLevel)));
 			float nextHeight = texNext.r;
 			vec3 nextNormal = texNext.gba;
 

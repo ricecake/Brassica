@@ -13,6 +13,8 @@ layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = padding
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uint  clipmapIndex;
+	float baseMeshletSize;
 } params;
 
 struct TaskPayload {
@@ -73,7 +75,7 @@ void main() {
 		uint row = localID / meshletsPerRow;
 		uint col = localID % meshletsPerRow;
 
-		float baseMeshletSize = 32.0;
+		float baseMeshletSize = (params.baseMeshletSize > 0.0) ? params.baseMeshletSize : 32.0;
 		float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
 
 		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
