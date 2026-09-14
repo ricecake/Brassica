@@ -12,11 +12,11 @@
 namespace brassica {
 
 	struct TerrainNoiseGenerators {
-		FastNoise::SmartNode<FastNoise::DomainScale> baseScale;
-		FastNoise::SmartNode<FastNoise::DomainScale> detailScale;
-		FastNoise::SmartNode<FastNoise::DomainScale> maskScale;
-		FastNoise::SmartNode<FastNoise::DomainScale> biomeScale;
-		FastNoise::SmartNode<>                       land;
+		FastNoise::SmartNode<> baseScale;
+		FastNoise::SmartNode<> detailScale;
+		FastNoise::SmartNode<> maskScale;
+		FastNoise::SmartNode<> biomeScale;
+		FastNoise::SmartNode<> land;
 
 		TerrainNoiseGenerators() {
 			land = FastNoise::NewFromEncodedNodeTree(
