@@ -1,0 +1,70 @@
+#version 460 core
+#include "bindless.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct Particle {
+	vec4 position;
+	vec4 velocity;
+	vec4 misc;
+	uint type;
+	float lifetime;
+	float maxLifetime;
+	uint padding;
+};
+
+struct ParticleType {
+	vec4 color;
+	float size;
+	float gravityScale;
+	float drag;
+	float padding;
+};
+
+struct IndirectCommand {
+	uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+};
+
+layout(std430, set = 1, binding = 0) buffer Particles {
+	Particle uParticles[];
+};
+
+layout(std430, set = 1, binding = 1) readonly buffer ParticleTypes {
+	ParticleType uParticleTypes[];
+};
+
+layout(std430, set = 1, binding = 2) readonly buffer AliveIndices {
+	uint uAliveIndices[];
+};
+
+layout(std430, set = 1, binding = 3) readonly buffer IndirectCommandBuffer {
+	IndirectCommand uIndirectCommand;
+};
+
+layout(push_constant) uniform ParticleBehaviorPushConstants {
+	uint maxParticles;
+	float deltaTime;
+} uPush;
+
+void main() {
+	uint invocationIdx = gl_GlobalInvocationID.x;
+	uint liveCount = uIndirectCommand.groupCountX;
+
+	if (invocationIdx >= liveCount) {
+		return;
+	}
+
+	uint particleIdx = uAliveIndices[invocationIdx];
+	Particle p = uParticles[particleIdx];
+	ParticleType pType = uParticleTypes[p.type];
+
+	vec3 gravity = vec3(0.0, -9.81 * pType.gravityScale, 0.0);
+	p.velocity.xyz += gravity * uPush.deltaTime;
+	p.velocity.xyz *= max(0.0, 1.0 - pType.drag * uPush.deltaTime);
+
+	p.position.xyz += p.velocity.xyz * uPush.deltaTime;
+
+	uParticles[particleIdx] = p;
+}

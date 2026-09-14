@@ -1,0 +1,76 @@
+#version 460 core
+#include "bindless.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct Particle {
+	vec4 position;
+	vec4 velocity;
+	vec4 misc;
+	uint type;
+	float lifetime;
+	float maxLifetime;
+	uint padding;
+};
+
+struct ParticleType {
+	vec4 color;
+	float size;
+	float gravityScale;
+	float drag;
+	float padding;
+};
+
+struct IndirectCommand {
+	uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+};
+
+layout(std430, set = 1, binding = 0) buffer Particles {
+	Particle uParticles[];
+};
+
+layout(std430, set = 1, binding = 1) readonly buffer ParticleTypes {
+	ParticleType uParticleTypes[];
+};
+
+layout(std430, set = 1, binding = 2) buffer AliveIndices {
+	uint uAliveIndices[];
+};
+
+layout(std430, set = 1, binding = 3) buffer IndirectCommandBuffer {
+	IndirectCommand uIndirectCommand;
+};
+
+layout(push_constant) uniform ParticleLivenessPushConstants {
+	uint maxParticles;
+	float deltaTime;
+} uPush;
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+
+	if (idx >= uPush.maxParticles) {
+		return;
+	}
+
+	if (uParticles[idx].lifetime <= 0.0) {
+		uParticles[idx].lifetime = 5.0;
+		uParticles[idx].maxLifetime = 5.0;
+
+		float xOffset = float((idx * 17u) % 200u) - 100.0;
+		float zOffset = float((idx * 31u) % 200u) - 100.0;
+		float yOffset = 50.0 + float((idx * 13u) % 50u);
+
+		uParticles[idx].position = vec4(xOffset, yOffset, zOffset, 1.0);
+		uParticles[idx].velocity = vec4(sin(float(idx)) * 2.0, 1.0, cos(float(idx)) * 2.0, 0.0);
+	}
+
+	uParticles[idx].lifetime -= uPush.deltaTime;
+
+	if (uParticles[idx].lifetime > 0.0) {
+		uint aliveSlot = atomicAdd(uIndirectCommand.groupCountX, 1);
+		uAliveIndices[aliveSlot] = idx;
+	}
+}

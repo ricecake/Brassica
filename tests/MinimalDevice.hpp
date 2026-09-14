@@ -132,6 +132,8 @@ namespace brassica::testing {
 
 		[[nodiscard]] bool IsValid() const { return static_cast<bool>(m_device); }
 
+		[[nodiscard]] vk::Instance GetInstance() const { return m_instance; }
+
 		[[nodiscard]] vk::Device GetDevice() const { return m_device; }
 
 		[[nodiscard]] VmaAllocator GetAllocator() const { return m_allocator; }

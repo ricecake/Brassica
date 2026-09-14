@@ -156,6 +156,20 @@ namespace brassica::graph {
 		const bool isWrite = access == AccessKind::Write || access == AccessKind::ReadWrite;
 		const bool isReadWrite = access == AccessKind::ReadWrite;
 
+		if (domain == ExecutionDomain::Host) {
+			if (isWrite) {
+				vk::AccessFlags2 acc = vk::AccessFlagBits2::eHostWrite;
+				if (isReadWrite)
+					acc |= vk::AccessFlagBits2::eHostRead;
+				return ResourceState{vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eHost, acc};
+			}
+			return ResourceState{
+				vk::ImageLayout::eGeneral,
+				vk::PipelineStageFlagBits2::eHost,
+				vk::AccessFlagBits2::eHostRead
+			};
+		}
+
 		if (isWrite) {
 			if (IsDepthFormat(format) && (usage & vk::ImageUsageFlagBits::eDepthStencilAttachment)) {
 				vk::AccessFlags2 acc = vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
@@ -247,6 +261,26 @@ namespace brassica::graph {
 	inline ResourceState DeriveBufferState(AccessKind access, ExecutionDomain domain, vk::BufferUsageFlags usage) {
 		const bool isWrite = access == AccessKind::Write || access == AccessKind::ReadWrite;
 		const bool isReadWrite = access == AccessKind::ReadWrite;
+
+		if (domain == ExecutionDomain::Host) {
+			if (isWrite) {
+				vk::AccessFlags2 acc = vk::AccessFlagBits2::eHostWrite;
+				if (isReadWrite)
+					acc |= vk::AccessFlagBits2::eHostRead;
+				return ResourceState{{}, vk::PipelineStageFlagBits2::eHost, acc};
+			}
+			return ResourceState{{}, vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead};
+		}
+
+		if (domain == ExecutionDomain::Transfer) {
+			if (isWrite) {
+				vk::AccessFlags2 acc = vk::AccessFlagBits2::eTransferWrite;
+				if (isReadWrite)
+					acc |= vk::AccessFlagBits2::eTransferRead;
+				return ResourceState{{}, vk::PipelineStageFlagBits2::eAllTransfer, acc};
+			}
+			return ResourceState{{}, vk::PipelineStageFlagBits2::eAllTransfer, vk::AccessFlagBits2::eTransferRead};
+		}
 
 		if (usage & vk::BufferUsageFlagBits::eUniformBuffer) {
 			// Uniform buffers in this engine are host-written, persistently mapped, shader-read

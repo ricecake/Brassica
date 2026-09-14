@@ -15,6 +15,7 @@
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/GradientNode.hpp"
+#include "passes/ParticleSystemNode.hpp"
 #include "passes/TerrainNode.hpp"
 #include "passes/WaterNode.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -181,6 +182,7 @@ namespace brassica {
 		WaterNode              waterNode;
 		TransmittanceLUTNode   transmittanceNode;
 		MultiScatteringLUTNode multiScatteringNode;
+		ParticleSystemNode     particleSystemNode;
 
 		// What's left of the old TerrainPass once its pipeline/shader ownership moved above --
 		// the terrain BLAS/TLAS build, unchanged, now living in terrain/ rather than passes/
