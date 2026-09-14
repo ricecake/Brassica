@@ -41,6 +41,28 @@ namespace brassica::graph {
 		void* vkCmd = nullptr;
 	};
 
+	// The concrete realization of a resource key for this frame, factoring in things like
+	// screen resolution -- the "more concrete type" a node produces at Setup time, as opposed
+	// to the abstract key it declares at the class level. formatCode/usageMask are opaque
+	// here on purpose: this layer never interprets them, it only carries them through (and,
+	// later, compares/hashes them for aliasing) for a backend to map onto real enums.
+	struct ResourceDesc {
+		// AccelerationStructure carries none of the fields below -- no extent/format/usage is
+		// meaningful for it, they stay at their defaults. See PhysicalResource.hpp's
+		// PhysicalAccelerationStructure comment for why this kind is Imported-only.
+		enum class Kind : std::uint8_t { Image2D, Image3D, Buffer, AccelerationStructure };
+
+		Kind          kind = Kind::Image2D;
+		std::uint32_t width = 0;
+		std::uint32_t height = 0;
+		std::uint32_t depth = 1;
+		std::uint32_t mips = 1;
+		std::uint32_t layers = 1;
+		std::uint32_t formatCode = 0;
+		std::uint32_t usageMask = 0;
+		std::uint64_t byteSize = 0;
+	};
+
 	// Opaque per-resource bindless-index lookup. Implemented by PhysicalResourceRegistry
 	// (PhysicalRegistry.hpp, Vulkan-aware) so that NodeContext::Index<K>()/StorageIndex<K>()
 	// below can live in this Vulkan-free seam without this file knowing PhysicalResourceRegistry,
@@ -55,6 +77,9 @@ namespace brassica::graph {
 		virtual ~BindlessIndexSource() = default;
 		virtual std::uint32_t IndexOf(ResourceId) const = 0;
 		virtual std::uint32_t StorageIndexOf(ResourceId) const = 0;
+		virtual void UploadPredefinedBuffer(ResourceId, const void*, std::size_t, const ResourceDesc&) {}
+		virtual void UploadPredefinedTexture(ResourceId, const void*, std::size_t, const ResourceDesc&, std::uint32_t) {}
+		virtual void WaitIdle() {}
 	};
 
 	// Per-node execution state, passed to a node's Execute in place of a bare CommandBuffer.
@@ -96,27 +121,6 @@ namespace brassica::graph {
 		std::uint64_t frameIndex = 0;
 	};
 
-	// The concrete realization of a resource key for this frame, factoring in things like
-	// screen resolution -- the "more concrete type" a node produces at Setup time, as opposed
-	// to the abstract key it declares at the class level. formatCode/usageMask are opaque
-	// here on purpose: this layer never interprets them, it only carries them through (and,
-	// later, compares/hashes them for aliasing) for a backend to map onto real enums.
-	struct ResourceDesc {
-		// AccelerationStructure carries none of the fields below -- no extent/format/usage is
-		// meaningful for it, they stay at their defaults. See PhysicalResource.hpp's
-		// PhysicalAccelerationStructure comment for why this kind is Imported-only.
-		enum class Kind : std::uint8_t { Image2D, Image3D, Buffer, AccelerationStructure };
-
-		Kind          kind = Kind::Image2D;
-		std::uint32_t width = 0;
-		std::uint32_t height = 0;
-		std::uint32_t depth = 1;
-		std::uint32_t mips = 1;
-		std::uint32_t layers = 1;
-		std::uint32_t formatCode = 0;
-		std::uint32_t usageMask = 0;
-		std::uint64_t byteSize = 0;
-	};
 
 	struct ResourceRealization {
 		ResourceId   key = nullptr;

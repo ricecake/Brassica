@@ -363,15 +363,6 @@ namespace brassica {
 //     particleTypeBuffer->GetDesc(),
 //     true // hasDefinedContents = true since it is populated via staging
 // );
-		auto buffer = std::array<ParticleType, 1>{{}};
-		utils::CreateAndRegisterStaticBuffer<ParticleTypeBuffer, ParticleType>(device, allocator);
-
-// // Execute this once during engine/system initialization
-		// physicalRegistry.RegisterImportedBuffer<ParticleTypeBuffer>(
-		// 	particleTypeBuffer,
-		// 	graph::StorageBufferDesc(16 * sizeof(ParticleType)),
-		// 	true // hasDefinedContents = true since the CPU populated it
-		// );
 
 		// Registered once, here -- the clipmap's image/view handles are stable for the engine's
 		// entire lifetime (only its *contents* mutate, via terrainUploader), so re-registering it

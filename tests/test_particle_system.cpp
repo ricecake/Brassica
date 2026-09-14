@@ -157,3 +157,113 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		vkDevice.destroyCommandPool(pool);
 	}
 }
+
+TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload and block until complete") {
+	brassica::testing::MinimalDevice device;
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+	VmaAllocator allocator = device.GetAllocator();
+	vk::Queue queue = device.GetQueue();
+
+	graph::PhysicalResourceRegistry registry(vkDevice, allocator, queue);
+
+	struct TestBufKey {};
+	struct TestTexKey {};
+
+	std::vector<uint32_t> testData = {1, 2, 3, 4, 5, 6, 7, 8};
+	graph::PredefinedBufferNode<TestBufKey, uint32_t> bufNode(testData);
+
+	std::vector<uint8_t> pixelData = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255};
+	graph::ResourceDesc texDesc{
+		.kind = graph::ResourceDesc::Kind::Image2D,
+		.width = 2,
+		.height = 2,
+		.formatCode = static_cast<uint32_t>(vk::Format::eR8G8B8A8Unorm),
+		.usageMask = static_cast<uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
+	};
+	graph::PredefinedTextureNode<TestTexKey> texNode(pixelData, texDesc);
+
+	graph::NodeContext nctx{};
+	nctx.bindless = &registry;
+
+	graph::FrameContext fctx{};
+
+	CHECK(bufNode.Setup(fctx).isActive == true);
+	CHECK(texNode.Setup(fctx).isActive == true);
+
+	bufNode.Execute(nctx);
+	texNode.Execute(nctx);
+
+	CHECK(bufNode.uploaded == true);
+	CHECK(texNode.uploaded == true);
+
+	CHECK(bufNode.Setup(fctx).isActive == false);
+	CHECK(texNode.Setup(fctx).isActive == false);
+
+	auto physBuf = registry.GetBuffer<TestBufKey>();
+	REQUIRE(physBuf != nullptr);
+	CHECK(physBuf->HasDefinedContents() == true);
+
+	auto physTex = registry.GetTexture<TestTexKey>();
+	REQUIRE(physTex != nullptr);
+	CHECK(physTex->HasDefinedContents() == true);
+}
+
+TEST_CASE("ExecuteOnce wrapper executes inner node once and skips subsequent runs") {
+	brassica::testing::MinimalDevice device;
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+	VmaAllocator allocator = device.GetAllocator();
+	vk::Queue queue = device.GetQueue();
+
+	graph::PhysicalResourceRegistry registry(vkDevice, allocator, queue);
+
+	struct MockComputeNode {
+		using Resources = graph::Declares<graph::Create<ParticleIndirectBuffer>>;
+		int runCount = 0;
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			r.realizations.push_back(graph::ResourceRealization{
+				.key = graph::IdOf<ParticleIndirectBuffer>(),
+				.access = graph::AccessKind::Write,
+				.desc = graph::StorageBufferDesc(12),
+			});
+			return r;
+		}
+
+		void Execute(graph::NodeContext&) {
+			runCount++;
+		}
+	};
+
+	graph::ExecuteOnce<MockComputeNode> onceNode;
+
+	graph::NodeContext nctx{};
+	nctx.bindless = &registry;
+	graph::FrameContext fctx{};
+
+	CHECK(onceNode.executed == false);
+	CHECK(onceNode.Setup(fctx).isActive == true);
+
+	onceNode.Execute(nctx);
+
+	CHECK(onceNode.executed == true);
+	CHECK(onceNode.inner.runCount == 1);
+	CHECK(onceNode.Setup(fctx).isActive == false);
+
+	onceNode.Execute(nctx);
+	CHECK(onceNode.inner.runCount == 1);
+
+	onceNode.Reset();
+	CHECK(onceNode.executed == false);
+	CHECK(onceNode.Setup(fctx).isActive == true);
+}
