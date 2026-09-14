@@ -44,13 +44,33 @@ namespace brassica {
 		auto pIndirectBuf = registry->GetBuffer<ParticleIndirectBuffer>();
 
 		if (!pBuf || !pTypeBuf || !pAliveBuf || !pIndirectBuf) return;
-		if (!pBuf->GetBuffer() || !pTypeBuf->GetBuffer() || !pAliveBuf->GetBuffer() || !pIndirectBuf->GetBuffer()) return;
+
+		vk::Buffer b0 = pBuf->GetBuffer();
+		vk::Buffer b1 = pTypeBuf->GetBuffer();
+		vk::Buffer b2 = pAliveBuf->GetBuffer();
+		vk::Buffer b3 = pIndirectBuf->GetBuffer();
+
+		if (!b0 || !b1 || !b2 || !b3) return;
+
+		struct Cache {
+			vk::DescriptorSet set{nullptr};
+			std::array<vk::Buffer, 4> buffers{};
+		};
+		static Cache cache{};
+
+		if (cache.set == particleSet &&
+		    cache.buffers[0] == b0 &&
+		    cache.buffers[1] == b1 &&
+		    cache.buffers[2] == b2 &&
+		    cache.buffers[3] == b3) {
+			return;
+		}
 
 		std::array<vk::DescriptorBufferInfo, 4> bufferInfos{
-			vk::DescriptorBufferInfo{pBuf->GetBuffer(), 0, VK_WHOLE_SIZE},
-			vk::DescriptorBufferInfo{pTypeBuf->GetBuffer(), 0, VK_WHOLE_SIZE},
-			vk::DescriptorBufferInfo{pAliveBuf->GetBuffer(), 0, VK_WHOLE_SIZE},
-			vk::DescriptorBufferInfo{pIndirectBuf->GetBuffer(), 0, VK_WHOLE_SIZE}
+			vk::DescriptorBufferInfo{b0, 0, VK_WHOLE_SIZE},
+			vk::DescriptorBufferInfo{b1, 0, VK_WHOLE_SIZE},
+			vk::DescriptorBufferInfo{b2, 0, VK_WHOLE_SIZE},
+			vk::DescriptorBufferInfo{b3, 0, VK_WHOLE_SIZE}
 		};
 
 		std::array<vk::WriteDescriptorSet, 4> writes{};
@@ -62,6 +82,9 @@ namespace brassica {
 		}
 
 		device.updateDescriptorSets(writes, nullptr);
+
+		cache.set = particleSet;
+		cache.buffers = {b0, b1, b2, b3};
 	}
 
 	struct ParticleResetNode {

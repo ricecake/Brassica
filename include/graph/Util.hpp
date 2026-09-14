@@ -114,12 +114,16 @@ namespace brassica::graph {
 		VmaAllocator allocator = GetAllocator();
 		vk::Queue queue = GetQueue();
 
-		ResourceDesc finalDesc = desc;
-		if (finalDesc.byteSize == 0) {
-			finalDesc = StorageBufferDesc(sizeBytes);
+		const ResourceId resolvedId = ResolveId(id);
+		auto destBuffer = GetBuffer(resolvedId);
+		if (!destBuffer) {
+			ResourceDesc finalDesc = desc;
+			if (finalDesc.byteSize == 0) {
+				finalDesc = StorageBufferDesc(sizeBytes);
+			}
+			destBuffer = std::make_shared<PhysicalBuffer>(device, allocator, finalDesc);
+			m_buffers[resolvedId] = destBuffer;
 		}
-
-		auto destBuffer = std::make_shared<PhysicalBuffer>(device, allocator, finalDesc);
 		destBuffer->SetHasDefinedContents(true);
 
 		if (sizeBytes > 0 && allocator != VK_NULL_HANDLE) {
@@ -179,14 +183,19 @@ namespace brassica::graph {
 		vk::Queue queue = GetQueue();
 		auto layout = static_cast<vk::ImageLayout>(targetLayout);
 
-		ResourceDesc texDesc = desc;
-		if (texDesc.usageMask == 0) {
-			texDesc.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
-			);
+		const ResourceId resolvedId = ResolveId(id);
+		auto destTexture = GetTexture(resolvedId);
+		if (!destTexture) {
+			ResourceDesc texDesc = desc;
+			if (texDesc.usageMask == 0) {
+				texDesc.usageMask = static_cast<std::uint32_t>(
+					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+				);
+			}
+			destTexture = std::make_shared<PhysicalTexture>(device, allocator, texDesc);
+			AssignAndWriteBindlessIndices(*destTexture);
+			m_textures[resolvedId] = destTexture;
 		}
-
-		auto destTexture = std::make_shared<PhysicalTexture>(device, allocator, texDesc);
 		destTexture->SetHasDefinedContents(true);
 
 		if (sizeBytes > 0 && allocator != VK_NULL_HANDLE && device && queue) {
