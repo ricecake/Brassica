@@ -205,26 +205,14 @@ TEST_CASE(
 
 		constexpr vk::Format kSwapchainFormat = vk::Format::eR8G8B8A8Unorm;
 
-		bool hasMeshShader = false;
-		uint32_t extCount = 0;
-		if (vkDevice.enumerateDeviceExtensionProperties(nullptr, &extCount, nullptr) == vk::Result::eSuccess && extCount > 0) {
-			std::vector<vk::ExtensionProperties> exts(extCount);
-			if (vkDevice.enumerateDeviceExtensionProperties(nullptr, &extCount, exts.data()) == vk::Result::eSuccess) {
-				for (const auto& ext : exts) {
-					if (std::string(ext.extensionName.data()) == VK_EXT_MESH_SHADER_EXTENSION_NAME) {
-						hasMeshShader = true;
-						break;
-					}
-				}
-			}
-		}
+		bool hasMeshShader = device.IsExtensionSupported(VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
 		DispatchLoaderDynamic dls;
 		dls.init(device.GetInstance(), vkDevice);
 		if (!hasMeshShader) {
 			dls.vkCmdDrawMeshTasksEXT = nullptr;
 			dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
-			MESSAGE("VK_EXT_mesh_shader not enabled on device; skipping WaterNode execution test.");
+			MESSAGE("VK_EXT_mesh_shader not supported on device; skipping WaterNode execution test.");
 			return;
 		}
 
