@@ -15,6 +15,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  backgroundIndex;
 	uint  clipmapIndex;
 	uint  tlasIndex;
+	uint gDepthIndex;
 } params;
 
 vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
@@ -90,6 +91,7 @@ void main() {
 	vec3 norm = SAMPLE_NEAREST(params.gNormalIndex, inUV).rgb;
 	vec3 pos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
 	vec3 hdrBg = SAMPLE_NEAREST(params.backgroundIndex, inUV).rgb;
+	float depth = SAMPLE_NEAREST(params.gDepthIndex, inUV).r;
 
 	vec3 hdrColor;
 
@@ -151,6 +153,8 @@ void main() {
 		}
 
 		vec3 diffuse = albedo.rgb * diff * lightColor * shadowFactor;
+		// diffuse = mix(vec3(0.1,0.2, 0.3), diffuse, exp(-0.10*length(pos)));
+		// diffuse += vec3(1.2, 0.2, 0.2) * exp(-length(pos));
 
 		// Ambient term
 		vec3 ambient = 0.25 * albedo.rgb;

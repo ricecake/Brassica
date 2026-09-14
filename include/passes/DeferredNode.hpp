@@ -35,6 +35,7 @@ namespace brassica {
 		std::uint32_t backgroundIndex{0};
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t tlasIndex{0};
+		std::uint32_t gDepthIndex{0};
 	};
 
 	// Replaces DeferredPass: no per-node descriptor set, no per-frame descriptor writes -- every
@@ -52,6 +53,7 @@ namespace brassica {
 			graph::Read<GBufferPosition>,
 			graph::Read<GBufferNormal>,
 			graph::Read<GBufferAlbedo>,
+			graph::Read<GBufferDepth>,
 			graph::Read<GradientBackground>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainTLAS>,
@@ -110,6 +112,7 @@ namespace brassica {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
+			push.gDepthIndex = ctx.Index<GBufferDepth>();
 			push.backgroundIndex = ctx.Index<GradientBackground>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.tlasIndex = ctx.Index<TerrainTLAS>();
