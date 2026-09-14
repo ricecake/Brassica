@@ -77,10 +77,12 @@ namespace {
 		vk::DescriptorSetLayout                           layout{};
 		vk::DescriptorPool                                pool{};
 		vk::Sampler                                       sampler{};
+		vk::Buffer                                        uboBuffer{};
+		VmaAllocation                                     uboAllocation{};
 		graph::PhysicalResourceRegistry::BindlessBindings bindings{};
 	};
 
-	WaterBindlessSet CreateWaterBindlessSet(vk::Device device) {
+	WaterBindlessSet CreateWaterBindlessSet(vk::Device device, VmaAllocator allocator) {
 		std::array<vk::DescriptorSetLayoutBinding, 3> layoutBindings{};
 		// Binding 0: FrameUBO
 		layoutBindings[0]
@@ -134,6 +136,29 @@ namespace {
 		allocInfo.setSetLayouts(result.layout);
 		vk::DescriptorSet set = device.allocateDescriptorSets(allocInfo).front();
 
+		// Create dummy FrameUBO buffer and update Binding 0
+		VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		bufInfo.size = 1024;
+		bufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+		VmaAllocationCreateInfo allocCreateInfo{};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+		VkBuffer vkBuf = VK_NULL_HANDLE;
+		vmaCreateBuffer(allocator, &bufInfo, &allocCreateInfo, &vkBuf, &result.uboAllocation, nullptr);
+		result.uboBuffer = vkBuf;
+
+		vk::DescriptorBufferInfo bufferInfo{};
+		bufferInfo.setBuffer(result.uboBuffer);
+		bufferInfo.setOffset(0);
+		bufferInfo.setRange(1024);
+
+		vk::WriteDescriptorSet uboWrite{};
+		uboWrite.setDstSet(set);
+		uboWrite.setDstBinding(0);
+		uboWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+		uboWrite.setBufferInfo(bufferInfo);
+		device.updateDescriptorSets(uboWrite, {});
+
 		vk::SamplerCreateInfo samplerInfo{};
 		samplerInfo.setMagFilter(vk::Filter::eNearest);
 		samplerInfo.setMinFilter(vk::Filter::eNearest);
@@ -158,7 +183,10 @@ namespace {
 		return result;
 	}
 
-	void DestroyWaterBindlessSet(vk::Device device, WaterBindlessSet& s) {
+	void DestroyWaterBindlessSet(vk::Device device, VmaAllocator allocator, WaterBindlessSet& s) {
+		if (s.uboBuffer && s.uboAllocation && allocator != VK_NULL_HANDLE) {
+			vmaDestroyBuffer(allocator, s.uboBuffer, s.uboAllocation);
+		}
 		device.destroySampler(s.sampler);
 		device.destroyDescriptorPool(s.pool);
 		device.destroyDescriptorSetLayout(s.layout);
@@ -199,19 +227,22 @@ TEST_CASE(
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
 		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
-		WaterBindlessSet                bindlessSet = CreateWaterBindlessSet(vkDevice);
+		WaterBindlessSet                bindlessSet = CreateWaterBindlessSet(vkDevice, device.GetAllocator());
 		registry.SetGlobalDescriptorSet(bindlessSet.bindings);
 		graph::PhysicalExecutionBackend backend(registry);
 
 		constexpr vk::Format kSwapchainFormat = vk::Format::eR8G8B8A8Unorm;
 
+		bool hasMeshShader = device.IsExtensionSupported(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
 		DispatchLoaderDynamic dls;
 		dls.init(device.GetInstance(), vkDevice);
-		// MinimalDevice does not enable VK_EXT_mesh_shader. On Mesa/lavapipe, vkGetDeviceProcAddr
-		// returns a non-null pointer for disabled extension functions. Clear mesh shader function
-		// pointers when extension is not enabled to avoid driver crash.
-		dls.vkCmdDrawMeshTasksEXT = nullptr;
-		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
+		if (!hasMeshShader) {
+			dls.vkCmdDrawMeshTasksEXT = nullptr;
+			dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
+			MESSAGE("VK_EXT_mesh_shader not supported on device; skipping WaterNode execution test.");
+			return;
+		}
 
 		WaterNode waterNode;
 		waterNode.Init(vkDevice, &pipelineLibrary, &dls, kSwapchainFormat);
@@ -240,7 +271,7 @@ TEST_CASE(
 
 		pipelineLibrary.Reset();
 		waterNode.Destroy(vkDevice);
-		DestroyWaterBindlessSet(vkDevice, bindlessSet);
+		DestroyWaterBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);
 		vkDevice.destroyCommandPool(pool);
 	}
 

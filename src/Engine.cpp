@@ -894,12 +894,15 @@ namespace brassica {
 
 		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
 
+		float baseMeshletSize = TerrainClipmap::CalculateBaseMeshletSize(camera.position, camera.fov);
+
 		uint32_t lods = terrainClipmap.GetNumLODs();
 		uint32_t meshletsPerRow = 16;
 		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
 		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, TERRAIN_MAP_DIM);
+		terrainPush.baseMeshletSize = baseMeshletSize;
 
 		glm::uvec4 offsets0_3{0u};
 		glm::uvec4 offsets4_7{0u};
@@ -918,7 +921,7 @@ namespace brassica {
 		terrainPush.lodOffsets4_7 = offsets4_7;
 
 		terrainAS
-			.BuildOrUpdate(allocator, camera.position, terrainClipmap.GetBaseTexelSize(), terrainPush.gridParams.x);
+			.BuildOrUpdate(allocator, camera.position, baseMeshletSize, terrainPush.gridParams.x);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
 		terrainNode.SetFrameParams(terrainPush);

@@ -140,3 +140,24 @@ TEST_CASE("AsyncTerrainUploader Initial State") {
 	brassica::AsyncTerrainUploader uploader;
 	CHECK_FALSE(uploader.HasInFlightUploads());
 }
+
+TEST_CASE("Screen Space Error Base Meshlet Size Scaling") {
+	// Near ground level
+	float sizeGround = brassica::TerrainClipmap::CalculateBaseMeshletSize(glm::vec3(0.0f, 15.0f, 0.0f), 1.2f);
+	CHECK(sizeGround == 32.0f);
+
+	// Medium altitude
+	float sizeMid = brassica::TerrainClipmap::CalculateBaseMeshletSize(glm::vec3(0.0f, 200.0f, 0.0f), 1.2f);
+	CHECK(sizeMid > 60.0f);
+	CHECK(sizeMid < 68.0f);
+
+	// High altitude
+	float sizeHigh = brassica::TerrainClipmap::CalculateBaseMeshletSize(glm::vec3(0.0f, 1000.0f, 0.0f), 1.2f);
+	CHECK(sizeHigh > 300.0f);
+	CHECK(sizeHigh < 340.0f);
+
+	// Visible extent expands proportionally with altitude
+	float lod0ExtentGround = 16.0f * sizeGround;
+	float lod0ExtentHigh = 16.0f * sizeHigh;
+	CHECK(lod0ExtentHigh >= 9.0f * lod0ExtentGround);
+}

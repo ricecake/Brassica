@@ -42,6 +42,13 @@ namespace brassica {
 
 		void UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue);
 
+		// Screen space error based base meshlet size calculation factoring in altitude and FOV
+		static float CalculateBaseMeshletSize(
+			const glm::vec3& cameraPos,
+			float            fov = 1.2f,
+			float            minMeshletSize = 32.0f
+		);
+
 		// Unified CPU Terrain Generator
 		static glm::vec4 SampleTerrain(float worldX, float worldZ, float texelSize);
 

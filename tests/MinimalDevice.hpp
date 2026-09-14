@@ -68,10 +68,16 @@ namespace brassica::testing {
 			features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 			features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 
+			VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+			meshFeatures.meshShader = VK_TRUE;
+			meshFeatures.taskShader = VK_TRUE;
+
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
 			selector.set_minimum_version(1, 3)
 				.set_required_features_13(features13)
 				.set_required_features_12(features12)
+				.add_desired_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
+				.add_required_extension_features(meshFeatures)
 				.defer_surface_initialization();
 
 			auto physRes = selector.select();
@@ -131,6 +137,22 @@ namespace brassica::testing {
 		MinimalDevice& operator=(const MinimalDevice&) = delete;
 
 		[[nodiscard]] bool IsValid() const { return static_cast<bool>(m_device); }
+
+		[[nodiscard]] bool IsExtensionSupported(const char* extensionName) const {
+			if (!m_physicalDevice) return false;
+			uint32_t count = 0;
+			if (m_physicalDevice.enumerateDeviceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess && count > 0) {
+				std::vector<vk::ExtensionProperties> exts(count);
+				if (m_physicalDevice.enumerateDeviceExtensionProperties(nullptr, &count, exts.data()) == vk::Result::eSuccess) {
+					for (const auto& ext : exts) {
+						if (std::string(ext.extensionName.data()) == extensionName) {
+							return true;
+						}
+					}
+				}
+			}
+			return false;
+		}
 
 		[[nodiscard]] vk::Instance GetInstance() const { return m_instance; }
 

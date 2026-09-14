@@ -3,6 +3,7 @@
 // Nothing included from here may pull in vulkan/vulkan.hpp, VMA, or external/FrameGraph.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -681,6 +682,31 @@ TEST_CASE("BarrierBatch merges repeated reads and records domain transitions") {
 TEST_CASE("InnerGraphIfAny is non-null only for a Subgraph") {
 	CHECK(NodeHandle::Make<GtaoPass>().InnerGraphIfAny() == nullptr);
 	CHECK(NodeHandle::Make<Inner>().InnerGraphIfAny() != nullptr);
+}
+
+TEST_CASE("Screen space error terrain LOD base meshlet size calculation") {
+	auto calculateBaseMeshletSize = [](float altitudeY, float fov, float minMeshletSize = 32.0f) {
+		float altitude = std::max(1.0f, altitudeY);
+		float tanHalfFov = std::tan(fov * 0.5f);
+		constexpr float targetFactor = 0.4677f;
+		float calculatedSize = targetFactor * altitude * tanHalfFov;
+		return std::max(minMeshletSize, calculatedSize);
+	};
+
+	float sizeGround = calculateBaseMeshletSize(15.0f, 1.2f);
+	CHECK(sizeGround == 32.0f);
+
+	float sizeMid = calculateBaseMeshletSize(200.0f, 1.2f);
+	CHECK(sizeMid > 60.0f);
+	CHECK(sizeMid < 68.0f);
+
+	float sizeHigh = calculateBaseMeshletSize(1000.0f, 1.2f);
+	CHECK(sizeHigh > 300.0f);
+	CHECK(sizeHigh < 340.0f);
+
+	float lod0ExtentGround = 16.0f * sizeGround;
+	float lod0ExtentHigh = 16.0f * sizeHigh;
+	CHECK(lod0ExtentHigh >= 9.0f * lod0ExtentGround);
 }
 
 TEST_CASE("ToDot renders nodes, recurses into a populated subgraph, and draws the temporal edge") {

@@ -42,7 +42,7 @@ namespace brassica {
 	void TerrainAccelerationStructure::BuildOrUpdate(
 		VmaAllocator     allocator,
 		const glm::vec3& cameraPos,
-		float            baseTexelSize,
+		float            baseMeshletSizeParam,
 		uint32_t         numLODs
 	) {
 		if (allocator == VK_NULL_HANDLE)
@@ -54,6 +54,8 @@ namespace brassica {
 		}
 		lastASCameraPos = cameraPos;
 
+		float baseMeshletSize = (baseMeshletSizeParam > 0.0f) ? baseMeshletSizeParam : 32.0f;
+
 		// Generate distance-aware AABBs for the terrain grid chunks.
 		// For points/AABBs close to the camera, resolution is finer (e.g., 32 world units per AABB).
 		// For points/AABBs further from the camera (shadow caster point distance), resolution is coarser (64, 128,
@@ -62,8 +64,7 @@ namespace brassica {
 
 		uint32_t meshletsPerRow = 16;
 		for (uint32_t lod = 0; lod < numLODs; ++lod) {
-			float     baseMeshletSize = 32.0f;
-			float     meshletSize = baseMeshletSize * std::pow(2.0f, std::min(0.0f, static_cast<float>(lod - 1)));
+			float     meshletSize = baseMeshletSize * std::pow(2.0f, static_cast<float>(lod));
 			glm::vec2 cameraSnap = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / meshletSize) * meshletSize;
 
 			for (uint32_t row = 0; row < meshletsPerRow; ++row) {
