@@ -45,7 +45,15 @@ namespace brassica {
 		// Unified CPU Terrain Generator
 		static glm::vec4 SampleTerrain(float worldX, float worldZ, float texelSize);
 
+		struct TerrainLevelData {
+			std::vector<glm::vec4> heightMap;
+			std::vector<glm::vec4> minMaxMap;
+			std::vector<glm::vec4> biomeMap;
+			std::vector<glm::vec4> visibilityMap;
+		};
+
 		std::vector<glm::vec4> GenerateLevelMap(uint32_t levelIndex) const;
+		TerrainLevelData       GenerateLevelData(uint32_t levelIndex) const;
 
 		static std::vector<glm::vec4> GenerateSineWaveMap(
 			uint32_t         levelIndex,
@@ -57,6 +65,18 @@ namespace brassica {
 		vk::Image GetImage() const { return image; }
 
 		vk::ImageView GetImageView() const { return imageView; }
+
+		vk::Image GetMinMaxImage() const { return minmaxImage; }
+
+		vk::ImageView GetMinMaxImageView() const { return minmaxImageView; }
+
+		vk::Image GetBiomeImage() const { return biomeImage; }
+
+		vk::ImageView GetBiomeImageView() const { return biomeImageView; }
+
+		vk::Image GetVisibilityImage() const { return visibilityImage; }
+
+		vk::ImageView GetVisibilityImageView() const { return visibilityImageView; }
 
 		vk::Sampler GetSampler() const { return sampler; }
 
@@ -74,22 +94,28 @@ namespace brassica {
 
 		vk::Image     image{nullptr};
 		vk::ImageView imageView{nullptr};
-		vk::Sampler   sampler{nullptr};
 		VmaAllocation allocation{VK_NULL_HANDLE};
+
+		vk::Image     minmaxImage{nullptr};
+		vk::ImageView minmaxImageView{nullptr};
+		VmaAllocation minmaxAllocation{VK_NULL_HANDLE};
+
+		vk::Image     biomeImage{nullptr};
+		vk::ImageView biomeImageView{nullptr};
+		VmaAllocation biomeAllocation{VK_NULL_HANDLE};
+
+		vk::Image     visibilityImage{nullptr};
+		vk::ImageView visibilityImageView{nullptr};
+		VmaAllocation visibilityAllocation{VK_NULL_HANDLE};
+
+		vk::Sampler   sampler{nullptr};
 
 		std::vector<ClipmapLevelInfo> levelInfos;
 
-		void CreateTextureArray();
+		void CreateTextureArrays();
 		void CreateSampler();
 	};
 
-	// Desc for registering TerrainClipmapTexture (ResourceKeys.hpp) as a graph-tracked Imported
-	// texture (Engine::Init, once -- the image/view handles never change after that) and for a
-	// consumer's own Read realization (TerrainNode/DeferredNode's Setup). layers = numLODs is
-	// what routes its bindless index into the sampled-*array* arena
-	// (PhysicalRegistry::AssignAndWriteBindlessIndices), not the plain sampled arena a
-	// single-layer texture would use -- getting this wrong wouldn't fail to compile, it would
-	// silently sample garbage or overflow into the wrong binding.
 	inline graph::ResourceDesc TerrainClipmapDesc(std::uint32_t numLODs) {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
@@ -101,6 +127,18 @@ namespace brassica {
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
+	}
+
+	inline graph::ResourceDesc TerrainMinMaxDesc(std::uint32_t numLODs) {
+		return TerrainClipmapDesc(numLODs);
+	}
+
+	inline graph::ResourceDesc TerrainBiomeDesc(std::uint32_t numLODs) {
+		return TerrainClipmapDesc(numLODs);
+	}
+
+	inline graph::ResourceDesc TerrainTileVisibilityDesc(std::uint32_t numLODs) {
+		return TerrainClipmapDesc(numLODs);
 	}
 
 } // namespace brassica

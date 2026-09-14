@@ -1,6 +1,7 @@
 #version 460
 #include "bindless.glsl"
 #include "bindless_tlas.glsl"
+#include "terrain.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -16,23 +17,10 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  clipmapIndex;
 	uint  tlasIndex;
 	uint gDepthIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	uint  visibilityIndex;
 } params;
-
-vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
-	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
-	float texelSize = baseTexelSize * pow(2.0, float(level));
-	uint textureDim = (params.gridParams.w > 0u) ? params.gridParams.w : 1088u;
-
-	uvec4 offsets = (level < 4) ? params.lodOffsets0_3 : params.lodOffsets4_7;
-	uint packed = offsets[level % 4];
-	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
-
-	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
-	vec2 deltaWorld = worldXZ - centerWorldPos;
-	vec2 texelCoord = deltaWorld / texelSize + vec2(float(textureDim) * 0.5) + vec2(gridOffset);
-
-	return fract(texelCoord / float(textureDim));
-}
 
 // Calculate the LOD level based on the sample's Chebyshev distance
 uint calculateRayLOD(vec2 sampleXZ) {
@@ -62,9 +50,15 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 		// Fetch the appropriate LOD for the current spatial step
 		uint stepLod = calculateRayLOD(samplePos.xz);
 
-		vec2 uv = sampleToroidalUV(samplePos.xz, stepLod);
-		// Sample the specific array layer matching the LOD
-		vec4 texSample = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv, float(stepLod)));
+		// Accelerate raymarching via min-max height map check if minMaxIndex is set
+		if (params.minMaxIndex > 0u) {
+			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+			if (samplePos.y > minMax.y + 1.0) {
+				continue; // Ray is safely above the maximum height in this cell
+			}
+		}
+
+		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
 		float terrainHeight = texSample.r;
 
 		if (samplePos.y <= terrainHeight) {
@@ -112,8 +106,7 @@ void main() {
 			vec3 rayOrigin = pos + norm * 0.1; // Base offset to avoid standard self-shadowing
 
 			// Sample the absolute highest-detail terrain height at this coordinate
-			vec2 uv0 = sampleToroidalUV(pos.xz, 0);
-			float trueHeight0 = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv0, 0.0)).r;
+			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7).r;
 
 			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
 			if (rayOrigin.y < trueHeight0 + 0.1) {
