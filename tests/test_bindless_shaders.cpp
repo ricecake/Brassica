@@ -65,22 +65,25 @@ TEST_CASE("terrain.task/terrain.mesh compile to valid SPIR-V against the real bi
 // which outside the VkPushConstantRange"). Pins the exact byte count so a future drift between
 // the C++ struct and the GLSL block fails loudly here instead of only on someone's GPU.
 TEST_CASE("TerrainPushConstants is exactly as large as terrain.task/terrain.mesh's shared push_constant block") {
-	CHECK(sizeof(TerrainPushConstants) == 52);
+	CHECK(sizeof(TerrainPushConstants) == 64);
 }
 
-TEST_CASE("water.mesh/water.frag compile to valid SPIR-V against the real bindless.glsl substitution") {
+TEST_CASE("water.task/water.mesh/water.frag compile to valid SPIR-V against the real bindless.glsl substitution") {
 	RegisterBindlessSamplerConstants();
 
+	TaskShader     task;
 	MeshShader     mesh;
 	FragmentShader frag;
+	CHECK(task.CompileTaskFromFile(vk::Device{}, "shaders/water.task"));
 	CHECK(mesh.CompileMeshFromFile(vk::Device{}, "shaders/water.mesh"));
 	CHECK(frag.CompileFragmentFromFile(vk::Device{}, "shaders/water.frag"));
+	CHECK(!task.GetSPIRV().empty());
 	CHECK(!mesh.GetSPIRV().empty());
 	CHECK(!frag.GetSPIRV().empty());
 
 	Shader::ClearConstants();
 }
 
-TEST_CASE("WaterPushConstants is exactly as large as water.mesh/water.frag's shared push_constant block") {
-	CHECK(sizeof(WaterPushConstants) == 28);
+TEST_CASE("WaterPushConstants is exactly as large as water.task/water.mesh/water.frag's shared push_constant block") {
+	CHECK(sizeof(WaterPushConstants) == 48);
 }

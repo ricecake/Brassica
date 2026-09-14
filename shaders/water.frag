@@ -1,60 +1,62 @@
 #version 460
 #include "bindless.glsl"
 
-layout(location = 0) in vec2 inUV;
+layout(location = 0) in vec3 inWorldPos;
+layout(location = 1) in vec3 inNormal;
+
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform WaterPushConstants {
+	uvec4 gridParams;     // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
+	uint  padding;
 } params;
 
 void main() {
-	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
-	// albedo.a < 0.01 is the same "no terrain rendered here" sentinel deferred.frag reads --
-	// without this check, GBufferPosition's cleared-to-zero value at sky/background pixels
-	// would read as "at the water level", tinting the sky.
-	if (albedo.a < 0.01) {
-		outColor = vec4(0.0);
-		return;
+	ivec2 gTexSize = textureSize(sampler2D(uTextures2D[nonuniformEXT(params.gAlbedoIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), 0);
+	vec2 screenUV = gl_FragCoord.xy / vec2(gTexSize);
+
+	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, screenUV);
+	vec3 terrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
+
+	float distToCamWater = length(uCameraPosition.xyz - inWorldPos);
+	float depthBelowWater = 100.0; // Default deep water depth when background is sky
+
+	if (albedo.a >= 0.01) {
+		float distToCamTerrain = length(uCameraPosition.xyz - terrainPos);
+		// Terrain is strictly in front of the water mesh fragment
+		if (distToCamTerrain < distToCamWater - 0.2) {
+			outColor = vec4(0.0);
+			return;
+		}
+
+		depthBelowWater = inWorldPos.y - terrainPos.y;
+		if (depthBelowWater <= 0.0) {
+			outColor = vec4(0.0);
+			return;
+		}
 	}
 
-	vec3 terrainPos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
-	float depthBelowWater = params.waterLevel - terrainPos.y;
-	if (depthBelowWater <= 0.0) {
-		outColor = vec4(0.0);
-		return;
+	vec3 waveNormal = normalize(inNormal);
+	if (length(waveNormal) < 0.1) {
+		waveNormal = vec3(0.0, 1.0, 0.0);
 	}
 
-	vec3 waterWorldPos = vec3(terrainPos.x, params.waterLevel, terrainPos.z);
-	float distToCam = length(uCameraPosition.xyz - waterWorldPos);
-	float closeThreshold = 400.0;
+	float distToCam = distToCamWater;
+	float closeThreshold = 800.0;
 	float closeFactor = clamp(1.0 - distToCam / closeThreshold, 0.0, 1.0);
 
-	// Wave normal animation based on time (uTime) and world XZ coordinates
-	float time = uTime;
-	vec2 worldXZ = terrainPos.xz;
-
-	vec2 waveDir1 = vec2(0.8, 0.6);
-	vec2 waveDir2 = vec2(-0.5, 0.85);
-	vec2 waveDir3 = vec2(0.3, -0.9);
-
-	vec2 waveGrad = waveDir1 * cos(dot(worldXZ, waveDir1) * 0.6 + time * 2.5) * 0.6
-	              - waveDir2 * sin(dot(worldXZ, waveDir2) * 1.1 + time * 1.8) * 1.1
-	              + waveDir3 * cos(dot(worldXZ, waveDir3) * 2.2 + time * 3.2) * 2.2;
-
-	vec3 waveNormal = normalize(vec3(-waveGrad.x * 0.12 * closeFactor, 1.0, -waveGrad.y * 0.12 * closeFactor));
-
 	// Refraction: distort G-Buffer sample UVs based on wave normal and water depth
-	vec2 refractOffset = waveNormal.xz * clamp(depthBelowWater * 0.015, 0.0, 0.03) * closeFactor;
-	vec2 refractUV = clamp(inUV + refractOffset, vec2(0.0), vec2(1.0));
+	vec2 refractOffset = waveNormal.xz * clamp(depthBelowWater * 0.015, 0.0, 0.04) * closeFactor;
+	vec2 refractUV = clamp(screenUV + refractOffset, vec2(0.0), vec2(1.0));
 
 	vec4 refractedAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, refractUV);
 	vec3 refractedPos = SAMPLE_NEAREST(params.gPositionIndex, refractUV).rgb;
-	if (params.waterLevel - refractedPos.y <= 0.0 || refractedAlbedo.a < 0.01) {
+	if (inWorldPos.y - refractedPos.y <= 0.0 || refractedAlbedo.a < 0.01) {
 		refractedAlbedo = albedo;
 	}
 
@@ -67,7 +69,7 @@ void main() {
 
 	// Specular shine and Fresnel reflection when camera is close
 	vec3 lightDir = normalize(vec3(0.5, 0.8, 0.5));
-	vec3 viewDir = normalize(uCameraPosition.xyz - waterWorldPos);
+	vec3 viewDir = normalize(uCameraPosition.xyz - inWorldPos);
 	vec3 halfDir = normalize(lightDir + viewDir);
 
 	float NdotH = max(dot(waveNormal, halfDir), 0.0);

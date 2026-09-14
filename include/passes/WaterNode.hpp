@@ -20,11 +20,13 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct WaterPushConstants {
+		glm::uvec4    gridParams{8, 16, 2048, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
+		std::uint32_t padding{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -61,6 +63,7 @@ namespace brassica {
 		};
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
+		TaskShader                   taskShader;
 		MeshShader                   meshShader;
 		FragmentShader               fragShader;
 		const DispatchLoaderDynamic* dls = nullptr;
@@ -77,6 +80,7 @@ namespace brassica {
 			pipelineLibrary = library;
 			dls = dispatchLoader;
 			swapchainFormat = format;
+			taskShader.CompileTaskFromFile(device, "shaders/water.task");
 			meshShader.CompileMeshFromFile(device, "shaders/water.mesh");
 			fragShader.CompileFragmentFromFile(device, "shaders/water.frag");
 			if (watcher) {
@@ -85,11 +89,13 @@ namespace brassica {
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
+			watcher.RegisterShader(&taskShader);
 			watcher.RegisterShader(&meshShader);
 			watcher.RegisterShader(&fragShader);
 		}
 
 		void Destroy(vk::Device device) {
+			taskShader.Destroy(device);
 			meshShader.Destroy(device);
 			fragShader.Destroy(device);
 		}
@@ -113,11 +119,11 @@ namespace brassica {
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 
-			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
+			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
 			std::array<vk::DescriptorSetLayout, 1> setLayouts{static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)};
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{vk::PushConstantRange{
-				vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
+				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(WaterPushConstants)
 			}};
@@ -148,14 +154,15 @@ namespace brassica {
 
 			vkCmd.pushConstants(
 				resolved.layout,
-				vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
+				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(WaterPushConstants),
 				&push
 			);
 
 			if (dls && dls->vkCmdDrawMeshTasksEXT) {
-				vkCmd.drawMeshTasksEXT(1, 1, 1, *dls);
+				std::uint32_t taskGroupCount = (push.gridParams.z + 31) / 32;
+				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, *dls);
 			}
 		}
 	};
