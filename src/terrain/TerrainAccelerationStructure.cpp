@@ -1,5 +1,7 @@
 #include "terrain/TerrainAccelerationStructure.hpp"
+#include "terrain/TerrainClipmap.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -71,11 +73,28 @@ namespace brassica {
 					glm::vec3 minB(
 						cameraSnap.x +
 							(static_cast<float>(col) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize,
-						-500.0f,
+						0.0f,
 						cameraSnap.y +
 							(static_cast<float>(row) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize
 					);
-					glm::vec3 maxB = minB + glm::vec3(meshletSize, 2000.0f, meshletSize);
+					glm::vec3 maxB = minB + glm::vec3(meshletSize, 0.0f, meshletSize);
+
+					float minH = 1e9f;
+					float maxH = -1e9f;
+					constexpr int numSamples = 5;
+					for (int sz = 0; sz < numSamples; ++sz) {
+						float tz = static_cast<float>(sz) / static_cast<float>(numSamples - 1);
+						float sampleZ = minB.z + tz * meshletSize;
+						for (int sx = 0; sx < numSamples; ++sx) {
+							float tx = static_cast<float>(sx) / static_cast<float>(numSamples - 1);
+							float sampleX = minB.x + tx * meshletSize;
+							float h = TerrainClipmap::SampleTerrain(sampleX, sampleZ, baseTexelSize).r;
+							minH = std::min(minH, h);
+							maxH = std::max(maxH, h);
+						}
+					}
+					minB.y = minH - 5.0f;
+					maxB.y = maxH + 5.0f;
 
 					// Radial ring check matching task shader to only generate AABBs for active LOD regions
 					if (lod > 0) {

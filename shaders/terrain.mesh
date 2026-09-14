@@ -3,32 +3,20 @@
 #extension GL_EXT_fragment_shading_rate : require
 #include "bindless.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform TerrainPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets
+	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
 	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	uint  visibilityIndex;
 } params;
-
-vec2 sampleToroidalUV(vec2 worldXZ, uint level) {
-	float baseTexelSize = uCameraPosition.w;
-	float texelSize = baseTexelSize * pow(2.0, float(level));
-	uint textureDim = (params.gridParams.w > 0u) ? params.gridParams.w : 1088u;
-
-	uvec4 offsets = (level < 4) ? params.lodOffsets0_3 : params.lodOffsets4_7;
-	uint packed = offsets[level % 4];
-	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
-
-	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
-	vec2 deltaWorld = worldXZ - centerWorldPos;
-	vec2 texelCoord = deltaWorld / texelSize + vec2(float(textureDim) * 0.5) + vec2(gridOffset);
-
-	return fract(texelCoord / float(textureDim));
-}
 
 struct TaskPayload {
 	uint meshletIDs[32];
@@ -73,8 +61,7 @@ void main() {
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
 
-	vec2 uv = sampleToroidalUV(worldPos.xz, lodLevel);
-	vec4 texSample = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uv, float(lodLevel)));
+	vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
@@ -92,8 +79,7 @@ void main() {
 			float alpha = clamp((distToCam - morphStart) / max(morphEnd - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending for CDLOD transition
 
-			vec2 uvNext = sampleToroidalUV(worldPos.xz, lodLevel + 1);
-			vec4 texNext = SAMPLE_ARRAY_WRAP(params.clipmapIndex, vec3(uvNext, float(lodLevel + 1)));
+			vec4 texNext = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel + 1, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
 			float nextHeight = texNext.r;
 			vec3 nextNormal = texNext.gba;
 

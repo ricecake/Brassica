@@ -31,6 +31,9 @@ namespace brassica {
 		glm::uvec4 lodOffsets0_3{0u};             // Toroidal offsets for LOD 0-3
 		glm::uvec4 lodOffsets4_7{0u};             // Toroidal offsets for LOD 4-7
 		std::uint32_t clipmapIndex{0};
+		std::uint32_t minMaxIndex{0};
+		std::uint32_t biomeIndex{0};
+		std::uint32_t visibilityIndex{0};
 	};
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
@@ -50,7 +53,10 @@ namespace brassica {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferDepth>,
 			graph::Create<TerrainTLAS>,
-			graph::Read<TerrainClipmapTexture>>;
+			graph::Read<TerrainClipmapTexture>,
+			graph::Read<TerrainMinMaxTexture>,
+			graph::Read<TerrainBiomeTexture>,
+			graph::Read<TerrainTileVisibilityTexture>>;
 
 		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
 		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
@@ -158,6 +164,9 @@ namespace brassica {
 
 		void Execute(graph::NodeContext& ctx) {
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
+			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
+			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
+			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

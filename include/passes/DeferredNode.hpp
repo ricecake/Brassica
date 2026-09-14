@@ -35,6 +35,9 @@ namespace brassica {
 		std::uint32_t backgroundIndex{0};
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t tlasIndex{0};
+		std::uint32_t minMaxIndex{0};
+		std::uint32_t biomeIndex{0};
+		std::uint32_t visibilityIndex{0};
 	};
 
 	// Replaces DeferredPass: no per-node descriptor set, no per-frame descriptor writes -- every
@@ -54,6 +57,9 @@ namespace brassica {
 			graph::Read<GBufferAlbedo>,
 			graph::Read<GradientBackground>,
 			graph::Read<TerrainClipmapTexture>,
+			graph::Read<TerrainMinMaxTexture>,
+			graph::Read<TerrainBiomeTexture>,
+			graph::Read<TerrainTileVisibilityTexture>,
 			graph::Read<TerrainTLAS>,
 			graph::Modify<Swapchain>>;
 
@@ -113,6 +119,9 @@ namespace brassica {
 			push.backgroundIndex = ctx.Index<GradientBackground>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.tlasIndex = ctx.Index<TerrainTLAS>();
+			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
+			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
+			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
