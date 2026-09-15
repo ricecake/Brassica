@@ -94,7 +94,7 @@ namespace brassica {
 		data.biomeMap.resize(size);
 		data.visibilityMap.resize(size);
 
-		float texelSize = info.texelSize;
+		float texelSize = info.texelSize > 0.0f ? info.texelSize : 0.5f;
 		float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
 		float minWorldX = info.centerWorldPos.x - halfExtent;
@@ -128,9 +128,9 @@ namespace brassica {
 		uint32_t paddedH = height + 2;
 		size_t   totalPadded = static_cast<size_t>(paddedW) * paddedH;
 
-		std::vector<float> paddedHeights(totalPadded);
-		std::vector<float> biomePatch(totalPadded);
-		std::vector<float> maskPatch(totalPadded);
+		std::vector<float> paddedHeights(totalPadded, 0.0f);
+		std::vector<float> biomePatch(totalPadded, 0.5f);
+		std::vector<float> maskPatch(totalPadded, 0.0f);
 
 		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;
@@ -530,8 +530,19 @@ namespace brassica {
 	}
 
 	TerrainClipmap::TerrainLevelData TerrainClipmap::GenerateLevelData(uint32_t levelIndex) const {
+		ClipmapLevelInfo info{};
+		if (levelIndex < levelInfos.size()) {
+			info = levelInfos[levelIndex];
+		} else {
+			info.level = levelIndex;
+			info.baseTexelSize = baseTexelSize > 0.0f ? baseTexelSize : 0.5f;
+			info.texelSize = info.baseTexelSize * static_cast<float>(1 << levelIndex);
+			info.worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * info.texelSize;
+			info.centerWorldPos = glm::vec2(0.0f);
+			info.gridOffset = glm::ivec2(0);
+		}
 		TerrainRegionData region =
-			GenerateTerrainRegionData(levelInfos[levelIndex], 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
+			GenerateTerrainRegionData(info, 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
 		return TerrainLevelData{
 			.heightMap = std::move(region.heightMap),
 			.minMaxMap = std::move(region.minMaxMap),

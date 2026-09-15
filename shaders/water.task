@@ -1,0 +1,116 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_KHR_shader_subgroup_ballot : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+
+layout(push_constant) uniform WaterPushConstants {
+	uvec4 gridParams;     // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+	vec3  waterColor;
+	float waterLevel;
+	uint  gPositionIndex;
+	uint  gAlbedoIndex;
+	uint  gNormalIndex;
+	uint  padding;
+} params;
+
+struct TaskPayload {
+	uint meshletIDs[32];
+	uint lodLevels[32];
+};
+
+taskPayloadSharedEXT TaskPayload payload;
+
+// Check AABB against frustum planes
+bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
+	vec4 planes[6];
+	planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]); // Left
+	planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]); // Right
+	planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]); // Bottom
+	planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]); // Top
+	planes[4] = vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]); // Near
+	planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]); // Far
+
+	for (int i = 0; i < 6; i++) {
+		vec3 pVertex = minB;
+		if (planes[i].x >= 0.0) pVertex.x = maxB.x;
+		if (planes[i].y >= 0.0) pVertex.y = maxB.y;
+		if (planes[i].z >= 0.0) pVertex.z = maxB.z;
+
+		float len = length(planes[i].xyz);
+		vec4 normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
+
+		// Safety margin for wave height displacement (50 units)
+		if (dot(normPlane.xyz, pVertex) + normPlane.w < -50.0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+shared uint meshletCount;
+
+void main() {
+	uint threadID = gl_LocalInvocationID.x;
+
+	if (threadID == 0) {
+		meshletCount = 0;
+	}
+	barrier();
+
+	uint meshletID = gl_WorkGroupID.x * 32 + threadID;
+
+	bool visible = false;
+	uint lodLevel = 0;
+
+	if (meshletID < params.gridParams.z) {
+		uint meshletsPerRow = params.gridParams.y;
+		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
+		lodLevel = min(meshletID / totalPerLOD, params.gridParams.x - 1);
+		uint localID = meshletID % totalPerLOD;
+
+		uint row = localID / meshletsPerRow;
+		uint col = localID % meshletsPerRow;
+
+		float baseMeshletSize = 32.0;
+		float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+
+		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+		float maxWaveAmp = 20.0;
+		vec3 minB = vec3(
+			cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
+			params.waterLevel - maxWaveAmp,
+			cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
+		);
+		vec3 maxB = minB + vec3(meshletSize, 2.0 * maxWaveAmp, meshletSize);
+
+		visible = isAABBVisible(minB, maxB, uViewProjMatrix);
+
+		if (visible && lodLevel > 0) {
+			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
+
+			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
+			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
+
+			// Cull the water meshlet if its entire bounding box is inside the previous finer LOD's area
+			if (insideX && insideZ) {
+				visible = false;
+			}
+		}
+	}
+
+	if (visible) {
+		uint index = atomicAdd(meshletCount, 1u);
+		payload.meshletIDs[index] = meshletID;
+		payload.lodLevels[index] = lodLevel;
+	}
+	barrier();
+
+	if (threadID == 0) {
+		EmitMeshTasksEXT(meshletCount, 1, 1);
+	}
+}
