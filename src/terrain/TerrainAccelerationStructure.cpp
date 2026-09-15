@@ -85,7 +85,7 @@ namespace brassica {
 				return static_cast<void*>(nullptr);
 			};
 
-		uint32_t       maxAABBs = 8 * 16 * 16;
+		uint32_t       maxAABBs = 12 * 16 * 16;
 		vk::DeviceSize aabbBufferSize = sizeof(std::uint64_t) + sizeof(VkAabbPositionsKHR) * maxAABBs;
 
 		createBuffer(
