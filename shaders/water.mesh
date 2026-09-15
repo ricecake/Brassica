@@ -104,8 +104,10 @@ void main() {
 			float alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending
 
-			// Target position snapped to 2x coarse grid
-			vec2 targetXZ = floor(worldXZ / (meshletSize * 0.2)) * (meshletSize * 0.2);
+			// Target position snapped to coarse grid
+			float nextMeshletSize = baseMeshletSize * getLODScale(float(lodLevel + 1));
+			float targetCellSize = nextMeshletSize * 0.1;
+			vec2 targetXZ = floor(worldXZ / targetCellSize) * targetCellSize;
 			worldXZ = mix(worldXZ, targetXZ, alpha * 0.5);
 		}
 	}

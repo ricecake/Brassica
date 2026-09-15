@@ -99,7 +99,7 @@ void main() {
 	vec4 clipPos = uViewProjMatrix * vec4(worldPos, 1.0);
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = clipPos;
 
-	outPosition[vertexIndex] = worldPos;
+	outPosition[vertexIndex] = worldPos - uCameraPosition.xyz;
 	outNormal[vertexIndex] = normal;
 
 	vec3 lodColor = vec3(0.2, 0.6, 0.2);
@@ -144,7 +144,7 @@ void main() {
 		vec3 skirtPos = worldPos - vec3(0.0, skirtDepth, 0.0);
 
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uViewProjMatrix * vec4(skirtPos, 1.0);
-		outPosition[skirtIdx] = skirtPos;
+		outPosition[skirtIdx] = skirtPos - uCameraPosition.xyz;
 		outNormal[skirtIdx] = normal;
 		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
 	}

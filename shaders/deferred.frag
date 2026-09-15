@@ -88,7 +88,8 @@ vec3 ACESFilm(vec3 x) {
 void main() {
 	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
 	vec3 norm = SAMPLE_NEAREST(params.gNormalIndex, inUV).rgb;
-	vec3 pos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
+	vec3 relPos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
+	vec3 pos = relPos + uCameraPosition.xyz;
 	vec3 hdrBg = SAMPLE_NEAREST(params.backgroundIndex, inUV).rgb;
 	float depth = SAMPLE_NEAREST(params.gDepthIndex, inUV).r;
 

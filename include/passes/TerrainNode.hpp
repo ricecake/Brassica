@@ -119,7 +119,7 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferPosition>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
 					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
 				}
 			);
@@ -157,7 +157,7 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
-				vk::Format::eR16G16B16A16Sfloat,
+				vk::Format::eR32G32B32A32Sfloat,
 				vk::Format::eR16G16B16A16Sfloat,
 				vk::Format::eR8G8B8A8Unorm
 			};
