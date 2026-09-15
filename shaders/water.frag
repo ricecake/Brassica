@@ -1,5 +1,6 @@
 #version 460
 #include "bindless.glsl"
+#include "common.glsl"
 
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
@@ -60,12 +61,14 @@ void main() {
 		refractedAlbedo = albedo;
 	}
 
-	// Translucency & Beer-Lambert absorption: shallow water is clearer, deep water absorbs more light
-	float absorption = 1.0 - exp(-depthBelowWater * 0.15);
-	vec3 deepWaterColor = vec3(0.01, 0.15, 0.35);
-	vec3 waterBodyColor = mix(params.waterColor, deepWaterColor, absorption);
+	// Translucency & Beer-Lambert absorption: shallow water is clearer turquoise, deep water absorbs more light
+	float absorption = 1.0 - exp(-depthBelowWater * 0.12);
+	vec3 shallowWaterTint = vec3(0.12, 0.62, 0.78);
+	vec3 deepWaterColor = vec3(0.01, 0.12, 0.32);
+	vec3 baseTint = mix(shallowWaterTint, params.waterColor, clamp(depthBelowWater / 5.0, 0.0, 1.0));
+	vec3 waterBodyColor = mix(baseTint, deepWaterColor, absorption);
 
-	float alpha = clamp(0.35 + absorption * 0.5, 0.35, 0.85);
+	float alpha = clamp(0.35 + absorption * 0.5, 0.35, 0.88);
 
 	// Specular shine and Fresnel reflection when camera is close
 	vec3 lightDir = normalize(vec3(0.5, 0.8, 0.5));
@@ -77,8 +80,24 @@ void main() {
 	vec3 shineColor = vec3(1.2, 1.1, 0.9) * specular;
 
 	float fresnel = pow(1.0 - max(dot(viewDir, waveNormal), 0.0), 4.0);
-	vec3 finalWaterTint = mix(waterBodyColor, vec3(0.6, 0.8, 1.0), fresnel * 0.4);
+	vec3 finalWaterTint = mix(waterBodyColor, vec3(0.65, 0.82, 1.0), fresnel * 0.45);
 
 	vec3 blendedColor = mix(refractedAlbedo.rgb, finalWaterTint, alpha) + shineColor;
+
+	// Shoreline foam and wave crest foam
+	float shoreFoam = clamp(1.0 - depthBelowWater / 2.2, 0.0, 1.0);
+	shoreFoam = pow(shoreFoam, 1.4);
+	float foamNoise = InterleavedGradientNoise(inWorldPos.xz * 3.5, int(uTime * 12.0));
+	shoreFoam *= 0.65 + 0.35 * foamNoise;
+
+	float crestFactor = clamp((1.0 - waveNormal.y) * 3.5, 0.0, 1.0);
+	float crestFoam = crestFactor * closeFactor * (0.5 + 0.5 * sin(uTime * 3.0 + inWorldPos.x * 0.5));
+
+	float totalFoam = clamp(shoreFoam * 1.25 + crestFoam * 0.6, 0.0, 1.0);
+	vec3 foamColor = vec3(0.92, 0.96, 1.0);
+
+	blendedColor = mix(blendedColor, foamColor, totalFoam);
+	alpha = max(alpha, totalFoam * 0.92);
+
 	outColor = vec4(blendedColor, alpha);
 }
