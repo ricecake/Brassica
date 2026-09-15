@@ -351,3 +351,48 @@ vec4 PhacelleNoise(in vec2 p, vec2 normDir, float freq, float offset, float norm
 	magnitude = max(1.0 - normalization, magnitude);
 	return vec4(interpolated / magnitude, sideDir);
 }
+
+float gate(float min_val, float max_val, float val) {
+	return val * smoothstep(min_val, max_val, val);
+}
+
+float threshold(float minv, float maxv, float width, float val) {
+	// float halfWidth = width * 0.5;
+	float halfWidth = 0.5 * min((maxv - minv), width);
+	return val * smoothstep(minv - halfWidth, minv, val) * (1.0 - smoothstep(maxv, maxv + halfWidth, val));
+}
+
+float sustain(float minv, float maxv, float width, float val) {
+	// float halfWidth = width * 0.5;
+	float halfWidth = 0.5 * min(abs(maxv - minv), width);
+	return smoothstep(minv - halfWidth, minv, val) * (1.0 - smoothstep(maxv, maxv + halfWidth, val));
+}
+
+float band(float minv, float maxv, float width, float val) {
+	// float halfWidth = width * 0.5;
+	float halfWidth = 0.5 * min(abs(maxv - minv), width);
+	return smoothstep(minv - halfWidth, minv, val)*(1.0-smoothstep(minv, minv+halfWidth, val)) + smoothstep(maxv - halfWidth, maxv, val)*(1.0 - smoothstep(maxv-halfWidth, maxv + halfWidth, val));
+}
+
+#define ADSR_FADE(t, start, attack, sustain, release) \
+    (smoothstep(start, start + attack, t) * (1.0 - smoothstep(start + attack + sustain, start + attack + sustain + release, t)))
+
+
+#define EVAL_LOD_OPTIMIZED(OUT_VAR, FUNC, TRANS_LEN, SEG_LEN, CUR_LEN) \
+    { \
+        float _layer = floor((CUR_LEN) / (SEG_LEN)); \
+        float _local = mod((CUR_LEN), (SEG_LEN)); \
+        float _blend = smoothstep((SEG_LEN) - (TRANS_LEN), (SEG_LEN), _local); \
+        OUT_VAR = FUNC(_layer); \
+        if (_blend > 0.0) { \
+            OUT_VAR = mix(OUT_VAR, FUNC(_layer + 1.0), _blend); \
+        } \
+    }
+
+// FUNC: A function that takes a float layer_index and returns your procedural texture (float, vec2, vec4, etc.)
+#define LOD_BLEND(FUNC, TRANS_LEN, SEG_LEN, CUR_LEN) \
+    mix( \
+        FUNC(floor((CUR_LEN) / (SEG_LEN))), \
+        FUNC(floor((CUR_LEN) / (SEG_LEN)) + 1.0), \
+        smoothstep((SEG_LEN) - (TRANS_LEN), (SEG_LEN), mod((CUR_LEN), (SEG_LEN))) \
+    )

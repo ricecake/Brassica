@@ -109,7 +109,7 @@ namespace brassica {
 
 		createBuffer(
 			aabbBufferSize,
-			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
 			aabbBuffer,
 			false
 		);

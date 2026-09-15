@@ -239,7 +239,6 @@ namespace brassica {
 
 			terrainAS.DestroyAccelerationStructures();
 
-			terrainUploader.Cleanup();
 			terrainClipmap.Cleanup();
 
 			pipelineLibrary.Reset();
@@ -337,7 +336,7 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		terrainAS.Init(instance, device, allocator);
+		terrainAS.Init(instance, device);
 
 		render::NodeServices nodeServices{
 			.device = device,
@@ -345,7 +344,6 @@ namespace brassica {
 			.shaderWatcher = &shaderWatcher,
 			.terrainAS = &terrainAS,
 			.dispatchLoader = &terrainAS.GetDls(),
-			.physicalRegistry = &physicalRegistry,
 			.swapchainFormat = GetSwapchainFormat(),
 		};
 		// Concrete evidence the CRTP registrar (render::NodeRegistrar<T>, include/render/
@@ -363,45 +361,6 @@ namespace brassica {
 		float initialTerrainHeight =
 			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, terrainClipmap.GetBaseTexelSize()).r;
 		camera.position.y = initialTerrainHeight + 2.0f;
-
-		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
-
-		// Async upload initial heightmaps & terrain attribute maps
-		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
-			auto mapData = terrainClipmap.GenerateLevelData(l);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.heightMap,
-				terrainClipmap.GetImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.minMaxMap,
-				terrainClipmap.GetMinMaxImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.biomeMap,
-				terrainClipmap.GetBiomeImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.visibilityMap,
-				terrainClipmap.GetVisibilityImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-		}
 
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),
@@ -963,7 +922,6 @@ namespace brassica {
 		// skipped, so Engine builds exactly one NodeFrameParams and hands it to every registered
 		// node uniformly, the same shape as InitAll/DestroyAll/RegisterAllInto.
 		render::NodeFrameParams frameParams{
-			.cameraPosition = camera.position,
 			.terrainGridParams = terrainPush.gridParams,
 			.terrainLodOffsets0_3 = terrainPush.lodOffsets0_3,
 			.terrainLodOffsets4_7 = terrainPush.lodOffsets4_7,
@@ -1063,7 +1021,7 @@ namespace brassica {
 		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
 		cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
-		auto waitInfos = terrainUploader.GetWaitSemaphores();
+		std::vector<vk::SemaphoreSubmitInfo> waitInfos;
 
 		vk::SemaphoreSubmitInfo waitInfo{};
 		waitInfo.setSemaphore(frame.swapchainSemaphore);
