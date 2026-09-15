@@ -17,7 +17,7 @@ namespace brassica {
 	struct ClipmapLevelInfo {
 		uint32_t   level{0};
 		float      baseTexelSize{0.5f};
-		float      texelSize{0.5f};     // texelSize = baseTexelSize * 2^level
+		float      texelSize{0.5f};     //  texelSize = baseTexelSize * 2^level
 		float      worldExtent{512.0f}; // 1024 * texelSize
 		glm::vec2  centerWorldPos{0.0f};
 		glm::ivec2 gridOffset{0}; // Toroidal grid cell offset in texels

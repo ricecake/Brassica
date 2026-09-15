@@ -26,9 +26,19 @@ namespace brassica {
 			this->device = device;
 			this->allocator = alloc;
 			dls.init(instance, device);
+			if (allocator != VK_NULL_HANDLE) {
+				InitAccelerationStructures();
+			}
 		}
 
-		void SetAllocator(VmaAllocator alloc) { this->allocator = alloc; }
+		void InitAccelerationStructures();
+
+		void SetAllocator(VmaAllocator alloc) {
+			this->allocator = alloc;
+			if (allocator != VK_NULL_HANDLE && !tlas) {
+				InitAccelerationStructures();
+			}
+		}
 
 		void BuildOrUpdate(
 			vk::CommandBuffer        cmd,

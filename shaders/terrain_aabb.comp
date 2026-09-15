@@ -1,8 +1,7 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : require
-#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "bindless.glsl"
 
@@ -24,8 +23,8 @@ layout(buffer_reference, scalar) buffer AABBBuffer {
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
-	uint64_t aabbBufferAddr;
-	uint64_t padding;
+	uvec2 aabbBufferAddr;
+	uvec2 padding;
 	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow (16), z = totalMeshlets, w = textureDim (1088)
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;

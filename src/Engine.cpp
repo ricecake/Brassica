@@ -637,9 +637,13 @@ namespace brassica {
 		variableShadingRate.primitiveFragmentShadingRate = VK_TRUE;
 		variableShadingRate.attachmentFragmentShadingRate = VK_TRUE;
 
+		VkPhysicalDeviceFeatures features1{};
+		features1.shaderInt64 = VK_TRUE;
+
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
 			.set_minimum_version(chosenMajor, chosenMinor)
+			.set_required_features(features1)
 			.set_required_features_13(features13)
 			.set_required_features_12(features12)
 			.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
@@ -936,6 +940,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
