@@ -249,15 +249,16 @@ namespace brassica {
 		}
 
 		BuildQuadtree();
-		CreateTextureArrays();
-		CreateIndirectionMapImage();
-		CreateSampler();
+		if (device) {
+			CreateTextureArrays();
+			CreateIndirectionMapImage();
+			CreateSampler();
+		}
 	}
 
 	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue) {
 		glm::vec2 cam2D(cameraPos.x, cameraPos.z);
 
-		// Distance radii for LOD activation
 		static const float lodRadii[8] = {
 			1024.0f,  // LOD 0
 			2048.0f,  // LOD 1
@@ -269,7 +270,6 @@ namespace brassica {
 			1e9f      // LOD 7 (Root)
 		};
 
-		// 1. Mark desired active status across quadtree nodes
 		std::vector<bool> desiredActive(quadtreeNodes.size(), false);
 
 		for (uint32_t lod = 0; lod < numLODs; ++lod) {
@@ -291,7 +291,6 @@ namespace brassica {
 			}
 		}
 
-		// 2. Evict deactivated nodes
 		for (size_t idx = 0; idx < quadtreeNodes.size(); ++idx) {
 			auto& node = quadtreeNodes[idx];
 			if (node.isLoaded && !desiredActive[idx]) {
@@ -303,7 +302,6 @@ namespace brassica {
 			}
 		}
 
-		// 3. Allocate and stream tiles for new active nodes (coarse to fine)
 		for (int lod = static_cast<int>(numLODs) - 1; lod >= 0; --lod) {
 			uint32_t dim = 128 >> lod;
 			for (uint32_t z = 0; z < dim; ++z) {
@@ -328,7 +326,6 @@ namespace brassica {
 			}
 		}
 
-		// 4. Rebuild indirection map CPU mips and upload to GPU
 		for (uint32_t l = 0; l < numLODs; ++l) {
 			uint32_t dim = 128 >> l;
 			bool changed = false;
