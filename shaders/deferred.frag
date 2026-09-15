@@ -16,13 +16,13 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  backgroundIndex;
 	uint  clipmapIndex;
 	uint  tlasIndex;
-	uint gDepthIndex;
+	uint  gDepthIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint  indirectionMapIndex;
 } params;
 
-// Calculate the LOD level based on the sample's Chebyshev distance
 uint calculateRayLOD(vec2 sampleXZ) {
 	vec2 dists = abs(sampleXZ - uCameraPosition.xz);
 	float maxDist = max(dists.x, dists.y);
@@ -37,7 +37,6 @@ uint calculateRayLOD(vec2 sampleXZ) {
 	return uint(clamp(lodFloat, 0.0, 7.0));
 }
 
-// Update the intersection function to use dynamic LODs
 bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
 	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
 	int numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
@@ -47,18 +46,16 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 		float t = (float(i) / float(numSteps)) * rayLength;
 		vec3 samplePos = rayOrigin + rayDir * t;
 
-		// Fetch the appropriate LOD for the current spatial step
 		uint stepLod = calculateRayLOD(samplePos.xz);
 
-		// Accelerate raymarching via min-max height map check if minMaxIndex is set
 		if (params.minMaxIndex > 0u) {
-			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, params.indirectionMapIndex, samplePos.xz, stepLod);
 			if (samplePos.y > minMax.y + 1.0) {
-				continue; // Ray is safely above the maximum height in this cell
+				continue;
 			}
 		}
 
-		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, params.indirectionMapIndex, samplePos.xz, stepLod);
 		float terrainHeight = texSample.r;
 
 		if (samplePos.y <= terrainHeight) {
@@ -70,7 +67,6 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 	return false;
 }
 
-// ACES Filmic Tone Mapping Curve
 vec3 ACESFilm(vec3 x) {
 	float a = 2.51f;
 	float b = 0.03f;
@@ -89,32 +85,26 @@ void main() {
 
 	vec3 hdrColor;
 
-	// If no surface rendered in gbuffer (albedo alpha is 0), show HDR background
 	if (albedo.a < 0.01) {
 		hdrColor = hdrBg;
 	} else {
 		vec3 lightDir = normalize(vec3(0.5, 0.2, 0.5));
-		vec3 lightColor = vec3(2.5, 2.3, 2.0); // High intensity HDR light source
+		vec3 lightColor = vec3(2.5, 2.3, 2.0);
 
 		float diff = max(dot(norm, lightDir), 0.0);
 
-		// Ray Query Shadows
 		float shadowFactor = 1.0;
 
-		// Inside main(), replace the existing rayOrigin assignment:
 		if (false && diff > 0.001) {
-			vec3 rayOrigin = pos + norm * 0.1; // Base offset to avoid standard self-shadowing
+			vec3 rayOrigin = pos + norm * 0.1;
 
-			// Sample the absolute highest-detail terrain height at this coordinate
-			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7).r;
+			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, params.indirectionMapIndex, pos.xz, 0u).r;
 
-			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
 			if (rayOrigin.y < trueHeight0 + 0.1) {
 				rayOrigin.y = trueHeight0 + 0.1;
 			}
 
 			float shadowRayTMax = 1000.0;
-
 
 			rayQueryEXT rq;
 			rayQueryInitializeEXT(
@@ -141,21 +131,16 @@ void main() {
 			}
 
 			if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
-				shadowFactor = 0.2; // Shadowed region
+				shadowFactor = 0.2;
 			}
 		}
 
 		vec3 diffuse = albedo.rgb * diff * lightColor * shadowFactor;
-		// diffuse = mix(vec3(0.1,0.2, 0.3), diffuse, exp(-0.10*length(pos)));
-		// diffuse += vec3(1.2, 0.2, 0.2) * exp(-length(pos));
-
-		// Ambient term
 		vec3 ambient = 0.25 * albedo.rgb;
 
 		hdrColor = ambient + diffuse;
 	}
 
-	// HDR Tonemapping & Gamma Correction
 	vec3 ldrColor = ACESFilm(hdrColor);
 	ldrColor = pow(ldrColor, vec3(1.0 / 2.2));
 

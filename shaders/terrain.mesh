@@ -16,6 +16,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint  indirectionMapIndex;
 } params;
 
 struct TaskPayload {
@@ -61,7 +62,7 @@ void main() {
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
 
-	vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+	vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, params.indirectionMapIndex, worldPos.xz, lodLevel);
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
@@ -79,7 +80,7 @@ void main() {
 			float alpha = clamp((distToCam - morphStart) / max(morphEnd - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending for CDLOD transition
 
-			vec4 texNext = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel + 1, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+			vec4 texNext = sampleTerrainClipmap(params.clipmapIndex, params.indirectionMapIndex, worldPos.xz, lodLevel + 1);
 			float nextHeight = texNext.r;
 			vec3 nextNormal = texNext.gba;
 
@@ -112,16 +113,9 @@ void main() {
 		lodColor = vec3(0.45, 0.5, 0.25);
 	}
 
-	// vec3 windIsh = cross_noise_fbm(worldPos*0.5, 2, uTime*0.25);
-	// lodColor += (0.25*length(windIsh)*dot_noise_fbm(worldPos*0.25+windIsh, 2, uTime*0.5))/(log2(distToCam)*lodColor);
-
-	// lodColor += vec3(1,0,0) * lodLevel;
-	// lodColor = vec3(0.1, 0.1, lodLevel/7.0);
-	// lodColor = vec3(step(5.0, lodLevel), 0.1, lodLevel/7.0);
-
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
-	// Generate skirt vertex for boundary vertices (sampled every 2 units to fit within Vulkan 256 primitive limit)
+	// Generate skirt vertex for boundary vertices
 	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
 	if (isBoundarySample) {
 		uint skirtID;
@@ -154,7 +148,7 @@ void main() {
 		shadingRate = gl_ShadingRateFlag2HorizontalPixelsEXT | gl_ShadingRateFlag2VerticalPixelsEXT;
 	}
 
-	// Generate 10x10 quad primitives (200 triangles)
+	// Generate 10x10 quad primitives
 	if (lx < 10 && ly < 10) {
 		uint quadIdx = ly * 10 + lx;
 		uint v0 = ly * 11 + lx;
@@ -180,8 +174,6 @@ void main() {
 
 			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
 
-			// Cull if the quad center is strictly inside the previous LOD's active area.
-			// The -0.01 margin prevents floating point inaccuracies from culling edge quads.
 			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
 				cullQuad = true;
 			}
@@ -191,7 +183,7 @@ void main() {
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
-	// Generate skirt primitives along outer boundary edges (5 segments per edge, total 40 triangles)
+	// Generate skirt primitives along outer boundary edges
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
 		uint s = lx / 2;
 		uint v0 = lx;
