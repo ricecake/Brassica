@@ -18,11 +18,11 @@
 // actually be instantiated and linked into this test's executable; if any were being stripped,
 // RegisteredTypeCount() would read back less than 7.
 //
-// 7 is every top-level node include/passes/AllNodes.hpp lists: GradientNode, TerrainNode,
+// 8 is every top-level node include/passes/AllNodes.hpp lists: GradientNode, TerrainGenNode, TerrainNode,
 // DeferredNode, WaterNode, TransmittanceLUTNode, MultiScatteringLUTNode, ParticleSystemNode.
 // Particle sub-nodes (ParticleResetNode/LivenessNode/BehaviorNode/RenderNode) are not counted --
 // they're constructed and Init'd by ParticleSystemNode itself, not registered with this registry.
 // This count should move by exactly one whenever a node is added to or removed from AllNodes.hpp.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 7);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 8);
 }

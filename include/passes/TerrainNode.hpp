@@ -29,9 +29,10 @@ namespace brassica {
 	// prefix of a push-constant block it actually uses, and every existing field's offset is
 	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
-		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-		glm::uvec4 lodOffsets0_3{0u};             // Toroidal offsets for LOD 0-3
-		glm::uvec4 lodOffsets4_7{0u};             // Toroidal offsets for LOD 4-7
+		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4 lodOffsets0_3{0u};              // Toroidal offsets for LOD 0-3
+		glm::uvec4 lodOffsets4_7{0u};              // Toroidal offsets for LOD 4-7
+		glm::uvec4 lodOffsets8_11{0u};             // Toroidal offsets for LOD 8-11
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
@@ -51,7 +52,6 @@ namespace brassica {
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Create>,
-			graph::Create<TerrainTLAS>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
@@ -105,6 +105,7 @@ namespace brassica {
 			push.gridParams = p.terrainGridParams;
 			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
 			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
+			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -143,18 +144,6 @@ namespace brassica {
 					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			// Declared unconditionally every frame, whether or not BuildOrUpdate actually
-			// rebuilt this frame (it self-throttles by camera movement and Engine calls it
-			// unconditionally before this Setup runs) -- simpler than threading a "did it
-			// actually rebuild" flag through just to skip an otherwise-harmless redundant
-			// barrier.
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainTLAS>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::AccelerationStructureDesc(),
 				}
 			);
 			return r;

@@ -22,8 +22,9 @@ namespace brassica {
 			land = FastNoise::NewFromEncodedNodeTree(
 				// "KQkdCRMABg@BkSCS4AAQ@BkHAABAnEUUCw@AD8EAgsAAECcRS@DOAE@BEC83MTD4EAw@CL@BPxMAAEjCGwAAekQE"
 				// "KQkdCRMABg@BkSCS4AAQ@BkHAABAnEUUCw@AD8EAgsAAECcRS@DOAE@BEC83MTD4EAw@CT@AgwRsAAHpEBA=="
-				// "KQkdCRMABg@BkSCS4AAQ@BkHAABAnEUUCw@AD8EAgsAAECcRS@DOAE@BEC83MTD4EEwAAIMEbAAD6QwQ="
-				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
+				//  "KQkdCRMABg@BkSCS4AAQ@BkHAABAnEUUCw@AD8EAgsAAECcRS@DOAE@BEC83MTD4EEwAAIMEbAAD6QwQ="
+				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/"
+				"BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
 			);
 			biomeScale = FastNoise::NewFromEncodedNodeTree("D4AF34S9AQAAAHgA");
 			maskScale = FastNoise::NewFromEncodedNodeTree("D4AF34S9AQAAAHgA");
@@ -238,9 +239,11 @@ namespace brassica {
 		baseTexelSize = baseTexel;
 
 		if (maxDist > 0.0f) {
-			float    baseLevelExtent = static_cast<float>(TERRAIN_MAP_DIM) * baseTexelSize;
-			uint32_t derivedLODs = static_cast<uint32_t>(std::ceil(std::log2(maxDist / baseLevelExtent))) + 1;
-			numLODs = std::clamp(derivedLODs, 1u, 8u);
+			uint32_t derivedLODs = 1;
+			while (derivedLODs < 12 && (static_cast<float>(TERRAIN_MAP_DIM) * GetLODScale(static_cast<float>(derivedLODs - 1)) * baseTexelSize * 0.5f) < maxDist) {
+				derivedLODs++;
+			}
+			numLODs = std::clamp(derivedLODs, 1u, 12u);
 		} else {
 			numLODs = lods;
 		}
@@ -249,7 +252,7 @@ namespace brassica {
 		for (uint32_t i = 0; i < numLODs; ++i) {
 			levelInfos[i].level = i;
 			levelInfos[i].baseTexelSize = baseTexelSize;
-			levelInfos[i].texelSize = baseTexelSize * static_cast<float>(1 << i);
+			levelInfos[i].texelSize = baseTexelSize * GetLODScale(static_cast<float>(i));
 			levelInfos[i].worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * levelInfos[i].texelSize;
 			levelInfos[i].centerWorldPos = glm::floor(
 											   glm::vec2(initialCameraPos.x, initialCameraPos.z) /
@@ -257,14 +260,14 @@ namespace brassica {
 										   ) *
 				levelInfos[i].texelSize;
 			levelInfos[i].gridOffset = glm::ivec2(0);
+			levelInfos[i].delta = glm::ivec2(TERRAIN_MAP_DIM, TERRAIN_MAP_DIM);
 		}
 
 		CreateTextureArrays();
 		CreateSampler();
 	}
 
-	void
-	TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue) {
+	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos) {
 		for (uint32_t l = 0; l < numLODs; ++l) {
 			auto& info = levelInfos[l];
 			float texelSize = info.texelSize;
@@ -275,176 +278,20 @@ namespace brassica {
 			int deltaX = static_cast<int>(std::round(diff.x / texelSize));
 			int deltaZ = static_cast<int>(std::round(diff.y / texelSize));
 
-			if (deltaX == 0 && deltaZ == 0)
-				continue;
-
-			if (std::abs(deltaX) >= static_cast<int>(TERRAIN_MAP_DIM) ||
-			    std::abs(deltaZ) >= static_cast<int>(TERRAIN_MAP_DIM)) {
-				info.centerWorldPos = newCenter;
-				info.gridOffset = glm::ivec2(0);
-				auto levelData = GenerateLevelData(l);
-				uploader.UploadLevelAsync(l, levelData.heightMap, image, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
-				uploader.UploadLevelAsync(l, levelData.minMaxMap, minmaxImage, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
-				uploader.UploadLevelAsync(l, levelData.biomeMap, biomeImage, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, queue);
-				uploader.UploadLevelAsync(
-					l,
-					levelData.visibilityMap,
-					visibilityImage,
-					TERRAIN_MAP_DIM,
-					TERRAIN_MAP_DIM,
-					queue
-				);
+			if (deltaX == 0 && deltaZ == 0) {
+				info.delta = glm::ivec2(0, 0);
 				continue;
 			}
 
+			info.delta = glm::ivec2(deltaX, deltaZ);
 			info.centerWorldPos = newCenter;
+			info.gridOffset.x = (info.gridOffset.x + deltaX) % static_cast<int>(TERRAIN_MAP_DIM);
+			if (info.gridOffset.x < 0)
+				info.gridOffset.x += static_cast<int>(TERRAIN_MAP_DIM);
 
-			std::vector<glm::vec4>           updateHeightBuffer;
-			std::vector<glm::vec4>           updateMinMaxBuffer;
-			std::vector<glm::vec4>           updateBiomeBuffer;
-			std::vector<glm::vec4>           updateVisibilityBuffer;
-			std::vector<vk::BufferImageCopy> copyRegions;
-
-			if (deltaX != 0) {
-				uint32_t stripWidth = std::abs(deltaX);
-				int      startDstX = (deltaX > 0) ? info.gridOffset.x
-												  : ((info.gridOffset.x + deltaX + static_cast<int>(TERRAIN_MAP_DIM)) %
-												     static_cast<int>(TERRAIN_MAP_DIM));
-
-				TerrainRegionData stripData =
-					GenerateTerrainRegionData(info, 0, 0, stripWidth, TERRAIN_MAP_DIM, deltaX, 0);
-
-				size_t baseOffset = updateHeightBuffer.size() * sizeof(glm::vec4);
-				updateHeightBuffer
-					.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
-				updateMinMaxBuffer
-					.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
-				updateBiomeBuffer.insert(updateBiomeBuffer.end(), stripData.biomeMap.begin(), stripData.biomeMap.end());
-				updateVisibilityBuffer.insert(
-					updateVisibilityBuffer.end(),
-					stripData.visibilityMap.begin(),
-					stripData.visibilityMap.end()
-				);
-
-				if (startDstX + stripWidth <= TERRAIN_MAP_DIM) {
-					vk::BufferImageCopy copyRegion{};
-					copyRegion.setBufferOffset(baseOffset);
-					copyRegion.setBufferRowLength(stripWidth);
-					copyRegion.setBufferImageHeight(TERRAIN_MAP_DIM);
-					copyRegion.setImageSubresource(
-						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
-					);
-					copyRegion.setImageOffset(vk::Offset3D{startDstX, 0, 0});
-					copyRegion.setImageExtent(vk::Extent3D{stripWidth, TERRAIN_MAP_DIM, 1});
-
-					copyRegions.push_back(copyRegion);
-				} else {
-					uint32_t w1 = TERRAIN_MAP_DIM - startDstX;
-					uint32_t w2 = stripWidth - w1;
-
-					vk::BufferImageCopy copyRegion1{};
-					copyRegion1.setBufferOffset(baseOffset);
-					copyRegion1.setBufferRowLength(stripWidth);
-					copyRegion1.setBufferImageHeight(TERRAIN_MAP_DIM);
-					copyRegion1.setImageSubresource(
-						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
-					);
-					copyRegion1.setImageOffset(vk::Offset3D{startDstX, 0, 0});
-					copyRegion1.setImageExtent(vk::Extent3D{w1, TERRAIN_MAP_DIM, 1});
-
-					vk::BufferImageCopy copyRegion2{};
-					copyRegion2.setBufferOffset(baseOffset + static_cast<size_t>(w1) * sizeof(glm::vec4));
-					copyRegion2.setBufferRowLength(stripWidth);
-					copyRegion2.setBufferImageHeight(TERRAIN_MAP_DIM);
-					copyRegion2.setImageSubresource(
-						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
-					);
-					copyRegion2.setImageOffset(vk::Offset3D{0, 0, 0});
-					copyRegion2.setImageExtent(vk::Extent3D{w2, TERRAIN_MAP_DIM, 1});
-
-					copyRegions.push_back(copyRegion1);
-					copyRegions.push_back(copyRegion2);
-				}
-
-				info.gridOffset.x = (info.gridOffset.x + deltaX) % static_cast<int>(TERRAIN_MAP_DIM);
-				if (info.gridOffset.x < 0)
-					info.gridOffset.x += static_cast<int>(TERRAIN_MAP_DIM);
-			}
-
-			if (deltaZ != 0) {
-				uint32_t stripHeight = std::abs(deltaZ);
-				int      startDstZ = (deltaZ > 0) ? info.gridOffset.y
-												  : ((info.gridOffset.y + deltaZ + static_cast<int>(TERRAIN_MAP_DIM)) %
-												     static_cast<int>(TERRAIN_MAP_DIM));
-
-				TerrainRegionData stripData =
-					GenerateTerrainRegionData(info, 0, 0, TERRAIN_MAP_DIM, stripHeight, 0, deltaZ);
-
-				size_t baseOffset = updateHeightBuffer.size() * sizeof(glm::vec4);
-				updateHeightBuffer
-					.insert(updateHeightBuffer.end(), stripData.heightMap.begin(), stripData.heightMap.end());
-				updateMinMaxBuffer
-					.insert(updateMinMaxBuffer.end(), stripData.minMaxMap.begin(), stripData.minMaxMap.end());
-				updateBiomeBuffer.insert(updateBiomeBuffer.end(), stripData.biomeMap.begin(), stripData.biomeMap.end());
-				updateVisibilityBuffer.insert(
-					updateVisibilityBuffer.end(),
-					stripData.visibilityMap.begin(),
-					stripData.visibilityMap.end()
-				);
-
-				if (startDstZ + stripHeight <= TERRAIN_MAP_DIM) {
-					vk::BufferImageCopy copyRegion{};
-					copyRegion.setBufferOffset(baseOffset);
-					copyRegion.setBufferRowLength(TERRAIN_MAP_DIM);
-					copyRegion.setBufferImageHeight(stripHeight);
-					copyRegion.setImageSubresource(
-						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
-					);
-					copyRegion.setImageOffset(vk::Offset3D{0, startDstZ, 0});
-					copyRegion.setImageExtent(vk::Extent3D{TERRAIN_MAP_DIM, stripHeight, 1});
-
-					copyRegions.push_back(copyRegion);
-				} else {
-					uint32_t h1 = TERRAIN_MAP_DIM - startDstZ;
-					uint32_t h2 = stripHeight - h1;
-
-					vk::BufferImageCopy copyRegion1{};
-					copyRegion1.setBufferOffset(baseOffset);
-					copyRegion1.setBufferRowLength(TERRAIN_MAP_DIM);
-					copyRegion1.setBufferImageHeight(stripHeight);
-					copyRegion1.setImageSubresource(
-						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
-					);
-					copyRegion1.setImageOffset(vk::Offset3D{0, startDstZ, 0});
-					copyRegion1.setImageExtent(vk::Extent3D{TERRAIN_MAP_DIM, h1, 1});
-
-					vk::BufferImageCopy copyRegion2{};
-					copyRegion2.setBufferOffset(
-						baseOffset + static_cast<size_t>(h1) * TERRAIN_MAP_DIM * sizeof(glm::vec4)
-					);
-					copyRegion2.setBufferRowLength(TERRAIN_MAP_DIM);
-					copyRegion2.setBufferImageHeight(stripHeight);
-					copyRegion2.setImageSubresource(
-						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, l, 1)
-					);
-					copyRegion2.setImageOffset(vk::Offset3D{0, 0, 0});
-					copyRegion2.setImageExtent(vk::Extent3D{TERRAIN_MAP_DIM, h2, 1});
-
-					copyRegions.push_back(copyRegion1);
-					copyRegions.push_back(copyRegion2);
-				}
-
-				info.gridOffset.y = (info.gridOffset.y + deltaZ) % static_cast<int>(TERRAIN_MAP_DIM);
-				if (info.gridOffset.y < 0)
-					info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
-			}
-
-			if (!updateHeightBuffer.empty() && !copyRegions.empty()) {
-				uploader.UploadRegionAsync(l, updateHeightBuffer, copyRegions, image, queue);
-				uploader.UploadRegionAsync(l, updateMinMaxBuffer, copyRegions, minmaxImage, queue);
-				uploader.UploadRegionAsync(l, updateBiomeBuffer, copyRegions, biomeImage, queue);
-				uploader.UploadRegionAsync(l, updateVisibilityBuffer, copyRegions, visibilityImage, queue);
-			}
+			info.gridOffset.y = (info.gridOffset.y + deltaZ) % static_cast<int>(TERRAIN_MAP_DIM);
+			if (info.gridOffset.y < 0)
+				info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
 		}
 	}
 
@@ -482,7 +329,7 @@ namespace brassica {
 			imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
 			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+			imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -538,7 +385,7 @@ namespace brassica {
 		} else {
 			info.level = levelIndex;
 			info.baseTexelSize = baseTexelSize > 0.0f ? baseTexelSize : 0.5f;
-			info.texelSize = info.baseTexelSize * static_cast<float>(1 << levelIndex);
+			info.texelSize = info.baseTexelSize * GetLODScale(static_cast<float>(levelIndex));
 			info.worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * info.texelSize;
 			info.centerWorldPos = glm::vec2(0.0f);
 			info.gridOffset = glm::ivec2(0);
@@ -561,7 +408,7 @@ namespace brassica {
 		ClipmapLevelInfo info{};
 		info.level = levelIndex;
 		info.baseTexelSize = baseTexelSize;
-		info.texelSize = baseTexelSize * static_cast<float>(1 << levelIndex);
+		info.texelSize = baseTexelSize * GetLODScale(static_cast<float>(levelIndex));
 		info.worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * info.texelSize;
 		info.centerWorldPos = centerWorldPos;
 		info.gridOffset = glm::ivec2(0);

@@ -1,6 +1,7 @@
 #version 460
 #include "bindless.glsl"
 #include "bindless_tlas.glsl"
+#include "common.glsl"
 #include "terrain.glsl"
 
 layout(location = 0) in vec2 inUV;
@@ -10,6 +11,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uvec4 lodOffsets8_11;
 	uint  gPositionIndex;
 	uint  gNormalIndex;
 	uint  gAlbedoIndex;
@@ -50,16 +52,19 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 		// Fetch the appropriate LOD for the current spatial step
 		uint stepLod = calculateRayLOD(samplePos.xz);
 
+		vec2 flatXZ = samplePos.xz - uCameraPosition.xz;
+		float dropOff = dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
+
 		// Accelerate raymarching via min-max height map check if minMaxIndex is set
 		if (params.minMaxIndex > 0u) {
-			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
-			if (samplePos.y > minMax.y + 1.0) {
+			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
+			if (samplePos.y > minMax.y - dropOff + 1.0) {
 				continue; // Ray is safely above the maximum height in this cell
 			}
 		}
 
-		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
-		float terrainHeight = texSample.r;
+		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
+		float terrainHeight = texSample.r - dropOff;
 
 		if (samplePos.y <= terrainHeight) {
 			hitT = t;
@@ -106,7 +111,10 @@ void main() {
 			vec3 rayOrigin = pos + norm * 0.1; // Base offset to avoid standard self-shadowing
 
 			// Sample the absolute highest-detail terrain height at this coordinate
-			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7).r;
+			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11).r;
+			vec2 flatXZ0 = pos.xz - uCameraPosition.xz;
+			float dropOff0 = dot(flatXZ0, flatXZ0) / (2.0 * FAKE_PLANET_RADIUS);
+			trueHeight0 -= dropOff0;
 
 			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
 			if (rayOrigin.y < trueHeight0 + 0.1) {

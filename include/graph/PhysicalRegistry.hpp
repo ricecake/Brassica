@@ -211,7 +211,7 @@ namespace brassica::graph {
 			newAS->SetBindlessIndex(index);
 			m_accelStructs[resolvedId] = newAS;
 
-			if (handleChanged) {
+			if (handleChanged && as) {
 				WriteAccelerationStructureDescriptor(index, as);
 			}
 		}

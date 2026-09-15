@@ -10,14 +10,12 @@
 
 namespace brassica {
 
-	// What's left of the old TerrainPass once its pipeline/shader/descriptor-set ownership moved
-	// to TerrainNode + Engine::pipelineLibrary (Node/Pass unification, Stage 6): the terrain
-	// BLAS/TLAS build, unchanged from before that migration -- own transient command pool/queue,
-	// own camera-movement throttle, own synchronous device.waitIdle(). Not a "pass" anymore (it
-	// owns no pipeline), hence the rename and the move into terrain/ alongside TerrainClipmap.
-	//
-	// Default-constructed, then wired via Init() once a real instance/device exist -- mirrors
-	// PhysicalResourceRegistry/PipelineLibrary's own default-then-wire pattern (Engine.hpp).
+	class ComputeShader;
+
+	namespace render {
+		class PipelineLibrary;
+	}
+
 	class TerrainAccelerationStructure {
 	public:
 		TerrainAccelerationStructure() = default;
@@ -27,16 +25,41 @@ namespace brassica {
 		TerrainAccelerationStructure(const TerrainAccelerationStructure&) = delete;
 		TerrainAccelerationStructure& operator=(const TerrainAccelerationStructure&) = delete;
 
-		void Init(vk::Instance instance, vk::Device device) {
+		void Init(vk::Instance instance, vk::Device device, VmaAllocator alloc = VK_NULL_HANDLE) {
 			this->device = device;
+			this->allocator = alloc;
 			dls.init(instance, device);
+			if (allocator != VK_NULL_HANDLE) {
+				InitAccelerationStructures();
+			}
 		}
 
-		void BuildOrUpdate(VmaAllocator allocator, const glm::vec3& cameraPos, float baseTexelSize, uint32_t numLODs);
+		void InitAccelerationStructures();
 
-		// Explicit, not just left to the destructor -- must run while device is still a live
-		// handle, called from Engine::Cleanup() before device.destroy() (mirroring
-		// PhysicalResourceRegistry::Reset()'s own placement there).
+		void SetAllocator(VmaAllocator alloc) {
+			this->allocator = alloc;
+			if (allocator != VK_NULL_HANDLE && !tlas) {
+				InitAccelerationStructures();
+			}
+		}
+
+		void BuildOrUpdate(
+			vk::CommandBuffer        cmd,
+			const glm::vec3&         cameraPos,
+			float                    baseTexelSize,
+			uint32_t                 numLODs,
+			render::PipelineLibrary* pipelineLibrary,
+			ComputeShader*           aabbShader,
+			vk::DescriptorSet        frameSet,
+			vk::DescriptorSet        globalSet,
+			vk::DescriptorSetLayout  frameSetLayout,
+			vk::DescriptorSetLayout  globalSetLayout,
+			const glm::uvec4&        gridParams,
+			const glm::uvec4&        lodOffsets0_3,
+			const glm::uvec4&        lodOffsets4_7,
+			const glm::uvec4&        lodOffsets8_11 = glm::uvec4(0u)
+		);
+
 		void DestroyAccelerationStructures();
 
 		[[nodiscard]] vk::AccelerationStructureKHR GetTLAS() const { return tlas; }
@@ -51,8 +74,8 @@ namespace brassica {
 		};
 
 		vk::Device            device{nullptr};
+		VmaAllocator          allocator{VK_NULL_HANDLE};
 		DispatchLoaderDynamic dls;
-		VmaAllocator          lastAllocator{VK_NULL_HANDLE};
 
 		BufferResource               aabbBuffer;
 		BufferResource               blasBuffer;

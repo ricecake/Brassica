@@ -12,15 +12,24 @@
 namespace brassica {
 
 	constexpr uint32_t TERRAIN_MAP_DIM = 1088; // 1024 + 64 (1 grid cell padding for seamless off-screen streaming)
-	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 8;
+	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 10;
+
+	inline float GetLODScale(float lod) {
+		if (lod <= 3.0f) {
+			return std::pow(2.0f, lod);
+		} else {
+			return 8.0f * std::pow(2.25f, lod - 3.0f);
+		}
+	}
 
 	struct ClipmapLevelInfo {
 		uint32_t   level{0};
 		float      baseTexelSize{0.5f};
-		float      texelSize{0.5f};     // texelSize = baseTexelSize * 2^level
+		float      texelSize{0.5f};     //  texelSize = baseTexelSize * GetLODScale(level)
 		float      worldExtent{512.0f}; // 1024 * texelSize
 		glm::vec2  centerWorldPos{0.0f};
-		glm::ivec2 gridOffset{0}; // Toroidal grid cell offset in texels
+		glm::ivec2 gridOffset{0};                           // Toroidal grid cell offset in texels
+		glm::ivec2 delta{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM}; // Texel shift since last update
 	};
 
 	class AsyncTerrainUploader;
@@ -40,7 +49,7 @@ namespace brassica {
 		);
 		void Cleanup();
 
-		void UpdateCameraPosition(const glm::vec3& cameraPos, AsyncTerrainUploader& uploader, vk::Queue queue);
+		void UpdateCameraPosition(const glm::vec3& cameraPos);
 
 		// Unified CPU Terrain Generator
 		static glm::vec4 SampleTerrain(float worldX, float worldZ, float texelSize);
@@ -124,7 +133,7 @@ namespace brassica {
 			.layers = numLODs,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
 			),
 		};
 	}

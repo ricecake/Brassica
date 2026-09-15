@@ -2,6 +2,8 @@
 #extension GL_EXT_mesh_shader : require
 
 #include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
 #include "lygia/generative/gerstnerWave.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
@@ -77,7 +79,7 @@ void main() {
 	uint col = localID % meshletsPerRow;
 
 	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 
 	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 	vec3 meshletMin = vec3(
@@ -87,7 +89,8 @@ void main() {
 	);
 
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-	vec2 worldXZ = meshletMin.xz + localPos;
+	vec2 baseWorldXZ = meshletMin.xz + localPos;
+	vec2 worldXZ = baseWorldXZ;
 
 	// CDLOD Continuous Distance LOD Morphing
 	vec2 offsetDist = abs(worldXZ - uCameraPosition.xz);
@@ -110,6 +113,11 @@ void main() {
 	vec3 waveNormal;
 	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, distToCam, waveNormal);
 	vec3 finalWorldPos = vec3(worldXZ.x, params.waterLevel, worldXZ.y) + waveOffset;
+
+	vec2 flatXZ = worldXZ - uCameraPosition.xz;
+	float distSq = dot(flatXZ, flatXZ);
+	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+	finalWorldPos.y -= dropOff;
 
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uViewProjMatrix * vec4(finalWorldPos, 1.0);
 	outWorldPos[vertexIndex] = finalWorldPos;
@@ -151,7 +159,7 @@ void main() {
 
 		bool cullQuad = false;
 		if (lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
+			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
