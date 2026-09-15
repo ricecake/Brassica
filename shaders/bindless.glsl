@@ -35,6 +35,7 @@ layout(set = 1, binding = 0) uniform texture2D uTextures2D[];
 layout(set = 1, binding = 1) uniform texture2DArray uTextureArrays[];
 layout(set = 1, binding = 2) uniform sampler uSamplers[];
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
+layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
 
 // Sampler catalog indices, written once by Engine::InitGlobalDescriptors and injected here via
 // Shader::RegisterConstant's [[NAME]] substitution -- GLSL and C++ read the same catalog by

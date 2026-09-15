@@ -5,12 +5,19 @@
 #include <cstring>
 #include <vector>
 
-#include "terrain/TerrainClipmap.hpp"
+#include "render/PipelineLibrary.hpp"
+#include "Shader.hpp"
 
 namespace brassica {
 
+	struct TerrainAABBPushConstants {
+		glm::uvec4 gridParams;
+		glm::uvec4 lodOffsets0_3;
+		glm::uvec4 lodOffsets4_7;
+	};
+
 	void TerrainAccelerationStructure::DestroyAccelerationStructures() {
-		if (!lastAllocator)
+		if (!allocator)
 			return;
 
 		auto destroyAS = [this](vk::AccelerationStructureKHR& as, BufferResource& buf) {
@@ -19,7 +26,7 @@ namespace brassica {
 				as = nullptr;
 			}
 			if (buf.buffer && buf.allocation) {
-				vmaDestroyBuffer(lastAllocator, buf.buffer, buf.allocation);
+				vmaDestroyBuffer(allocator, buf.buffer, buf.allocation);
 				buf.buffer = nullptr;
 				buf.allocation = VK_NULL_HANDLE;
 				buf.deviceAddress = 0;
@@ -28,7 +35,7 @@ namespace brassica {
 
 		auto destroyBuf = [this](BufferResource& buf) {
 			if (buf.buffer && buf.allocation) {
-				vmaDestroyBuffer(lastAllocator, buf.buffer, buf.allocation);
+				vmaDestroyBuffer(allocator, buf.buffer, buf.allocation);
 				buf.buffer = nullptr;
 				buf.allocation = VK_NULL_HANDLE;
 				buf.deviceAddress = 0;
@@ -43,99 +50,33 @@ namespace brassica {
 	}
 
 	void TerrainAccelerationStructure::BuildOrUpdate(
-		VmaAllocator     allocator,
-		const glm::vec3& cameraPos,
-		float            baseTexelSize,
-		uint32_t         numLODs
+		vk::CommandBuffer        cmd,
+		const glm::vec3&         cameraPos,
+		float                    baseTexelSize,
+		uint32_t                 numLODs,
+		render::PipelineLibrary* pipelineLibrary,
+		ComputeShader*           aabbShader,
+		vk::DescriptorSet        frameSet,
+		vk::DescriptorSet        globalSet,
+		vk::DescriptorSetLayout  frameSetLayout,
+		vk::DescriptorSetLayout  globalSetLayout,
+		const glm::uvec4&        gridParams,
+		const glm::uvec4&        lodOffsets0_3,
+		const glm::uvec4&        lodOffsets4_7
 	) {
-		if (allocator == VK_NULL_HANDLE)
+		(void)baseTexelSize;
+		if (allocator == VK_NULL_HANDLE || !pipelineLibrary || !aabbShader)
 			return;
-		lastAllocator = allocator;
 
 		if (tlas && glm::distance(cameraPos, lastASCameraPos) < 16.0f) {
-			return; // Rebuild AS only when camera moves across a grid cell threshold
+			return;
 		}
 		lastASCameraPos = cameraPos;
 
-		// Generate distance-aware AABBs for the terrain grid chunks.
-		// For points/AABBs close to the camera, resolution is finer (e.g., 32 world units per AABB).
-		// For points/AABBs further from the camera (shadow caster point distance), resolution is coarser (64, 128,
-		// etc.).
-		std::vector<VkAabbPositionsKHR> aabbs;
-
-		uint32_t meshletsPerRow = 16;
-		for (uint32_t lod = 0; lod < numLODs; ++lod) {
-			float     baseMeshletSize = 32.0f;
-			float     meshletSize = baseMeshletSize * std::pow(2.0f, std::min(0.0f, static_cast<float>(lod - 1)));
-			glm::vec2 cameraSnap = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / meshletSize) * meshletSize;
-
-			for (uint32_t row = 0; row < meshletsPerRow; ++row) {
-				for (uint32_t col = 0; col < meshletsPerRow; ++col) {
-					glm::vec3 minB(
-						cameraSnap.x +
-							(static_cast<float>(col) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize,
-						0.0f,
-						cameraSnap.y +
-							(static_cast<float>(row) - static_cast<float>(meshletsPerRow) * 0.5f) * meshletSize
-					);
-					glm::vec3 maxB = minB + glm::vec3(meshletSize, 0.0f, meshletSize);
-
-					float         minH = 1e9f;
-					float         maxH = -1e9f;
-					constexpr int numSamples = 5;
-					for (int sz = 0; sz < numSamples; ++sz) {
-						float tz = static_cast<float>(sz) / static_cast<float>(numSamples - 1);
-						float sampleZ = minB.z + tz * meshletSize;
-						for (int sx = 0; sx < numSamples; ++sx) {
-							float tx = static_cast<float>(sx) / static_cast<float>(numSamples - 1);
-							float sampleX = minB.x + tx * meshletSize;
-							float h = TerrainClipmap::SampleTerrain(sampleX, sampleZ, baseTexelSize).r;
-							minH = std::min(minH, h);
-							maxH = std::max(maxH, h);
-						}
-					}
-					minB.y = minH - 5.0f;
-					maxB.y = maxH + 5.0f;
-
-					// Radial ring check matching task shader to only generate AABBs for active LOD regions
-					if (lod > 0) {
-						float prevMeshletSize = baseMeshletSize * std::pow(2.0f, static_cast<float>(lod - 1));
-						float safeInnerRadius = (static_cast<float>(meshletsPerRow) * 0.5f - 1.0f) * prevMeshletSize;
-						glm::vec2 maxOffset = glm::max(
-							glm::abs(glm::vec2(minB.x, minB.z) - glm::vec2(cameraPos.x, cameraPos.z)),
-							glm::abs(glm::vec2(maxB.x, maxB.z) - glm::vec2(cameraPos.x, cameraPos.z))
-						);
-						float maxDistToCam = glm::length(maxOffset);
-						if (maxDistToCam < safeInnerRadius) {
-							continue; // Region covered by finer LOD
-						}
-					}
-
-					VkAabbPositionsKHR aabb{};
-					aabb.minX = minB.x;
-					aabb.minY = minB.y;
-					aabb.minZ = minB.z;
-					aabb.maxX = maxB.x;
-					aabb.maxY = maxB.y;
-					aabb.maxZ = maxB.z;
-
-					aabbs.push_back(aabb);
-				}
-			}
-		}
-
-		if (aabbs.empty())
-			return;
-
-		// Ensure GPU has finished reading/using previous TLAS before destroying or updating
-		device.waitIdle();
-
 		DestroyAccelerationStructures();
 
-		// Helper to create Vulkan memory buffer with device address flag
 		auto createBuffer =
-			[this,
-			 allocator](vk::DeviceSize size, vk::BufferUsageFlags usage, BufferResource& res, bool hostMapped = false) {
+			[this](vk::DeviceSize size, vk::BufferUsageFlags usage, BufferResource& res, bool hostMapped = false) {
 				VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 				bufInfo.size = size;
 				bufInfo.usage = static_cast<VkBufferUsageFlags>(usage | vk::BufferUsageFlagBits::eShaderDeviceAddress);
@@ -160,21 +101,101 @@ namespace brassica {
 				return static_cast<void*>(nullptr);
 			};
 
-		// 1. Upload AABBs to GPU Buffer
-		vk::DeviceSize aabbBufferSize = sizeof(VkAabbPositionsKHR) * aabbs.size();
-		void*          aabbMapped = createBuffer(
+		uint32_t maxAABBs = numLODs * 16 * 16;
+		vk::DeviceSize aabbBufferSize = sizeof(uint32_t) + sizeof(VkAabbPositionsKHR) * maxAABBs;
+
+		createBuffer(
 			aabbBufferSize,
-			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
 			aabbBuffer,
-			true
+			false
 		);
-		if (aabbMapped) {
-			std::memcpy(aabbMapped, aabbs.data(), aabbBufferSize);
+
+		cmd.fillBuffer(aabbBuffer.buffer, 0, sizeof(uint32_t), 0);
+
+		vk::BufferMemoryBarrier fillBarrier{
+			vk::AccessFlagBits::eTransferWrite,
+			vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			aabbBuffer.buffer,
+			0,
+			aabbBufferSize
+		};
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eTransfer,
+			vk::PipelineStageFlagBits::eComputeShader,
+			vk::DependencyFlags{},
+			nullptr,
+			fillBarrier,
+			nullptr
+		);
+
+		std::array<vk::DescriptorSetLayout, 2> setLayouts{
+			frameSetLayout,
+			globalSetLayout
+		};
+		std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
+			vk::ShaderStageFlagBits::eCompute,
+			0,
+			sizeof(TerrainAABBPushConstants)
+		}};
+
+		render::ComputePipelineRequest request{
+			.shader = aabbShader,
+			.setLayouts = setLayouts,
+			.pushConstantRanges = pushConstantRanges,
+		};
+		render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+
+		if (resolved.pipeline) {
+			cmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 		}
 
-		// 2. Build BLAS
+		std::array<vk::DescriptorSet, 2> boundSets{
+			frameSet,
+			globalSet
+		};
+		if (boundSets[0] && boundSets[1]) {
+			cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
+		}
+
+		TerrainAABBPushConstants push{
+			.gridParams = gridParams,
+			.lodOffsets0_3 = lodOffsets0_3,
+			.lodOffsets4_7 = lodOffsets4_7,
+		};
+		cmd.pushConstants(
+			resolved.layout,
+			vk::ShaderStageFlagBits::eCompute,
+			0,
+			sizeof(TerrainAABBPushConstants),
+			&push
+		);
+
+		uint32_t groupCount = (maxAABBs + 63) / 64;
+		cmd.dispatch(groupCount, 1, 1);
+
+		vk::BufferMemoryBarrier aabbBarrier{
+			vk::AccessFlagBits::eShaderWrite,
+			vk::AccessFlagBits::eAccelerationStructureReadKHR,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			aabbBuffer.buffer,
+			0,
+			aabbBufferSize
+		};
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eComputeShader,
+			vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR,
+			vk::DependencyFlags{},
+			nullptr,
+			aabbBarrier,
+			nullptr
+		);
+
 		vk::AccelerationStructureGeometryAabbsDataKHR aabbGeomData{};
-		aabbGeomData.setData(aabbBuffer.deviceAddress);
+		aabbGeomData.setData(aabbBuffer.deviceAddress + sizeof(uint32_t));
 		aabbGeomData.setStride(sizeof(VkAabbPositionsKHR));
 
 		vk::AccelerationStructureGeometryDataKHR geomData{};
@@ -190,7 +211,7 @@ namespace brassica {
 		blasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
 		blasBuildInfo.setGeometries(geometry);
 
-		uint32_t                                   primitiveCount = static_cast<uint32_t>(aabbs.size());
+		uint32_t primitiveCount = maxAABBs;
 		vk::AccelerationStructureBuildSizesInfoKHR blasSizeInfo{};
 		device.getAccelerationStructureBuildSizesKHR(
 			vk::AccelerationStructureBuildTypeKHR::eDevice,
@@ -213,12 +234,10 @@ namespace brassica {
 		blasCreateInfo.setType(vk::AccelerationStructureTypeKHR::eBottomLevel);
 		blas = device.createAccelerationStructureKHR(blasCreateInfo, nullptr, dls);
 
-		// Get BLAS device address
 		vk::AccelerationStructureDeviceAddressInfoKHR blasAddrInfo{};
 		blasAddrInfo.setAccelerationStructure(blas);
 		vk::DeviceAddress blasAddress = device.getAccelerationStructureAddressKHR(blasAddrInfo, dls);
 
-		// 3. Build TLAS Instance
 		VkAccelerationStructureInstanceKHR instanceData{};
 		instanceData.transform.matrix[0][0] = 1.0f;
 		instanceData.transform.matrix[1][1] = 1.0f;
@@ -255,7 +274,7 @@ namespace brassica {
 		tlasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
 		tlasBuildInfo.setGeometries(tlasGeometry);
 
-		uint32_t                                   tlasInstanceCount = 1;
+		uint32_t tlasInstanceCount = 1;
 		vk::AccelerationStructureBuildSizesInfoKHR tlasSizeInfo{};
 		device.getAccelerationStructureBuildSizesKHR(
 			vk::AccelerationStructureBuildTypeKHR::eDevice,
@@ -278,23 +297,9 @@ namespace brassica {
 		tlasCreateInfo.setType(vk::AccelerationStructureTypeKHR::eTopLevel);
 		tlas = device.createAccelerationStructureKHR(tlasCreateInfo, nullptr, dls);
 
-		// Allocate Scratch Buffer for build commands
 		vk::DeviceSize scratchSize = std::max(blasSizeInfo.buildScratchSize, tlasSizeInfo.buildScratchSize);
 		createBuffer(scratchSize, vk::BufferUsageFlagBits::eStorageBuffer, scratchBuffer, false);
 
-		// Execute Acceleration Structure Build Commands using Command Pool / Queue
-		vk::CommandPoolCreateInfo poolInfo{};
-		poolInfo.setFlags(vk::CommandPoolCreateFlagBits::eTransient);
-		vk::CommandPool tempPool = device.createCommandPool(poolInfo);
-
-		vk::CommandBufferAllocateInfo cmdAlloc{};
-		cmdAlloc.setCommandPool(tempPool);
-		cmdAlloc.setCommandBufferCount(1);
-		vk::CommandBuffer cmd = device.allocateCommandBuffers(cmdAlloc).front();
-
-		cmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-		// Build BLAS
 		blasBuildInfo.setDstAccelerationStructure(blas);
 		blasBuildInfo.setScratchData(scratchBuffer.deviceAddress);
 
@@ -307,7 +312,6 @@ namespace brassica {
 		const vk::AccelerationStructureBuildRangeInfoKHR* pBlasRange = &blasRange;
 		cmd.buildAccelerationStructuresKHR(1, &blasBuildInfo, &pBlasRange, dls);
 
-		// Memory barrier between BLAS build and TLAS build
 		vk::MemoryBarrier barrier{
 			vk::AccessFlagBits::eAccelerationStructureWriteKHR,
 			vk::AccessFlagBits::eAccelerationStructureReadKHR
@@ -321,7 +325,6 @@ namespace brassica {
 			nullptr
 		);
 
-		// Build TLAS
 		tlasBuildInfo.setDstAccelerationStructure(tlas);
 		tlasBuildInfo.setScratchData(scratchBuffer.deviceAddress);
 
@@ -333,17 +336,6 @@ namespace brassica {
 
 		const vk::AccelerationStructureBuildRangeInfoKHR* pTlasRange = &tlasRange;
 		cmd.buildAccelerationStructuresKHR(1, &tlasBuildInfo, &pTlasRange, dls);
-
-		cmd.end();
-
-		// Submit command buffer synchronously
-		vk::Queue      queue = device.getQueue(0, 0);
-		vk::SubmitInfo submitInfo{};
-		submitInfo.setCommandBuffers(cmd);
-		queue.submit(submitInfo, nullptr);
-		queue.waitIdle();
-
-		device.destroyCommandPool(tempPool);
 	}
 
 } // namespace brassica

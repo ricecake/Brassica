@@ -337,7 +337,7 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		terrainAS.Init(instance, device);
+		terrainAS.Init(instance, device, allocator);
 
 		render::NodeServices nodeServices{
 			.device = device,
@@ -926,9 +926,7 @@ namespace brassica {
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 
-		terrainUploader.Poll();
-
-		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
+		terrainClipmap.UpdateCameraPosition(camera.position);
 
 		uint32_t lods = terrainClipmap.GetNumLODs();
 		uint32_t meshletsPerRow = 16;
@@ -953,8 +951,6 @@ namespace brassica {
 		terrainPush.lodOffsets0_3 = offsets0_3;
 		terrainPush.lodOffsets4_7 = offsets4_7;
 
-		terrainAS
-			.BuildOrUpdate(allocator, camera.position, terrainClipmap.GetBaseTexelSize(), terrainPush.gridParams.x);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
 		// SetFrameParams is a data-flow concern (this frame's camera/water-level/LOD data),
@@ -966,6 +962,7 @@ namespace brassica {
 		// skipped, so Engine builds exactly one NodeFrameParams and hands it to every registered
 		// node uniformly, the same shape as InitAll/DestroyAll/RegisterAllInto.
 		render::NodeFrameParams frameParams{
+			.cameraPosition = camera.position,
 			.terrainGridParams = terrainPush.gridParams,
 			.terrainLodOffsets0_3 = terrainPush.lodOffsets0_3,
 			.terrainLodOffsets4_7 = terrainPush.lodOffsets4_7,

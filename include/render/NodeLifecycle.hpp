@@ -42,6 +42,7 @@ namespace brassica::render {
 	// see HasSetFrameParams below. Most nodes (GradientNode, the atmosphere LUT nodes,
 	// ParticleSystemNode) don't declare one at all and are silently skipped.
 	struct NodeFrameParams {
+		glm::vec3  cameraPosition{0.0f};
 		glm::uvec4 terrainGridParams{8, 16, 2048, 1088};
 		glm::uvec4 terrainLodOffsets0_3{0u};
 		glm::uvec4 terrainLodOffsets4_7{0u};
