@@ -21,7 +21,6 @@ namespace brassica {
 		float      worldExtent{512.0f}; // 1024 * texelSize
 		glm::vec2  centerWorldPos{0.0f};
 		glm::ivec2 gridOffset{0}; // Toroidal grid cell offset in texels
-		glm::ivec2 delta{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM}; // Texel shift since last update
 	};
 
 	class AsyncTerrainUploader;
