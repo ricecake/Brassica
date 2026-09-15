@@ -239,7 +239,6 @@ namespace brassica {
 
 			terrainAS.DestroyAccelerationStructures();
 
-			terrainUploader.Cleanup();
 			terrainClipmap.Cleanup();
 
 			pipelineLibrary.Reset();
@@ -362,45 +361,6 @@ namespace brassica {
 		float initialTerrainHeight =
 			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, terrainClipmap.GetBaseTexelSize()).r;
 		camera.position.y = initialTerrainHeight + 2.0f;
-
-		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
-
-		// Async upload initial heightmaps & terrain attribute maps
-		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
-			auto mapData = terrainClipmap.GenerateLevelData(l);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.heightMap,
-				terrainClipmap.GetImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.minMaxMap,
-				terrainClipmap.GetMinMaxImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.biomeMap,
-				terrainClipmap.GetBiomeImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.visibilityMap,
-				terrainClipmap.GetVisibilityImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-		}
 
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),
@@ -677,9 +637,13 @@ namespace brassica {
 		variableShadingRate.primitiveFragmentShadingRate = VK_TRUE;
 		variableShadingRate.attachmentFragmentShadingRate = VK_TRUE;
 
+		VkPhysicalDeviceFeatures features1{};
+		features1.shaderInt64 = VK_TRUE;
+
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
 			.set_minimum_version(chosenMajor, chosenMinor)
+			.set_required_features(features1)
 			.set_required_features_13(features13)
 			.set_required_features_12(features12)
 			.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
@@ -926,9 +890,7 @@ namespace brassica {
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 
-		terrainUploader.Poll();
-
-		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
+		terrainClipmap.UpdateCameraPosition(camera.position);
 
 		uint32_t lods = terrainClipmap.GetNumLODs();
 		uint32_t meshletsPerRow = 16;
@@ -953,8 +915,6 @@ namespace brassica {
 		terrainPush.lodOffsets0_3 = offsets0_3;
 		terrainPush.lodOffsets4_7 = offsets4_7;
 
-		terrainAS
-			.BuildOrUpdate(allocator, camera.position, terrainClipmap.GetBaseTexelSize(), terrainPush.gridParams.x);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
 		// SetFrameParams is a data-flow concern (this frame's camera/water-level/LOD data),
@@ -980,6 +940,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
@@ -1065,7 +1026,7 @@ namespace brassica {
 		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
 		cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
-		auto waitInfos = terrainUploader.GetWaitSemaphores();
+		std::vector<vk::SemaphoreSubmitInfo> waitInfos;
 
 		vk::SemaphoreSubmitInfo waitInfo{};
 		waitInfo.setSemaphore(frame.swapchainSemaphore);
