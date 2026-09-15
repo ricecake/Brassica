@@ -364,69 +364,40 @@ namespace brassica {
 		camera.position.y = initialTerrainHeight + 2.0f;
 
 		terrainUploader.Init(device, allocator, graphicsQueueFamily, 32);
-
-		// Async upload initial heightmaps & terrain attribute maps
-		for (uint32_t l = 0; l < terrainClipmap.GetNumLODs(); ++l) {
-			auto mapData = terrainClipmap.GenerateLevelData(l);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.heightMap,
-				terrainClipmap.GetImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.minMaxMap,
-				terrainClipmap.GetMinMaxImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.biomeMap,
-				terrainClipmap.GetBiomeImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-			terrainUploader.UploadLevelAsync(
-				l,
-				mapData.visibilityMap,
-				terrainClipmap.GetVisibilityImage(),
-				TERRAIN_MAP_DIM,
-				TERRAIN_MAP_DIM,
-				graphicsQueue
-			);
-		}
+		terrainClipmap.UpdateCameraPosition(camera.position, terrainUploader, graphicsQueue);
 
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),
 			terrainClipmap.GetImageView(),
-			TerrainClipmapDesc(terrainClipmap.GetNumLODs()),
+			TerrainClipmapDesc(terrainClipmap.GetNumTileSlots()),
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			/*hasDefinedContents=*/true
 		);
 		physicalRegistry.RegisterImportedTexture<TerrainMinMaxTexture>(
 			terrainClipmap.GetMinMaxImage(),
 			terrainClipmap.GetMinMaxImageView(),
-			TerrainMinMaxDesc(terrainClipmap.GetNumLODs()),
+			TerrainMinMaxDesc(terrainClipmap.GetNumTileSlots()),
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			/*hasDefinedContents=*/true
 		);
 		physicalRegistry.RegisterImportedTexture<TerrainBiomeTexture>(
 			terrainClipmap.GetBiomeImage(),
 			terrainClipmap.GetBiomeImageView(),
-			TerrainBiomeDesc(terrainClipmap.GetNumLODs()),
+			TerrainBiomeDesc(terrainClipmap.GetNumTileSlots()),
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			/*hasDefinedContents=*/true
 		);
 		physicalRegistry.RegisterImportedTexture<TerrainTileVisibilityTexture>(
 			terrainClipmap.GetVisibilityImage(),
 			terrainClipmap.GetVisibilityImageView(),
-			TerrainTileVisibilityDesc(terrainClipmap.GetNumLODs()),
+			TerrainTileVisibilityDesc(terrainClipmap.GetNumTileSlots()),
+			vk::ImageLayout::eShaderReadOnlyOptimal,
+			/*hasDefinedContents=*/true
+		);
+		physicalRegistry.RegisterImportedTexture<TerrainIndirectionMapTexture>(
+			terrainClipmap.GetIndirectionImage(),
+			terrainClipmap.GetIndirectionImageView(),
+			TerrainIndirectionMapDesc(terrainClipmap.GetNumLODs()),
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			/*hasDefinedContents=*/true
 		);
@@ -844,22 +815,6 @@ namespace brassica {
 		vk::Extent2D extent{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
 		vk::Format   format = GetSwapchainFormat();
 
-		// Re-imported fresh every frame: a freshly constructed PhysicalTexture always starts
-		// {eUndefined, hasDefinedContents=false}, which is correct here -- DeferredNode's
-		// Modify<Swapchain> fully overwrites every pixel via a fullscreen triangle, so there is
-		// nothing worth preserving from whatever the driver left behind after the last present.
-		//
-		// Unlike an Owning resource (where usageMask drives real image creation and is therefore
-		// always accurate), an Imported one's desc is just metadata describing an image this
-		// registry didn't create -- it must match what the image was *actually* created with, not
-		// what would be generically convenient. ColorAttachmentDesc() claims eSampled (correct for
-		// G-buffer-style targets the bindless array is meant to hold), but vk-bootstrap's
-		// SwapchainBuilder here never requests VK_IMAGE_USAGE_SAMPLED_BIT (Engine.cpp's swapchain
-		// creation has no set_image_usage_flags call, so it's the vk-bootstrap default of
-		// eColorAttachment | eTransferDst only) -- so claiming eSampled made
-		// AssignAndWriteBindlessIndices try to write an invalid SAMPLED_IMAGE descriptor pointing
-		// at a view that was never created with that usage. Stripped here rather than fixed at the
-		// preset: every *other* ColorAttachmentDesc consumer is Owning and does want eSampled.
 		graph::ResourceDesc swapchainDesc = graph::ColorAttachmentDesc(extent.width, extent.height, format);
 		swapchainDesc.usageMask &= ~static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled);
 
@@ -911,9 +866,6 @@ namespace brassica {
 			vmaFlushAllocation(allocator, frameUboAllocations[activeFrame], 0, sizeof(FrameUBO));
 		}
 
-		// bindlessBindings.set/layout (set 1) never change frame to frame -- only frameSet
-		// actually varies here, since it's the only piece that's genuinely double-buffered. This
-		// still runs every frame rather than once at init because activeFrame does.
 		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
 		bindlessBindings.set = bindlessDescriptorSet;
 		bindlessBindings.layout = bindlessSetLayout;
@@ -957,14 +909,6 @@ namespace brassica {
 			.BuildOrUpdate(allocator, camera.position, terrainClipmap.GetBaseTexelSize(), terrainPush.gridParams.x);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
-		// SetFrameParams is a data-flow concern (this frame's camera/water-level/LOD data),
-		// deliberately kept separate from NodeServices/InitAll -- see the CRTP auto-registration
-		// plan's Context section. Unlike Init (once, heterogeneous per node type), every node
-		// that has per-frame data at all shares this one bundle and pulls out whichever fields
-		// it needs (render::HasSetFrameParams, include/render/NodeLifecycle.hpp) -- nodes with no
-		// per-frame data (GradientNode, the atmosphere LUT nodes, ParticleSystemNode) are silently
-		// skipped, so Engine builds exactly one NodeFrameParams and hands it to every registered
-		// node uniformly, the same shape as InitAll/DestroyAll/RegisterAllInto.
 		render::NodeFrameParams frameParams{
 			.terrainGridParams = terrainPush.gridParams,
 			.terrainLodOffsets0_3 = terrainPush.lodOffsets0_3,
@@ -980,6 +924,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+		frameGraph.Register<graph::Import<TerrainIndirectionMapTexture>>();
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
@@ -987,29 +932,11 @@ namespace brassica {
 		graph::CommandBuffer            graphCmd{static_cast<void*>(static_cast<VkCommandBuffer>(frame.commandBuffer))};
 
 		try {
-			// enableAliasing=false: ImageAliasPool/BufferAliasPool's block bookkeeping
-			// (PhysicalResource.hpp) records neither an occupant's identity nor its liveness, only
-			// the schedule stage its lifetime last touched -- and that bookkeeping is never
-			// refreshed for a key that keeps hitting ProvisionTexture's desc-match early return
-			// (PhysicalRegistry.hpp), which every steady-state resource here does every frame. A
-			// window resize (or any new/changed key) can then bind a fresh image onto a block a
-			// live resource still occupies. See FRAME_GRAPH_MIGRATION_TODO.md for the full writeup;
-			// this was already the migration plan's own recommendation before shipping true.
 			backend.Execute(frameGraph, ctx, graphCmd, false);
 		} catch (const std::exception& e) {
 			spdlog::error("Frame graph execution failed: {}", e.what());
 			frame.commandBuffer.end();
 
-			// backend.Execute throws before recording anything into frame.commandBuffer
-			// (Provision, which is where this can fail, runs before the command buffer is ever
-			// touched) -- so this is submitting an empty but valid begin/end pair, purely to
-			// consume frame.swapchainSemaphore's signal from the acquire above. Skipping the
-			// submit entirely would leave that semaphore signaled, and the next time this frame
-			// slot's semaphore is reused for acquireNextImageKHR (FRAME_OVERLAP frames from now),
-			// the validation layer correctly flags "Semaphore must not be currently signaled".
-			// presentKHR is skipped on purpose: the swapchain image's layout was never
-			// transitioned to ePresentSrcKHR (the graph never ran), so presenting it now would be
-			// invalid -- this frame is simply dropped, not shown with stale/undefined content.
 			vk::CommandBufferSubmitInfo cmdSubmitInfo{};
 			cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
@@ -1032,12 +959,6 @@ namespace brassica {
 			return;
 		}
 
-		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
-		// srcStage/srcAccess now come from the registry's tracked state rather than being
-		// hardcoded -- DeferredNode's Modify<Swapchain> always leaves it at exactly
-		// {eColorAttachmentOptimal, eColorAttachmentOutput, eColorAttachmentWrite|Read} today
-		// (see tests/test_resource_state.cpp's swapchain-chain case), but reading it instead of
-		// assuming it means this stays correct the day a different node becomes the last writer.
 		auto                    swapchainTex = physicalRegistry.GetTexture<Swapchain>();
 		vk::ImageMemoryBarrier2 presentBarrier{};
 		presentBarrier.setSrcStageMask(
@@ -1253,9 +1174,6 @@ namespace brassica {
 		layoutInfo.pNext = &bindingFlagsInfo;
 		bindlessSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
-		// Single instance -- never duplicated per frame, unlike the frame set above: a
-		// resource's descriptor is written once at creation and read for the rest of its life,
-		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
 		std::array<vk::DescriptorPoolSize, 4> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
@@ -1273,7 +1191,6 @@ namespace brassica {
 		allocInfo.setSetLayouts(bindlessSetLayout);
 		bindlessDescriptorSet = device.allocateDescriptorSets(allocInfo).front();
 
-		// Sampler catalog: 4 engine-owned entries
 		auto makeSampler = [&](vk::Filter filter, vk::SamplerAddressMode addressMode, bool mipmap) {
 			vk::SamplerCreateInfo info{};
 			info.setMagFilter(filter)
@@ -1308,13 +1225,6 @@ namespace brassica {
 		samplerWrite.setImageInfo(samplerInfos);
 		device.updateDescriptorSets(samplerWrite, {});
 
-		// Seeds the registry immediately (rather than waiting for the first DrawFrame) so that
-		// Init()'s own RegisterImportedTexture calls (terrain clipmap/min-max/biome/visibility,
-		// below) have a real set to write their bindless descriptors into -- a texture only gets
-		// AssignAndWriteBindlessIndices'd once at registration, so missing this window here would
-		// leave it with an assigned index number but a never-written descriptor. DrawFrame
-		// rebuilds this every frame regardless (frameSet is the only piece that actually varies
-		// frame to frame), so frame 0 here is just a placeholder.
 		graph::PhysicalResourceRegistry::BindlessBindings bindlessBindings{};
 		bindlessBindings.set = bindlessDescriptorSet;
 		bindlessBindings.layout = bindlessSetLayout;

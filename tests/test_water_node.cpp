@@ -17,12 +17,6 @@ using namespace brassica;
 
 namespace {
 
-	// Stands in for TerrainNode + DeferredNode: writes the G-buffer inputs WaterNode reads
-	// and the Swapchain target it composites onto, with nothing in its own Execute -- this test
-	// is about WaterNode's own pipeline/barrier/blend correctness, not about rendering a real
-	// scene into the G-buffer first. graph::Phase::Default (its default), strictly before
-	// WaterNode's Phase::Late, is what makes a plain Modify<Swapchain> on both nodes -- with no
-	// version number between them -- schedule correctly; see WaterNode.hpp's own comment.
 	struct FakeSceneProducer {
 		using Resources = graph::Declares<
 			graph::Create<GBufferPosition>,
@@ -77,18 +71,6 @@ namespace {
 		void Execute(graph::NodeContext&) {}
 	};
 
-	// Real frame set (set 0) + bindless set (set 1), mirroring Engine's real split
-	// (InitFrameSet/InitGlobalDescriptors) rather than the old single merged set: WaterNode now
-	// binds both unconditionally, so this fixture needs a real, defined FrameUBO buffer behind
-	// the frame set's binding 0 (bindless.glsl's FrameUBO block is statically read by
-	// water.frag/water.mesh via uCameraPosition/uTime, so an unwritten descriptor there would be
-	// a real, if harmless-content, validation gap). The bindless set carries just enough for
-	// water.frag's SAMPLE_NEAREST(gPositionIndex/gAlbedoIndex/gNormalIndex, ...) to resolve real
-	// descriptors: binding 0 (sampled 2D) is what PhysicalRegistry writes GBufferPosition/
-	// GBufferAlbedo/GBufferNormal's indices into, binding 2 (samplers) needs a real sampler
-	// written at BRASSICA_SAMPLER_NEAREST_CLAMP's index (0) since the shader indexes it
-	// unconditionally. No array/storage/AS bindings -- WaterNode never touches them. Mirrors
-	// test_physical_backend.cpp's own CreateBindlessTestSet, trimmed to what this node needs.
 	struct WaterBindlessSet {
 		vk::DescriptorSetLayout frameLayout{};
 		vk::DescriptorPool      framePool{};
@@ -104,7 +86,6 @@ namespace {
 	WaterBindlessSet CreateWaterBindlessSet(vk::Device device, VmaAllocator allocator) {
 		WaterBindlessSet result;
 
-		// -- Frame set (set 0): just the FrameUBO --
 		vk::DescriptorSetLayoutBinding uboBinding{};
 		uboBinding.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
@@ -144,10 +125,6 @@ namespace {
 		);
 		result.frameUboBuffer = frameBuffer;
 		if (frameAllocResultInfo.pMappedData) {
-			// Zeroed, not real camera data -- this test never asserts on FrameUBO-derived pixel
-			// values, only that the descriptor is real and defined (an unwritten uniform-buffer
-			// descriptor read by a shader that statically uses it is what this fixture exists to
-			// avoid).
 			std::memset(frameAllocResultInfo.pMappedData, 0, sizeof(FrameUBO));
 		}
 
@@ -159,7 +136,6 @@ namespace {
 		uboWrite.setBufferInfo(frameBufferDescInfo);
 		device.updateDescriptorSets(uboWrite, nullptr);
 
-		// -- Bindless set (set 1): sampled 2D + sampler catalog --
 		std::array<vk::DescriptorSetLayoutBinding, 2> layoutBindings{};
 		layoutBindings[0]
 			.setBinding(0)
@@ -280,11 +256,13 @@ TEST_CASE(
 
 		DispatchLoaderDynamic dls;
 		dls.init(device.GetInstance(), vkDevice);
-		// MinimalDevice does not enable VK_EXT_mesh_shader. On Mesa/lavapipe, vkGetDeviceProcAddr
-		// returns a non-null pointer for disabled extension functions. Clear mesh shader function
-		// pointers when extension is not enabled to avoid driver crash.
-		dls.vkCmdDrawMeshTasksEXT = nullptr;
-		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
+		if (!dls.vkCmdDrawMeshTasksEXT) {
+			MESSAGE("Mesh shader extension not available on this device; skipping execution.");
+			pipelineLibrary.Reset();
+			DestroyWaterBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);
+			vkDevice.destroyCommandPool(pool);
+			return;
+		}
 
 		WaterNode waterNode;
 		waterNode.Init(

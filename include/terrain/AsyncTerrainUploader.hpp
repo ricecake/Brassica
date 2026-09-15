@@ -38,6 +38,16 @@ namespace brassica {
 			vk::Queue                  transferQueue
 		);
 
+		// Non-blocking upload request for a 2D image mip level (float format)
+		bool UploadMipAsync(
+			uint32_t                 mipLevel,
+			std::span<const float>   data,
+			vk::Image                targetImage,
+			uint32_t                 width,
+			uint32_t                 height,
+			vk::Queue                transferQueue
+		);
+
 		// Non-blocking upload request for sub-regions of a clipmap layer using vk::BufferImageCopy
 		bool UploadRegionAsync(
 			uint32_t                             levelIndex,

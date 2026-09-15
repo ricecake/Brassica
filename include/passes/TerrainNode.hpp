@@ -21,33 +21,17 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	// Mirrors terrain.task/terrain.mesh's shared push_constant block exactly. clipmapIndex is the
-	// only field the old TerrainPushConstants didn't have -- the terrain clipmap moved from
-	// TerrainPass's own set-1 combined-image-sampler binding to a bindless index here, same
-	// change DeferredNode already made. terrain.task doesn't read clipmapIndex (it doesn't sample
-	// the clipmap at all), but still shares this struct: a stage only needs to declare the
-	// prefix of a push-constant block it actually uses, and every existing field's offset is
-	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
-		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-		glm::uvec4 lodOffsets0_3{0u};             // Toroidal offsets for LOD 0-3
-		glm::uvec4 lodOffsets4_7{0u};             // Toroidal offsets for LOD 4-7
+		glm::uvec4 gridParams{8, 16, 2048, 1024}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4 lodOffsets0_3{0u};
+		glm::uvec4 lodOffsets4_7{0u};
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
+		std::uint32_t indirectionMapIndex{0};
 	};
 
-	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
-	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
-	// every sampled input is a bindless index, resolved through NodeContext::Index<K>() below.
-	// The BLAS/TLAS build stays entirely out-of-band, unchanged, now owned by
-	// TerrainAccelerationStructure (terrain/TerrainAccelerationStructure.hpp) rather than a
-	// class that also used to own a pipeline.
-	//
-	// Like GradientNode/DeferredNode, reconstructed fresh every frame -- pipelineLibrary/
-	// taskShader/meshShader/fragShader point at Engine-owned, persistent state, and
-	// ResolveCached makes re-resolving the same request every frame a cache hit.
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Create>,
@@ -55,14 +39,9 @@ namespace brassica {
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>>;
+			graph::Read<TerrainTileVisibilityTexture>,
+			graph::Read<TerrainIndirectionMapTexture>>;
 
-		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
-		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
-		// VRS-ignoring behavior -- the old hand-rolled pipeline never chained the VRS pNext at
-		// all, so this is a deliberately pixel-identical port; flipping it to honor the mesh
-		// shader's own per-primitive gl_PrimitiveShadingRateEXT writes is a separate,
-		// separately-validated follow-up.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eBack,
 			.depthTest = true,
@@ -109,11 +88,6 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			// clearColor = {0,0,0,0}, not the default opaque black: deferred.frag reads
-			// albedo.a < 0.01 as "no terrain rendered at this pixel, show the gradient
-			// background instead" (see ResourceRealization::clearColor's comment,
-			// Execution.hpp). Applied to all three color targets, matching the pre-migration
-			// TerrainPass exactly, even though only albedo's alpha is actually read.
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferPosition>(),
@@ -145,11 +119,6 @@ namespace brassica {
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 				}
 			);
-			// Declared unconditionally every frame, whether or not BuildOrUpdate actually
-			// rebuilt this frame (it self-throttles by camera movement and Engine calls it
-			// unconditionally before this Setup runs) -- simpler than threading a "did it
-			// actually rebuild" flag through just to skip an otherwise-harmless redundant
-			// barrier.
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainTLAS>(),
@@ -165,6 +134,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+			push.indirectionMapIndex = ctx.Index<TerrainIndirectionMapTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

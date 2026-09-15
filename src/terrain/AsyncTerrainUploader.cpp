@@ -133,9 +133,8 @@ namespace brassica {
 		uint32_t                   height,
 		vk::Queue                  transferQueue
 	) {
-		Poll(); // Reclaim completed uploads first
+		Poll();
 
-		// Find available request slot
 		PendingUploadRequest* slot = nullptr;
 		for (auto& req : requests) {
 			if (!req.inFlight) {
@@ -146,12 +145,11 @@ namespace brassica {
 
 		if (!slot) {
 			spdlog::warn("AsyncTerrainUploader: No available upload slot for LOD level {}", levelIndex);
-			return false; // Queue full
+			return false;
 		}
 
 		VkDeviceSize bufferSize = data.size_bytes();
 
-		// Allocate staging buffer
 		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 		bufferInfo.size = bufferSize;
 		bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -169,15 +167,12 @@ namespace brassica {
 		}
 		slot->stagingBuffer = vkBuf;
 
-		// Copy data to mapped staging memory
 		std::memcpy(resultAllocInfo.pMappedData, data.data(), bufferSize);
 
-		// Record copy commands
 		slot->commandBuffer.reset();
 		vk::CommandBufferBeginInfo cmdBegin{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
 		slot->commandBuffer.begin(cmdBegin);
 
-		// Transition target image layer to DST_OPTIMAL
 		vk::ImageMemoryBarrier2 barrier1{};
 		barrier1.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 		barrier1.setSrcAccessMask(vk::AccessFlagBits2::eNone);
@@ -192,7 +187,6 @@ namespace brassica {
 		depInfo1.setImageMemoryBarriers(barrier1);
 		slot->commandBuffer.pipelineBarrier2(depInfo1);
 
-		// Copy buffer to image layer
 		vk::BufferImageCopy copyRegion{};
 		copyRegion.setBufferOffset(0);
 		copyRegion.setBufferRowLength(width);
@@ -204,7 +198,6 @@ namespace brassica {
 		slot->commandBuffer
 			.copyBufferToImage(slot->stagingBuffer, targetImage, vk::ImageLayout::eTransferDstOptimal, copyRegion);
 
-		// Transition target image layer to SHADER_READ_ONLY_OPTIMAL
 		vk::ImageMemoryBarrier2 barrier2{};
 		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
 		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
@@ -225,7 +218,6 @@ namespace brassica {
 		slot->commandBuffer.end();
 		slot->targetTimelineValue = ++currentTimelineCounter;
 
-		// Submit command buffer non-blockingly with fence
 		vk::CommandBufferSubmitInfo cmdSubmit{};
 		cmdSubmit.setCommandBuffer(slot->commandBuffer);
 
@@ -239,6 +231,119 @@ namespace brassica {
 		submitInfo.setSignalSemaphoreInfos(signalInfo);
 
 		slot->levelIndex = levelIndex;
+		slot->inFlight = true;
+
+		transferQueue.submit2(submitInfo, nullptr);
+
+		return true;
+	}
+
+	bool AsyncTerrainUploader::UploadMipAsync(
+		uint32_t                 mipLevel,
+		std::span<const float>   data,
+		vk::Image                targetImage,
+		uint32_t                 width,
+		uint32_t                 height,
+		vk::Queue                transferQueue
+	) {
+		Poll();
+
+		PendingUploadRequest* slot = nullptr;
+		for (auto& req : requests) {
+			if (!req.inFlight) {
+				slot = &req;
+				break;
+			}
+		}
+
+		if (!slot) {
+			spdlog::warn("AsyncTerrainUploader: No available upload slot for indirection mip {}", mipLevel);
+			return false;
+		}
+
+		VkDeviceSize bufferSize = data.size_bytes();
+
+		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		bufferInfo.size = bufferSize;
+		bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+		VmaAllocationCreateInfo allocInfo{};
+		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer          vkBuf = VK_NULL_HANDLE;
+		VmaAllocationInfo resultAllocInfo{};
+		if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &vkBuf, &slot->stagingAllocation, &resultAllocInfo) !=
+		    VK_SUCCESS) {
+			spdlog::error("Failed to create staging buffer for indirection mip upload.");
+			return false;
+		}
+		slot->stagingBuffer = vkBuf;
+
+		std::memcpy(resultAllocInfo.pMappedData, data.data(), bufferSize);
+
+		slot->commandBuffer.reset();
+		vk::CommandBufferBeginInfo cmdBegin{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+		slot->commandBuffer.begin(cmdBegin);
+
+		vk::ImageMemoryBarrier2 barrier1{};
+		barrier1.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+		barrier1.setSrcAccessMask(vk::AccessFlagBits2::eNone);
+		barrier1.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier1.setDstAccessMask(vk::AccessFlagBits2::eTransferWrite);
+		barrier1.setOldLayout(vk::ImageLayout::eUndefined);
+		barrier1.setNewLayout(vk::ImageLayout::eTransferDstOptimal);
+		barrier1.setImage(targetImage);
+		barrier1.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, mipLevel, 1, 0, 1));
+
+		vk::DependencyInfo depInfo1{};
+		depInfo1.setImageMemoryBarriers(barrier1);
+		slot->commandBuffer.pipelineBarrier2(depInfo1);
+
+		vk::BufferImageCopy copyRegion{};
+		copyRegion.setBufferOffset(0);
+		copyRegion.setBufferRowLength(width);
+		copyRegion.setBufferImageHeight(height);
+		copyRegion.setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, mipLevel, 0, 1));
+		copyRegion.setImageOffset(vk::Offset3D{0, 0, 0});
+		copyRegion.setImageExtent(vk::Extent3D{width, height, 1});
+
+		slot->commandBuffer
+			.copyBufferToImage(slot->stagingBuffer, targetImage, vk::ImageLayout::eTransferDstOptimal, copyRegion);
+
+		vk::ImageMemoryBarrier2 barrier2{};
+		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
+		barrier2.setDstStageMask(
+			vk::PipelineStageFlagBits2::eMeshShaderEXT | vk::PipelineStageFlagBits2::eTaskShaderEXT |
+			vk::PipelineStageFlagBits2::eFragmentShader
+		);
+		barrier2.setDstAccessMask(vk::AccessFlagBits2::eShaderRead);
+		barrier2.setOldLayout(vk::ImageLayout::eTransferDstOptimal);
+		barrier2.setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+		barrier2.setImage(targetImage);
+		barrier2.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, mipLevel, 1, 0, 1));
+
+		vk::DependencyInfo depInfo2{};
+		depInfo2.setImageMemoryBarriers(barrier2);
+		slot->commandBuffer.pipelineBarrier2(depInfo2);
+
+		slot->commandBuffer.end();
+		slot->targetTimelineValue = ++currentTimelineCounter;
+
+		vk::CommandBufferSubmitInfo cmdSubmit{};
+		cmdSubmit.setCommandBuffer(slot->commandBuffer);
+
+		vk::SemaphoreSubmitInfo signalInfo{};
+		signalInfo.setSemaphore(timelineSemaphore);
+		signalInfo.setValue(slot->targetTimelineValue);
+		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eTransfer);
+
+		vk::SubmitInfo2 submitInfo{};
+		submitInfo.setCommandBufferInfos(cmdSubmit);
+		submitInfo.setSignalSemaphoreInfos(signalInfo);
+
+		slot->levelIndex = mipLevel;
 		slot->inFlight = true;
 
 		transferQueue.submit2(submitInfo, nullptr);
