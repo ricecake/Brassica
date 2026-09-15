@@ -5,6 +5,8 @@
 #extension GL_EXT_scalar_block_layout : require
 
 #include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
 
 struct VkAabbPositionsKHR {
 	float minX;
@@ -29,6 +31,7 @@ layout(push_constant) uniform PushConstants {
 	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow (16), z = totalMeshlets, w = textureDim (1088)
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uvec4 lodOffsets8_11;
 } push;
 
 vec3 permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
@@ -109,7 +112,7 @@ void main() {
 	uint col = rem % meshletsPerRow;
 
 	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * pow(2.0, max(0.0, float(int(lod) - 1)));
+	float meshletSize = baseMeshletSize * getLODScale(float(lod));
 	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 
 	vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
@@ -117,7 +120,7 @@ void main() {
 
 	bool activeMeshlet = true;
 	if (lod > 0u) {
-		float prevMeshletSize = baseMeshletSize * pow(2.0, float(lod - 1u));
+		float prevMeshletSize = baseMeshletSize * getLODScale(float(lod - 1u));
 		float safeInnerRadius = (float(meshletsPerRow) * 0.5 - 1.0) * prevMeshletSize;
 		vec2 maxOffset = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
 		float maxDistToCam = length(maxOffset);
@@ -136,7 +139,9 @@ void main() {
 				float tx = float(sx) / 4.0;
 				float sampleX = minB.x + tx * meshletSize;
 				float dummyB, dummyM;
-				float h = evalTerrainHeight(vec2(sampleX, sampleZ), dummyB, dummyM);
+				vec2 flatXZ = vec2(sampleX, sampleZ) - uCameraPosition.xz;
+				float dropOff = dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
+				float h = evalTerrainHeight(vec2(sampleX, sampleZ), dummyB, dummyM) - dropOff;
 				minH = min(minH, h);
 				maxH = max(maxH, h);
 			}

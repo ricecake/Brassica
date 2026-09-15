@@ -2,6 +2,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #include "bindless.glsl"
+#include "terrain.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
 
@@ -11,8 +12,10 @@ layout(push_constant) uniform PushConstants {
 	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim (1088)
 	uvec4 lodOffsets0_3;        // packed toroidal gridOffset for LOD 0-3
 	uvec4 lodOffsets4_7;        // packed toroidal gridOffset for LOD 4-7
+	uvec4 lodOffsets8_11;       // packed toroidal gridOffset for LOD 8-11
 	uvec4 lodDeltas0_3;         // packed toroidal delta for LOD 0-3
 	uvec4 lodDeltas4_7;         // packed toroidal delta for LOD 4-7
+	uvec4 lodDeltas8_11;        // packed toroidal delta for LOD 8-11
 	uint  clipmapStorageIdx;    // storage image index for TerrainClipmapTexture
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
@@ -90,7 +93,7 @@ void main() {
 		return;
 	}
 
-	uvec4 deltas = (lod < 4u) ? push.lodDeltas0_3 : push.lodDeltas4_7;
+	uvec4 deltas = (lod < 4u) ? push.lodDeltas0_3 : ((lod < 8u) ? push.lodDeltas4_7 : push.lodDeltas8_11);
 	uint packedDelta = deltas[lod % 4u];
 	int deltaX = int(packedDelta & 0xFFFFu);
 	if (deltaX >= 0x8000) deltaX -= 0x10000;
@@ -101,7 +104,7 @@ void main() {
 		return;
 	}
 
-	uvec4 offsets = (lod < 4u) ? push.lodOffsets0_3 : push.lodOffsets4_7;
+	uvec4 offsets = (lod < 4u) ? push.lodOffsets0_3 : ((lod < 8u) ? push.lodOffsets4_7 : push.lodOffsets8_11);
 	uint packedOffset = offsets[lod % 4u];
 	ivec2 gridOffset = ivec2(int(packedOffset & 0xFFFFu), int((packedOffset >> 16u) & 0xFFFFu));
 
@@ -119,7 +122,7 @@ void main() {
 	}
 
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
-	float texelSize = baseTexelSize * pow(2.0, float(lod));
+	float texelSize = baseTexelSize * getLODScale(float(lod));
 
 	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;

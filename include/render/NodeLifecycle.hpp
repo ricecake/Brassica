@@ -36,11 +36,13 @@ namespace brassica::render {
 
 	struct NodeFrameParams {
 		glm::vec3  cameraPosition{0.0f};
-		glm::uvec4 terrainGridParams{8, 16, 2048, 1088};
+		glm::uvec4 terrainGridParams{10, 16, 2560, 1088};
 		glm::uvec4 terrainLodOffsets0_3{0u};
 		glm::uvec4 terrainLodOffsets4_7{0u};
+		glm::uvec4 terrainLodOffsets8_11{0u};
 		glm::uvec4 terrainLodDeltas0_3{0u};
 		glm::uvec4 terrainLodDeltas4_7{0u};
+		glm::uvec4 terrainLodDeltas8_11{0u};
 		bool       terrainHasUpdate{false};
 		glm::vec3  waterColor{0.05f, 0.45f, 0.85f};
 		float      waterLevel{0.0f};

@@ -5,6 +5,8 @@
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 #include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
 
 layout(push_constant) uniform WaterPushConstants {
 	uvec4 gridParams;     // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
@@ -75,7 +77,7 @@ void main() {
 		uint col = localID % meshletsPerRow;
 
 		float baseMeshletSize = 32.0;
-		float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 
 		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 		float maxWaveAmp = 20.0;
@@ -86,10 +88,14 @@ void main() {
 		);
 		vec3 maxB = minB + vec3(meshletSize, 2.0 * maxWaveAmp, meshletSize);
 
+		vec2 maxRel = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
+		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
+		minB.y -= maxDropOff;
+
 		visible = isAABBVisible(minB, maxB, uViewProjMatrix);
 
 		if (visible && lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
+			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 

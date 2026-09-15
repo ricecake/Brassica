@@ -1,4 +1,5 @@
 
+const float FAKE_PLANET_RADIUS = 600000.0; // 600km radius (1/10th scale planet)
 const float PI = 3.14159265359;
 const float PHI = 1.618033988749894848204586834;
 const float TAU = 2.0 * PI;
