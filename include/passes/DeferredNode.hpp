@@ -28,9 +28,10 @@ namespace brassica {
 	// TerrainPushConstants). The trailing six are bindless indices, filled in by
 	// DeferredNode::Execute every frame -- everything else is supplied once, at construction.
 	struct DeferredPushConstants {
-		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::uvec4 lodOffsets0_3{0u};
 		glm::uvec4 lodOffsets4_7{0u};
+		glm::uvec4 lodOffsets8_11{0u};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gNormalIndex{0};
 		std::uint32_t gAlbedoIndex{0};
@@ -102,6 +103,7 @@ namespace brassica {
 			push.gridParams = p.terrainGridParams;
 			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
 			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
+			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {

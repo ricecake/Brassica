@@ -29,9 +29,10 @@ namespace brassica {
 	// prefix of a push-constant block it actually uses, and every existing field's offset is
 	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
-		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-		glm::uvec4 lodOffsets0_3{0u};             // Toroidal offsets for LOD 0-3
-		glm::uvec4 lodOffsets4_7{0u};             // Toroidal offsets for LOD 4-7
+		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4 lodOffsets0_3{0u};              // Toroidal offsets for LOD 0-3
+		glm::uvec4 lodOffsets4_7{0u};              // Toroidal offsets for LOD 4-7
+		glm::uvec4 lodOffsets8_11{0u};             // Toroidal offsets for LOD 8-11
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
@@ -104,6 +105,7 @@ namespace brassica {
 			push.gridParams = p.terrainGridParams;
 			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
 			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
+			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -117,7 +119,7 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferPosition>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
 					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
 				}
 			);
@@ -155,7 +157,7 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
-				vk::Format::eR16G16B16A16Sfloat,
+				vk::Format::eR32G32B32A32Sfloat,
 				vk::Format::eR16G16B16A16Sfloat,
 				vk::Format::eR8G8B8A8Unorm
 			};

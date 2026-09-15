@@ -357,10 +357,15 @@ namespace brassica {
 		render::EngineNodeRegistry::Instance().CreateAll();
 		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
-		terrainClipmap.Init(device, allocator, 8, 0.5f, camera.farPlane, camera.position);
 		float initialTerrainHeight =
-			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, terrainClipmap.GetBaseTexelSize()).r;
+			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
 		camera.position.y = initialTerrainHeight + 2.0f;
+
+		float altitude = std::max(10.0f, camera.position.y);
+		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
+		camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
+
+		terrainClipmap.Init(device, allocator, 10, 0.5f, 0.0f, camera.position);
 
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),
@@ -393,6 +398,11 @@ namespace brassica {
 		);
 
 		taskScheduler.Initialize();
+		{
+			float altitude = std::max(10.0f, camera.position.y);
+			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
+			camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
+		}
 		camera.UpdateMatrices(16.0f / 9.0f);
 		lastFrameTime = glfwGetTime();
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
@@ -852,6 +862,11 @@ namespace brassica {
 		}
 
 		UpdateCamera(deltaTime);
+		{
+			float altitude = std::max(10.0f, camera.position.y);
+			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
+			camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
+		}
 		camera.UpdateMatrices(aspect);
 
 		FrameUBO ubo{};
@@ -902,8 +917,10 @@ namespace brassica {
 
 		glm::uvec4 offsets0_3{0u};
 		glm::uvec4 offsets4_7{0u};
+		glm::uvec4 offsets8_11{0u};
 		glm::uvec4 deltas0_3{0u};
 		glm::uvec4 deltas4_7{0u};
+		glm::uvec4 deltas8_11{0u};
 		bool       terrainHasUpdate = false;
 
 		for (uint32_t i = 0; i < terrainClipmap.GetNumLODs(); ++i) {
@@ -921,6 +938,9 @@ namespace brassica {
 			} else if (i < 8) {
 				offsets4_7[i - 4] = packedOffset;
 				deltas4_7[i - 4] = packedDelta;
+			} else if (i < 12) {
+				offsets8_11[i - 8] = packedOffset;
+				deltas8_11[i - 8] = packedDelta;
 			}
 		}
 		terrainPush.lodOffsets0_3 = offsets0_3;
@@ -941,8 +961,10 @@ namespace brassica {
 			.terrainGridParams = terrainPush.gridParams,
 			.terrainLodOffsets0_3 = terrainPush.lodOffsets0_3,
 			.terrainLodOffsets4_7 = terrainPush.lodOffsets4_7,
+			.terrainLodOffsets8_11 = offsets8_11,
 			.terrainLodDeltas0_3 = deltas0_3,
 			.terrainLodDeltas4_7 = deltas4_7,
+			.terrainLodDeltas8_11 = deltas8_11,
 			.terrainHasUpdate = terrainHasUpdate,
 			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
 			.waterLevel = 0.0f,

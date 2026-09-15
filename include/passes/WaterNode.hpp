@@ -22,7 +22,7 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct WaterPushConstants {
-		glm::uvec4    gridParams{8, 16, 2048, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+		glm::uvec4    gridParams{10, 16, 2560, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
@@ -93,6 +93,7 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
+			push.gridParams = p.terrainGridParams;
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
 		}

@@ -10,4 +10,7 @@ namespace brassica {
 	// construction.
 	inline constexpr std::uint32_t FRAME_OVERLAP = 2;
 
+	// Scale planet radius: 600km = 600,000 units (1/10th scale planet)
+	inline constexpr float FAKE_PLANET_RADIUS = 600000.0f;
+
 } // namespace brassica

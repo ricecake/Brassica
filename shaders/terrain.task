@@ -14,6 +14,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uvec4 lodOffsets8_11;
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
@@ -79,7 +80,7 @@ void main() {
 		uint col = localID % meshletsPerRow;
 
 		float baseMeshletSize = 32.0;
-		float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 
 		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -500.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
@@ -87,15 +88,19 @@ void main() {
 
 		if (params.minMaxIndex > 0u) {
 			vec2 centerXZ = vec2(minB.x + meshletSize * 0.5, minB.z + meshletSize * 0.5);
-			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, centerXZ, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, centerXZ, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
 			minB.y = minMax.x - 10.0;
 			maxB.y = minMax.y + 10.0;
 		}
 
+		vec2 maxRel = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
+		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
+		minB.y -= maxDropOff;
+
 		visible = isAABBVisible(minB, maxB, uViewProjMatrix);
 
 		if (visible && lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
+			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 

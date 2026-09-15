@@ -239,9 +239,11 @@ namespace brassica {
 		baseTexelSize = baseTexel;
 
 		if (maxDist > 0.0f) {
-			float    baseLevelExtent = static_cast<float>(TERRAIN_MAP_DIM) * baseTexelSize;
-			uint32_t derivedLODs = static_cast<uint32_t>(std::ceil(std::log2(maxDist / baseLevelExtent))) + 1;
-			numLODs = std::clamp(derivedLODs, 1u, 8u);
+			uint32_t derivedLODs = 1;
+			while (derivedLODs < 12 && (static_cast<float>(TERRAIN_MAP_DIM) * GetLODScale(static_cast<float>(derivedLODs - 1)) * baseTexelSize * 0.5f) < maxDist) {
+				derivedLODs++;
+			}
+			numLODs = std::clamp(derivedLODs, 1u, 12u);
 		} else {
 			numLODs = lods;
 		}
@@ -250,7 +252,7 @@ namespace brassica {
 		for (uint32_t i = 0; i < numLODs; ++i) {
 			levelInfos[i].level = i;
 			levelInfos[i].baseTexelSize = baseTexelSize;
-			levelInfos[i].texelSize = baseTexelSize * static_cast<float>(1 << i);
+			levelInfos[i].texelSize = baseTexelSize * GetLODScale(static_cast<float>(i));
 			levelInfos[i].worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * levelInfos[i].texelSize;
 			levelInfos[i].centerWorldPos = glm::floor(
 											   glm::vec2(initialCameraPos.x, initialCameraPos.z) /
@@ -383,7 +385,7 @@ namespace brassica {
 		} else {
 			info.level = levelIndex;
 			info.baseTexelSize = baseTexelSize > 0.0f ? baseTexelSize : 0.5f;
-			info.texelSize = info.baseTexelSize * static_cast<float>(1 << levelIndex);
+			info.texelSize = info.baseTexelSize * GetLODScale(static_cast<float>(levelIndex));
 			info.worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * info.texelSize;
 			info.centerWorldPos = glm::vec2(0.0f);
 			info.gridOffset = glm::ivec2(0);
@@ -406,7 +408,7 @@ namespace brassica {
 		ClipmapLevelInfo info{};
 		info.level = levelIndex;
 		info.baseTexelSize = baseTexelSize;
-		info.texelSize = baseTexelSize * static_cast<float>(1 << levelIndex);
+		info.texelSize = baseTexelSize * GetLODScale(static_cast<float>(levelIndex));
 		info.worldExtent = static_cast<float>(TERRAIN_MAP_DIM) * info.texelSize;
 		info.centerWorldPos = centerWorldPos;
 		info.gridOffset = glm::ivec2(0);

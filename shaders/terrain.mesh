@@ -12,6 +12,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
+	uvec4 lodOffsets8_11;
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
@@ -53,7 +54,7 @@ void main() {
 	uint col = localID % meshletsPerRow;
 
 	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * pow(2.0, float(lodLevel));
+	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 
 	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 	vec3 meshletMin = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
@@ -61,7 +62,7 @@ void main() {
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
 
-	vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+	vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
 	if (length(normal) < 0.1) normal = vec3(0.0, 1.0, 0.0);
@@ -79,7 +80,7 @@ void main() {
 			float alpha = clamp((distToCam - morphStart) / max(morphEnd - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha); // Smoothstep blending for CDLOD transition
 
-			vec4 texNext = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel + 1, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7);
+			vec4 texNext = sampleTerrainClipmap(params.clipmapIndex, worldPos.xz, lodLevel + 1, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
 			float nextHeight = texNext.r;
 			vec3 nextNormal = texNext.gba;
 
@@ -90,12 +91,15 @@ void main() {
 		}
 	}
 
-	worldPos.y = height;
+	vec2 flatXZ = worldPos.xz - uCameraPosition.xz;
+	float distSq = dot(flatXZ, flatXZ);
+	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+	worldPos.y = height - dropOff;
 
 	vec4 clipPos = uViewProjMatrix * vec4(worldPos, 1.0);
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = clipPos;
 
-	outPosition[vertexIndex] = worldPos;
+	outPosition[vertexIndex] = worldPos - uCameraPosition.xyz;
 	outNormal[vertexIndex] = normal;
 
 	vec3 lodColor = vec3(0.2, 0.6, 0.2);
@@ -140,7 +144,7 @@ void main() {
 		vec3 skirtPos = worldPos - vec3(0.0, skirtDepth, 0.0);
 
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uViewProjMatrix * vec4(skirtPos, 1.0);
-		outPosition[skirtIdx] = skirtPos;
+		outPosition[skirtIdx] = skirtPos - uCameraPosition.xyz;
 		outNormal[skirtIdx] = normal;
 		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
 	}
@@ -171,7 +175,7 @@ void main() {
 		// Fine-grained overlap culling
 		bool cullQuad = false;
 		if (lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * pow(2.0, float(lodLevel - 1));
+			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 

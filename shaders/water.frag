@@ -21,20 +21,21 @@ void main() {
 	vec2 screenUV = gl_FragCoord.xy / vec2(gTexSize);
 
 	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, screenUV);
-	vec3 terrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
+	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
+	vec3 relWaterPos = inWorldPos - uCameraPosition.xyz;
 
-	float distToCamWater = length(uCameraPosition.xyz - inWorldPos);
+	float distToCamWater = length(relWaterPos);
 	float depthBelowWater = 100.0; // Default deep water depth when background is sky
 
 	if (albedo.a >= 0.01) {
-		float distToCamTerrain = length(uCameraPosition.xyz - terrainPos);
+		float distToCamTerrain = length(relTerrainPos);
 		// Terrain is strictly in front of the water mesh fragment
 		if (distToCamTerrain < distToCamWater - 0.2) {
 			outColor = vec4(0.0);
 			return;
 		}
 
-		depthBelowWater = inWorldPos.y - terrainPos.y;
+		depthBelowWater = relWaterPos.y - relTerrainPos.y;
 		if (depthBelowWater <= 0.0) {
 			outColor = vec4(0.0);
 			return;
@@ -55,8 +56,8 @@ void main() {
 	vec2 refractUV = clamp(screenUV + refractOffset, vec2(0.0), vec2(1.0));
 
 	vec4 refractedAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, refractUV);
-	vec3 refractedPos = SAMPLE_NEAREST(params.gPositionIndex, refractUV).rgb;
-	if (inWorldPos.y - refractedPos.y <= 0.0 || refractedAlbedo.a < 0.01) {
+	vec3 relRefractedPos = SAMPLE_NEAREST(params.gPositionIndex, refractUV).rgb;
+	if (relWaterPos.y - relRefractedPos.y <= 0.0 || refractedAlbedo.a < 0.01) {
 		refractedAlbedo = albedo;
 	}
 
@@ -69,7 +70,7 @@ void main() {
 
 	// Specular shine and Fresnel reflection when camera is close
 	vec3 lightDir = normalize(vec3(0.5, 0.8, 0.5));
-	vec3 viewDir = normalize(uCameraPosition.xyz - inWorldPos);
+	vec3 viewDir = normalize(-relWaterPos);
 	vec3 halfDir = normalize(lightDir + viewDir);
 
 	float NdotH = max(dot(waveNormal, halfDir), 0.0);

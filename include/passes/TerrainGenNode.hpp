@@ -20,11 +20,13 @@
 namespace brassica {
 
 	struct TerrainGenPushConstants {
-		glm::uvec4 gridParams{8, 16, 2048, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::uvec4 lodOffsets0_3{0u};
 		glm::uvec4 lodOffsets4_7{0u};
+		glm::uvec4 lodOffsets8_11{0u};
 		glm::uvec4 lodDeltas0_3{0u};
 		glm::uvec4 lodDeltas4_7{0u};
+		glm::uvec4 lodDeltas8_11{0u};
 		std::uint32_t clipmapStorageIdx{0};
 		std::uint32_t minMaxStorageIdx{0};
 		std::uint32_t biomeStorageIdx{0};
@@ -74,8 +76,10 @@ namespace brassica {
 			push.gridParams = p.terrainGridParams;
 			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
 			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
+			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
 			push.lodDeltas0_3 = p.terrainLodDeltas0_3;
 			push.lodDeltas4_7 = p.terrainLodDeltas4_7;
+			push.lodDeltas8_11 = p.terrainLodDeltas8_11;
 			hasUpdate = p.terrainHasUpdate;
 		}
 
@@ -185,7 +189,8 @@ namespace brassica {
 					setLayouts[1],
 					push.gridParams,
 					push.lodOffsets0_3,
-					push.lodOffsets4_7
+					push.lodOffsets4_7,
+					push.lodOffsets8_11
 				);
 				if (physicalRegistry && terrainAS->GetTLAS()) {
 					physicalRegistry->RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS->GetTLAS());
