@@ -336,7 +336,7 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		terrainAS.Init(instance, device);
+		terrainAS.Init(instance, device, allocator);
 
 		render::NodeServices nodeServices{
 			.device = device,
@@ -369,6 +369,7 @@ namespace brassica {
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			/*hasDefinedContents=*/true
 		);
+		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 		physicalRegistry.RegisterImportedTexture<TerrainMinMaxTexture>(
 			terrainClipmap.GetMinMaxImage(),
 			terrainClipmap.GetMinMaxImageView(),

@@ -201,9 +201,6 @@ namespace brassica::graph {
 		// waitIdle() before this is ever called, so there is no in-flight command buffer that
 		// could still be reading the old handle through this slot.
 		void RegisterImportedAccelerationStructure(ResourceId id, vk::AccelerationStructureKHR as) {
-			if (!as) {
-				return;
-			}
 			const ResourceId    resolvedId = ResolveId(id);
 			auto                existingIt = m_accelStructs.find(resolvedId);
 			const bool          handleChanged = existingIt == m_accelStructs.end() || existingIt->second->Get() != as;
@@ -214,7 +211,7 @@ namespace brassica::graph {
 			newAS->SetBindlessIndex(index);
 			m_accelStructs[resolvedId] = newAS;
 
-			if (handleChanged) {
+			if (handleChanged && as) {
 				WriteAccelerationStructureDescriptor(index, as);
 			}
 		}
