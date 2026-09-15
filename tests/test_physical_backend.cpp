@@ -494,25 +494,23 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	// -- CPU-write + sync helper: Stage 0 empirical proof --------------------------------------
-	// See .claude/plans/ancient-booping-magpie.md. Proves the *existing*, unmodified barrier
-	// machinery -- ResourceState.hpp's DeriveBufferState Host-write branch (present but never
-	// exercised by a real device before this) and DeriveImageState's Transfer-write path --
-	// produces a validation-clean, data-correct chain for a real CPU write threaded through a
-	// real command buffer across a real frame boundary, before any HostAccess/PhysicalBuffer-ring/
-	// NodeContext::Write production code gets built on top of it. Deliberately hand-rolls the VMA
-	// calls the real mechanism will eventually own (mirrors Util.hpp's existing
-	// UploadPredefinedBuffer/Texture) -- nothing here is meant to survive past this stage.
+	// -- CPU-write + sync helper: Stage 0 empirical proof, since converted to Stage 3's real seam
+	// See .claude/plans/ancient-booping-magpie.md. Stage 0 proved the *unmodified* barrier
+	// machinery -- ResourceState.hpp's DeriveBufferState Host-write branch and DeriveImageState's
+	// Transfer-write path -- produces a validation-clean, data-correct chain for a real CPU write,
+	// by hand-rolling the VMA calls the real mechanism would eventually own. Stage 3 built that
+	// mechanism (HostAccess, PhysicalBuffer's Mapped ring, PhysicalRegistry's Staged staging ring,
+	// ResourceServices::BeginHostWrite/EndHostWrite, NodeContext::Write/WriteSpan) -- these
+	// fixtures now exercise it directly instead of hand-rolling it.
 
 	struct TestHostBuffer {};
 
 	struct TestStagedTexture {};
 
-	// Host-domain: memcpy directly into a persistently-mapped buffer, no copy command at all.
+	// HostAccess::Mapped: WriteSpan writes straight into this frame's ring slot, no copy command.
 	struct HostWriterNode {
 		using Resources = Declares<Create<TestHostBuffer>>;
 
-		void*         mapped = nullptr;
 		std::uint32_t sentinel = 0;
 
 		Recipe Setup(const FrameContext&) {
@@ -521,16 +519,14 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestHostBuffer>(),
 					.access = AccessKind::Write,
-					.desc = StorageBufferDesc(sizeof(std::uint32_t)),
+					.desc = MappedStorageBufferDesc(sizeof(std::uint32_t)),
 				}
 			);
 			return r;
 		}
 
-		void Execute(NodeContext&) {
-			if (mapped) {
-				std::memcpy(mapped, &sentinel, sizeof(sentinel));
-			}
+		void Execute(NodeContext& ctx) {
+			ctx.WriteSpan<TestHostBuffer>(std::span<const std::uint32_t>{&sentinel, 1});
 		}
 	};
 
@@ -543,7 +539,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestHostBuffer>(),
 					.access = AccessKind::Read,
-					.desc = StorageBufferDesc(sizeof(std::uint32_t)),
+					.desc = MappedStorageBufferDesc(sizeof(std::uint32_t)),
 				}
 			);
 			return r;
@@ -552,12 +548,11 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	// Transfer-domain: a real copyBufferToImage into a graph-provisioned (not imported) texture,
-	// the shape the real Staged path will use.
+	// HostAccess::Staged: WriteSpan copies into the registry's own staging ring; EndHostWrite
+	// records the real copyBufferToImage into a graph-provisioned (not imported) texture.
 	struct StagedWriterNode {
 		using Resources = Declares<Create<TestStagedTexture>>;
 
-		vk::Buffer    stagingBuffer{};
 		std::uint32_t width = 0;
 		std::uint32_t height = 0;
 
@@ -567,27 +562,15 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestStagedTexture>(),
 					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(width, height, vk::Format::eR8G8B8A8Unorm),
+					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Unorm),
 				}
 			);
 			return r;
 		}
 
 		void Execute(NodeContext& ctx) {
-			const auto* registry = dynamic_cast<const PhysicalResourceRegistry*>(ctx.bindless);
-			if (!registry) {
-				return;
-			}
-			auto tex = registry->GetTexture<TestStagedTexture>();
-			if (!tex) {
-				return;
-			}
-			vk::CommandBuffer   vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			vk::BufferImageCopy region{};
-			region.setBufferOffset(0)
-				.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1})
-				.setImageExtent({width, height, 1});
-			vkCmd.copyBufferToImage(stagingBuffer, tex->GetImage(), tex->GetCurrentLayout(), region);
+			std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4, 0xAB);
+			ctx.WriteSpan<TestStagedTexture>(std::span<const std::uint8_t>{pixels});
 		}
 	};
 
@@ -603,7 +586,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestStagedTexture>(),
 					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(width, height, vk::Format::eR8G8B8A8Unorm),
+					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Unorm),
 				}
 			);
 			return r;
@@ -636,6 +619,43 @@ namespace {
 		}
 
 		void Execute(NodeContext&) {}
+	};
+
+	// -- CPU-write + sync helper: Stage 3 negative case ----------------------------------------
+	// A Graphics-domain node that both opens a real dynamic-rendering scope (the color-target
+	// realization below) and tries a Staged write from inside it -- BeginHostWrite's
+	// insideRendering check exists specifically to reject this before it becomes a cryptic
+	// "vkCmdCopyBuffer inside a render pass" validation error instead.
+	struct TestIllegalStagedTarget {};
+
+	struct TestIllegalStagedBuffer {};
+
+	struct IllegalStagedWriteNode {
+		using Resources = Declares<Create<TestIllegalStagedTarget>, Create<TestIllegalStagedBuffer>>;
+
+		Recipe Setup(const FrameContext& ctx) {
+			Recipe r{.domain = ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestIllegalStagedTarget>(),
+					.access = AccessKind::Write,
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+				}
+			);
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestIllegalStagedBuffer>(),
+					.access = AccessKind::Write,
+					.desc = StagedStorageBufferDesc(sizeof(std::uint32_t)),
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext& ctx) {
+			std::uint32_t value = 1;
+			ctx.WriteSpan<TestIllegalStagedBuffer>(std::span<const std::uint32_t>{&value, 1});
+		}
 	};
 
 } // namespace
@@ -1421,14 +1441,17 @@ TEST_CASE(
 	engine.Cleanup();
 }
 
-// -- CPU-write + sync helper: Stage 0 empirical proof ------------------------------------------
-// See .claude/plans/ancient-booping-magpie.md. Exercises the *unmodified* barrier-synthesis
-// machinery -- DeriveBufferState's Host-write branch and DeriveImageState's Transfer-domain
-// fallback -- across three real frames, before any HostAccess/ring/NodeContext::Write production
-// code gets built on top of it.
+// -- CPU-write + sync helper: Stage 3 real seam --------------------------------------------------
+// See .claude/plans/ancient-booping-magpie.md. Stage 0 (git history) proved the barrier-synthesis
+// machinery this relies on -- DeriveBufferState's Host-write branch and DeriveImageState's
+// Transfer-domain fallback -- was already validation-clean by hand-rolling the VMA/copy plumbing.
+// This is the same three-frame shape, now through the real production seam: HostAccess-tagged
+// descs, PhysicalBuffer's Mapped ring, PhysicalRegistry's Staged staging ring, and
+// NodeContext::Write/WriteSpan -- identical zero-error result, hand-rolled staging gone.
 TEST_CASE(
-	"CPU-write + sync helper Stage 0: a real Host-domain memcpy and a real Transfer-domain "
-	"staged copy both produce validation-clean, data-correct barriers across three frames"
+	"NodeContext::Write/WriteSpan carry a real Host-domain Mapped write and a real "
+	"Transfer-domain Staged write through Provision/BeginHostWrite/EndHostWrite with no "
+	"validation errors across three frames"
 ) {
 	brassica::testing::MinimalDevice device;
 
@@ -1458,72 +1481,14 @@ TEST_CASE(
 		PhysicalResourceRegistry registry(vkDevice, allocator);
 		PhysicalExecutionBackend backend(registry);
 
-		// Hand-rolled host-visible+mapped buffer standing in for the real HostAccess::Mapped
-		// ring this stage exists to justify -- one real vk::Buffer, imported so ProvisionBuffer
-		// never touches it (PhysicalRegistry.hpp's provisioning loop skips any resolvedKey that's
-		// already IsImported() -- see the loop just above ProvisionBuffer/ProvisionTexture), so
-		// the same handle and the same mapped pointer survive all three frames below.
-		VkBufferCreateInfo hostBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-		hostBufferInfo.size = sizeof(std::uint32_t);
-		hostBufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-
-		VmaAllocationCreateInfo hostAllocInfo{};
-		hostAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-		hostAllocInfo.flags =
-			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-		VkBuffer          rawHostBuffer = VK_NULL_HANDLE;
-		VmaAllocation     hostAllocation = nullptr;
-		VmaAllocationInfo hostAllocResult{};
-		vmaCreateBuffer(allocator, &hostBufferInfo, &hostAllocInfo, &rawHostBuffer, &hostAllocation, &hostAllocResult);
-		REQUIRE(hostAllocResult.pMappedData != nullptr);
-
-		registry.RegisterImportedBuffer<TestHostBuffer>(
-			vk::Buffer(rawHostBuffer),
-			StorageBufferDesc(sizeof(std::uint32_t))
-		);
-
-		// Hand-rolled staging buffer for the Transfer-domain copyBufferToImage -- mirrors
-		// UploadPredefinedTexture's own staging buffer exactly (Util.hpp), since that's the real
-		// code path this fixture stands in for.
 		constexpr std::uint32_t kTexWidth = 4;
 		constexpr std::uint32_t kTexHeight = 4;
-		constexpr std::size_t   kTexBytes = std::size_t{kTexWidth} * kTexHeight * 4;
-
-		VkBufferCreateInfo stagingBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-		stagingBufferInfo.size = kTexBytes;
-		stagingBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-
-		VmaAllocationCreateInfo stagingAllocInfo{};
-		stagingAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-		stagingAllocInfo.flags =
-			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-		VkBuffer          rawStagingBuffer = VK_NULL_HANDLE;
-		VmaAllocation     stagingAllocation = nullptr;
-		VmaAllocationInfo stagingAllocResult{};
-		vmaCreateBuffer(
-			allocator,
-			&stagingBufferInfo,
-			&stagingAllocInfo,
-			&rawStagingBuffer,
-			&stagingAllocation,
-			&stagingAllocResult
-		);
-		REQUIRE(stagingAllocResult.pMappedData != nullptr);
-		std::memset(stagingAllocResult.pMappedData, 0xAB, kTexBytes);
 
 		auto runFrame = [&](std::uint64_t frameIndex, std::uint32_t sentinel) {
 			Graph g;
-			g.Register<HostWriterNode>(HostWriterNode{.mapped = hostAllocResult.pMappedData, .sentinel = sentinel});
+			g.Register<HostWriterNode>(HostWriterNode{.sentinel = sentinel});
 			g.Register<HostBufferReaderNode>();
-			g.Register<StagedWriterNode>(
-				StagedWriterNode{
-					.stagingBuffer = vk::Buffer(rawStagingBuffer),
-					.width = kTexWidth,
-					.height = kTexHeight,
-				}
-			);
+			g.Register<StagedWriterNode>(StagedWriterNode{.width = kTexWidth, .height = kTexHeight});
 			g.Register<StagedTextureReaderNode>(StagedTextureReaderNode{.width = kTexWidth, .height = kTexHeight});
 
 			FrameContext ctx{.width = kTexWidth, .height = kTexHeight, .frameIndex = frameIndex};
@@ -1546,17 +1511,68 @@ TEST_CASE(
 		runFrame(1, 0xBBBBBBBBu);
 		runFrame(2, 0xCCCCCCCCu);
 
+		auto buf = registry.GetBuffer<TestHostBuffer>();
+		REQUIRE(buf != nullptr);
+		void* slice = buf->MappedSlice(2);
+		REQUIRE(slice != nullptr);
 		std::uint32_t readBack = 0;
-		std::memcpy(&readBack, hostAllocResult.pMappedData, sizeof(readBack));
+		std::memcpy(&readBack, slice, sizeof(readBack));
 		CHECK(readBack == 0xCCCCCCCCu);
 
-		vmaDestroyBuffer(allocator, rawStagingBuffer, stagingAllocation);
-		vmaDestroyBuffer(allocator, rawHostBuffer, hostAllocation);
 		vkDevice.destroyCommandPool(pool);
 	}
 
 	CHECK(device.GetValidationErrorCount() == 0);
 	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+TEST_CASE("A Staged write attempted from inside a render pass throws, naming the resource") {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
+		);
+		vk::CommandBuffer vkCmd = vkDevice
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		PhysicalExecutionBackend backend(registry);
+
+		Graph g;
+		g.Register<IllegalStagedWriteNode>();
+
+		FrameContext ctx{.width = 4, .height = 4, .frameIndex = 0};
+
+		vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+
+		std::string thrownMessage;
+		bool        threw = false;
+		try {
+			backend.Execute(g, ctx, cmd, false);
+		} catch (const std::exception& e) {
+			threw = true;
+			thrownMessage = e.what();
+		}
+		CHECK(threw);
+		CHECK(thrownMessage.find("TestIllegalStagedBuffer") != std::string::npos);
+		CHECK(thrownMessage.find("render pass") != std::string::npos);
+
+		// The exception fired mid-recording (inside the render pass IllegalStagedWriteNode's own
+		// color-target realization opened) -- nothing to submit, just tear down cleanly.
+		vkDevice.destroyCommandPool(pool);
+	}
 }
 
 // -- CPU-write + sync helper: Stage 2 -----------------------------------------------------------

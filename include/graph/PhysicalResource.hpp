@@ -891,8 +891,9 @@ namespace brassica::graph {
 	inline ResourceDesc UniformBufferDesc(std::uint64_t byteSize) {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Buffer,
-			// eTransferDst: lets UploadPredefinedBuffer's cmd.copyBuffer (Util.hpp) target this
-			// buffer directly -- without it, every uniform buffer this preset creates is a live
+			// eTransferDst: lets a real cmd.copyBuffer (StagedStorageBufferDesc's staging-ring
+			// path, or Util.hpp's UploadBufferImmediate) target this buffer directly -- without
+			// it, every uniform buffer this preset creates is a live
 			// VUID-vkCmdCopyBuffer-dstBuffer-00120 the moment anything tries to upload into it.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eTransferDst
@@ -905,7 +906,7 @@ namespace brassica::graph {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Buffer,
 			// eTransferDst: same reason as UniformBufferDesc above -- ParticleSystemNode's
-			// typeBufferNode is exactly this preset, uploaded via UploadPredefinedBuffer.
+			// typeBufferNode is exactly this preset, uploaded via HostWriteNode/WriteSpan.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst
 			),
@@ -924,9 +925,9 @@ namespace brassica::graph {
 	// actually differs for Mapped (PhysicalBuffer's Owning ctor requests host-visible+mapped
 	// memory and a FRAME_OVERLAP ring only when desc.hostAccess == Mapped, PhysicalResource.hpp)
 	// -- Staged keeps the exact same device-local allocation as the plain preset; hostAccess is
-	// only a flag ResourceServices'/BeginHostWrite's staging-ring path (a later stage) reads to
-	// decide how a CPU write reaches this resource, not something PhysicalBuffer itself branches
-	// on for anything but Mapped.
+	// only a flag PhysicalRegistry::BeginHostWrite (Util.hpp) reads to decide whether to hand
+	// back a ring slice directly (Mapped) or stage through its own staging ring and a real copy
+	// command (Staged), not something PhysicalBuffer itself branches on for anything but Mapped.
 
 	inline ResourceDesc StagedUniformBufferDesc(std::uint64_t byteSize) {
 		ResourceDesc desc = UniformBufferDesc(byteSize);
@@ -954,7 +955,7 @@ namespace brassica::graph {
 
 	// Sampled + TransferDst only -- no eColorAttachment, unlike ColorAttachmentDesc: this is for
 	// an asset-style texture only ever written by a staged CPU copy and read by shaders (matches
-	// UploadPredefinedTexture's own default usage fallback when a caller passes no desc,
+	// UploadTextureImmediate's own default usage fallback when a caller passes no desc,
 	// Util.hpp), not a render target. Mapped has no texture counterpart -- see HostAccess's own
 	// comment (Execution.hpp) for why a CPU-mapped, optimally-tiled image isn't a shape this
 	// engine supports.

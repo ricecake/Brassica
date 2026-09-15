@@ -9,13 +9,12 @@
 #include "graph/Execution.hpp"
 #include "graph/ResourceKey.hpp"
 
-#if __has_include("vulkan/vulkan.hpp")
-	#include "VulkanCompat.hpp"
-#endif
-
 namespace brassica::graph {
 
-	ResourceDesc StorageBufferDesc(std::uint64_t byteSize);
+	// Forward-declared only, same reason as HistoryTargetIdOf's forward inversions elsewhere in
+	// this seam: the real definition lives in PhysicalResource.hpp (Vulkan-aware), resolved at
+	// link time -- this file itself stays Vulkan-free.
+	ResourceDesc StagedStorageBufferDesc(std::uint64_t byteSize);
 
 	// Forward-declared only: Node.hpp needs to hand back a pointer to a node's inner Graph
 	// (for recursive rendering, see Dot.hpp) without depending on Graph.hpp, which itself
@@ -229,36 +228,45 @@ namespace brassica::graph {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 
+	// One CPU-write primitive for both buffers and textures -- ctx.WriteSpan<Key> (Execution.hpp)
+	// dispatches on whatever ResourceServices::BeginHostWrite resolves Key to (a buffer or a
+	// texture; see PhysicalRegistry.hpp), so this type never needs to know which. Cadence is just
+	// everyFrame/dirty on Recipe::isActive: one-shot (dirty starts true, clears after the first
+	// write), write-on-change (SetData sets dirty again), and every-frame are the same Setup/
+	// Execute pair, not three separate mechanisms. domain is Transfer, not Host: a real write
+	// here goes through BeginHostWrite/EndHostWrite's Staged or Mapped path, either of which
+	// records/flushes correctly under Transfer -- Host is reserved for a node that bypasses this
+	// primitive and writes a mapped pointer directly outside any Write<K>/WriteSpan<K> call (see
+	// ResourceState.hpp's DeriveBufferState Host branch).
+	//
+	// No vk:: types anywhere here (unlike this file's old separate PredefinedTextureNode, which
+	// carried a vk::ImageLayout targetLayout) -- EndHostWrite's real Staged-texture path always
+	// transitions through whatever layout the barrier machinery already derived for this
+	// resource's next access, so nothing here needs to name or track a target layout itself.
 	template <ResourceRef Key, typename T = std::uint8_t>
-	struct PredefinedBufferNode {
+	struct HostWriteNode {
 		using Resources = Declares<Create<Key>>;
 
 		std::vector<T> data;
 		ResourceDesc   desc{};
-		bool           uploaded{false};
+		bool           everyFrame = false;
+		bool           dirty = true;
 
-		PredefinedBufferNode() = default;
+		HostWriteNode() = default;
 
-		explicit PredefinedBufferNode(std::span<const T> initialData, const ResourceDesc& customDesc = {}):
-			data(initialData.begin(), initialData.end()), desc(customDesc) {
-			if (desc.byteSize == 0) {
-				desc = StorageBufferDesc(data.size() * sizeof(T));
-			}
-		}
+		HostWriteNode(std::span<const T> initialData, const ResourceDesc& customDesc, bool writeEveryFrame = false):
+			data(initialData.begin(), initialData.end()), desc(customDesc), everyFrame(writeEveryFrame) {}
 
-		void SetData(std::span<const T> newData, const ResourceDesc& newDesc = {}) {
+		void SetData(std::span<const T> newData, const ResourceDesc& newDesc) {
 			data.assign(newData.begin(), newData.end());
 			desc = newDesc;
-			if (desc.byteSize == 0) {
-				desc = StorageBufferDesc(data.size() * sizeof(T));
-			}
-			uploaded = false;
+			dirty = true;
 		}
 
 		Recipe Setup(const FrameContext&) {
 			return Recipe{
-				.domain = ExecutionDomain::Host,
-				.isActive = !uploaded,
+				.domain = ExecutionDomain::Transfer,
+				.isActive = everyFrame || dirty,
 				.realizations = {ResourceRealization{
 					.key = IdOf<Key>(),
 					.access = AccessKind::Write,
@@ -267,17 +275,41 @@ namespace brassica::graph {
 			};
 		}
 
+		// No isActive/dirty guard needed here: Graph::Compile culls a node whose Recipe came back
+		// !isActive before scheduling, so Execute is provably only ever called when this frame's
+		// Setup already said there's something to write.
 		void Execute(NodeContext& ctx) {
-			if (uploaded)
-				return;
-			if (ctx.bindless) {
-				const_cast<BindlessIndexSource*>(ctx.bindless)
-					->UploadPredefinedBuffer(IdOf<Key>(), data.data(), data.size() * sizeof(T), desc);
-				uploaded = true;
-			}
+			ctx.WriteSpan<Key>(std::span<const T>(data));
+			dirty = false;
 		}
 
-		void Reset() { uploaded = false; }
+		void Reset() { dirty = true; }
+	};
+
+	template <ResourceRef Key, typename T>
+	struct NodeKindOfT<HostWriteNode<Key, T>> {
+		static constexpr NodeKind value = NodeKind::Import;
+	};
+
+	// Thin wrapper: infers a Staged storage-buffer desc from data.size() when the caller doesn't
+	// supply one, the convenience the bare HostWriteNode deliberately doesn't have (a byteSize of
+	// 0 is also a legitimate image desc's steady state, so that inference can't live there
+	// without risking silently overwriting a caller's real Image2D/3D desc).
+	template <ResourceRef Key, typename T = std::uint8_t>
+	struct PredefinedBufferNode: HostWriteNode<Key, T> {
+		using Base = HostWriteNode<Key, T>;
+
+		PredefinedBufferNode() = default;
+
+		explicit PredefinedBufferNode(std::span<const T> initialData, const ResourceDesc& customDesc = {}):
+			Base(
+				initialData,
+				customDesc.byteSize ? customDesc : StagedStorageBufferDesc(initialData.size() * sizeof(T))
+			) {}
+
+		void SetData(std::span<const T> newData, const ResourceDesc& newDesc = {}) {
+			Base::SetData(newData, newDesc.byteSize ? newDesc : StagedStorageBufferDesc(newData.size() * sizeof(T)));
+		}
 	};
 
 	template <ResourceRef Key, typename T>
@@ -285,72 +317,24 @@ namespace brassica::graph {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 
-#if __has_include("vulkan/vulkan.hpp")
+	// Thin wrapper, named for symmetry with PredefinedBufferNode above -- an image desc always
+	// needs real width/height from the caller, so there is no default-desc inference to add here;
+	// this exists purely to spell out "this HostWriteNode<Key, uint8_t> is pixel data" at the call
+	// site.
 	template <ResourceRef Key>
-	struct PredefinedTextureNode {
-		using Resources = Declares<Create<Key>>;
-
-		std::vector<std::uint8_t> pixels;
-		ResourceDesc              desc{};
-		vk::ImageLayout           targetLayout{vk::ImageLayout::eShaderReadOnlyOptimal};
-		bool                      uploaded{false};
+	struct PredefinedTextureNode: HostWriteNode<Key, std::uint8_t> {
+		using Base = HostWriteNode<Key, std::uint8_t>;
 
 		PredefinedTextureNode() = default;
 
-		PredefinedTextureNode(
-			std::span<const std::uint8_t> pixelData,
-			const ResourceDesc&           imageDesc,
-			vk::ImageLayout               layout = vk::ImageLayout::eShaderReadOnlyOptimal
-		):
-			pixels(pixelData.begin(), pixelData.end()), desc(imageDesc), targetLayout(layout) {}
-
-		void SetData(
-			std::span<const std::uint8_t> newPixels,
-			const ResourceDesc&           newDesc,
-			vk::ImageLayout               newLayout = vk::ImageLayout::eShaderReadOnlyOptimal
-		) {
-			pixels.assign(newPixels.begin(), newPixels.end());
-			desc = newDesc;
-			targetLayout = newLayout;
-			uploaded = false;
-		}
-
-		Recipe Setup(const FrameContext&) {
-			return Recipe{
-				.domain = ExecutionDomain::Host,
-				.isActive = !uploaded,
-				.realizations = {ResourceRealization{
-					.key = IdOf<Key>(),
-					.access = AccessKind::Write,
-					.desc = desc,
-				}}
-			};
-		}
-
-		void Execute(NodeContext& ctx) {
-			if (uploaded)
-				return;
-			if (ctx.bindless) {
-				const_cast<BindlessIndexSource*>(ctx.bindless)
-					->UploadPredefinedTexture(
-						IdOf<Key>(),
-						pixels.data(),
-						pixels.size(),
-						desc,
-						static_cast<std::uint32_t>(targetLayout)
-					);
-				uploaded = true;
-			}
-		}
-
-		void Reset() { uploaded = false; }
+		PredefinedTextureNode(std::span<const std::uint8_t> pixelData, const ResourceDesc& imageDesc):
+			Base(pixelData, imageDesc) {}
 	};
 
 	template <ResourceRef Key>
 	struct NodeKindOfT<PredefinedTextureNode<Key>> {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
-#endif
 
 	template <NodeLike T>
 	struct ExecuteOnce {
@@ -375,8 +359,8 @@ namespace brassica::graph {
 				return;
 			inner.Execute(ctx);
 
-			if (ctx.bindless) {
-				const_cast<BindlessIndexSource*>(ctx.bindless)->WaitIdle();
+			if (ctx.resources) {
+				ctx.resources->WaitIdle();
 			}
 			executed = true;
 		}

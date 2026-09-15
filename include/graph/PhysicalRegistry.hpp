@@ -29,7 +29,7 @@ namespace brassica::graph {
 	// stays alive until that reference drops, even if Reset() or a later Provision() call has
 	// since released the registry's own reference -- real shared ownership, not just a
 	// same-frame borrow.
-	class PhysicalResourceRegistry: public BindlessIndexSource {
+	class PhysicalResourceRegistry: public ResourceServices {
 	public:
 		PhysicalResourceRegistry(vk::Device device = {}, VmaAllocator allocator = nullptr, vk::Queue queue = {}):
 			m_device(device),
@@ -231,7 +231,7 @@ namespace brassica::graph {
 			return tex ? tex->GetSampledBindlessIndex() : 0;
 		}
 
-		// BindlessIndexSource: the lookup NodeContext::Index<K>() (Execution.hpp) calls through
+		// ResourceServices: the lookup NodeContext::Index<K>() (Execution.hpp) calls through
 		// to. Checks the AS registry first since an AS's ResourceId never resolves via
 		// GetTexture -- the two kinds are disjoint, so this is never ambiguous -- then falls
 		// back to the sampled-image index, same as GetBindlessIndex(id) above. Deliberately
@@ -245,29 +245,37 @@ namespace brassica::graph {
 			return GetBindlessIndex(id);
 		}
 
-		// BindlessIndexSource: the lookup NodeContext::StorageIndex<K>() calls through to.
+		// ResourceServices: the lookup NodeContext::StorageIndex<K>() calls through to.
 		// Unlike IndexOf, there's no AS/sampled fallback to check first -- a storage-image read
 		// is never expected to resolve to anything else, so this is just GetStorageBindlessIndex
 		// under the interface every node's Execute actually has access to (a NodeContext, not a
 		// raw registry pointer).
 		[[nodiscard]] std::uint32_t StorageIndexOf(ResourceId id) const override { return GetStorageBindlessIndex(id); }
 
-		void UploadPredefinedBuffer(
-			ResourceId          id,
-			const void*         data,
-			std::size_t         sizeBytes,
-			const ResourceDesc& desc
-		) override;
+		void WaitIdle() override;
 
-		void UploadPredefinedTexture(
+		// Not part of ResourceServices -- nothing calls these except Util.hpp's
+		// CreateAndRegisterStaticBuffer/Texture, a pre-frame-loop static-asset path that
+		// genuinely can't ride NodeContext::Write/WriteSpan (there is no frame, no NodeContext,
+		// no graph command buffer yet when it runs). Defined in Util.hpp for the same reason as
+		// BeginHostWrite/EndHostWrite below -- the real bodies need vk::Buffer(Image)Copy/VMA.
+		void UploadBufferImmediate(ResourceId id, const void* data, std::size_t sizeBytes, const ResourceDesc& desc);
+
+		void UploadTextureImmediate(
 			ResourceId          id,
 			const void*         pixelData,
 			std::size_t         sizeBytes,
 			const ResourceDesc& desc,
-			std::uint32_t       targetLayout
-		) override;
+			vk::ImageLayout     targetLayout
+		);
 
-		void WaitIdle() override;
+		// ResourceServices: NodeContext::Write<K>/WriteSpan<K> call through to these. Defined in
+		// Util.hpp, same as the three above -- the real bodies need vk::Buffer(Image)Copy/VMA,
+		// which would bloat this class if inlined here.
+		std::span<std::byte>
+		BeginHostWrite(ResourceId id, std::size_t sizeBytes, std::uint64_t frameIndex, bool insideRendering) override;
+
+		void EndHostWrite(ResourceId id, CommandBuffer cmd) override;
 
 		template <ResourceRef K>
 		[[nodiscard]] std::uint32_t GetBindlessIndex() const {
@@ -523,9 +531,71 @@ namespace brassica::graph {
 			m_storageArena.Reset();
 			m_accelStructArena.Reset();
 			m_fallbackTexture.reset();
+			for (auto& [id, ring] : m_stagingBuffers) {
+				for (auto& slot : ring.slots) {
+					if (slot.buffer) {
+						vmaDestroyBuffer(m_allocator, static_cast<VkBuffer>(slot.buffer), slot.allocation);
+					}
+				}
+			}
+			m_stagingBuffers.clear();
+			m_hostWriteFrame.clear();
+			m_pendingHostWrites.clear();
 		}
 
 	private:
+		// One CPU-visible staging slot for a Staged BeginHostWrite -- grows (destroy + recreate)
+		// on demand, never shrinks. Purely a copy *source*: nothing ever binds this into a
+		// descriptor, so unlike PhysicalBuffer's Mapped ring (PhysicalResource.hpp) or a replaced
+		// buffer in ProvisionBuffer, growing it needs no retirement delay -- unrelated code holds
+		// no handle to invalidate, and the only thing that ever read a prior allocation here (an
+		// already-recorded copy command from FRAME_OVERLAP frames ago) is guaranteed complete by
+		// DrawFrame's timeline-semaphore wait before this slot's index is reused.
+		struct StagingSlot {
+			vk::Buffer    buffer{};
+			VmaAllocation allocation{};
+			void*         mapped = nullptr;
+			std::size_t   capacity = 0;
+		};
+
+		struct StagingRing {
+			std::array<StagingSlot, brassica::FRAME_OVERLAP> slots{};
+		};
+
+		StagingSlot& AcquireStagingSlot(ResourceId id, std::size_t sizeBytes, std::uint64_t frameIndex) {
+			StagingRing& ring = m_stagingBuffers[id];
+			StagingSlot& slot = ring.slots[frameIndex % brassica::FRAME_OVERLAP];
+			if (slot.capacity >= sizeBytes) {
+				return slot;
+			}
+			if (slot.buffer) {
+				vmaDestroyBuffer(m_allocator, static_cast<VkBuffer>(slot.buffer), slot.allocation);
+				slot = StagingSlot{};
+			}
+
+			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = sizeBytes;
+			bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+			VmaAllocationCreateInfo allocInfo{};
+			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+			VkBuffer          rawBuffer = VK_NULL_HANDLE;
+			VmaAllocationInfo allocResult{};
+			if (vmaCreateBuffer(m_allocator, &bufferInfo, &allocInfo, &rawBuffer, &slot.allocation, &allocResult) !=
+			    VK_SUCCESS) {
+				throw std::runtime_error("Failed to allocate staging buffer via VMA!");
+			}
+			slot.buffer = rawBuffer;
+			slot.mapped = allocResult.pMappedData;
+			slot.capacity = sizeBytes;
+			return slot;
+		}
+
+		std::unordered_map<ResourceId, StagingRing>                           m_stagingBuffers;
+		std::unordered_map<ResourceId, std::uint64_t>                         m_hostWriteFrame;
+		std::unordered_map<ResourceId, std::pair<std::uint64_t, std::size_t>> m_pendingHostWrites;
+
 		// A monotonically-growing bindless-array index space with recycling. Index 0 is never
 		// handed out by Allocate() -- reserved universally (not just in the sampled array, which
 		// actually writes a real fallback texture there) purely so "index == 0" reliably means

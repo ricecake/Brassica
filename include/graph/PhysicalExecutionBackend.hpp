@@ -368,13 +368,14 @@ namespace brassica::graph {
 			// DeferredNode pattern), not through ctx. frameSet/globalSet are the two genuinely
 			// shared, backend-level handles every ported node binds: the always-bound per-frame
 			// UBO set (set 0) and the single bindless descriptor set (set 1). m_registry itself
-			// satisfies BindlessIndexSource, so ctx.Index<K>() already resolves real indices too.
+			// satisfies ResourceServices, so ctx.Index<K>()/Write<K>() already resolve/write
+			// through it too.
 			NodeContext nodeCtx{};
 			nodeCtx.cmd = cmd;
 			nodeCtx.width = ctx.width;
 			nodeCtx.height = ctx.height;
 			nodeCtx.frameIndex = ctx.frameIndex;
-			nodeCtx.bindless = &m_registry;
+			nodeCtx.resources = &m_registry;
 			nodeCtx.frameSet = static_cast<void*>(static_cast<VkDescriptorSet>(m_registry.GetFrameDescriptorSet()));
 			nodeCtx.frameSetLayout = static_cast<void*>(
 				static_cast<VkDescriptorSetLayout>(m_registry.GetFrameDescriptorSetLayout())
@@ -483,10 +484,12 @@ namespace brassica::graph {
 					}
 
 					bool activeRendering = DynamicRenderingWrapper::Begin(vkCmd, m_registry, recipe);
+					nodeCtx.insideRendering = activeRendering;
 					graph.ExecuteNode(nodeIndex, nodeCtx);
 					if (activeRendering) {
 						DynamicRenderingWrapper::End(vkCmd);
 					}
+					nodeCtx.insideRendering = false;
 
 					// Mark contents defined only now, after the node has actually recorded its
 					// commands -- this is what lets Begin (run before ExecuteNode, on the *next*

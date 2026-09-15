@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <vector>
 
@@ -75,27 +76,53 @@ namespace brassica::graph {
 		HostAccess    hostAccess = HostAccess::None;
 	};
 
-	// Opaque per-resource bindless-index lookup. Implemented by PhysicalResourceRegistry
-	// (PhysicalRegistry.hpp, Vulkan-aware) so that NodeContext::Index<K>()/StorageIndex<K>()
-	// below can live in this Vulkan-free seam without this file knowing PhysicalResourceRegistry,
-	// or Vulkan, exists -- the same inversion Resource/MemoryBarrier already use for barriers.
+	// Opaque per-resource bindless-index lookup *and* CPU-write entry point. Implemented by
+	// PhysicalResourceRegistry (PhysicalRegistry.hpp, Vulkan-aware) so that
+	// NodeContext::Index<K>()/StorageIndex<K>()/Write<K>()/WriteSpan<K>() below can live in this
+	// Vulkan-free seam without this file knowing PhysicalResourceRegistry, or Vulkan, exists --
+	// the same inversion Resource/MemoryBarrier already use for barriers. Named ResourceServices,
+	// not BindlessIndexSource (its name until this stage): WaitIdle already meant this interface
+	// was more than bindless-index lookups before BeginHostWrite/EndHostWrite below made that
+	// official. UploadPredefinedBuffer/UploadPredefinedTexture used to live here too -- removed
+	// once HostWriteNode<Key,T> (Node.hpp) and Write<K>/WriteSpan<K> gave every real caller a
+	// path onto the graph's own per-frame command buffer instead; the one caller that still
+	// needs to upload outside any frame (Util.hpp's CreateAndRegisterStaticBuffer/Texture, a
+	// pre-frame-loop static-asset path) calls PhysicalResourceRegistry's own
+	// UploadBufferImmediate/UploadTextureImmediate directly -- not through this interface, since
+	// nothing else needs them.
 	//
 	// Two lookups, not one: a texture with both eSampled and eStorage usage (a compute LUT
 	// written via imageStore and later sampled by a different node, e.g. the atmosphere LUTs)
 	// occupies a slot in both the sampled and storage bindless arenas at once -- IndexOf and
 	// StorageIndexOf are how a caller says which one it means, since one flat index can't name
 	// both (see PhysicalTexture::GetSampledBindlessIndex's comment, PhysicalResource.hpp).
-	struct BindlessIndexSource {
-		virtual ~BindlessIndexSource() = default;
+	struct ResourceServices {
+		virtual ~ResourceServices() = default;
 		virtual std::uint32_t IndexOf(ResourceId) const = 0;
 		virtual std::uint32_t StorageIndexOf(ResourceId) const = 0;
 
-		virtual void UploadPredefinedBuffer(ResourceId, const void*, std::size_t, const ResourceDesc&) {}
+		virtual void WaitIdle() {}
 
-		virtual void UploadPredefinedTexture(ResourceId, const void*, std::size_t, const ResourceDesc&, std::uint32_t) {
+		// Begins a CPU write into `id`'s current-frame slot -- valid only for a resource whose
+		// ResourceDesc::hostAccess is Staged or Mapped (HostAccess::None, the default, returns an
+		// empty span; there is nothing to write into). sizeBytes is the logical size the caller
+		// intends to write, must not exceed the resource's real per-slot capacity.
+		// insideRendering must be true exactly when called from within a dynamic-rendering scope
+		// (DynamicRenderingWrapper::Begin/End) -- a Staged write records a real copy command in
+		// EndHostWrite, which vkCmdCopyBuffer/vkCmdCopyBufferToImage can't do there; a Mapped
+		// write never touches the command buffer at all, so it's unaffected either way. Returns
+		// an empty span by default (matching every other virtual here, all no-ops until
+		// PhysicalResourceRegistry overrides them).
+		virtual std::span<std::byte>
+		BeginHostWrite(ResourceId, std::size_t /*sizeBytes*/, std::uint64_t /*frameIndex*/, bool /*insideRendering*/) {
+			return {};
 		}
 
-		virtual void WaitIdle() {}
+		// Finalizes the write BeginHostWrite began for the same id this frame: for a Staged
+		// resource, records the real copy into cmd (the graph's own command buffer for this
+		// frame); for a Mapped resource, flushes the written slice in case the underlying memory
+		// isn't coherent. No-op default.
+		virtual void EndHostWrite(ResourceId, CommandBuffer) {}
 	};
 
 	// Per-node execution state, passed to a node's Execute in place of a bare CommandBuffer.
@@ -124,16 +151,52 @@ namespace brassica::graph {
 		void* globalSet = nullptr;       // opaque VkDescriptorSet -- the bindless set
 		void* globalSetLayout = nullptr; // opaque VkDescriptorSetLayout for the same set
 
-		const BindlessIndexSource* bindless = nullptr;
+		// Non-const: Write<K>/WriteSpan<K> below call through it, and a const pointer here never
+		// bought anything real -- every prior caller that needed to mutate through it (Node.hpp's
+		// PredefinedBufferNode/PredefinedTextureNode/ExecuteOnce, ParticleSystemNode's descriptor
+		// refresh) const_cast'd it right back off again.
+		ResourceServices* resources = nullptr;
+
+		// True exactly while a dynamic-rendering scope is active for this node (set by
+		// PhysicalExecutionBackend::RunSchedule around DynamicRenderingWrapper::Begin/End) --
+		// what BeginHostWrite needs to reject an illegal Staged write from inside a render pass
+		// with a clear message instead of a cryptic validation error later.
+		bool insideRendering = false;
 
 		template <typename K>
 		[[nodiscard]] std::uint32_t Index() const {
-			return bindless ? bindless->IndexOf(IdOf<K>()) : 0u;
+			return resources ? resources->IndexOf(IdOf<K>()) : 0u;
 		}
 
 		template <typename K>
 		[[nodiscard]] std::uint32_t StorageIndex() const {
-			return bindless ? bindless->StorageIndexOf(IdOf<K>()) : 0u;
+			return resources ? resources->StorageIndexOf(IdOf<K>()) : 0u;
+		}
+
+		// Writes sizeBytes into K's current-frame slot via fn(std::span<std::byte>), then
+		// finalizes the write (a real copy command for Staged, a flush for Mapped). A no-op if
+		// K isn't host-writable (HostAccess::None) or resources is null -- fn is simply never
+		// called in that case, so it's safe to pass a lambda that assumes a full-sized span.
+		template <typename K>
+		void Write(std::size_t sizeBytes, auto&& fn) {
+			if (!resources) {
+				return;
+			}
+			std::span<std::byte> dst = resources->BeginHostWrite(IdOf<K>(), sizeBytes, frameIndex, insideRendering);
+			if (dst.empty()) {
+				return;
+			}
+			fn(dst);
+			resources->EndHostWrite(IdOf<K>(), cmd);
+		}
+
+		// memcpy convenience over Write<K> for the common "I already have the data in one
+		// contiguous span" case -- SetData-style callers, mostly.
+		template <typename K, typename T>
+		void WriteSpan(std::span<const T> data) {
+			Write<K>(data.size_bytes(), [&](std::span<std::byte> dst) {
+				std::memcpy(dst.data(), data.data(), data.size_bytes());
+			});
 		}
 	};
 

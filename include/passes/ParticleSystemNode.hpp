@@ -205,8 +205,8 @@ namespace brassica {
 			// Refreshes the particle descriptor set once per frame -- see
 			// detail::RefreshParticleDescriptorSet's comment for why this runs here (Reset,
 			// Phase::Early) rather than in ParticleSystemNode::Execute.
-			if (ctx.bindless) {
-				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.bindless)) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
 				}
 			}
@@ -543,8 +543,8 @@ namespace brassica {
 			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 
 			vk::Buffer indirectBuf = indirectBuffer;
-			if (!indirectBuf && ctx.bindless) {
-				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.bindless)) {
+			if (!indirectBuf && ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					if (auto physBuf = registry->GetBuffer<ParticleIndirectBuffer>()) {
 						indirectBuf = physBuf->GetBuffer();
 					}

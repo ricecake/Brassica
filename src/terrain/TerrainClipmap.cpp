@@ -541,8 +541,7 @@ namespace brassica {
 			info.centerWorldPos = glm::vec2(0.0f);
 			info.gridOffset = glm::ivec2(0);
 		}
-		TerrainRegionData region =
-			GenerateTerrainRegionData(info, 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
+		TerrainRegionData region = GenerateTerrainRegionData(info, 0, 0, TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 0, 0);
 		return TerrainLevelData{
 			.heightMap = std::move(region.heightMap),
 			.minMaxMap = std::move(region.minMaxMap),

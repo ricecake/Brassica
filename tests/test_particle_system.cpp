@@ -168,13 +168,20 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 	}
 }
 
-// DIAGNOSTIC -- investigating a live report of "descriptor set 2 binding N used in
-// dispatch/draw but never updated via vkUpdateDescriptorSets", i.e. ParticleSystemNode's
-// UpdateDescriptorSet guard (!pBuf || !pTypeBuf || !pAliveBuf || !pIndirectBuf) is returning
-// early on every frame. This drives the 3 compute sub-nodes through a real Provision() (no
-// ParticleRenderNode/mesh shaders, so it runs even without VK_EXT_mesh_shader) and checks which
-// of the 4 buffers, if any, comes back null.
-TEST_CASE("DIAGNOSTIC: particle buffers are all provisioned after one real frame") {
+// Regression test for a real bug: ParticleSystemNode::Execute used to refresh the particle
+// descriptor set itself, but ParticleSystemNode is a Subgraph-kind node, and
+// PhysicalExecutionBackend::RunSchedule recurses straight into a Subgraph's inner-graph nodes on
+// the real backend path -- it never calls the Subgraph node's own Execute (see RunSchedule's own
+// comment, "recursing here... is what gives its own inner nodes real barriers", right where it
+// skips ExecuteNode for a Subgraph). So the refresh call was dead code on every real frame, and
+// descriptor set 2 (the particle buffers) was allocated but never written --
+// VUID-vkCmdDispatch-None-08114 on every dispatch that statically used it. Fixed by moving the
+// refresh into ParticleResetNode::Execute (Phase::Early, so it runs first every frame, and its
+// Execute does get called either way this graph is driven). This test drives the 3 compute
+// sub-nodes directly through a real Provision()+Execute() (no ParticleRenderNode/mesh shaders, so
+// it runs even without VK_EXT_mesh_shader) and checks both that the 4 buffers provision correctly
+// and that dispatching against the resulting descriptor set produces no validation errors.
+TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any dispatch uses it") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
@@ -395,11 +402,6 @@ TEST_CASE("DIAGNOSTIC: particle buffers are all provisioned after one real frame
 		auto pAliveBuf = registry.GetBuffer<ParticleAliveBuffer>();
 		auto pIndirectBuf = registry.GetBuffer<ParticleIndirectBuffer>();
 
-		MESSAGE("ParticleBuffer: ", (pBuf ? "OK" : "NULL"));
-		MESSAGE("ParticleTypeBuffer: ", (pTypeBuf ? "OK" : "NULL"));
-		MESSAGE("ParticleAliveBuffer: ", (pAliveBuf ? "OK" : "NULL"));
-		MESSAGE("ParticleIndirectBuffer: ", (pIndirectBuf ? "OK" : "NULL"));
-
 		CHECK(pBuf != nullptr);
 		CHECK(pTypeBuf != nullptr);
 		CHECK(pAliveBuf != nullptr);
@@ -422,9 +424,20 @@ TEST_CASE("DIAGNOSTIC: particle buffers are all provisioned after one real frame
 		vkDevice.destroyDescriptorSetLayout(frameLayout);
 		vkDevice.destroyCommandPool(pool);
 	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
 }
 
-TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload and block until complete") {
+// Stage 4 (see .claude/plans/ancient-booping-magpie.md): PredefinedBufferNode/PredefinedTextureNode
+// are now thin HostWriteNode<Key,T> wrappers (Node.hpp) that write through ctx.WriteSpan<Key> --
+// a real Provision()+backend.Execute() cycle is required now (BeginHostWrite looks up an
+// already-provisioned resource, unlike the old UploadPredefinedBuffer/Texture, which created one
+// on demand), so this drives both nodes through the real seam instead of calling Setup/Execute by
+// hand. Also covers the plan's explicit re-upload case: SetData with a *larger* size exercises
+// ProvisionBuffer's grow-only capacity path (Stage 2) end-to-end.
+TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the real seam, and a "
+		  "larger re-upload grows the buffer") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
@@ -432,56 +445,98 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload and block until
 	}
 
 	vk::Device vkDevice = device.GetDevice();
-	VmaAllocator allocator = device.GetAllocator();
-	vk::Queue queue = device.GetQueue();
 
-	graph::PhysicalResourceRegistry registry(vkDevice, allocator, queue);
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				device.GetQueueFamily(),
+			}
+		);
+		vk::CommandBuffer vkCmd = vkDevice
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
 
-	struct TestBufKey {};
-	struct TestTexKey {};
+		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		graph::PhysicalExecutionBackend backend(registry);
 
-	std::vector<uint32_t> testData = {1, 2, 3, 4, 5, 6, 7, 8};
-	graph::PredefinedBufferNode<TestBufKey, uint32_t> bufNode(testData);
+		struct TestBufKey {};
+		struct TestTexKey {};
 
-	std::vector<uint8_t> pixelData = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255};
-	graph::ResourceDesc texDesc{
-		.kind = graph::ResourceDesc::Kind::Image2D,
-		.width = 2,
-		.height = 2,
-		.formatCode = static_cast<uint32_t>(vk::Format::eR8G8B8A8Unorm),
-		.usageMask = static_cast<uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
-	};
-	graph::PredefinedTextureNode<TestTexKey> texNode(pixelData, texDesc);
+		std::vector<uint32_t> testData = {1, 2, 3, 4, 5, 6, 7, 8};
+		graph::PredefinedBufferNode<TestBufKey, uint32_t> bufNode(testData);
 
-	graph::NodeContext nctx{};
-	nctx.bindless = &registry;
+		std::vector<uint8_t> pixelData = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255};
+		graph::ResourceDesc  texDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = 2,
+			.height = 2,
+			.formatCode = static_cast<uint32_t>(vk::Format::eR8G8B8A8Unorm),
+			.usageMask = static_cast<uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
+			.hostAccess = graph::HostAccess::Staged,
+		};
+		graph::PredefinedTextureNode<TestTexKey> texNode(pixelData, texDesc);
 
-	graph::FrameContext fctx{};
+		auto runFrame = [&](std::uint64_t frameIndex) {
+			graph::Graph g;
+			g.RegisterRef(bufNode);
+			g.RegisterRef(texNode);
 
-	CHECK(bufNode.Setup(fctx).isActive == true);
-	CHECK(texNode.Setup(fctx).isActive == true);
+			graph::FrameContext ctx{.frameIndex = frameIndex};
 
-	bufNode.Execute(nctx);
-	texNode.Execute(nctx);
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			graph::CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(g, ctx, cmd, false));
+			vkCmd.end();
 
-	CHECK(bufNode.uploaded == true);
-	CHECK(texNode.uploaded == true);
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			device.GetQueue().submit(submitInfo);
+			device.GetQueue().waitIdle();
+		};
 
-	CHECK(bufNode.Setup(fctx).isActive == false);
-	CHECK(texNode.Setup(fctx).isActive == false);
+		runFrame(0);
 
-	auto physBuf = registry.GetBuffer<TestBufKey>();
-	REQUIRE(physBuf != nullptr);
-	CHECK(physBuf->HasDefinedContents() == true);
+		CHECK(bufNode.dirty == false);
+		CHECK(texNode.dirty == false);
 
-	auto physTex = registry.GetTexture<TestTexKey>();
-	REQUIRE(physTex != nullptr);
-	CHECK(physTex->HasDefinedContents() == true);
+		auto physBuf = registry.GetBuffer<TestBufKey>();
+		REQUIRE(physBuf != nullptr);
+		CHECK(physBuf->HasDefinedContents() == true);
 
-	// TestBufKey's default StorageBufferDesc is exactly the shape ParticleSystemNode's real
+		auto physTex = registry.GetTexture<TestTexKey>();
+		REQUIRE(physTex != nullptr);
+		CHECK(physTex->HasDefinedContents() == true);
+
+		vk::Buffer stableBufHandle = physBuf->GetBuffer();
+
+		// A second frame with no SetData call: dirty is already false, so the node goes inactive
+		// and gets culled from the schedule -- the buffer must not be touched again.
+		runFrame(1);
+		CHECK(registry.GetBuffer<TestBufKey>()->GetBuffer() == stableBufHandle);
+
+		// Re-upload with a *larger* size -- exercises ProvisionBuffer's grow-only capacity path
+		// (Stage 2) end-to-end, not just PhysicalBuffer's own unit-level Mapped-ring test.
+		std::vector<uint32_t> biggerData(16, 42u);
+		bufNode.SetData(biggerData);
+		CHECK(bufNode.dirty == true);
+		runFrame(2);
+		CHECK(bufNode.dirty == false);
+
+		auto grownBuf = registry.GetBuffer<TestBufKey>();
+		REQUIRE(grownBuf != nullptr);
+		CHECK(grownBuf->GetBuffer() != stableBufHandle); // outgrew capacity -- real reallocation
+		CHECK(grownBuf->GetDesc().byteSize == biggerData.size() * sizeof(uint32_t));
+
+		vkDevice.destroyCommandPool(pool);
+	}
+
+	// TestBufKey's default StagedStorageBufferDesc is exactly the shape ParticleSystemNode's real
 	// typeBufferNode uses (ParticleSystemNode.hpp) -- until StorageBufferDesc gained eTransferDst
-	// (PhysicalResource.hpp), bufNode.Execute's cmd.copyBuffer above was a live
-	// VUID-vkCmdCopyBuffer-dstBuffer-00120 that nothing in this file was checking for.
+	// (PhysicalResource.hpp, Stage 1), a real copy into a buffer shaped like this was a live
+	// VUID-vkCmdCopyBuffer-dstBuffer-00120.
 	CHECK(device.GetValidationErrorCount() == 0);
 	CHECK(device.GetValidationWarningCount() == 0);
 }
@@ -521,7 +576,7 @@ TEST_CASE("ExecuteOnce wrapper executes inner node once and skips subsequent run
 	graph::ExecuteOnce<MockComputeNode> onceNode;
 
 	graph::NodeContext nctx{};
-	nctx.bindless = &registry;
+	nctx.resources = &registry;
 	graph::FrameContext fctx{};
 
 	CHECK(onceNode.executed == false);
