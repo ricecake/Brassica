@@ -366,30 +366,30 @@ namespace brassica {
 			terrainClipmap.GetImage(),
 			terrainClipmap.GetImageView(),
 			TerrainClipmapDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eShaderReadOnlyOptimal,
-			/*hasDefinedContents=*/true
+			vk::ImageLayout::eUndefined,
+			/*hasDefinedContents=*/false
 		);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 		physicalRegistry.RegisterImportedTexture<TerrainMinMaxTexture>(
 			terrainClipmap.GetMinMaxImage(),
 			terrainClipmap.GetMinMaxImageView(),
 			TerrainMinMaxDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eShaderReadOnlyOptimal,
-			/*hasDefinedContents=*/true
+			vk::ImageLayout::eUndefined,
+			/*hasDefinedContents=*/false
 		);
 		physicalRegistry.RegisterImportedTexture<TerrainBiomeTexture>(
 			terrainClipmap.GetBiomeImage(),
 			terrainClipmap.GetBiomeImageView(),
 			TerrainBiomeDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eShaderReadOnlyOptimal,
-			/*hasDefinedContents=*/true
+			vk::ImageLayout::eUndefined,
+			/*hasDefinedContents=*/false
 		);
 		physicalRegistry.RegisterImportedTexture<TerrainTileVisibilityTexture>(
 			terrainClipmap.GetVisibilityImage(),
 			terrainClipmap.GetVisibilityImageView(),
 			TerrainTileVisibilityDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eShaderReadOnlyOptimal,
-			/*hasDefinedContents=*/true
+			vk::ImageLayout::eUndefined,
+			/*hasDefinedContents=*/false
 		);
 
 		taskScheduler.Initialize();
