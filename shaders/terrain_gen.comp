@@ -11,6 +11,8 @@ layout(push_constant) uniform PushConstants {
 	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim (1088)
 	uvec4 lodOffsets0_3;        // packed toroidal gridOffset for LOD 0-3
 	uvec4 lodOffsets4_7;        // packed toroidal gridOffset for LOD 4-7
+	uvec4 lodDeltas0_3;         // packed toroidal delta for LOD 0-3
+	uvec4 lodDeltas4_7;         // packed toroidal delta for LOD 4-7
 	uint  clipmapStorageIdx;    // storage image index for TerrainClipmapTexture
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
@@ -88,16 +90,36 @@ void main() {
 		return;
 	}
 
+	uvec4 deltas = (lod < 4u) ? push.lodDeltas0_3 : push.lodDeltas4_7;
+	uint packedDelta = deltas[lod % 4u];
+	int deltaX = int(packedDelta & 0xFFFFu);
+	if (deltaX >= 0x8000) deltaX -= 0x10000;
+	int deltaZ = int((packedDelta >> 16u) & 0xFFFFu);
+	if (deltaZ >= 0x8000) deltaZ -= 0x10000;
+
+	if (deltaX == 0 && deltaZ == 0) {
+		return;
+	}
+
 	uvec4 offsets = (lod < 4u) ? push.lodOffsets0_3 : push.lodOffsets4_7;
 	uint packedOffset = offsets[lod % 4u];
 	ivec2 gridOffset = ivec2(int(packedOffset & 0xFFFFu), int((packedOffset >> 16u) & 0xFFFFu));
 
-	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
-	float texelSize = baseTexelSize * pow(2.0, float(lod));
-
 	ivec2 texelIndex = ivec2(globalId.xy);
 	int colIdx = (texelIndex.x - gridOffset.x + int(dim)) % int(dim);
 	int rowIdx = (texelIndex.y - gridOffset.y + int(dim)) % int(dim);
+
+	int dimInt = int(dim);
+	if (abs(deltaX) < dimInt && abs(deltaZ) < dimInt) {
+		bool dirtyX = (deltaX > 0 && colIdx >= dimInt - deltaX) || (deltaX < 0 && colIdx < -deltaX);
+		bool dirtyZ = (deltaZ > 0 && rowIdx >= dimInt - deltaZ) || (deltaZ < 0 && rowIdx < -deltaZ);
+		if (!dirtyX && !dirtyZ) {
+			return;
+		}
+	}
+
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+	float texelSize = baseTexelSize * pow(2.0, float(lod));
 
 	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;

@@ -257,6 +257,7 @@ namespace brassica {
 										   ) *
 				levelInfos[i].texelSize;
 			levelInfos[i].gridOffset = glm::ivec2(0);
+			levelInfos[i].delta = glm::ivec2(TERRAIN_MAP_DIM, TERRAIN_MAP_DIM);
 		}
 
 		CreateTextureArrays();
@@ -274,9 +275,12 @@ namespace brassica {
 			int deltaX = static_cast<int>(std::round(diff.x / texelSize));
 			int deltaZ = static_cast<int>(std::round(diff.y / texelSize));
 
-			if (deltaX == 0 && deltaZ == 0)
+			if (deltaX == 0 && deltaZ == 0) {
+				info.delta = glm::ivec2(0, 0);
 				continue;
+			}
 
+			info.delta = glm::ivec2(deltaX, deltaZ);
 			info.centerWorldPos = newCenter;
 			info.gridOffset.x = (info.gridOffset.x + deltaX) % static_cast<int>(TERRAIN_MAP_DIM);
 			if (info.gridOffset.x < 0)

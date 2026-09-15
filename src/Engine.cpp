@@ -902,15 +902,25 @@ namespace brassica {
 
 		glm::uvec4 offsets0_3{0u};
 		glm::uvec4 offsets4_7{0u};
+		glm::uvec4 deltas0_3{0u};
+		glm::uvec4 deltas4_7{0u};
+		bool       terrainHasUpdate = false;
 
 		for (uint32_t i = 0; i < terrainClipmap.GetNumLODs(); ++i) {
 			const auto& info = terrainClipmap.GetLevelInfo(i);
-			uint32_t    packed = (static_cast<uint32_t>(info.gridOffset.x) & 0xFFFFu) |
+			if (info.delta.x != 0 || info.delta.y != 0) {
+				terrainHasUpdate = true;
+			}
+			uint32_t packedOffset = (static_cast<uint32_t>(info.gridOffset.x) & 0xFFFFu) |
 				((static_cast<uint32_t>(info.gridOffset.y) & 0xFFFFu) << 16u);
+			uint32_t packedDelta = (static_cast<uint32_t>(info.delta.x) & 0xFFFFu) |
+				((static_cast<uint32_t>(info.delta.y) & 0xFFFFu) << 16u);
 			if (i < 4) {
-				offsets0_3[i] = packed;
+				offsets0_3[i] = packedOffset;
+				deltas0_3[i] = packedDelta;
 			} else if (i < 8) {
-				offsets4_7[i - 4] = packed;
+				offsets4_7[i - 4] = packedOffset;
+				deltas4_7[i - 4] = packedDelta;
 			}
 		}
 		terrainPush.lodOffsets0_3 = offsets0_3;
@@ -927,9 +937,13 @@ namespace brassica {
 		// skipped, so Engine builds exactly one NodeFrameParams and hands it to every registered
 		// node uniformly, the same shape as InitAll/DestroyAll/RegisterAllInto.
 		render::NodeFrameParams frameParams{
+			.cameraPosition = camera.position,
 			.terrainGridParams = terrainPush.gridParams,
 			.terrainLodOffsets0_3 = terrainPush.lodOffsets0_3,
 			.terrainLodOffsets4_7 = terrainPush.lodOffsets4_7,
+			.terrainLodDeltas0_3 = deltas0_3,
+			.terrainLodDeltas4_7 = deltas4_7,
+			.terrainHasUpdate = terrainHasUpdate,
 			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
 			.waterLevel = 0.0f,
 		};
