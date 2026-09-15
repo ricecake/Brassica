@@ -51,7 +51,6 @@ namespace brassica {
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Create>,
-			graph::Create<TerrainTLAS>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
@@ -143,18 +142,6 @@ namespace brassica {
 					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			// Declared unconditionally every frame, whether or not BuildOrUpdate actually
-			// rebuilt this frame (it self-throttles by camera movement and Engine calls it
-			// unconditionally before this Setup runs) -- simpler than threading a "did it
-			// actually rebuild" flag through just to skip an otherwise-harmless redundant
-			// barrier.
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainTLAS>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::AccelerationStructureDesc(),
 				}
 			);
 			return r;

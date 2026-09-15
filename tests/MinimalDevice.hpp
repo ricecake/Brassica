@@ -8,22 +8,6 @@
 #include "vk_mem_alloc.h"
 #include "VkBootstrap.h"
 
-// A minimal Vulkan 1.3 core bootstrap for tests that need a *real* device but not the full
-// production Engine's feature set. Engine::InitVulkan (src/Engine.cpp) hard-requires
-// VK_EXT_mesh_shader, VK_KHR_ray_query, VK_KHR_acceleration_structure, and
-// VK_KHR_fragment_shading_rate -- real TerrainPass/DeferredPass dependencies -- and MoltenVK
-// 1.4.2 implements none of them (confirmed directly against a real M1 Pro via `vulkaninfo`), so
-// every test that bootstraps through Engine can only ever take the skip path on a Mac.
-//
-// Tests that only exercise the graph/physical layer with synthetic nodes (no mesh shaders, no
-// ray query, no acceleration structures -- see test_physical_backend.cpp's PassA/PassB) don't
-// need any of that. This gives them a real device wherever core Vulkan 1.3 (dynamic rendering +
-// synchronization2) is available, MoltenVK included -- real barrier dispatch, real
-// validation-layer coverage, on this machine, today.
-//
-// No surface, no swapchain: these tests render into offscreen images only, so there is nothing
-// for a swapchain to attach to. vkb::PhysicalDeviceSelector normally expects a surface;
-// defer_surface_initialization() is vk-bootstrap's documented way to opt out entirely.
 namespace brassica::testing {
 
 	class MinimalDevice {
@@ -48,15 +32,17 @@ namespace brassica::testing {
 			}
 			m_instance = m_vkbInstance.instance;
 
+			VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{};
+			meshFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+			meshFeatures.meshShader = VK_TRUE;
+			meshFeatures.taskShader = VK_TRUE;
+
 			VkPhysicalDeviceVulkan13Features features13{};
 			features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 			features13.dynamicRendering = VK_TRUE;
 			features13.synchronization2 = VK_TRUE;
+			features13.pNext = &meshFeatures;
 
-			// Bindless set 0 (PhysicalRegistry's bindless index machinery, Engine::InitGlobalDescriptors)
-			// -- confirmed present on this Mac's MoltenVK 1.4.2 via vulkaninfo before relying on it
-			// here, unlike mesh shader/ray query/AS/VRS, which MoltenVK genuinely doesn't implement
-			// (see this header's class comment). Mirrors the same features Engine.cpp requests.
 			VkPhysicalDeviceVulkan12Features features12{};
 			features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 			features12.descriptorIndexing = VK_TRUE;
@@ -68,10 +54,15 @@ namespace brassica::testing {
 			features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 			features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 
+			VkPhysicalDeviceFeatures features1{};
+			features1.shaderInt64 = VK_TRUE;
+
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
 			selector.set_minimum_version(1, 3)
+				.set_required_features(features1)
 				.set_required_features_13(features13)
 				.set_required_features_12(features12)
+				.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
 				.defer_surface_initialization();
 
 			auto physRes = selector.select();
