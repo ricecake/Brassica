@@ -7,6 +7,7 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -36,16 +37,18 @@ namespace brassica {
 			graph::Modify<TerrainTileVisibilityTexture>,
 			graph::Modify<TerrainTLAS>>;
 
-		render::PipelineLibrary*      pipelineLibrary = nullptr;
-		ComputeShader                 genShader;
-		ComputeShader                 aabbShader;
-		TerrainAccelerationStructure* terrainAS = nullptr;
-		TerrainGenPushConstants       push{};
-		glm::vec3                     cameraPos{0.0f};
+		render::PipelineLibrary*         pipelineLibrary = nullptr;
+		graph::PhysicalResourceRegistry* physicalRegistry = nullptr;
+		ComputeShader                    genShader;
+		ComputeShader                    aabbShader;
+		TerrainAccelerationStructure*    terrainAS = nullptr;
+		TerrainGenPushConstants          push{};
+		glm::vec3                        cameraPos{0.0f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			terrainAS = services.terrainAS;
+			physicalRegistry = services.physicalRegistry;
 			genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp");
 			aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp");
 			if (services.shaderWatcher) {
@@ -76,35 +79,35 @@ namespace brassica {
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainClipmapTexture>(),
-					.access = graph::AccessKind::Write,
+					.access = graph::AccessKind::ReadWrite,
 					.desc = TerrainClipmapDesc(push.gridParams.x),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainMinMaxTexture>(),
-					.access = graph::AccessKind::Write,
+					.access = graph::AccessKind::ReadWrite,
 					.desc = TerrainMinMaxDesc(push.gridParams.x),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainBiomeTexture>(),
-					.access = graph::AccessKind::Write,
+					.access = graph::AccessKind::ReadWrite,
 					.desc = TerrainBiomeDesc(push.gridParams.x),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainTileVisibilityTexture>(),
-					.access = graph::AccessKind::Write,
+					.access = graph::AccessKind::ReadWrite,
 					.desc = TerrainTileVisibilityDesc(push.gridParams.x),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainTLAS>(),
-					.access = graph::AccessKind::Write,
+					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::AccelerationStructureDesc(),
 				}
 			);
@@ -164,7 +167,7 @@ namespace brassica {
 				terrainAS->BuildOrUpdate(
 					vkCmd,
 					cameraPos,
-					push.gridParams.w > 0 ? push.gridParams.w : 0.5f,
+					0.5f,
 					push.gridParams.x,
 					pipelineLibrary,
 					&aabbShader,
@@ -176,6 +179,9 @@ namespace brassica {
 					push.lodOffsets0_3,
 					push.lodOffsets4_7
 				);
+				if (physicalRegistry && terrainAS->GetTLAS()) {
+					physicalRegistry->RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS->GetTLAS());
+				}
 			}
 		}
 	};

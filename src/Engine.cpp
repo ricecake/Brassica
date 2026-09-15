@@ -345,6 +345,7 @@ namespace brassica {
 			.shaderWatcher = &shaderWatcher,
 			.terrainAS = &terrainAS,
 			.dispatchLoader = &terrainAS.GetDls(),
+			.physicalRegistry = &physicalRegistry,
 			.swapchainFormat = GetSwapchainFormat(),
 		};
 		// Concrete evidence the CRTP registrar (render::NodeRegistrar<T>, include/render/

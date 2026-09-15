@@ -14,6 +14,7 @@
 namespace brassica {
 	class ShaderWatcher;
 	class TerrainAccelerationStructure;
+	namespace graph { class PhysicalResourceRegistry; }
 } // namespace brassica
 
 namespace brassica::render {
@@ -26,12 +27,13 @@ namespace brassica::render {
 	// into one, which is what lets EngineNodeRegistry drive every registered node through the
 	// same call instead of Engine hand-writing one call per node type.
 	struct NodeServices {
-		vk::Device                    device;
-		PipelineLibrary*              pipelineLibrary = nullptr;
-		ShaderWatcher*                shaderWatcher = nullptr;
-		TerrainAccelerationStructure* terrainAS = nullptr;
-		const DispatchLoaderDynamic*  dispatchLoader = nullptr;
-		vk::Format                    swapchainFormat = vk::Format::eUndefined;
+		vk::Device                              device;
+		PipelineLibrary*                        pipelineLibrary = nullptr;
+		ShaderWatcher*                          shaderWatcher = nullptr;
+		TerrainAccelerationStructure*           terrainAS = nullptr;
+		const DispatchLoaderDynamic*            dispatchLoader = nullptr;
+		graph::PhysicalResourceRegistry*        physicalRegistry = nullptr;
+		vk::Format                              swapchainFormat = vk::Format::eUndefined;
 	};
 
 	// This frame's data for whichever nodes need it -- unlike NodeServices (Init-time, mostly

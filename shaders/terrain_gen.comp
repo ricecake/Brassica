@@ -3,6 +3,8 @@
 
 #include "bindless.glsl"
 
+layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
+
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
@@ -123,16 +125,8 @@ void main() {
 
 	ivec3 storeCoord = ivec3(globalId.xy, lod);
 
-	if (push.clipmapStorageIdx != 0u) {
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
-	}
-	if (push.minMaxStorageIdx != 0u) {
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(minH, maxH, minH, maxH));
-	}
-	if (push.biomeStorageIdx != 0u) {
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(b, 0.0, 1.0), variance, 1.0, m));
-	}
-	if (push.visibilityStorageIdx != 0u) {
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
-	}
+	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
+	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(minH, maxH, minH, maxH));
+	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(b, 0.0, 1.0), variance, 1.0, m));
+	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
 }

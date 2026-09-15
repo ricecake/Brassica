@@ -14,5 +14,6 @@
 #include "passes/DeferredNode.hpp"
 #include "passes/GradientNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
+#include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
 #include "passes/WaterNode.hpp"

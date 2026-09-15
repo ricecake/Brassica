@@ -11,9 +11,11 @@
 namespace brassica {
 
 	struct TerrainAABBPushConstants {
-		glm::uvec4 gridParams;
-		glm::uvec4 lodOffsets0_3;
-		glm::uvec4 lodOffsets4_7;
+		std::uint64_t aabbBufferAddr;
+		std::uint64_t padding{0};
+		glm::uvec4    gridParams;
+		glm::uvec4    lodOffsets0_3;
+		glm::uvec4    lodOffsets4_7;
 	};
 
 	void TerrainAccelerationStructure::DestroyAccelerationStructures() {
@@ -73,10 +75,11 @@ namespace brassica {
 		}
 		lastASCameraPos = cameraPos;
 
-		DestroyAccelerationStructures();
-
 		auto createBuffer =
 			[this](vk::DeviceSize size, vk::BufferUsageFlags usage, BufferResource& res, bool hostMapped = false) {
+				if (res.buffer != VK_NULL_HANDLE) {
+					return static_cast<void*>(nullptr);
+				}
 				VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 				bufInfo.size = size;
 				bufInfo.usage = static_cast<VkBufferUsageFlags>(usage | vk::BufferUsageFlagBits::eShaderDeviceAddress);
@@ -102,7 +105,7 @@ namespace brassica {
 			};
 
 		uint32_t maxAABBs = numLODs * 16 * 16;
-		vk::DeviceSize aabbBufferSize = sizeof(uint32_t) + sizeof(VkAabbPositionsKHR) * maxAABBs;
+		vk::DeviceSize aabbBufferSize = sizeof(std::uint64_t) + sizeof(VkAabbPositionsKHR) * maxAABBs;
 
 		createBuffer(
 			aabbBufferSize,
@@ -111,7 +114,116 @@ namespace brassica {
 			false
 		);
 
-		cmd.fillBuffer(aabbBuffer.buffer, 0, sizeof(uint32_t), 0);
+		// Build persistent BLAS and TLAS handles if not created yet
+		if (!blas) {
+			vk::AccelerationStructureGeometryAabbsDataKHR aabbGeomData{};
+			aabbGeomData.setData(aabbBuffer.deviceAddress + sizeof(std::uint64_t));
+			aabbGeomData.setStride(sizeof(VkAabbPositionsKHR));
+
+			vk::AccelerationStructureGeometryDataKHR geomData{};
+			geomData.setAabbs(aabbGeomData);
+
+			vk::AccelerationStructureGeometryKHR geometry{};
+			geometry.setGeometryType(vk::GeometryTypeKHR::eAabbs);
+			geometry.setGeometry(geomData);
+			geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+
+			vk::AccelerationStructureBuildGeometryInfoKHR blasBuildInfo{};
+			blasBuildInfo.setType(vk::AccelerationStructureTypeKHR::eBottomLevel);
+			blasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
+			blasBuildInfo.setGeometries(geometry);
+
+			uint32_t primitiveCount = maxAABBs;
+			vk::AccelerationStructureBuildSizesInfoKHR blasSizeInfo{};
+			device.getAccelerationStructureBuildSizesKHR(
+				vk::AccelerationStructureBuildTypeKHR::eDevice,
+				&blasBuildInfo,
+				&primitiveCount,
+				&blasSizeInfo,
+				dls
+			);
+
+			createBuffer(
+				blasSizeInfo.accelerationStructureSize,
+				vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR,
+				blasBuffer,
+				false
+			);
+
+			vk::AccelerationStructureCreateInfoKHR blasCreateInfo{};
+			blasCreateInfo.setBuffer(blasBuffer.buffer);
+			blasCreateInfo.setSize(blasSizeInfo.accelerationStructureSize);
+			blasCreateInfo.setType(vk::AccelerationStructureTypeKHR::eBottomLevel);
+			blas = device.createAccelerationStructureKHR(blasCreateInfo, nullptr, dls);
+
+			vk::AccelerationStructureDeviceAddressInfoKHR blasAddrInfo{};
+			blasAddrInfo.setAccelerationStructure(blas);
+			vk::DeviceAddress blasAddress = device.getAccelerationStructureAddressKHR(blasAddrInfo, dls);
+
+			VkAccelerationStructureInstanceKHR instanceData{};
+			instanceData.transform.matrix[0][0] = 1.0f;
+			instanceData.transform.matrix[1][1] = 1.0f;
+			instanceData.transform.matrix[2][2] = 1.0f;
+			instanceData.instanceCustomIndex = 0;
+			instanceData.mask = 0xFF;
+			instanceData.instanceShaderBindingTableRecordOffset = 0;
+			instanceData.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+			instanceData.accelerationStructureReference = blasAddress;
+
+			void* instMapped = createBuffer(
+				sizeof(VkAccelerationStructureInstanceKHR),
+				vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+				instanceBuffer,
+				true
+			);
+			if (instMapped) {
+				std::memcpy(instMapped, &instanceData, sizeof(VkAccelerationStructureInstanceKHR));
+			}
+
+			vk::AccelerationStructureGeometryInstancesDataKHR tlasInstancesData{};
+			tlasInstancesData.setArrayOfPointers(VK_FALSE);
+			tlasInstancesData.setData(instanceBuffer.deviceAddress);
+
+			vk::AccelerationStructureGeometryDataKHR tlasGeomData{};
+			tlasGeomData.setInstances(tlasInstancesData);
+
+			vk::AccelerationStructureGeometryKHR tlasGeometry{};
+			tlasGeometry.setGeometryType(vk::GeometryTypeKHR::eInstances);
+			tlasGeometry.setGeometry(tlasGeomData);
+
+			vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildInfo{};
+			tlasBuildInfo.setType(vk::AccelerationStructureTypeKHR::eTopLevel);
+			tlasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
+			tlasBuildInfo.setGeometries(tlasGeometry);
+
+			uint32_t tlasInstanceCount = 1;
+			vk::AccelerationStructureBuildSizesInfoKHR tlasSizeInfo{};
+			device.getAccelerationStructureBuildSizesKHR(
+				vk::AccelerationStructureBuildTypeKHR::eDevice,
+				&tlasBuildInfo,
+				&tlasInstanceCount,
+				&tlasSizeInfo,
+				dls
+			);
+
+			createBuffer(
+				tlasSizeInfo.accelerationStructureSize,
+				vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR,
+				tlasBuffer,
+				false
+			);
+
+			vk::AccelerationStructureCreateInfoKHR tlasCreateInfo{};
+			tlasCreateInfo.setBuffer(tlasBuffer.buffer);
+			tlasCreateInfo.setSize(tlasSizeInfo.accelerationStructureSize);
+			tlasCreateInfo.setType(vk::AccelerationStructureTypeKHR::eTopLevel);
+			tlas = device.createAccelerationStructureKHR(tlasCreateInfo, nullptr, dls);
+
+			vk::DeviceSize scratchSize = std::max(blasSizeInfo.buildScratchSize, tlasSizeInfo.buildScratchSize);
+			createBuffer(scratchSize, vk::BufferUsageFlagBits::eStorageBuffer, scratchBuffer, false);
+		}
+
+		cmd.fillBuffer(aabbBuffer.buffer, 0, sizeof(std::uint64_t), 0);
 
 		vk::BufferMemoryBarrier fillBarrier{
 			vk::AccessFlagBits::eTransferWrite,
@@ -161,6 +273,8 @@ namespace brassica {
 		}
 
 		TerrainAABBPushConstants push{
+			.aabbBufferAddr = aabbBuffer.deviceAddress,
+			.padding = 0,
 			.gridParams = gridParams,
 			.lodOffsets0_3 = lodOffsets0_3,
 			.lodOffsets4_7 = lodOffsets4_7,
@@ -195,7 +309,7 @@ namespace brassica {
 		);
 
 		vk::AccelerationStructureGeometryAabbsDataKHR aabbGeomData{};
-		aabbGeomData.setData(aabbBuffer.deviceAddress + sizeof(uint32_t));
+		aabbGeomData.setData(aabbBuffer.deviceAddress + sizeof(std::uint64_t));
 		aabbGeomData.setStride(sizeof(VkAabbPositionsKHR));
 
 		vk::AccelerationStructureGeometryDataKHR geomData{};
@@ -210,99 +324,10 @@ namespace brassica {
 		blasBuildInfo.setType(vk::AccelerationStructureTypeKHR::eBottomLevel);
 		blasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
 		blasBuildInfo.setGeometries(geometry);
-
-		uint32_t primitiveCount = maxAABBs;
-		vk::AccelerationStructureBuildSizesInfoKHR blasSizeInfo{};
-		device.getAccelerationStructureBuildSizesKHR(
-			vk::AccelerationStructureBuildTypeKHR::eDevice,
-			&blasBuildInfo,
-			&primitiveCount,
-			&blasSizeInfo,
-			dls
-		);
-
-		createBuffer(
-			blasSizeInfo.accelerationStructureSize,
-			vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR,
-			blasBuffer,
-			false
-		);
-
-		vk::AccelerationStructureCreateInfoKHR blasCreateInfo{};
-		blasCreateInfo.setBuffer(blasBuffer.buffer);
-		blasCreateInfo.setSize(blasSizeInfo.accelerationStructureSize);
-		blasCreateInfo.setType(vk::AccelerationStructureTypeKHR::eBottomLevel);
-		blas = device.createAccelerationStructureKHR(blasCreateInfo, nullptr, dls);
-
-		vk::AccelerationStructureDeviceAddressInfoKHR blasAddrInfo{};
-		blasAddrInfo.setAccelerationStructure(blas);
-		vk::DeviceAddress blasAddress = device.getAccelerationStructureAddressKHR(blasAddrInfo, dls);
-
-		VkAccelerationStructureInstanceKHR instanceData{};
-		instanceData.transform.matrix[0][0] = 1.0f;
-		instanceData.transform.matrix[1][1] = 1.0f;
-		instanceData.transform.matrix[2][2] = 1.0f;
-		instanceData.instanceCustomIndex = 0;
-		instanceData.mask = 0xFF;
-		instanceData.instanceShaderBindingTableRecordOffset = 0;
-		instanceData.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-		instanceData.accelerationStructureReference = blasAddress;
-
-		void* instMapped = createBuffer(
-			sizeof(VkAccelerationStructureInstanceKHR),
-			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
-			instanceBuffer,
-			true
-		);
-		if (instMapped) {
-			std::memcpy(instMapped, &instanceData, sizeof(VkAccelerationStructureInstanceKHR));
-		}
-
-		vk::AccelerationStructureGeometryInstancesDataKHR tlasInstancesData{};
-		tlasInstancesData.setArrayOfPointers(VK_FALSE);
-		tlasInstancesData.setData(instanceBuffer.deviceAddress);
-
-		vk::AccelerationStructureGeometryDataKHR tlasGeomData{};
-		tlasGeomData.setInstances(tlasInstancesData);
-
-		vk::AccelerationStructureGeometryKHR tlasGeometry{};
-		tlasGeometry.setGeometryType(vk::GeometryTypeKHR::eInstances);
-		tlasGeometry.setGeometry(tlasGeomData);
-
-		vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildInfo{};
-		tlasBuildInfo.setType(vk::AccelerationStructureTypeKHR::eTopLevel);
-		tlasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
-		tlasBuildInfo.setGeometries(tlasGeometry);
-
-		uint32_t tlasInstanceCount = 1;
-		vk::AccelerationStructureBuildSizesInfoKHR tlasSizeInfo{};
-		device.getAccelerationStructureBuildSizesKHR(
-			vk::AccelerationStructureBuildTypeKHR::eDevice,
-			&tlasBuildInfo,
-			&tlasInstanceCount,
-			&tlasSizeInfo,
-			dls
-		);
-
-		createBuffer(
-			tlasSizeInfo.accelerationStructureSize,
-			vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR,
-			tlasBuffer,
-			false
-		);
-
-		vk::AccelerationStructureCreateInfoKHR tlasCreateInfo{};
-		tlasCreateInfo.setBuffer(tlasBuffer.buffer);
-		tlasCreateInfo.setSize(tlasSizeInfo.accelerationStructureSize);
-		tlasCreateInfo.setType(vk::AccelerationStructureTypeKHR::eTopLevel);
-		tlas = device.createAccelerationStructureKHR(tlasCreateInfo, nullptr, dls);
-
-		vk::DeviceSize scratchSize = std::max(blasSizeInfo.buildScratchSize, tlasSizeInfo.buildScratchSize);
-		createBuffer(scratchSize, vk::BufferUsageFlagBits::eStorageBuffer, scratchBuffer, false);
-
 		blasBuildInfo.setDstAccelerationStructure(blas);
 		blasBuildInfo.setScratchData(scratchBuffer.deviceAddress);
 
+		uint32_t primitiveCount = maxAABBs;
 		vk::AccelerationStructureBuildRangeInfoKHR blasRange{};
 		blasRange.setPrimitiveCount(primitiveCount);
 		blasRange.setPrimitiveOffset(0);
@@ -325,6 +350,25 @@ namespace brassica {
 			nullptr
 		);
 
+		vk::AccelerationStructureDeviceAddressInfoKHR blasAddrInfo{};
+		blasAddrInfo.setAccelerationStructure(blas);
+		vk::DeviceAddress blasAddress = device.getAccelerationStructureAddressKHR(blasAddrInfo, dls);
+
+		vk::AccelerationStructureGeometryInstancesDataKHR tlasInstancesData{};
+		tlasInstancesData.setArrayOfPointers(VK_FALSE);
+		tlasInstancesData.setData(instanceBuffer.deviceAddress);
+
+		vk::AccelerationStructureGeometryDataKHR tlasGeomData{};
+		tlasGeomData.setInstances(tlasInstancesData);
+
+		vk::AccelerationStructureGeometryKHR tlasGeometry{};
+		tlasGeometry.setGeometryType(vk::GeometryTypeKHR::eInstances);
+		tlasGeometry.setGeometry(tlasGeomData);
+
+		vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildInfo{};
+		tlasBuildInfo.setType(vk::AccelerationStructureTypeKHR::eTopLevel);
+		tlasBuildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
+		tlasBuildInfo.setGeometries(tlasGeometry);
 		tlasBuildInfo.setDstAccelerationStructure(tlas);
 		tlasBuildInfo.setScratchData(scratchBuffer.deviceAddress);
 

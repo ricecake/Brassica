@@ -1,5 +1,8 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "bindless.glsl"
 
@@ -12,14 +15,17 @@ struct VkAabbPositionsKHR {
 	float maxZ;
 };
 
-layout(set = 0, binding = 1, std430) buffer AABBBuffer {
+layout(buffer_reference, scalar) buffer AABBBuffer {
 	uint count;
+	uint padding;
 	VkAabbPositionsKHR aabbs[];
-} outAABBs;
+};
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
+	uint64_t aabbBufferAddr;
+	uint64_t padding;
 	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow (16), z = totalMeshlets, w = textureDim (1088)
 	uvec4 lodOffsets0_3;
 	uvec4 lodOffsets4_7;
@@ -109,34 +115,39 @@ void main() {
 	vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, 0.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
 	vec3 maxB = minB + vec3(meshletSize, 0.0, meshletSize);
 
+	bool activeMeshlet = true;
 	if (lod > 0u) {
 		float prevMeshletSize = baseMeshletSize * pow(2.0, float(lod - 1u));
 		float safeInnerRadius = (float(meshletsPerRow) * 0.5 - 1.0) * prevMeshletSize;
 		vec2 maxOffset = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
 		float maxDistToCam = length(maxOffset);
 		if (maxDistToCam < safeInnerRadius) {
-			return;
+			activeMeshlet = false;
 		}
 	}
 
-	float minH = 1e9;
-	float maxH = -1e9;
-	for (int sz = 0; sz < 5; ++sz) {
-		float tz = float(sz) / 4.0;
-		float sampleZ = minB.z + tz * meshletSize;
-		for (int sx = 0; sx < 5; ++sx) {
-			float tx = float(sx) / 4.0;
-			float sampleX = minB.x + tx * meshletSize;
-			float dummyB, dummyM;
-			float h = evalTerrainHeight(vec2(sampleX, sampleZ), dummyB, dummyM);
-			minH = min(minH, h);
-			maxH = max(maxH, h);
+	if (activeMeshlet) {
+		float minH = 1e9;
+		float maxH = -1e9;
+		for (int sz = 0; sz < 5; ++sz) {
+			float tz = float(sz) / 4.0;
+			float sampleZ = minB.z + tz * meshletSize;
+			for (int sx = 0; sx < 5; ++sx) {
+				float tx = float(sx) / 4.0;
+				float sampleX = minB.x + tx * meshletSize;
+				float dummyB, dummyM;
+				float h = evalTerrainHeight(vec2(sampleX, sampleZ), dummyB, dummyM);
+				minH = min(minH, h);
+				maxH = max(maxH, h);
+			}
 		}
+		minB.y = minH - 5.0;
+		maxB.y = maxH + 5.0;
+	} else {
+		minB = vec3(cameraSnap.x, 0.0, cameraSnap.y);
+		maxB = minB;
 	}
 
-	minB.y = minH - 5.0;
-	maxB.y = maxH + 5.0;
-
-	uint slot = atomicAdd(outAABBs.count, 1u);
-	outAABBs.aabbs[slot] = VkAabbPositionsKHR(minB.x, minB.y, minB.z, maxB.x, maxB.y, maxB.z);
+	AABBBuffer outAABBs = AABBBuffer(push.aabbBufferAddr);
+	outAABBs.aabbs[gId] = VkAabbPositionsKHR(minB.x, minB.y, minB.z, maxB.x, maxB.y, maxB.z);
 }
