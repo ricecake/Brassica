@@ -89,7 +89,8 @@ void main() {
 	);
 
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-	vec2 worldXZ = meshletMin.xz + localPos;
+	vec2 baseWorldXZ = meshletMin.xz + localPos;
+	vec2 worldXZ = baseWorldXZ;
 
 	// CDLOD Continuous Distance LOD Morphing
 	vec2 offsetDist = abs(worldXZ - uCameraPosition.xz);
@@ -113,7 +114,7 @@ void main() {
 	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, distToCam, waveNormal);
 	vec3 finalWorldPos = vec3(worldXZ.x, params.waterLevel, worldXZ.y) + waveOffset;
 
-	vec2 flatXZ = finalWorldPos.xz - uCameraPosition.xz;
+	vec2 flatXZ = worldXZ - uCameraPosition.xz;
 	float distSq = dot(flatXZ, flatXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	finalWorldPos.y -= dropOff;

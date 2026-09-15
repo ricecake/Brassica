@@ -357,10 +357,15 @@ namespace brassica {
 		render::EngineNodeRegistry::Instance().CreateAll();
 		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
-		terrainClipmap.Init(device, allocator, 10, 0.5f, camera.farPlane, camera.position);
 		float initialTerrainHeight =
-			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, terrainClipmap.GetBaseTexelSize()).r;
+			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
 		camera.position.y = initialTerrainHeight + 2.0f;
+
+		float altitude = std::max(10.0f, camera.position.y);
+		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
+		camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
+
+		terrainClipmap.Init(device, allocator, 10, 0.5f, 0.0f, camera.position);
 
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),

@@ -112,6 +112,9 @@ void main() {
 
 			// Sample the absolute highest-detail terrain height at this coordinate
 			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11).r;
+			vec2 flatXZ0 = pos.xz - uCameraPosition.xz;
+			float dropOff0 = dot(flatXZ0, flatXZ0) / (2.0 * FAKE_PLANET_RADIUS);
+			trueHeight0 -= dropOff0;
 
 			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
 			if (rayOrigin.y < trueHeight0 + 0.1) {
