@@ -357,8 +357,7 @@ namespace brassica {
 		render::EngineNodeRegistry::Instance().CreateAll();
 		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
-		float initialTerrainHeight =
-			TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
+		float initialTerrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
 		camera.position.y = initialTerrainHeight + 2.0f;
 
 		float altitude = std::max(10.0f, camera.position.y);
