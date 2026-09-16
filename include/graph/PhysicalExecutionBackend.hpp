@@ -49,6 +49,10 @@ namespace brassica::graph {
 																  : vk::ImageUsageFlags{};
 			const AttachmentRole role = AttachmentRoleFor(usage, format);
 
+			if (role == AttachmentRole::None) {
+				continue;
+			}
+
 			// A shading-rate map is Read, not Write/ReadWrite (it's computed by an earlier
 			// compute node), and contributes no color/depth format at all -- it rides pNext, not
 			// pColorAttachments/pDepthAttachment.
