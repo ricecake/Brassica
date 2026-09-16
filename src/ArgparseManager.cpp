@@ -10,23 +10,29 @@ namespace brassica {
 		: m_parser(programName, version) {}
 
 	void ArgparseManager::SetupArguments() {
-		m_parser.add_argument("--headless")
+		m_parser.add_argument("--headless", "-headless")
 			.help("Run engine in headless mode without window display")
 			.default_value(false)
 			.implicit_value(true);
 
-		m_parser.add_argument("--frames")
+		m_parser.add_argument("--frames", "-frames")
 			.help("Maximum number of frames to run before exiting")
 			.default_value(0)
 			.scan<'i', int>();
 
-		m_parser.add_argument("--config")
+		m_parser.add_argument("--config", "-config")
 			.help("Path to configuration file")
 			.default_value(std::string("config.ini"));
 
-		m_parser.add_argument("--app")
+		m_parser.add_argument("--app", "-app")
 			.help("Application name for scoped configurations")
 			.default_value(std::string("Sandbox"));
+
+		m_parser.add_argument("positional_frames")
+			.help("Optional positional frame count")
+			.default_value(std::vector<int>{})
+			.scan<'i', int>()
+			.nargs(0, 1);
 	}
 
 	void ArgparseManager::Initialize() {
@@ -77,7 +83,19 @@ namespace brassica {
 		if (!m_argsParsed)
 			return 0;
 		int frames = m_parser.get<int>("--frames");
-		return frames > 0 ? static_cast<uint32_t>(frames) : 0u;
+		if (frames > 0) {
+			return static_cast<uint32_t>(frames);
+		}
+
+		try {
+			auto posFrames = m_parser.get<std::vector<int>>("positional_frames");
+			if (!posFrames.empty() && posFrames[0] > 0) {
+				return static_cast<uint32_t>(posFrames[0]);
+			}
+		} catch (...) {
+		}
+
+		return 0u;
 	}
 
 	std::string ArgparseManager::GetConfigFile() const {

@@ -766,6 +766,13 @@ TEST_CASE("ArgparseManager CLI options parsing") {
 	CHECK(argMgr.GetMaxFrames() == 15u);
 	CHECK(argMgr.GetAppName() == "TestSandbox");
 	CHECK(argMgr.GetConfigFile() == "test.ini");
+
+	// Test CI headless format: --headless 10
+	brassica::ArgparseManager ciArgMgr("TestApp", "1.0.0");
+	std::vector<std::string> ciArgs = {"TestApp", "--headless", "10"};
+	CHECK(ciArgMgr.Parse(ciArgs));
+	CHECK(ciArgMgr.GetHeadless() == true);
+	CHECK(ciArgMgr.GetMaxFrames() == 10u);
 }
 
 TEST_CASE("ConfigManager application and manager scoped configuration") {
