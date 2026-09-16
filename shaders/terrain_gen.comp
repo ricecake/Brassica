@@ -1,12 +1,14 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_KHR_shader_subgroup_quad : require
+#extension GL_KHR_shader_subgroup_vote : require // Required for subgroupAny
+#extension GL_KHR_shader_subgroup_clustered : require
 
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
-
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
@@ -21,9 +23,7 @@ layout(push_constant) uniform PushConstants {
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
-}
-
-push;
+} push;
 
 vec3 permute(vec3 x) {
 	return mod(((x * 34.0) + 1.0) * x, 289.0);
@@ -96,42 +96,58 @@ float evalTerrainHeight(vec2 worldXZ, out float outBiome, out float outMask) {
 }
 
 void main() {
-	uvec3 globalId = gl_GlobalInvocationID;
-	uint  dim = push.gridParams.w;
-	uint  lod = globalId.z;
+	// 1. Remap the 16x16 local workgroup into 2x2 spatial quads
+	uint quad_id = gl_LocalInvocationIndex / 4;
+	uint thread_in_quad = gl_LocalInvocationIndex % 4;
+
+	// Map hardware quad lanes [0,1,2,3] to local 2x2 offsets: (0,0), (1,0), (0,1), (1,1)
+	uvec2 quad_local_pos = uvec2(thread_in_quad & 1, thread_in_quad >> 1);
+
+	// 64 quads mapped to an 8x8 grid to span the 16x16 workgroup
+	uvec2 tile_pos = uvec2(quad_id % 8, quad_id / 8) * 2;
+
+	// Reconstruct globalId to guarantee 2x2 spatial alignment
+	uvec3 globalId = uvec3(gl_WorkGroupID.xy * 16 + tile_pos + quad_local_pos, gl_GlobalInvocationID.z);
+
+	uint dim = push.gridParams.w;
+	uint lod = globalId.z;
 
 	if (globalId.x >= dim || globalId.y >= dim || lod >= push.gridParams.x) {
 		return;
 	}
 
 	uvec4 deltas = (lod < 4u) ? push.lodDeltas0_3 : ((lod < 8u) ? push.lodDeltas4_7 : push.lodDeltas8_11);
-	uint  packedDelta = deltas[lod % 4u];
-	int   deltaX = int(packedDelta & 0xFFFFu);
-	if (deltaX >= 0x8000)
-		deltaX -= 0x10000;
+	uint packedDelta = deltas[lod % 4u];
+	int deltaX = int(packedDelta & 0xFFFFu);
+	if (deltaX >= 0x8000) deltaX -= 0x10000;
 	int deltaZ = int((packedDelta >> 16u) & 0xFFFFu);
-	if (deltaZ >= 0x8000)
-		deltaZ -= 0x10000;
+	if (deltaZ >= 0x8000) deltaZ -= 0x10000;
 
 	if (uFrameIndex > 0 && deltaX == 0 && deltaZ == 0) {
 		return;
 	}
 
 	uvec4 offsets = (lod < 4u) ? push.lodOffsets0_3 : ((lod < 8u) ? push.lodOffsets4_7 : push.lodOffsets8_11);
-	uint  packedOffset = offsets[lod % 4u];
+	uint packedOffset = offsets[lod % 4u];
 	ivec2 gridOffset = ivec2(int(packedOffset & 0xFFFFu), int((packedOffset >> 16u) & 0xFFFFu));
 
 	ivec2 texelIndex = ivec2(globalId.xy);
-	int   colIdx = (texelIndex.x - gridOffset.x + int(dim)) % int(dim);
-	int   rowIdx = (texelIndex.y - gridOffset.y + int(dim)) % int(dim);
+	int colIdx = (texelIndex.x - gridOffset.x + int(dim)) % int(dim);
+	int rowIdx = (texelIndex.y - gridOffset.y + int(dim)) % int(dim);
 
 	int dimInt = int(dim);
+	bool is_dirty = true;
+
 	if (uFrameIndex > 0 && abs(deltaX) < dimInt && abs(deltaZ) < dimInt) {
 		bool dirtyX = (deltaX > 0 && colIdx >= dimInt - deltaX) || (deltaX < 0 && colIdx < -deltaX);
 		bool dirtyZ = (deltaZ > 0 && rowIdx >= dimInt - deltaZ) || (deltaZ < 0 && rowIdx < -deltaZ);
-		if (!dirtyX && !dirtyZ) {
-			return;
-		}
+		is_dirty = dirtyX || dirtyZ;
+	}
+
+	// 2. Subgroup Divergence Protection
+	// Ensure the entire quad stays active if *any* thread in the 2x2 block needs to compute
+	if (!subgroupAny(is_dirty)) {
+		return;
 	}
 
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
@@ -141,52 +157,66 @@ void main() {
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;
 	vec2 worldXZ = centerWorldPos + deltaWorld;
 
-	float eps = max(0.25, texelSize);
-
-	TerrainConfig con = TerrainConfig(
-		0.0001, // Multiplier for the input coordinate domain
-		-50.0,    // Absolute minimum output (e.g., ocean floor)
-		1000.0,    // Absolute maximum output (e.g., highest mountain peak)
-		0.14  // Balances how high ridges spike relative to base terrain (0.0 to 1.0)
-	);
-
+	TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14);
 	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
-    float h = evaluate_terrain(p, 0.0, 0.75, con);
-    vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con);
 
-	float b, m;
-	float h_null = evalTerrainHeight(worldXZ, b, m);
+	// Evaluate height ONCE per thread
+	float h = evaluate_terrain(p, 0.0, 0.75, con);
 
-	// float dummyB, dummyM;
-	// float hL = evalTerrainHeight(worldXZ + vec2(-eps, 0.0), dummyB, dummyM);
-	// float hR = evalTerrainHeight(worldXZ + vec2(eps, 0.0), dummyB, dummyM);
-	// float hD = evalTerrainHeight(worldXZ + vec2(0.0, -eps), dummyB, dummyM);
-	// float hU = evalTerrainHeight(worldXZ + vec2(0.0, eps), dummyB, dummyM);
-	// vec3  normal = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
+	// 3. Quad Swap Differencing
+	float h_swap_x = subgroupQuadSwapHorizontal(h);
+	float h_swap_y = subgroupQuadSwapVertical(h);
+	float h_swap_diag = subgroupQuadSwapDiagonal(h);
 
-	// float hLD = evalTerrainHeight(worldXZ + vec2(-eps, -eps), dummyB, dummyM);
-	// float hRD = evalTerrainHeight(worldXZ + vec2(eps, -eps), dummyB, dummyM);
-	// float hLU = evalTerrainHeight(worldXZ + vec2(-eps, eps), dummyB, dummyM);
-	// float hRU = evalTerrainHeight(worldXZ + vec2(eps, eps), dummyB, dummyM);
+	// Swap world coordinates to detect toroidal wrap boundaries
+	float wx_swap_x = subgroupQuadSwapHorizontal(worldXZ.x);
+	float wz_swap_y = subgroupQuadSwapVertical(worldXZ.y);
 
-	// float minH = min(h, min(hL, min(hR, min(hD, min(hU, min(hLD, min(hRD, min(hLU, hRU))))))));
-	// float maxH = max(h, max(hL, max(hR, max(hD, max(hU, max(hLD, max(hRD, max(hLU, hRU))))))));
-	float variance = 0.25;//maxH - minH;
-	float minH = -10.0;
-	float maxH = 20.0;
+	bool is_left = (thread_in_quad & 1) == 0;
+	bool is_top  = (thread_in_quad >> 1) == 0;
 
-	ivec3 storeCoord = ivec3(globalId.xy, lod);
+	// Calculate forward difference
+	float ddx = is_left ? (h_swap_x - h) : (h - h_swap_x);
+	float ddy = is_top  ? (h_swap_y - h) : (h - h_swap_y);
 
-	imageStore(
-		uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)],
-		storeCoord,
-		vec4(h, normal.x, normal.y, normal.z)
-	);
-	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(minH, maxH, minH, maxH));
-	imageStore(
-		uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)],
-		storeCoord,
-		vec4(clamp(b, 0.0, 1.0), variance, 1.0, m)
-	);
-	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
+	// Calculate actual world delta to identify clipmap wrap boundaries
+	float dx = is_left ? (wx_swap_x - worldXZ.x) : (worldXZ.x - wx_swap_x);
+	float dz = is_top  ? (wz_swap_y - worldXZ.y) : (worldXZ.y - wz_swap_y);
+
+	// If the swapped coordinate is on the other side of the clipmap, flatten the derivative
+	if (abs(dx) > texelSize * 2.0) ddx = 0.0;
+	if (abs(dz) > texelSize * 2.0) ddy = 0.0;
+
+	vec3 normal = normalize(vec3(-ddx, texelSize, -ddy));
+
+	// Only run the store logic if this specific thread was actually dirty
+	if (is_dirty) {
+		// Computes the min/max across clusters of 16 invocations
+		float cluster_min = subgroupClusteredMin(h, 16);
+		float cluster_max = subgroupClusteredMax(h, 16);
+
+		float quad_min = min(min(h, h_swap_x), min(h_swap_y, h_swap_diag));
+		float quad_max = max(max(h, h_swap_x), max(h_swap_y, h_swap_diag));
+
+		// Mean of the quad
+		float mean_h = (h + h_swap_x + h_swap_y + h_swap_diag) * 0.25;
+
+		// Mean of the squares
+		float h2 = h * h;
+		float mean_h2 = (h2 +
+						subgroupQuadSwapHorizontal(h2) +
+						subgroupQuadSwapVertical(h2) +
+						subgroupQuadSwapDiagonal(h2)) * 0.25;
+
+		// True variance
+		float variance = max(0.0, mean_h2 - (mean_h * mean_h));
+
+
+		ivec3 storeCoord = ivec3(globalId.xy, lod);
+
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(cluster_min, cluster_max, quad_min, quad_max));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(0.5, 0.0, 1.0), variance, 1.0, 0.5));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
+	}
 }
