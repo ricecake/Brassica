@@ -138,7 +138,8 @@ namespace brassica {
 					float t = (sunVis - (-0.20f)) / (0.05f - (-0.20f));
 					sunFade = glm::smoothstep(0.0f, 1.0f, t);
 				}
-				_lights[0].baseIntensity = 10.0f * sunFade;
+				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
+				_lights[0].baseIntensity = 1.0f * sunFade;
 
 				glm::vec3 sunDir = glm::normalize(-_lights[0].direction);
 				glm::vec3 moonDir = glm::normalize(-_lights[1].direction);
