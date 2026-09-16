@@ -93,34 +93,54 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	vec2 d4 = normalize(vec2(-0.85 + 0.15 * cos(time * 0.06), -0.3 + 0.15 * sin(time * 0.05)));
 
 
-	// Replace the steering block inside calculateGerstnerOffsetAndNormal
+	vec2 globalWindDir = normalize(cross_noise(vec3(uv.x, 0.0, uv.y)*0.001, time*0.010).xz);
+
+	// Default deep water parameters
+	float wl1 = 60.0, spd1 = 1.2;
+	float wl2 = 38.0, spd2 = 1.5;
+	float wl3 = 22.0, spd3 = 2.0;
+	float wl4 = 12.0, spd4 = 2.8;
+
 	float smoothH = estSmoothTerrainHeight(uv);
 	float smoothDepth = params.waterLevel - smoothH;
 
 	if (smoothDepth >= -30.0) {
-		// Expand the sampling epsilon significantly to average out underlying variations
 		float eps = mix(80.0, 40.0, smoothstep(-50.0, -10.0, smoothDepth));
 		vec2  grad = vec2(
 			estSmoothTerrainHeight(uv + vec2(eps, 0.0)) - estSmoothTerrainHeight(uv - vec2(eps, 0.0)),
 			estSmoothTerrainHeight(uv + vec2(0.0, eps)) - estSmoothTerrainHeight(uv - vec2(0.0, eps))
 		);
+
 		if (dot(grad, grad) > 0.0001) {
 			vec2  shoreDir = normalize(grad);
-			float shoreWeight = clamp(1.0 - smoothDepth / 20.0, 0.125, 1.0);
+			float shoreWeight = clamp(1.0 - smoothDepth / 20.0, 0.0, 1.0);
 
-			d1 = normalize(mix(d1, shoreDir, shoreWeight * 1.1));
-			d2 = normalize(mix(d2, shoreDir, shoreWeight * 1.0));
-			d3 = normalize(mix(d3, shoreDir, shoreWeight * 0.8));
-			d4 = normalize(mix(d4, shoreDir, shoreWeight * 0.7));
+			// 1. Unify Directions
+			d1 = normalize(mix(globalWindDir, shoreDir, shoreWeight));
+			d2 = normalize(mix(globalWindDir, shoreDir, shoreWeight * 0.9));
+			d3 = normalize(mix(globalWindDir, shoreDir, shoreWeight * 0.8));
+			d4 = normalize(mix(globalWindDir, shoreDir, shoreWeight * 0.7));
+
+			// 2. Unify Wavelengths and Speeds (Phase Syncing)
+			float targetWl = 45.0;  // Unified shore wave length
+			float targetSpd = 1.0;  // Unified shore wave speed (slower in shallow water)
+
+			wl1 = mix(wl1, targetWl, shoreWeight);
+			wl2 = mix(wl2, targetWl, shoreWeight);
+			spd1 = mix(spd1, targetSpd, shoreWeight);
+			spd2 = mix(spd2, targetSpd, shoreWeight);
+
+			// 3. Fade out medium waves to prevent visual noise at the shoreline
+			mediumWaveFade *= (1.0 - shoreWeight);
 		}
 	}
 
-	// Primary swell (large wavelength)
+	// Primary swell execution using the synced parameters
 	if (mainWaveFade > 0.001) {
 		float vectorAdjustment = dot(d1, d2) * 0.5 + 0.5;
 		mainWaveFade *= vectorAdjustment;
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d1, 0.18 * mainWaveFade, 60.0, time * 1.2, tangent, binormal);
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d2, 0.14 * mainWaveFade, 38.0, time * 1.5, tangent, binormal);
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d1, 0.18 * mainWaveFade, wl1, time * spd1, tangent, binormal);
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d2, 0.14 * mainWaveFade, wl2, time * spd2, tangent, binormal);
 	}
 
 	// Medium waves
