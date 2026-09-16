@@ -57,8 +57,8 @@ namespace brassica {
 
 	private:
 		std::vector<Light> _lights{
-			Light::CreateDirectional(0.0f, 45.0f, 10.0f, {1.0f, 1.0f, 1.0f}, true),
-			Light::CreateDirectional(180.0f, -45.0f, 1.0f, {0.8f, 0.9f, 1.0f}, true)
+			Light::CreateDirectional(0.0f, 45.0f, 1.0f, {2.5f, 2.3f, 2.0f}, true),
+			Light::CreateDirectional(180.0f, -45.0f, 1.0f, {0.95f, 0.93f, 0.88f}, true)
 		};
 		glm::vec3     _ambientLight{0.15f, 0.15f, 0.2f};
 		DayNightCycle _cycle;

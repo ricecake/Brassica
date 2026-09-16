@@ -656,9 +656,18 @@ TEST_CASE("Lighting structs alignment and size layout") {
 TEST_CASE("LightManager day/night cycle and behaviors") {
 	brassica::LightManager mgr;
 
+	CHECK(mgr.GetDayNightCycle().enabled);
+	CHECK(!mgr.GetDayNightCycle().paused);
 	CHECK(mgr.GetLights().size() == 2);
 	CHECK(mgr.GetLights()[0].type == brassica::DIRECTIONAL_LIGHT);
 	CHECK(mgr.GetLights()[1].type == brassica::DIRECTIONAL_LIGHT);
+	CHECK(mgr.GetLights()[0].color.r == doctest::Approx(2.5f));
+	CHECK(mgr.GetLights()[0].color.g == doctest::Approx(2.3f));
+	CHECK(mgr.GetLights()[0].color.b == doctest::Approx(2.0f));
+
+	mgr.GetDayNightCycle().time = 12.0f; // Noon (sun at zenith)
+	mgr.Update(0.0f);
+	CHECK(mgr.GetLights()[0].intensity == doctest::Approx(1.0f));
 
 	brassica::Light pointLight = brassica::Light::CreatePoint(glm::vec3(10.0f, 5.0f, 0.0f), 20.0f, glm::vec3(1.0f, 0.0f, 0.0f), 50.0f);
 	pointLight.SetPulse(2.0f, 1.0f);
