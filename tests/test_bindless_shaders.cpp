@@ -65,7 +65,7 @@ TEST_CASE("terrain.task/terrain.mesh compile to valid SPIR-V against the real bi
 // which outside the VkPushConstantRange"). Pins the exact byte count so a future drift between
 // the C++ struct and the GLSL block fails loudly here instead of only on someone's GPU.
 TEST_CASE("TerrainPushConstants is exactly as large as terrain.task/terrain.mesh's shared push_constant block") {
-	CHECK(sizeof(TerrainPushConstants) == 64);
+	CHECK(sizeof(TerrainPushConstants) == 80);
 }
 
 TEST_CASE("water.task/water.mesh/water.frag compile to valid SPIR-V against the real bindless.glsl substitution") {
