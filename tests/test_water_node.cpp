@@ -183,7 +183,7 @@ namespace {
 		layoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
-			.setDescriptorCount(1)
+			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		layoutBindings[3]
 			.setBinding(3)
@@ -209,7 +209,7 @@ namespace {
 
 		std::array<vk::DescriptorPoolSize, 3> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 16},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 8},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
