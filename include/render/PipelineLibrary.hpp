@@ -6,6 +6,7 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "IManager.hpp"
 #include "Shader.hpp"
 
 // One place builds every graphics/compute pipeline in the engine. Replaces
@@ -75,11 +76,23 @@ namespace brassica::render {
 	// hot-reloaded shader bumps its generation, see Shader::GetGeneration, which changes the
 	// cache key and produces a fresh entry rather than mutating the old one in place) or until
 	// this PipelineLibrary itself is destroyed.
-	class PipelineLibrary {
+	class PipelineLibrary: public IManager {
 	public:
 		PipelineLibrary(vk::Device device = {}, vk::PipelineCache cache = {}): m_device(device), m_cache(cache) {}
 
-		~PipelineLibrary() { Reset(); }
+		~PipelineLibrary() override {
+			if (m_initialized) {
+				Shutdown();
+			} else {
+				Reset();
+			}
+		}
+
+		void Initialize() override { m_initialized = true; }
+		void Shutdown() override {
+			Reset();
+			m_initialized = false;
+		}
 
 		PipelineLibrary(const PipelineLibrary&) = delete;
 		PipelineLibrary& operator=(const PipelineLibrary&) = delete;

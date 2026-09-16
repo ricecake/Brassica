@@ -82,8 +82,11 @@ namespace brassica {
 
 		glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
 			auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(w));
-			if (engine && engine->GetInputHandler()) {
-				engine->GetInputHandler()->OnKey(w, key, scancode, action, mods);
+			if (engine) {
+				engine->GetImGuiManager().OnKey(key, action);
+				if (engine->GetInputHandler()) {
+					engine->GetInputHandler()->OnKey(w, key, scancode, action, mods);
+				}
 			}
 		});
 
@@ -230,6 +233,7 @@ namespace brassica {
 		if (device) {
 			device.waitIdle();
 
+			imguiManager.Shutdown();
 			shaderWatcher.StopWatching();
 
 			// Must run before vmaDestroyAllocator/device.destroy() below -- PhysicalTexture's
@@ -303,6 +307,8 @@ namespace brassica {
 	}
 
 	void Engine::Init(const EngineOptions& opts) {
+		ServiceLocator::SetInstance(&serviceLocator);
+
 		if (!inputHandler) {
 			inputHandler = CreateDefaultInputHandler();
 		}
@@ -404,6 +410,42 @@ namespace brassica {
 		}
 		camera.UpdateMatrices(16.0f / 9.0f);
 		lastFrameTime = glfwGetTime();
+
+		shaderWatcher.Initialize();
+		pipelineLibrary.Initialize();
+		terrainAS.Initialize();
+		terrainClipmap.Initialize();
+		terrainUploader.Initialize();
+		physicalRegistry.Initialize();
+
+		imguiManager.InitVulkanAndGlfw(
+			window,
+			instance,
+			chosenGPU,
+			device,
+			graphicsQueueFamily,
+			graphicsQueue,
+			GetSwapchainFormat(),
+			static_cast<uint32_t>(swapchainImages.size())
+		);
+
+		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
+		serviceLocator.Provide<render::PipelineLibrary>(
+			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
+		);
+		serviceLocator.Provide<AsyncTerrainUploader>(
+			std::shared_ptr<AsyncTerrainUploader>(&terrainUploader, [](AsyncTerrainUploader*) {})
+		);
+		serviceLocator.Provide<TerrainClipmap>(std::shared_ptr<TerrainClipmap>(&terrainClipmap, [](TerrainClipmap*) {})
+		);
+		serviceLocator.Provide<TerrainAccelerationStructure>(
+			std::shared_ptr<TerrainAccelerationStructure>(&terrainAS, [](TerrainAccelerationStructure*) {})
+		);
+		serviceLocator.Provide<graph::PhysicalResourceRegistry>(
+			std::shared_ptr<graph::PhysicalResourceRegistry>(&physicalRegistry, [](graph::PhysicalResourceRegistry*) {})
+		);
+		serviceLocator.Provide<ImGuiManager>(std::shared_ptr<ImGuiManager>(&imguiManager, [](ImGuiManager*) {}));
+
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
 	}
 
@@ -867,6 +909,8 @@ namespace brassica {
 			camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
 		}
 		camera.UpdateMatrices(aspect);
+
+		imguiManager.NewFrame(camera.position);
 
 		FrameUBO ubo{};
 		ubo.viewMatrix = camera.viewMatrix;

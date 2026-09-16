@@ -10,7 +10,18 @@ namespace brassica {
 	ShaderWatcher::ShaderWatcher() {}
 
 	ShaderWatcher::~ShaderWatcher() {
+		if (m_initialized) {
+			Shutdown();
+		}
+	}
+
+	void ShaderWatcher::Initialize() {
+		m_initialized = true;
+	}
+
+	void ShaderWatcher::Shutdown() {
 		StopWatching();
+		m_initialized = false;
 	}
 
 	std::string ShaderWatcher::NormalizePath(const std::string& path) {

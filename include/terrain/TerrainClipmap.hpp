@@ -6,6 +6,7 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "IManager.hpp"
 #include "graph/Execution.hpp"
 #include "vk_mem_alloc.h"
 
@@ -34,10 +35,16 @@ namespace brassica {
 
 	class AsyncTerrainUploader;
 
-	class TerrainClipmap {
+	class TerrainClipmap: public IManager {
 	public:
 		TerrainClipmap() = default;
-		~TerrainClipmap();
+		~TerrainClipmap() override;
+
+		void Initialize() override { m_initialized = true; }
+		void Shutdown() override {
+			Cleanup();
+			m_initialized = false;
+		}
 
 		void Init(
 			vk::Device       device,

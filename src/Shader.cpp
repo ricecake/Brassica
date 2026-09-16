@@ -266,6 +266,7 @@ namespace brassica {
 		options.SetOptimizationLevel(shaderc_optimization_level_performance);
 		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
 		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+		options.AddMacroDefinition("BRASSICA_PERFORMANCE_OPTIMIZED", "1");
 
 		auto result = compiler.CompileGlslToSpv(source, kind, name, options);
 		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
@@ -322,6 +323,7 @@ namespace brassica {
 		// higher target would allow but the device doesn't guarantee.
 		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
 		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+		options.AddMacroDefinition("BRASSICA_PERFORMANCE_OPTIMIZED", "1");
 
 		auto result = compiler.CompileGlslToSpv(newSource, shaderKind, filePath.c_str(), options);
 		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {

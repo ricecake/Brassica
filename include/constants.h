@@ -1,18 +1,28 @@
 #pragma once
 
+#include <cstdint>
 #include <utility>
 
 #include <glm/glm.hpp>
 
-namespace Brassica {
-	namespace Constants {
+namespace brassica {
+	namespace constants {
+		namespace Engine {
+			constexpr std::uint32_t FrameOverlap = 2;
+			constexpr float         FakePlanetRadius = 600000.0f; // 600km (1/10th scale planet)
+			constexpr float         FakePlanetDiameter = FakePlanetRadius * 2.0f;
+		} // namespace Engine
+
 		namespace General {
 			namespace Math {
 				constexpr float Pi = 3.14159265358979323846f;
+				constexpr float TwoPi = Pi * 2.0f;
+				constexpr float HalfPi = Pi * 0.5f;
+				constexpr float DegToRad = Pi / 180.0f;
+				constexpr float RadToDeg = 180.0f / Pi;
 			} // namespace Math
 
 			namespace Colors {
-				// Default ambient light color: glm::vec3(90.0f/255.0f, 81.0f/255.0f, 62.0f/255.0f)
 				constexpr float DefaultAmbientR = 90.0f / 255.0f;
 				constexpr float DefaultAmbientG = 81.0f / 255.0f;
 				constexpr float DefaultAmbientB = 62.0f / 255.0f;
@@ -25,253 +35,129 @@ namespace Brassica {
 
 		namespace Project {
 			namespace Window {
-				consteval int DefaultWidth() {
-					return 1280;
-				}
+				constexpr int DefaultWidth = 1280;
+				constexpr int DefaultHeight = 720;
+				constexpr float DefaultAspectRatio = static_cast<float>(DefaultWidth) / static_cast<float>(DefaultHeight);
 
-				consteval int DefaultHeight() {
-					return 720;
-				}
+				consteval int GetDefaultWidth() { return DefaultWidth; }
+				consteval int GetDefaultHeight() { return DefaultHeight; }
 			} // namespace Window
 
 			namespace Camera {
-				constexpr float DefaultFOV() {
-					return 45.0f;
-				}
+				constexpr float DefaultFOV = 45.0f;
+				constexpr float DefaultNearPlane = 0.1f;
+				constexpr float MinHeight = 0.1f;
+				constexpr float MinSpeed = 0.5f;
+				constexpr float DefaultSpeed = 15.0f;
+				constexpr float SpeedStep = 2.5f;
+				constexpr float RollSpeed = 45.0f;
 
-				constexpr float DefaultNearPlane() {
-					return 0.1f;
-				}
+				constexpr float FirstPersonEyeHeight = 4.8f;
+				constexpr float FirstPersonCrouchHeight = 1.5f;
+				constexpr float FirstPersonSprintMultiplier = 2.0f;
+				constexpr float FirstPersonJumpForce = 12.5f;
+				constexpr float FirstPersonGravity = 18.0f;
+				constexpr float FirstPersonGroundSmoothing = 5.0f;
 
-				constexpr float DefaultFarPlane();
+				// Derived First-Person Values
+				constexpr float FirstPersonSprintSpeed = DefaultSpeed * FirstPersonSprintMultiplier;
 
-				constexpr float MinHeight() {
-					return 0.1f;
-				}
-
-				constexpr float MinSpeed() {
-					return 0.5f;
-				}
-
-				constexpr float DefaultSpeed() {
-					return 15.0f;
-				}
-
-				constexpr float FirstPersonEyeHeight() {
-					return 4.8f;
-				}
-
-				constexpr float FirstPersonCrouchHeight() {
-					return 1.5f;
-				}
-
-				constexpr float FirstPersonSprintMultiplier() {
-					return 2.0f;
-				}
-
-				constexpr float FirstPersonJumpForce() {
-					return 12.5f;
-				}
-
-				constexpr float FirstPersonGravity() {
-					return 18.0f;
-				}
-
-				constexpr float FirstPersonGroundSmoothing() {
-					return 5.0f;
-				}
-
-				constexpr float SpeedStep() {
-					return 2.5f;
-				}
-
-				constexpr float RollSpeed() {
-					return 45.0f;
-				}
-
-				// Path following
-				constexpr float DefaultPathSpeed() {
-					return 20.0f;
-				}
-
-				constexpr float PathBankFactor() {
-					return 1.8f;
-				}
-
-				constexpr float PathBankSpeed() {
-					return 3.5f;
-				}
-
-				constexpr float ChaseTrailBehind() {
-					return 15.0f;
-				}
-
-				constexpr float ChaseElevation() {
-					return 5.0f;
-				}
-
-				constexpr float ChaseLookAhead() {
-					return 10.0f;
-				}
-
-				constexpr float ChaseResponsiveness() {
-					return 1.5f;
-				}
-
-				constexpr float PathFollowSmoothing() {
-					return 5.0f;
-				}
+				// Path following & chase camera constants
+				constexpr float DefaultPathSpeed = 20.0f;
+				constexpr float PathBankFactor = 1.8f;
+				constexpr float PathBankSpeed = 3.5f;
+				constexpr float ChaseTrailBehind = 15.0f;
+				constexpr float ChaseElevation = 5.0f;
+				constexpr float ChaseLookAhead = 10.0f;
+				constexpr float ChaseResponsiveness = 1.5f;
+				constexpr float PathFollowSmoothing = 5.0f;
 			} // namespace Camera
 		} // namespace Project
 
 		namespace Library {
 			namespace Input {
-				constexpr int MaxKeys() {
-					return 1024;
-				}
-
-				constexpr int MaxMouseButtons() {
-					return 8;
-				}
+				constexpr int MaxKeys = 1024;
+				constexpr int MaxMouseButtons = 8;
 			} // namespace Input
+
+			namespace ShaderWatcher {
+				constexpr int DefaultPollIntervalMs = 250;
+			} // namespace ShaderWatcher
 		} // namespace Library
 
 		namespace Class {
-			namespace Terrain {
-			} // namespace Terrain
-
 			namespace Shadows {
-				consteval int MaxLights() {
-					return 10;
-				}
-
-				consteval int MaxCascades() {
-					return 4;
-				}
-
-				consteval int MaxShadowMaps() {
-					return 16;
-				}
-
-				consteval int MapSize() {
-					return 2048;
-				}
-
-				consteval float DefaultSceneRadius() {
-					return 500.0f;
-				}
-
-				consteval float DefaultFOV() {
-					return 45.0f;
-				}
+				constexpr int   MaxLights = 10;
+				constexpr int   MaxCascades = 4;
+				constexpr int   MaxShadowMaps = 16;
+				constexpr int   MapSize = 2048;
+				constexpr float DefaultSceneRadius = 500.0f;
+				constexpr float DefaultFOV = 45.0f;
 
 				// Cascade split distances (logarithmic distribution)
-				// Near splits are tighter for crisp close shadows
-				// Far cascade acts as catchall for distant terrain
-				consteval float CascadeSplit0() {
-					return 20.0f;
-				}
+				constexpr float CascadeSplit0 = 20.0f;
+				constexpr float CascadeSplit1 = 50.0f;
+				constexpr float CascadeSplit2 = 150.0f;
+				constexpr float CascadeSplit3 = 700.0f;
 
-				consteval float CascadeSplit1() {
-					return 50.0f;
-				}
-
-				consteval float CascadeSplit2() {
-					return 150.0f;
-				}
-
-				consteval float CascadeSplit3() {
-					return 700.0f;
-				}
-
-				// Grid snapping sizes per cascade (finer for near, coarser for far)
-				consteval float GridSnapCascade0() {
-					return 0.25f;
-				}
-
-				consteval float GridSnapCascade1() {
-					return 1.0f;
-				}
-
-				consteval float GridSnapCascade2() {
-					return 4.0f;
-				}
-
-				consteval float GridSnapCascade3() {
-					return 8.0f;
-				}
+				// Grid snapping sizes per cascade
+				constexpr float GridSnapCascade0 = 0.25f;
+				constexpr float GridSnapCascade1 = 1.0f;
+				constexpr float GridSnapCascade2 = 4.0f;
+				constexpr float GridSnapCascade3 = 8.0f;
 			} // namespace Shadows
 
 			namespace Terrain {
-				consteval float PathCorridorWidth() {
-					return 0.15f;
-				}
+				constexpr int   BaseMeshletDimension = 11;
+				constexpr int   VerticesPerMeshlet = BaseMeshletDimension * BaseMeshletDimension; // 121
+				constexpr int   SkirtVertices = (BaseMeshletDimension - 1) * 4;                    // 40
+				constexpr int   TotalMeshletVertices = VerticesPerMeshlet + SkirtVertices;          // 161
+				constexpr int   DefaultMaxLODs = 10;
+				constexpr int   MeshletGridSizePerLOD = 4;                                          // 4x4
+				constexpr int   MeshletCountPerLOD = MeshletGridSizePerLOD * MeshletGridSizePerLOD; // 16
+				constexpr float PathCorridorWidth = 0.15f;
 			} // namespace Terrain
 
+			namespace AsyncTerrain {
+				constexpr std::size_t MaxUploadSlots = 32;
+			} // namespace AsyncTerrain
+
+			namespace ClusteredLighting {
+				constexpr std::uint32_t GridX = 16;
+				constexpr std::uint32_t GridY = 9;
+				constexpr std::uint32_t GridZ = 24;
+				constexpr std::uint32_t TotalClusters = GridX * GridY * GridZ; // 3456
+				constexpr std::uint32_t MaxLightsPerCluster = 100;
+			} // namespace ClusteredLighting
+
+			namespace ShadingRate {
+				constexpr std::uint32_t TileWidth = 16;
+				constexpr std::uint32_t TileHeight = 16;
+				constexpr std::uint32_t TileArea = TileWidth * TileHeight; // 256
+			} // namespace ShadingRate
+
 			namespace Particles {
-				consteval int MaxParticles() {
-					return 128000;
-				}
-
-				consteval int AmbientParticleScale() {
-					return 8192;
-				}
-
-				consteval int MaxEmitters() {
-					return 100;
-				}
-
-				consteval int ComputeGroupSize() {
-					return 256;
-				}
-
-				consteval int ParticleGridSize() {
-					return 131072;
-				}
-
-				consteval float ParticleGridCellSize() {
-					return 2.0f;
-				}
-
-				consteval float DefaultAmbientDensity() {
-					return 1.0f;
-				}
+				constexpr int   MaxParticles = 128000;
+				constexpr int   AmbientParticleScale = 8192;
+				constexpr int   MaxEmitters = 100;
+				constexpr int   ComputeGroupSize = 256;
+				constexpr int   ParticleGridSize = 131072;
+				constexpr float ParticleGridCellSize = 2.0f;
+				constexpr float DefaultAmbientDensity = 1.0f;
 			} // namespace Particles
 
 			namespace Explosions {
-				consteval int MaxFragments() {
-					return 50000;
-				}
-
-				consteval int ComputeGroupSize() {
-					return 64;
-				}
-
-				consteval float DefaultVelocity() {
-					return 10.0f;
-				}
-
-				consteval float DefaultRandomVelocity() {
-					return 5.0f;
-				}
+				constexpr int   MaxFragments = 50000;
+				constexpr int   ComputeGroupSize = 64;
+				constexpr float DefaultVelocity = 10.0f;
+				constexpr float DefaultRandomVelocity = 5.0f;
 			} // namespace Explosions
 
 			namespace Shockwaves {
-				consteval int MaxShockwaves() {
-					return 16;
-				}
-
-				consteval float DefaultIntensity() {
-					return 0.5f;
-				}
-
-				consteval float DefaultRingWidth() {
-					return 3.0f;
-				}
-
-				consteval float DefaultDuration() {
-					return 1.2f;
-				} // Based on CreateExplosion logic
+				constexpr int   MaxShockwaves = 16;
+				constexpr float DefaultIntensity = 0.5f;
+				constexpr float DefaultRingWidth = 3.0f;
+				constexpr float DefaultDuration = 1.2f;
 
 				consteval glm::vec3 DefaultColor() {
 					return glm::vec3(1.0f, 0.6f, 0.2f);
@@ -279,180 +165,89 @@ namespace Brassica {
 			} // namespace Shockwaves
 
 			namespace SdfVolumes {
-				consteval int MaxSources() {
-					return 128;
-				}
-
-				consteval float DefaultRadius() {
-					return 5.0f;
-				}
-
-				consteval float DefaultSmoothness() {
-					return 2.0f;
-				}
+				constexpr int   MaxSources = 128;
+				constexpr float DefaultRadius = 5.0f;
+				constexpr float DefaultSmoothness = 2.0f;
 			} // namespace SdfVolumes
 
 			namespace Trails {
-				consteval int DefaultMaxLength() {
-					return 250;
-				}
-
-				consteval int DefaultTrailLength() {
-					return 10;
-				}
-
-				consteval int Segments() {
-					return 8;
-				}
-
-				consteval int CurveSegments() {
-					return 4;
-				}
-
-				consteval float BaseThickness() {
-					return 0.06f;
-				}
-
-				consteval float DefaultRoughness() {
-					return 0.3f;
-				}
-
-				consteval float DefaultMetallic() {
-					return 0.0f;
-				}
-
-				consteval int FloatsPerVertex() {
-					return 9;
-				}
-
-				consteval int InitialVertexCapacity() {
-					return 500000;
-				}
-
-				consteval float GrowthFactor() {
-					return 1.5f;
-				}
+				constexpr int   DefaultMaxLength = 250;
+				constexpr int   DefaultTrailLength = 10;
+				constexpr int   Segments = 8;
+				constexpr int   CurveSegments = 4;
+				constexpr float BaseThickness = 0.06f;
+				constexpr float DefaultRoughness = 0.3f;
+				constexpr float DefaultMetallic = 0.0f;
+				constexpr int   FloatsPerVertex = 9;
+				constexpr int   InitialVertexCapacity = 500000;
+				constexpr float GrowthFactor = 1.5f;
 			} // namespace Trails
 
 			namespace Rendering {
-				consteval int BlurPasses() {
-					return 4;
-				}
+				constexpr int BlurPasses = 4;
 			} // namespace Rendering
 
 			namespace Akira {
-				consteval float DefaultGrowthDuration() {
-					return 0.5f;
-				}
-
-				consteval float DefaultFadeDuration() {
-					return 3.0f;
-				}
-
-				consteval float DefaultRadius() {
-					return 20.0f;
-				}
+				constexpr float DefaultGrowthDuration = 0.5f;
+				constexpr float DefaultFadeDuration = 3.0f;
+				constexpr float DefaultRadius = 20.0f;
 			} // namespace Akira
 
 			namespace Checkpoint {
-				consteval float DefaultRadius() {
-					return 10.0f;
-				}
-
-				consteval float DefaultHaloWidth() {
-					return 2.0f;
-				}
-
-				consteval float DefaultAuraWidth() {
-					return 5.0f;
-				}
-
-				consteval float DefaultLifespan() {
-					return 60.0f;
-				}
+				constexpr float DefaultRadius = 10.0f;
+				constexpr float DefaultHaloWidth = 2.0f;
+				constexpr float DefaultAuraWidth = 5.0f;
+				constexpr float DefaultLifespan = 60.0f;
 
 				namespace Colors {
-					consteval float GoldR() {
-						return 1.0f;
-					}
+					constexpr float GoldR = 1.0f;
+					constexpr float GoldG = 0.84f;
+					constexpr float GoldB = 0.0f;
 
-					consteval float GoldG() {
-						return 0.84f;
-					}
+					constexpr float SilverR = 0.75f;
+					constexpr float SilverG = 0.75f;
+					constexpr float SilverB = 0.75f;
 
-					consteval float GoldB() {
-						return 0.0f;
-					}
+					constexpr float BlackR = 0.01f;
+					constexpr float BlackG = 0.01f;
+					constexpr float BlackB = 0.01f;
 
-					consteval float SilverR() {
-						return 0.75f;
-					}
+					constexpr float BlueR = 0.0f;
+					constexpr float BlueG = 0.5f;
+					constexpr float BlueB = 1.0f;
 
-					consteval float SilverG() {
-						return 0.75f;
-					}
-
-					consteval float SilverB() {
-						return 0.75f;
-					}
-
-					consteval float BlackR() {
-						return 0.01f;
-					}
-
-					consteval float BlackG() {
-						return 0.01f;
-					}
-
-					consteval float BlackB() {
-						return 0.01f;
-					}
-
-					consteval float BlueR() {
-						return 0.0f;
-					}
-
-					consteval float BlueG() {
-						return 0.5f;
-					}
-
-					consteval float BlueB() {
-						return 1.0f;
-					}
-
-					consteval float NeonGreenR() {
-						return 0.2f;
-					}
-
-					consteval float NeonGreenG() {
-						return 1.0f;
-					}
-
-					consteval float NeonGreenB() {
-						return 0.2f;
-					}
+					constexpr float NeonGreenR = 0.2f;
+					constexpr float NeonGreenG = 1.0f;
+					constexpr float NeonGreenB = 0.2f;
 
 					consteval glm::vec3 Gold() {
-						return glm::vec3(GoldR(), GoldG(), GoldB());
+						return glm::vec3(GoldR, GoldG, GoldB);
 					}
 
 					consteval glm::vec3 Silver() {
-						return glm::vec3(SilverR(), SilverG(), SilverB());
+						return glm::vec3(SilverR, SilverG, SilverB);
 					}
 
 					consteval glm::vec3 Black() {
-						return glm::vec3(BlackR(), BlackG(), BlackB());
+						return glm::vec3(BlackR, BlackG, BlackB);
 					}
 
 					consteval glm::vec3 Blue() {
-						return glm::vec3(BlueR(), BlueG(), BlueB());
+						return glm::vec3(BlueR, BlueG, BlueB);
 					}
 
 					consteval glm::vec3 NeonGreen() {
-						return glm::vec3(NeonGreenR(), NeonGreenG(), NeonGreenB());
+						return glm::vec3(NeonGreenR, NeonGreenG, NeonGreenB);
 					}
 				} // namespace Colors
 			} // namespace Checkpoint
 		} // namespace Class
-	} // namespace Constants
+	} // namespace constants
+
+	// Backward compatibility alias for Brassica::Constants
+	namespace Constants = constants;
+} // namespace brassica
+
+namespace Brassica {
+	namespace Constants = brassica::constants;
 } // namespace Brassica
