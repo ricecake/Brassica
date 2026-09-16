@@ -32,8 +32,7 @@ namespace brassica::testing {
 			}
 			m_instance = m_vkbInstance.instance;
 
-			VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{};
-			meshFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+			VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
 			meshFeatures.meshShader = VK_TRUE;
 			meshFeatures.taskShader = VK_TRUE;
 
@@ -55,6 +54,7 @@ namespace brassica::testing {
 
 			VkPhysicalDeviceFeatures features1{};
 			features1.shaderInt64 = VK_TRUE;
+			features1.fragmentStoresAndAtomics = VK_TRUE;
 
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
 			selector.set_minimum_version(1, 3)
