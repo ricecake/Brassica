@@ -3,21 +3,23 @@
 
 #include "bindless.glsl"
 #include "common.glsl"
-#include "terrain.glsl"
 #include "lygia/generative/gerstnerWave.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams;     // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
 	uint  padding;
-} params;
+}
+
+params;
 
 struct TaskPayload {
 	uint meshletIDs[32];
@@ -70,12 +72,12 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	float depth = params.waterLevel - estH;
 	if (depth > -5.0 && depth < 25.0) {
 		float eps = 3.0;
-		vec2 grad = vec2(
+		vec2  grad = vec2(
 			estTerrainHeight(uv + vec2(eps, 0.0)) - estTerrainHeight(uv - vec2(eps, 0.0)),
 			estTerrainHeight(uv + vec2(0.0, eps)) - estTerrainHeight(uv - vec2(0.0, eps))
 		);
 		if (dot(grad, grad) > 0.0001) {
-			vec2 shoreDir = normalize(grad);
+			vec2  shoreDir = normalize(grad);
 			float shoreWeight = clamp(1.0 - depth / 20.0, 0.0, 0.85);
 			d1 = normalize(mix(d1, shoreDir, shoreWeight * 0.8));
 			d2 = normalize(mix(d2, shoreDir, shoreWeight * 0.7));
@@ -141,7 +143,7 @@ void main() {
 	vec2 worldXZ = baseWorldXZ;
 
 	// CDLOD Continuous Distance LOD Morphing
-	vec2 offsetDist = abs(worldXZ - uCameraPosition.xz);
+	vec2  offsetDist = abs(worldXZ - uCameraPosition.xz);
 	float distToCam = max(offsetDist.x, offsetDist.y);
 	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
 
@@ -155,7 +157,7 @@ void main() {
 			// Target position snapped to coarse grid
 			float nextMeshletSize = baseMeshletSize * getLODScale(float(lodLevel + 1));
 			float targetCellSize = nextMeshletSize * 0.1;
-			vec2 targetXZ = floor(worldXZ / targetCellSize) * targetCellSize;
+			vec2  targetXZ = floor(worldXZ / targetCellSize) * targetCellSize;
 			worldXZ = mix(worldXZ, targetXZ, alpha * 0.5);
 		}
 	}
@@ -164,7 +166,7 @@ void main() {
 	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, distToCam, float(lodLevel), waveNormal);
 	vec3 finalWorldPos = vec3(worldXZ.x, params.waterLevel, worldXZ.y) + waveOffset;
 
-	vec2 flatXZ = worldXZ - uCameraPosition.xz;
+	vec2  flatXZ = worldXZ - uCameraPosition.xz;
 	float distSq = dot(flatXZ, flatXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	finalWorldPos.y -= dropOff;
@@ -189,7 +191,7 @@ void main() {
 		uint skirtIdx = 121 + skirtID;
 
 		float skirtDepth = max(0.0, meshletSize * 0.005);
-		vec3 skirtPos = finalWorldPos - vec3(0.0, skirtDepth, 0.0);
+		vec3  skirtPos = finalWorldPos - vec3(0.0, skirtDepth, 0.0);
 
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uViewProjMatrix * vec4(skirtPos, 1.0);
 		outWorldPos[skirtIdx] = skirtPos;
@@ -210,7 +212,7 @@ void main() {
 		bool cullQuad = false;
 		if (lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;

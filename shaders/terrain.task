@@ -8,8 +8,8 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 // trailing clipmapIndex field terrain.mesh reads, which is fine -- each stage only needs to
 // declare the prefix it actually uses, not the whole shared range).
 #include "bindless.glsl"
-#include "terrain.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
@@ -20,7 +20,9 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
-} params;
+}
+
+params;
 
 struct TaskPayload {
 	uint meshletIDs[32];
@@ -41,12 +43,15 @@ bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 
 	for (int i = 0; i < 6; i++) {
 		vec3 pVertex = minB;
-		if (planes[i].x >= 0.0) pVertex.x = maxB.x;
-		if (planes[i].y >= 0.0) pVertex.y = maxB.y;
-		if (planes[i].z >= 0.0) pVertex.z = maxB.z;
+		if (planes[i].x >= 0.0)
+			pVertex.x = maxB.x;
+		if (planes[i].y >= 0.0)
+			pVertex.y = maxB.y;
+		if (planes[i].z >= 0.0)
+			pVertex.z = maxB.z;
 
 		float len = length(planes[i].xyz);
-		vec4 normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
+		vec4  normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
 
 		// Conservative view buffer: 100 world units safety margin
 		if (dot(normPlane.xyz, pVertex) + normPlane.w < -100.0) {
@@ -84,17 +89,29 @@ void main() {
 		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 
 		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
-		vec3 minB = vec3(cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize, -500.0, cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize);
+		vec3 minB = vec3(
+			cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
+			-500.0,
+			cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
+		);
 		vec3 maxB = minB + vec3(meshletSize, 2000.0, meshletSize);
 
 		if (params.minMaxIndex > 0u) {
 			vec2 centerXZ = vec2(minB.x + meshletSize * 0.5, minB.z + meshletSize * 0.5);
-			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, centerXZ, lodLevel, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
+			vec2 minMax = sampleTerrainMinMax(
+				params.minMaxIndex,
+				centerXZ,
+				lodLevel,
+				params.gridParams.w,
+				params.lodOffsets0_3,
+				params.lodOffsets4_7,
+				params.lodOffsets8_11
+			);
 			minB.y = minMax.x - 10.0;
 			maxB.y = minMax.y + 10.0;
 		}
 
-		vec2 maxRel = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
+		vec2  maxRel = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
 		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
 		minB.y -= maxDropOff;
 
@@ -102,7 +119,7 @@ void main() {
 
 		if (visible && lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;

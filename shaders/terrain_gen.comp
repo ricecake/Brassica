@@ -2,8 +2,8 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #include "bindless.glsl"
-#include "terrain.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
 
@@ -21,22 +21,24 @@ layout(push_constant) uniform PushConstants {
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
-} push;
+}
 
-vec3 permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
+push;
+
+vec3 permute(vec3 x) {
+	return mod(((x * 34.0) + 1.0) * x, 289.0);
+}
 
 float snoise(vec2 v) {
-	const vec4 C = vec4(0.211324865405187, 0.366025403784439,
-	                  -0.577350269189626, 0.024390243902439);
-	vec2 i  = floor(v + dot(v, C.yy));
-	vec2 x0 = v -   i + dot(i, C.xx);
-	vec2 i1;
+	const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+	vec2       i = floor(v + dot(v, C.yy));
+	vec2       x0 = v - i + dot(i, C.xx);
+	vec2       i1;
 	i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
 	vec4 x12 = x0.xyxy + C.xxzz;
 	x12.xy -= i1;
 	i = mod(i, 289.0);
-	vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0))
-		+ i.x + vec3(0.0, i1.x, 1.0));
+	vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
 	vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
 	m = m * m;
 	m = m * m;
@@ -46,7 +48,7 @@ float snoise(vec2 v) {
 	vec3 a0 = x - ox;
 	m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
 	vec3 g;
-	g.x  = a0.x  * x0.x  + h.x  * x0.y;
+	g.x = a0.x * x0.x + h.x * x0.y;
 	g.yz = a0.yz * x12.xz + h.yz * x12.yw;
 	return 130.0 * dot(m, g);
 }
@@ -84,7 +86,7 @@ float evalTerrainHeight(vec2 worldXZ, out float outBiome, out float outMask) {
 
 	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
 	vec3 warp = cross_noise_fbm(pos * 0.005, 3, 0.0);
-	pos += 50.0*warp;
+	pos += 50.0 * warp;
 	outBiome = dot_noise(pos * 0.0003, 0.0);
 	outMask = dot_noise(pos * 0.0008, 0.0);
 	float baseVal = dot_noise_fbm(pos * 0.0015, 4, 0.0);
@@ -95,31 +97,33 @@ float evalTerrainHeight(vec2 worldXZ, out float outBiome, out float outMask) {
 
 void main() {
 	uvec3 globalId = gl_GlobalInvocationID;
-	uint dim = push.gridParams.w;
-	uint lod = globalId.z;
+	uint  dim = push.gridParams.w;
+	uint  lod = globalId.z;
 
 	if (globalId.x >= dim || globalId.y >= dim || lod >= push.gridParams.x) {
 		return;
 	}
 
 	uvec4 deltas = (lod < 4u) ? push.lodDeltas0_3 : ((lod < 8u) ? push.lodDeltas4_7 : push.lodDeltas8_11);
-	uint packedDelta = deltas[lod % 4u];
-	int deltaX = int(packedDelta & 0xFFFFu);
-	if (deltaX >= 0x8000) deltaX -= 0x10000;
+	uint  packedDelta = deltas[lod % 4u];
+	int   deltaX = int(packedDelta & 0xFFFFu);
+	if (deltaX >= 0x8000)
+		deltaX -= 0x10000;
 	int deltaZ = int((packedDelta >> 16u) & 0xFFFFu);
-	if (deltaZ >= 0x8000) deltaZ -= 0x10000;
+	if (deltaZ >= 0x8000)
+		deltaZ -= 0x10000;
 
 	if (uFrameIndex > 0 && deltaX == 0 && deltaZ == 0) {
 		return;
 	}
 
 	uvec4 offsets = (lod < 4u) ? push.lodOffsets0_3 : ((lod < 8u) ? push.lodOffsets4_7 : push.lodOffsets8_11);
-	uint packedOffset = offsets[lod % 4u];
+	uint  packedOffset = offsets[lod % 4u];
 	ivec2 gridOffset = ivec2(int(packedOffset & 0xFFFFu), int((packedOffset >> 16u) & 0xFFFFu));
 
 	ivec2 texelIndex = ivec2(globalId.xy);
-	int colIdx = (texelIndex.x - gridOffset.x + int(dim)) % int(dim);
-	int rowIdx = (texelIndex.y - gridOffset.y + int(dim)) % int(dim);
+	int   colIdx = (texelIndex.x - gridOffset.x + int(dim)) % int(dim);
+	int   rowIdx = (texelIndex.y - gridOffset.y + int(dim)) % int(dim);
 
 	int dimInt = int(dim);
 	if (uFrameIndex > 0 && abs(deltaX) < dimInt && abs(deltaZ) < dimInt) {
@@ -146,7 +150,7 @@ void main() {
 	float hR = evalTerrainHeight(worldXZ + vec2(eps, 0.0), dummyB, dummyM);
 	float hD = evalTerrainHeight(worldXZ + vec2(0.0, -eps), dummyB, dummyM);
 	float hU = evalTerrainHeight(worldXZ + vec2(0.0, eps), dummyB, dummyM);
-	vec3 normal = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
+	vec3  normal = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
 
 	float hLD = evalTerrainHeight(worldXZ + vec2(-eps, -eps), dummyB, dummyM);
 	float hRD = evalTerrainHeight(worldXZ + vec2(eps, -eps), dummyB, dummyM);
@@ -159,8 +163,16 @@ void main() {
 
 	ivec3 storeCoord = ivec3(globalId.xy, lod);
 
-	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
+	imageStore(
+		uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)],
+		storeCoord,
+		vec4(h, normal.x, normal.y, normal.z)
+	);
 	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(minH, maxH, minH, maxH));
-	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(b, 0.0, 1.0), variance, 1.0, m));
+	imageStore(
+		uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)],
+		storeCoord,
+		vec4(clamp(b, 0.0, 1.0), variance, 1.0, m)
+	);
 	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
 }

@@ -10,7 +10,7 @@ layout(location = 0) in struct ParticleVertexOutput {
 layout(location = 0) out vec4 outColor;
 
 void main() {
-	vec2 centerOffset = IN.uv - vec2(0.5);
+	vec2  centerOffset = IN.uv - vec2(0.5);
 	float distSq = dot(centerOffset, centerOffset);
 	if (distSq > 0.25) {
 		discard;

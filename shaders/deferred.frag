@@ -18,15 +18,17 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  backgroundIndex;
 	uint  clipmapIndex;
 	uint  tlasIndex;
-	uint gDepthIndex;
+	uint  gDepthIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
-} params;
+}
+
+params;
 
 // Calculate the LOD level based on the sample's Chebyshev distance
 uint calculateRayLOD(vec2 sampleXZ) {
-	vec2 dists = abs(sampleXZ - uCameraPosition.xz);
+	vec2  dists = abs(sampleXZ - uCameraPosition.xz);
 	float maxDist = max(dists.x, dists.y);
 
 	float baseRadius = 272.0;
@@ -42,28 +44,44 @@ uint calculateRayLOD(vec2 sampleXZ) {
 // Update the intersection function to use dynamic LODs
 bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
 	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
-	int numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
+	int   numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
 
 	float rayLength = 500.0;
 	for (int i = 1; i <= numSteps; ++i) {
 		float t = (float(i) / float(numSteps)) * rayLength;
-		vec3 samplePos = rayOrigin + rayDir * t;
+		vec3  samplePos = rayOrigin + rayDir * t;
 
 		// Fetch the appropriate LOD for the current spatial step
 		uint stepLod = calculateRayLOD(samplePos.xz);
 
-		vec2 flatXZ = samplePos.xz - uCameraPosition.xz;
+		vec2  flatXZ = samplePos.xz - uCameraPosition.xz;
 		float dropOff = dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
 
 		// Accelerate raymarching via min-max height map check if minMaxIndex is set
 		if (params.minMaxIndex > 0u) {
-			vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
+			vec2 minMax = sampleTerrainMinMax(
+				params.minMaxIndex,
+				samplePos.xz,
+				stepLod,
+				params.gridParams.w,
+				params.lodOffsets0_3,
+				params.lodOffsets4_7,
+				params.lodOffsets8_11
+			);
 			if (samplePos.y > minMax.y - dropOff + 1.0) {
 				continue; // Ray is safely above the maximum height in this cell
 			}
 		}
 
-		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, samplePos.xz, stepLod, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11);
+		vec4 texSample = sampleTerrainClipmap(
+			params.clipmapIndex,
+			samplePos.xz,
+			stepLod,
+			params.gridParams.w,
+			params.lodOffsets0_3,
+			params.lodOffsets4_7,
+			params.lodOffsets8_11
+		);
 		float terrainHeight = texSample.r - dropOff;
 
 		if (samplePos.y <= terrainHeight) {
@@ -86,11 +104,11 @@ vec3 ACESFilm(vec3 x) {
 }
 
 void main() {
-	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
-	vec3 norm = SAMPLE_NEAREST(params.gNormalIndex, inUV).rgb;
-	vec3 relPos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
-	vec3 pos = relPos + uCameraPosition.xyz;
-	vec3 hdrBg = SAMPLE_NEAREST(params.backgroundIndex, inUV).rgb;
+	vec4  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
+	vec3  norm = SAMPLE_NEAREST(params.gNormalIndex, inUV).rgb;
+	vec3  relPos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
+	vec3  pos = relPos + uCameraPosition.xyz;
+	vec3  hdrBg = SAMPLE_NEAREST(params.backgroundIndex, inUV).rgb;
 	float depth = SAMPLE_NEAREST(params.gDepthIndex, inUV).r;
 
 	vec3 hdrColor;
@@ -112,8 +130,17 @@ void main() {
 			vec3 rayOrigin = pos + norm * 0.1; // Base offset to avoid standard self-shadowing
 
 			// Sample the absolute highest-detail terrain height at this coordinate
-			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11).r;
-			vec2 flatXZ0 = pos.xz - uCameraPosition.xz;
+			float trueHeight0 = sampleTerrainClipmap(
+									params.clipmapIndex,
+									pos.xz,
+									0u,
+									params.gridParams.w,
+									params.lodOffsets0_3,
+									params.lodOffsets4_7,
+									params.lodOffsets8_11
+			)
+									.r;
+			vec2  flatXZ0 = pos.xz - uCameraPosition.xz;
 			float dropOff0 = dot(flatXZ0, flatXZ0) / (2.0 * FAKE_PLANET_RADIUS);
 			trueHeight0 -= dropOff0;
 
@@ -123,7 +150,6 @@ void main() {
 			}
 
 			float shadowRayTMax = 1000.0;
-
 
 			rayQueryEXT rq;
 			rayQueryInitializeEXT(

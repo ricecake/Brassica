@@ -4,17 +4,17 @@
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct Particle {
-	vec4 position;
-	vec4 velocity;
-	vec4 misc;
-	uint type;
+	vec4  position;
+	vec4  velocity;
+	vec4  misc;
+	uint  type;
 	float lifetime;
 	float maxLifetime;
-	uint padding;
+	uint  padding;
 };
 
 struct ParticleType {
-	vec4 color;
+	vec4  color;
 	float size;
 	float gravityScale;
 	float drag;
@@ -44,9 +44,11 @@ layout(std430, set = 2, binding = 3) buffer IndirectCommandBuffer {
 };
 
 layout(push_constant) uniform ParticleLivenessPushConstants {
-	uint maxParticles;
+	uint  maxParticles;
 	float deltaTime;
-} uPush;
+}
+
+uPush;
 
 void main() {
 	uint idx = gl_GlobalInvocationID.x;

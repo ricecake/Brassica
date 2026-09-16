@@ -4,21 +4,23 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(push_constant) uniform TransmittancePushConstants {
-	vec3  rayleighScatteringBase;
-	float rayleighScaleHeight;
-	vec3  ozoneAbsorptionBase;
-	float mieScaleHeight;
-	vec3  hazeColor;
-	float mieScatteringBase;
-	float mieExtinctionBase;
-	float rayleighScale;
-	float mieScale;
-	float mieAnisotropy;
-	float atmosphereHeight;
-	float hazeDensity;
-	float hazeHeight;
+	vec3                     rayleighScatteringBase;
+	float                    rayleighScaleHeight;
+	vec3                     ozoneAbsorptionBase;
+	float                    mieScaleHeight;
+	vec3                     hazeColor;
+	float                    mieScatteringBase;
+	float                    mieExtinctionBase;
+	float                    rayleighScale;
+	float                    mieScale;
+	float                    mieAnisotropy;
+	float                    atmosphereHeight;
+	float                    hazeDensity;
+	float                    hazeHeight;
 	layout(offset = 80) uint outIndex;
-} u_atmosphere;
+}
+
+u_atmosphere;
 
 #include "common.glsl"
 

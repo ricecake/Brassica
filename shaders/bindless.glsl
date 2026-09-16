@@ -8,21 +8,21 @@
 // the C++ side (Engine::frameDescriptorSets), unlike the bindless catalog below, since its
 // contents are CPU-written fresh every frame.
 layout(std140, set = 0, binding = 0) uniform FrameUBO {
-	mat4 uViewMatrix;
-	mat4 uInvViewMatrix;
-	mat4 uProjMatrix;
-	mat4 uInvProjMatrix;
-	mat4 uViewProjMatrix;
-	mat4 uInvViewProjMatrix;
-	vec4 uCameraPosition;
+	mat4  uViewMatrix;
+	mat4  uInvViewMatrix;
+	mat4  uProjMatrix;
+	mat4  uInvProjMatrix;
+	mat4  uViewProjMatrix;
+	mat4  uInvViewProjMatrix;
+	vec4  uCameraPosition;
 	float uTime;
 	float uFov;
 	float uAspectRatio;
 	float uNearPlane;
 	float uFarPlane;
-	uint uFrameIndex;
-	uint uGlobalSeed;
-	uint uFrameRandom;
+	uint  uFrameIndex;
+	uint  uGlobalSeed;
+	uint  uFrameRandom;
 };
 
 // Bindless resource catalog in Set 1 (bindings 0..4). One descriptor set instance -- never
@@ -53,13 +53,13 @@ layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
 // 0 yet, so it depends on the caller having actually registered whatever it indexes (true for
 // every current SAMPLE_ARRAY_WRAP call site: the terrain clipmap is always registered once at
 // Engine::Init before any frame runs).
-#define SAMPLE_NEAREST(idx, uv) \
+#define SAMPLE_NEAREST(idx, uv)                                                                                        \
 	texture(sampler2D(uTextures2D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uv)
 
-#define SAMPLE_LINEAR(idx, uv) \
+#define SAMPLE_LINEAR(idx, uv)                                                                                         \
 	texture(sampler2D(uTextures2D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv)
 
-#define SAMPLE_ARRAY_WRAP(idx, uvw) \
+#define SAMPLE_ARRAY_WRAP(idx, uvw)                                                                                    \
 	texture(sampler2DArray(uTextureArrays[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
 
 #endif // BRASSICA_BINDLESS_GLSL
