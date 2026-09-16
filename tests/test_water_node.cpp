@@ -168,8 +168,8 @@ namespace {
 		uboWrite.setBufferInfo(frameBufferDescInfo);
 		device.updateDescriptorSets(uboWrite, nullptr);
 
-		// -- Bindless set (set 1): sampled 2D, sampled 2D array + sampler catalog --
-		std::array<vk::DescriptorSetLayoutBinding, 3> layoutBindings{};
+		// -- Bindless set (set 1): sampled 2D, sampled 2D array, sampler catalog, storage image --
+		std::array<vk::DescriptorSetLayoutBinding, 4> layoutBindings{};
 		layoutBindings[0]
 			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
@@ -185,26 +185,32 @@ namespace {
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		layoutBindings[3]
+			.setBinding(3)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 4> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
 		bindingFlagsInfo.setBindingFlags(bindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindingCount(3);
+		layoutInfo.setBindingCount(4);
 		layoutInfo.setBindings(layoutBindings);
 		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		layoutInfo.pNext = &bindingFlagsInfo;
 		result.layout = device.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 3> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 16},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 8},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -238,6 +244,7 @@ namespace {
 		result.bindings.sampledImage2DBinding = 0;
 		result.bindings.sampledImage2DArrayBinding = 1;
 		result.bindings.samplerBinding = 2;
+		result.bindings.storageImageBinding = 3;
 		result.bindings.frameSet = frameSet;
 		result.bindings.frameSetLayout = result.frameLayout;
 		return result;
