@@ -9,6 +9,8 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "constants.h"
+
 namespace brassica {
 
 	enum LightType {
@@ -38,7 +40,7 @@ namespace brassica {
 
 	static_assert(sizeof(LightGPU) == 64, "LightGPU size must be 64 bytes");
 
-	constexpr uint32_t MAX_LIGHTS = 1024;
+	constexpr uint32_t MAX_LIGHTS = brassica::constants::Class::Lighting::MaxLights;
 
 	struct alignas(16) LightsSSBOData {
 		uint32_t count{0};
@@ -54,7 +56,7 @@ namespace brassica {
 
 	static_assert(sizeof(ClusterGPU) == 272, "ClusterGPU size must be 272 bytes");
 
-	constexpr uint32_t TOTAL_CLUSTERS = 16 * 9 * 24 + 1; // 3457 clusters
+	constexpr uint32_t TOTAL_CLUSTERS = brassica::constants::Class::Lighting::TotalClusters; // 3457 clusters
 
 	enum class LightBehaviorType { NONE, BLINK, PULSE, EASE_IN, EASE_OUT, EASE_IN_OUT, FLICKER, MORSE };
 

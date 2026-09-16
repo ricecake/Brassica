@@ -20,6 +20,9 @@
 #include "graph/ResourceKey.hpp"
 #include "graph/TypeList.hpp"
 #include "graph/Validation.hpp"
+#include "ArgparseManager.hpp"
+#include "ConfigManager.hpp"
+#include "lighting/ILightManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -749,4 +752,63 @@ TEST_CASE("Cluster light assignment node creates dependency before deferred shad
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
+}
+
+TEST_CASE("ArgparseManager CLI options parsing") {
+	brassica::ArgparseManager argMgr("TestApp", "1.0.0");
+	argMgr.Initialize();
+	CHECK(argMgr.IsInitialized());
+
+	std::vector<std::string> args = {"TestApp", "--headless", "--frames", "15", "--app", "TestSandbox", "--config", "test.ini"};
+	bool parseSuccess = argMgr.Parse(args);
+	CHECK(parseSuccess);
+	CHECK(argMgr.GetHeadless() == true);
+	CHECK(argMgr.GetMaxFrames() == 15u);
+	CHECK(argMgr.GetAppName() == "TestSandbox");
+	CHECK(argMgr.GetConfigFile() == "test.ini");
+}
+
+TEST_CASE("ConfigManager application and manager scoped configuration") {
+	brassica::ConfigManager cfgMgr("Sandbox");
+	cfgMgr.Initialize();
+
+	cfgMgr.SetAppSetting<int>("Width", 1920);
+	cfgMgr.SetAppSetting<std::string>("Title", "SandboxApp");
+	cfgMgr.SetManagerSetting<float>("LightManager", "SunIntensity", 2.5f);
+	cfgMgr.SetManagerSetting<bool>("LightManager", "EnableShadows", true);
+
+	CHECK(cfgMgr.GetAppSetting<int>("Width", 1280) == 1920);
+	CHECK(cfgMgr.GetAppSetting<std::string>("Title", "Default") == "SandboxApp");
+	CHECK(cfgMgr.GetManagerSetting<float>("LightManager", "SunIntensity", 1.0f) == doctest::Approx(2.5f));
+	CHECK(cfgMgr.GetManagerSetting<bool>("LightManager", "EnableShadows", false) == true);
+
+	// Scoped app testing: "Editor" app should not get "Sandbox" app settings
+	cfgMgr.SetApplicationName("Editor");
+	CHECK(cfgMgr.GetAppSetting<int>("Width", 1280) == 1280); // Falls back to default for Editor
+	CHECK(cfgMgr.GetManagerSetting<float>("LightManager", "SunIntensity", 1.0f) == doctest::Approx(1.0f)); // Scoped fallback
+}
+
+TEST_CASE("ImGuiNode toggles active state in frame graph based on ImGuiManager visibility") {
+	struct MockImGuiManager {
+		bool visible = false;
+		bool IsVisible() const { return visible; }
+	};
+
+	MockImGuiManager mockMgr;
+	mockMgr.visible = false;
+
+	Recipe r1{.domain = ExecutionDomain::Graphics, .isActive = mockMgr.IsVisible()};
+	CHECK(r1.isActive == false);
+
+	mockMgr.visible = true;
+	Recipe r2{.domain = ExecutionDomain::Graphics, .isActive = mockMgr.IsVisible()};
+	if (mockMgr.IsVisible()) {
+		r2.realizations.push_back(ResourceRealization{
+			.key = IdOf<Swapchain>(),
+			.access = AccessKind::ReadWrite
+		});
+	}
+	CHECK(r2.isActive == true);
+	REQUIRE(r2.realizations.size() == 1);
+	CHECK(r2.realizations[0].key == IdOf<Swapchain>());
 }

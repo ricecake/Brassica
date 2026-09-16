@@ -86,6 +86,67 @@ namespace brassica {
 		} // namespace Library
 
 		namespace Class {
+			namespace Lighting {
+				constexpr std::uint32_t MaxLights = 1024;
+				constexpr std::uint32_t TotalClusters = 16 * 9 * 24 + 1; // 3457 clusters
+
+				// Sun Defaults
+				constexpr float DefaultSunAzimuth = 0.0f;
+				constexpr float DefaultSunElevation = 45.0f;
+				constexpr float DefaultSunIntensity = 1.0f;
+				constexpr float DefaultSunColorR = 2.5f;
+				constexpr float DefaultSunColorG = 2.3f;
+				constexpr float DefaultSunColorB = 2.0f;
+
+				// Moon Defaults
+				constexpr float DefaultMoonAzimuth = 180.0f;
+				constexpr float DefaultMoonElevation = -45.0f;
+				constexpr float DefaultMoonIntensity = 1.0f;
+				constexpr float DefaultMoonColorR = 0.95f;
+				constexpr float DefaultMoonColorG = 0.93f;
+				constexpr float DefaultMoonColorB = 0.88f;
+
+				// Day/Night Cycle Defaults
+				constexpr float DefaultCycleTime = 8.0f;
+				constexpr float DefaultCycleSpeed = 0.0125f;
+				constexpr float DefaultMoonOffset = 6.0f;
+				constexpr float DefaultMoonAzimuthBase = 70.0f;
+				constexpr float DefaultLunarAlbedo = 0.08f;
+				constexpr float DefaultLunarMonth = 2.0f;
+
+				// Ambient & Exposures
+				constexpr float DefaultAmbientR = 0.15f;
+				constexpr float DefaultAmbientG = 0.15f;
+				constexpr float DefaultAmbientB = 0.2f;
+				constexpr float DefaultSkyExposure = 1.0f;
+				constexpr float DefaultStarExposure = 1.0f;
+				constexpr float DefaultTerrainExposure = 1.0f;
+
+				// Lightning Defaults
+				constexpr float DefaultLightningMaxLifetime = 0.3f;
+				constexpr float DefaultLightningBranchProbability = 0.15f;
+				constexpr float DefaultLightningThickness = 1.5f;
+				constexpr float DefaultLightningColorR = 0.8f;
+				constexpr float DefaultLightningColorG = 0.9f;
+				constexpr float DefaultLightningColorB = 1.0f;
+
+				consteval glm::vec3 DefaultSunColor() {
+					return glm::vec3(DefaultSunColorR, DefaultSunColorG, DefaultSunColorB);
+				}
+
+				consteval glm::vec3 DefaultMoonColor() {
+					return glm::vec3(DefaultMoonColorR, DefaultMoonColorG, DefaultMoonColorB);
+				}
+
+				consteval glm::vec3 DefaultAmbientLight() {
+					return glm::vec3(DefaultAmbientR, DefaultAmbientG, DefaultAmbientB);
+				}
+
+				consteval glm::vec3 DefaultLightningColor() {
+					return glm::vec3(DefaultLightningColorR, DefaultLightningColorG, DefaultLightningColorB);
+				}
+			} // namespace Lighting
+
 			namespace Shadows {
 				constexpr int   MaxLights = 10;
 				constexpr int   MaxCascades = 4;
