@@ -141,25 +141,39 @@ void main() {
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;
 	vec2 worldXZ = centerWorldPos + deltaWorld;
 
-	float b, m;
-	float h = evalTerrainHeight(worldXZ, b, m);
-
 	float eps = max(0.25, texelSize);
-	float dummyB, dummyM;
-	float hL = evalTerrainHeight(worldXZ + vec2(-eps, 0.0), dummyB, dummyM);
-	float hR = evalTerrainHeight(worldXZ + vec2(eps, 0.0), dummyB, dummyM);
-	float hD = evalTerrainHeight(worldXZ + vec2(0.0, -eps), dummyB, dummyM);
-	float hU = evalTerrainHeight(worldXZ + vec2(0.0, eps), dummyB, dummyM);
-	vec3  normal = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
 
-	float hLD = evalTerrainHeight(worldXZ + vec2(-eps, -eps), dummyB, dummyM);
-	float hRD = evalTerrainHeight(worldXZ + vec2(eps, -eps), dummyB, dummyM);
-	float hLU = evalTerrainHeight(worldXZ + vec2(-eps, eps), dummyB, dummyM);
-	float hRU = evalTerrainHeight(worldXZ + vec2(eps, eps), dummyB, dummyM);
+	TerrainConfig con = TerrainConfig(
+		0.0001, // Multiplier for the input coordinate domain
+		-50.0,    // Absolute minimum output (e.g., ocean floor)
+		1000.0,    // Absolute maximum output (e.g., highest mountain peak)
+		0.14  // Balances how high ridges spike relative to base terrain (0.0 to 1.0)
+	);
 
-	float minH = min(h, min(hL, min(hR, min(hD, min(hU, min(hLD, min(hRD, min(hLU, hRU))))))));
-	float maxH = max(h, max(hL, max(hR, max(hD, max(hU, max(hLD, max(hRD, max(hLU, hRU))))))));
-	float variance = maxH - minH;
+	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
+    float h = evaluate_terrain(p, 0.0, 0.75, con);
+    vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con);
+
+	float b, m;
+	float h_null = evalTerrainHeight(worldXZ, b, m);
+
+	// float dummyB, dummyM;
+	// float hL = evalTerrainHeight(worldXZ + vec2(-eps, 0.0), dummyB, dummyM);
+	// float hR = evalTerrainHeight(worldXZ + vec2(eps, 0.0), dummyB, dummyM);
+	// float hD = evalTerrainHeight(worldXZ + vec2(0.0, -eps), dummyB, dummyM);
+	// float hU = evalTerrainHeight(worldXZ + vec2(0.0, eps), dummyB, dummyM);
+	// vec3  normal = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
+
+	// float hLD = evalTerrainHeight(worldXZ + vec2(-eps, -eps), dummyB, dummyM);
+	// float hRD = evalTerrainHeight(worldXZ + vec2(eps, -eps), dummyB, dummyM);
+	// float hLU = evalTerrainHeight(worldXZ + vec2(-eps, eps), dummyB, dummyM);
+	// float hRU = evalTerrainHeight(worldXZ + vec2(eps, eps), dummyB, dummyM);
+
+	// float minH = min(h, min(hL, min(hR, min(hD, min(hU, min(hLD, min(hRD, min(hLU, hRU))))))));
+	// float maxH = max(h, max(hL, max(hR, max(hD, max(hU, max(hLD, max(hRD, max(hLU, hRU))))))));
+	float variance = 0.25;//maxH - minH;
+	float minH = -10.0;
+	float maxH = 20.0;
 
 	ivec3 storeCoord = ivec3(globalId.xy, lod);
 

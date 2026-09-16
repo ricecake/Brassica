@@ -16,6 +16,18 @@ const mat3 GOLD = mat3(
 	+0.399753815
 );
 
+
+// const float PI = 3.14159265359;
+// const float TAU = 2.0 * PI;
+// const float PHI = 1.61803398875;
+
+// const mat3 GOLD = mat3(
+//     -0.571464913, +0.814921382, +0.096597072,
+//     -0.278044873, -0.303026659, +0.911518454,
+//     +0.772087367, +0.494042493, +0.399753815
+// );
+
+
 const int bayer4x4[16] = int[](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
 
 float safeDiv(float a, float b) {
@@ -439,4 +451,193 @@ float schlickBias(float x, float g) {
 	// Schlick's fast alternative: f(x) = x / ((1/a - 2) * (1.0 - x) + 1.0)
 	float k = (1.0 / gg) - 2.0;
 	return xx / (k * (1.0 - xx) + 1.0);
+}
+
+float dot_noise(vec3 p, float phase, out vec3 grad) {
+    vec3 u = GOLD * p + vec3(phase, phase * 1.3, phase * 1.7);
+    vec3 v = PHI * p * GOLD + vec3(phase * 1.1, phase * 0.7, phase * 1.5);
+
+    vec3 sin_u = sin(u);
+    vec3 cos_u = cos(u);
+    vec3 sin_v = sin(v);
+    vec3 cos_v = cos(v);
+
+    // Apply the analytical derivative
+    grad = -(sin_u * sin_v) * GOLD + PHI * (GOLD * (cos_u * cos_v));
+
+    return dot(cos_u, sin_v);
+}
+
+float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad) {
+    float val = 0.0;
+    vec3 grad = vec3(0.0);
+
+    float amp = 1.0;
+    float freq = 1.0;
+    float max_amp = 0.0;
+
+    for (int i = 0; i < max(0, oct); i++) {
+        vec3 g_noise;
+
+        // (p + (val/freq)) * freq simplifies algebraically to (p * freq + val)
+        // Since val is a float, GLSL adds it to each component of the vec3.
+        vec3 p_warp = p * freq + val;
+
+        float n = dot_noise(p_warp, phase * freq, g_noise);
+
+        // Accumulate the gradient using the chain rule for the domain warping.
+        // The Jacobian of (p * freq + val) introduces the dot product here
+        // because the scalar `val` is added uniformly across all three dimensions.
+        grad += amp * (freq * g_noise + dot(g_noise, vec3(1.0)) * grad);
+
+        val += amp * n;
+        max_amp += amp;
+
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+
+    out_grad = grad / max_amp;
+    return val / max_amp;
+}
+
+// Skew-symmetric matrix helper (takes column-major order)
+mat3 skew(vec3 v) {
+    return mat3(
+        0.0,  v.z, -v.y,
+       -v.z,  0.0,  v.x,
+        v.y, -v.x,  0.0
+    );
+}
+
+// Diagonal matrix helper
+mat3 diag(vec3 v) {
+    return mat3(
+        v.x, 0.0, 0.0,
+        0.0, v.y, 0.0,
+        0.0, 0.0, v.z
+    );
+}
+
+vec3 cross_noise(vec3 p, float phase, out mat3 jacobian) {
+    vec3 u = GOLD * p + vec3(phase, phase * 1.3, phase * 1.7);
+    vec3 v = PHI * p * GOLD + vec3(phase * 1.1, phase * 0.7, phase * 1.5);
+
+    vec3 sin_u = sin(u);
+    vec3 cos_u = cos(u);
+    vec3 sin_v = sin(v);
+    vec3 cos_v = cos(v);
+
+    // Compute the Jacobians of the inner transformations
+    mat3 J_A = -diag(sin_u) * GOLD;
+    mat3 J_B =  diag(cos_v) * (PHI * transpose(GOLD));
+
+    // Apply the cross product product-rule
+    jacobian = -skew(sin_v) * J_A + skew(cos_u) * J_B;
+
+    return cross(cos_u, sin_v);
+}
+
+vec3 cross_noise_fbm(vec3 p, int oct, float phase, out mat3 out_jacobian) {
+    vec3 val = vec3(0.0);
+    mat3 jacobian = mat3(0.0);
+
+    float amp = 1.0;
+    float freq = 1.0;
+    float max_amp = 0.0;
+
+    // Identity matrix in GLSL
+    mat3 I = mat3(1.0);
+
+    for (int i = 0; i < max(0, oct); i++) {
+        mat3 J_noise;
+
+        vec3 p_warp = p * freq + val;
+        vec3 n = cross_noise(p_warp, phase * freq, J_noise);
+
+        // J_warp is the derivative of (p * freq + val)
+        mat3 J_warp = freq * I + jacobian;
+
+        // Chain rule applies standard matrix multiplication: J_outer * J_inner
+        jacobian += amp * (J_noise * J_warp);
+
+        val += amp * n;
+        max_amp += amp;
+
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+
+    out_jacobian = jacobian / max_amp;
+    return val / max_amp;
+}
+
+// Assuming cross_noise_fbm and dot_noise_fbm from previous implementations are in scope
+struct TerrainConfig {
+    float spatial_scale;
+    float min_height;
+    float max_height;
+    float ridge_weight;
+};
+
+float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config) {
+	p *= config.spatial_scale;
+    mat3 J_flow;
+    vec3 unused_grad; // Placeholder for when you implement full analytical normals
+
+    // 1. Evaluate the divergence-free vector field and its Jacobian
+    vec3 flow = cross_noise_fbm(p, 3, phase, J_flow);
+
+    // 2. Isolate the symmetric strain tensor (S)
+    mat3 S = 0.5 * (J_flow + transpose(J_flow));
+
+    // 3. Calculate tensor invariants
+    // First invariant (I1) is the trace (divergence)
+    float I1 = S[0][0] + S[1][1] + S[2][2];
+
+    // For a symmetric matrix, tr(S^2) is the sum of squared elements
+    float tr_S2 = dot(S[0], S[0]) + dot(S[1], S[1]) + dot(S[2], S[2]);
+
+    // Second invariant (I2) yields a scalar representation of shear stress
+    float I2 = 0.5 * (I1 * I1 - tr_S2);
+
+    // 4. Base Continent Mask
+    // Map negative divergence (convergence) to 1.0 (land), positive to 0.0 (ocean/valleys)
+    float continent_mask = smoothstep(0.2, -0.5, I1);
+
+    // Evaluate low-frequency baseline elevation
+    float base_height = dot_noise_fbm(p, 4, phase, unused_grad) * continent_mask;
+
+    // 5. Anisotropic Domain Warping
+    // Multiply p by the strain tensor to stretch the coordinate space along the principal axes of deformation
+    vec3 p_warped = p + (S * p) * warp_strength;
+
+    // 6. Shear-Guided High-Frequency Detail
+    // Isolate areas of high shear stress using I2 to mask the jagged ridges
+    float ridge_mask = smoothstep(0.0, 0.8, abs(I2)) * continent_mask;
+
+    // Evaluate high-frequency noise using the warped domain, mapped to a sharp ridge function
+    float raw_ridge = dot_noise_fbm(p_warped, 6, phase + 42.0, unused_grad);
+    float ridge_height = (1.0 - abs(raw_ridge)) * ridge_mask; // Ridged multifractal style
+
+    float finalHeight = base_height + (ridge_height * 0.5);
+	return remap(finalHeight, 0.0, 1.0, config.min_height, config.max_height);
+}
+
+
+vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps, TerrainConfig config) {
+    const vec2 k = vec2(1.0, -1.0);
+
+    // Evaluate the terrain 4 times offset in a tetrahedron
+    float h1 = evaluate_terrain(p + k.xyy * eps, phase, warp_strength, config);
+    float h2 = evaluate_terrain(p + k.yyx * eps, phase, warp_strength, config);
+    float h3 = evaluate_terrain(p + k.yxy * eps, phase, warp_strength, config);
+    float h4 = evaluate_terrain(p + k.xxx * eps, phase, warp_strength, config);
+
+    // Accumulate the gradient vectors
+    vec3 grad = k.xyy * h1 + k.yyx * h2 + k.yxy * h3 + k.xxx * h4;
+
+    // Normalize to get the surface normal.
+    // The exact scaling of grad.y vs grad.xz depends on your world-space scale.
+    return normalize(vec3(grad.x, 2.0 * eps, grad.z));
 }
