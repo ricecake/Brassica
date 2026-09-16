@@ -8,6 +8,8 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "ArgparseManager.hpp"
+#include "ConfigManager.hpp"
 #include "EngineConstants.hpp"
 #include "GLFW/glfw3.h"
 #include "graph/PhysicalRegistry.hpp"
@@ -33,32 +35,21 @@
 namespace brassica {
 
 	struct EngineOptions {
-		bool     headless{false};
-		uint32_t maxFrames{0};
+		bool        headless{false};
+		uint32_t    maxFrames{0};
+		std::string configFile{"config.ini"};
+		std::string appName{"Sandbox"};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
+			ArgparseManager argManager;
+			argManager.Initialize();
+			argManager.Parse(argc, argv);
+
 			EngineOptions opts;
-			for (int i = 1; i < argc; ++i) {
-				std::string arg = argv[i];
-				if (arg == "--headless" || arg == "-headless") {
-					opts.headless = true;
-					if (i + 1 < argc && argv[i + 1][0] != '-') {
-						try {
-							opts.maxFrames = static_cast<uint32_t>(std::stoul(argv[i + 1]));
-							i++;
-						} catch (...) {
-						}
-					}
-				} else if (arg == "--frames" || arg == "-frames") {
-					if (i + 1 < argc) {
-						try {
-							opts.maxFrames = static_cast<uint32_t>(std::stoul(argv[i + 1]));
-							i++;
-						} catch (...) {
-						}
-					}
-				}
-			}
+			opts.headless = argManager.GetHeadless();
+			opts.maxFrames = argManager.GetMaxFrames();
+			opts.configFile = argManager.GetConfigFile();
+			opts.appName = argManager.GetAppName();
 			return opts;
 		}
 	};
@@ -109,6 +100,10 @@ namespace brassica {
 		ImGuiManager& GetImGuiManager() { return imguiManager; }
 
 		const ImGuiManager& GetImGuiManager() const { return imguiManager; }
+
+		ConfigManager& GetConfigManager() { return configManager; }
+
+		const ConfigManager& GetConfigManager() const { return configManager; }
 
 		ServiceLocator& GetServiceLocator() { return serviceLocator; }
 
@@ -253,6 +248,8 @@ namespace brassica {
 		EngineOptions       options{};
 		uint32_t            validationErrorCount{0};
 		uint32_t            validationWarningCount{0};
+		ArgparseManager     argparseManager;
+		ConfigManager       configManager;
 		ShaderWatcher       shaderWatcher;
 		enki::TaskScheduler taskScheduler;
 	};

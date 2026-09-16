@@ -48,7 +48,7 @@ namespace brassica {
 		const glm::vec3& startPos,
 		const glm::vec3& endPos,
 		const glm::vec3& color,
-		LightManager&    lightManager
+		ILightManager&   lightManager
 	) {
 		LightningStrike strike;
 		strike.id = _nextStrikeId++;
@@ -86,7 +86,7 @@ namespace brassica {
 		_activeStrikes.push_back(strike);
 	}
 
-	void LightningManager::Update(float deltaTime, float /*totalTime*/, LightManager& lightManager) {
+	void LightningManager::Update(float deltaTime, float /*totalTime*/, ILightManager& lightManager) {
 		_globalPulse = 0.0f;
 		_globalColor = glm::vec3(0.0f);
 

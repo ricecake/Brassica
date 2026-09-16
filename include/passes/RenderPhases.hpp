@@ -15,4 +15,9 @@
 // `inline constexpr graph::Phase SomeName = graph::Phase::Late;` (or a custom int32_t value
 // spaced away from the existing bands) here.
 
-namespace brassica {} // namespace brassica
+namespace brassica {
+	namespace SubPhase {
+		inline constexpr graph::Phase HudOverlay = graph::Phase(2000);
+		inline constexpr graph::Phase MenuOverlay = graph::Phase(3000);
+	} // namespace SubPhase
+} // namespace brassica

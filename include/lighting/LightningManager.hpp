@@ -4,7 +4,7 @@
 
 #include <glm/glm.hpp>
 
-#include "lighting/LightManager.hpp"
+#include "lighting/ILightManager.hpp"
 
 namespace brassica {
 
@@ -23,27 +23,27 @@ namespace brassica {
 		int                               id = 0;
 		LightningType                     type = LightningType::BOLT;
 		std::vector<LightningBoltSegment> segments;
-		float                             lifetime = 0.0f;    // Current duration
-		float                             maxLifetime = 0.3f; // Total flash duration
-		float                             intensity = 1.0f;   // Brightness [0-1]
-		glm::vec3                         color{0.8f, 0.9f, 1.0f};
-		bool                              hasSpawnedFlash = false;
-		int                               flashLightId = -1;
-		glm::vec3                         driftVelocity{0.0f};
+		float                             lifetime = 0.0f;                               // Current duration
+		float     maxLifetime = constants::Class::Lighting::DefaultLightningMaxLifetime; // Total flash duration
+		float     intensity = 1.0f;                                                      // Brightness [0-1]
+		glm::vec3 color{constants::Class::Lighting::DefaultLightningColor()};
+		bool      hasSpawnedFlash = false;
+		int       flashLightId = -1;
+		glm::vec3 driftVelocity{0.0f};
 	};
 
 	class LightningManager {
 	public:
 		LightningManager() = default;
 
-		void Update(float deltaTime, float totalTime, LightManager& lightManager);
+		void Update(float deltaTime, float totalTime, ILightManager& lightManager);
 
 		void TriggerStrike(
 			LightningType    type,
 			const glm::vec3& startPos,
 			const glm::vec3& endPos,
 			const glm::vec3& color,
-			LightManager&    lightManager
+			ILightManager&   lightManager
 		);
 
 		const std::vector<LightningStrike>& GetActiveStrikes() const { return _activeStrikes; }
@@ -84,8 +84,8 @@ namespace brassica {
 		float _intensityMultiplier = 1.0f;
 		float _frequencyMultiplier = 1.0f;
 		float _lifetimeMultiplier = 1.0f;
-		float _branchProbability = 0.15f;
-		float _thickness = 1.5f;
+		float _branchProbability = constants::Class::Lighting::DefaultLightningBranchProbability;
+		float _thickness = constants::Class::Lighting::DefaultLightningThickness;
 	};
 
 } // namespace brassica

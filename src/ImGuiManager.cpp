@@ -45,10 +45,16 @@ namespace brassica {
 		m_device = device;
 
 		// Create descriptor pool for ImGui
-		vk::DescriptorPoolSize       poolSizes[] = {{vk::DescriptorType::eCombinedImageSampler, 100}};
+		vk::DescriptorPoolSize poolSizes[] = {
+			{vk::DescriptorType::eCombinedImageSampler, 100},
+			{vk::DescriptorType::eSampledImage, 100},
+			{vk::DescriptorType::eSampler, 100},
+			{vk::DescriptorType::eUniformBuffer, 100},
+			{vk::DescriptorType::eStorageBuffer, 100}
+		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
-		poolInfo.setMaxSets(100);
+		poolInfo.setMaxSets(500);
 		poolInfo.setPoolSizes(poolSizes);
 
 		try {
