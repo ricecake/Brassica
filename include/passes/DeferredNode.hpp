@@ -20,13 +20,6 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	// Mirrors deferred.frag's push_constant block exactly. The first four fields are the same
-	// toroidal-clipmap-sampling parameters TerrainNode's TerrainPushConstants carries (needed
-	// here for the ray-query shadow march's terrain-height lookups, not for any vertex
-	// transform -- deferred.frag has no vertex-stage use for a view-projection matrix, unlike
-	// TerrainNode's mesh shader, so this is a dedicated, slimmer struct rather than a reuse of
-	// TerrainPushConstants). The trailing six are bindless indices, filled in by
-	// DeferredNode::Execute every frame -- everything else is supplied once, at construction.
 	struct DeferredPushConstants {
 		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::uvec4 lodOffsets0_3{0u};
@@ -44,20 +37,11 @@ namespace brassica {
 		std::uint32_t visibilityIndex{0};
 	};
 
-	// Replaces DeferredPass: no per-node descriptor set, no per-frame descriptor writes -- every
-	// sampled input is a bindless index in the push-constant block, resolved through
-	// NodeContext::Index<K>() below. Read<TerrainClipmapTexture> is a declared dependency (see
-	// ResourceKeys.hpp), not a raw vk::ImageView/vk::Sampler smuggled in with no graph edge, the
-	// way the old DeferredNode carried clipmapImageView/clipmapSampler fields.
-	//
-	// Like GradientNode, reconstructed fresh every frame -- pipelineLibrary/vertShader/fragShader
-	// point at Engine-owned, persistent state (see Engine::pipelineLibrary/deferredVertShader/
-	// deferredFragShader), and ResolveCached makes re-resolving the same request every frame a
-	// cache hit.
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
 			graph::Read<GradientBackground>,
+			graph::Read<ClusteredLighting>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
@@ -65,10 +49,6 @@ namespace brassica {
 			graph::Read<TerrainTLAS>,
 			graph::Modify<Swapchain>>;
 
-		// cullMode=eNone (fullscreen triangle) and enableBlend=false match
-		// GraphicsPipelineState's own defaults already; only cullMode needs overriding.
-		// enableShadingRate stays at its default (true), matching DeferredPass's original
-		// pipeline exactly.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 		};

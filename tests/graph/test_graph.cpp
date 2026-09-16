@@ -20,6 +20,10 @@
 #include "graph/ResourceKey.hpp"
 #include "graph/TypeList.hpp"
 #include "graph/Validation.hpp"
+#include "lighting/LightManager.hpp"
+#include "lighting/LightningManager.hpp"
+#include "passes/ResourceKeys.hpp"
+#include "types/ubo/LightingUBO.hpp"
 
 using namespace brassica::graph;
 
@@ -97,9 +101,6 @@ namespace {
 
 	// -- example passes: node phases and versioned write chains ----------------------
 
-	// Mirrors the water-pass regression exactly: two nodes plain-Modify the same key (no version
-	// number, so both consume+produce bare Swapchain) with a phase difference the only thing
-	// establishing order between them.
 	struct DeferredLikeNode {
 		using Resources = Declares<Modify<Swapchain>>;
 
@@ -119,8 +120,6 @@ namespace {
 
 	struct StandaloneKey {};
 
-	// No resource dependency on anything -- must still schedule after an earlier phase purely
-	// because Phase says so.
 	struct StandaloneLateNode {
 		static constexpr Phase kPhase = Phase::Late;
 		using Resources = Declares<Create<StandaloneKey>>;
@@ -138,8 +137,6 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	// Phase violation: the only producer of ViolationKey runs in a later phase than the reader
-	// that needs it -- impossible to satisfy no matter how the schedule is arranged.
 	struct ViolationKey {};
 
 	struct LateProducer {
@@ -160,9 +157,6 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	// Version lifting: two Default-phase nodes chain-write Swapchain (version 1, then version 2);
-	// a Late-phase node declares a plain Read<Swapchain> (version 0) and must lift to version 2
-	// rather than binding against the stale import.
 	struct FirstWriter {
 		using Resources = Declares<Modify<Swapchain, 1>>;
 
@@ -188,9 +182,6 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	// Same-phase cycle: each node both reads what the other creates, with no phase difference to
-	// break the tie. Compile() must report this rather than silently omit both from every stage
-	// (or, when they are the only two nodes registered, index an empty stages vector).
 	struct CycleKeyA {};
 
 	struct CycleKeyB {};
@@ -219,13 +210,6 @@ namespace {
 	static_assert(IsSubsetOf<TypeList<char>, TypeList<int, char>>);
 	static_assert(!IsSubsetOf<TypeList<char, double>, TypeList<int, char>>);
 
-	// -- compile-time checks: Group ---------------------------------------------------
-	// Group<Op, Ks...> is just Declares<Op<Ks>...> under a discoverable name -- these prove it
-	// expands identically to writing the operations out by hand, both alone and composed inside a
-	// larger Declares<...> alongside a sibling op that overlaps one of the group's own keys (Dedup
-	// must still collapse that overlap to one, matching the first-occurrence-wins rule the runtime
-	// Graph::Compile() tests below already depend on).
-
 	static_assert(std::is_same_v<
 				   Declares<Group<Read, GBufferAlbedo, GBufferNormal>>::Consumes,
 				   Declares<Read<GBufferAlbedo>, Read<GBufferNormal>>::Consumes>);
@@ -240,24 +224,15 @@ namespace {
 				   Declares<Group<Create, GBufferAlbedo, GBufferNormal>, Create<GBufferAlbedo>>::Produces,
 				   Declares<Create<GBufferAlbedo>, Create<GBufferNormal>>::Produces>);
 
-	// -- compile-time checks: resource keys ------------------------------------------
-
 	static_assert(ResourceKey<GBufferAlbedo> && !ResourceKey<int>);
 	static_assert(ResourceRef<History<GTAOData>>);
 	static_assert(IsHistory<History<GTAOData>> && !IsHistory<GTAOData>);
 	static_assert(std::is_same_v<HistoryTarget<History<GTAOData>>, GTAOData>);
 	static_assert(IdOf<GBufferAlbedo>() != IdOf<GBufferNormal>());
 
-	// Runtime unwrap of History<K> -> K's id, used by Dot.hpp to draw the temporal edge from
-	// only a pair of ResourceIds (no compile-time type available at render time).
 	static_assert(kResourceTypeInfo<History<GTAOData>>.historyTarget == IdOf<GTAOData>());
 	static_assert(kResourceTypeInfo<GTAOData>.historyTarget == nullptr);
 
-	// -- compile-time checks: versioned resource keys --------------------------------
-
-	// VersionOf<K, 0> collapses to K itself -- version 0 is whatever Create<K>/an import already
-	// produces, not a distinct type. This is what keeps Modify<K> (no version) and Import<K>
-	// working untouched.
 	static_assert(std::is_same_v<VersionOf<Swapchain, 0>, Swapchain>);
 	static_assert(std::is_same_v<VersionOf<Swapchain, 1>, VersionedKey<Swapchain, 1>>);
 	static_assert(ResourceRef<VersionedKey<Swapchain, 1>>);
@@ -266,26 +241,19 @@ namespace {
 	static_assert(VersionIndexOf<VersionedKey<Swapchain, 2>> == 2 && VersionIndexOf<Swapchain> == 0);
 	static_assert(IdOf<VersionedKey<Swapchain, 1>>() != IdOf<VersionedKey<Swapchain, 2>>());
 
-	// Runtime unwrap, the same shape as historyTarget above -- this is what lets
-	// PhysicalResourceRegistry::ResolveId (PhysicalRegistry.hpp) map every version back to one
-	// physical resource from the id alone, with no per-node registration.
 	static_assert(kResourceTypeInfo<VersionedKey<Swapchain, 1>>.versionBase == IdOf<Swapchain>());
 	static_assert(kResourceTypeInfo<VersionedKey<Swapchain, 1>>.version == 1);
 	static_assert(kResourceTypeInfo<Swapchain>.versionBase == nullptr);
 	static_assert(kResourceTypeInfo<Swapchain>.version == 0);
-
-	// -- compile-time checks: declarations -------------------------------------------
 
 	static_assert(std::is_same_v<ConsumesOf<GtaoPass>, TypeList<GBufferNormal, History<GTAOData>>>);
 	static_assert(std::is_same_v<ProducesOf<GBufferPass>, TypeList<GBufferAlbedo, GBufferNormal>>);
 	static_assert(std::is_same_v<ConsumesOf<TonemapPass>, TypeList<HdrColor>>);
 	static_assert(std::is_same_v<ProducesOf<TonemapPass>, TypeList<Swapchain>>);
 
-	// Modify<K> (no version) is unchanged: still a plain self-edge on the bare key.
 	static_assert(std::is_same_v<ConsumesOf<DeferredLikeNode>, TypeList<Swapchain>>);
 	static_assert(std::is_same_v<ProducesOf<DeferredLikeNode>, TypeList<Swapchain>>);
 
-	// Modify<K, N> for N >= 1: consumes version N-1 (version 0 == bare K), produces version N.
 	static_assert(std::is_same_v<ConsumesOf<FirstWriter>, TypeList<Swapchain>>);
 	static_assert(std::is_same_v<ProducesOf<FirstWriter>, TypeList<VersionedKey<Swapchain, 1>>>);
 	static_assert(std::is_same_v<ConsumesOf<SecondWriter>, TypeList<VersionedKey<Swapchain, 1>>>);
@@ -297,33 +265,21 @@ namespace {
 	static_assert(NodeLike<PreviousFrame<Temporal>>);
 	static_assert(NodeLike<NextFrame<Temporal>>);
 
-	// -- compile-time checks: node phases ---------------------------------------------
-
-	// Default for any node that doesn't opt in, including ones that predate Phase entirely.
 	static_assert(PhaseOf<GBufferPass> == Phase::Default);
 	static_assert(PhaseOf<DeferredLikeNode> == Phase::Default);
-	// Opts in via `static constexpr graph::Phase kPhase = ...;` rather than specializing PhaseOfT.
 	static_assert(PhaseOf<WaterLikeNode> == Phase::Late);
 	static_assert(PhaseOf<EarlyReader> == Phase::Early);
-	// PreviousFrame/NextFrame bracket every user-defined phase from below/above unconditionally --
-	// specialized in Frame.hpp, not opted in via kPhase.
 	static_assert(PhaseOf<PreviousFrame<Temporal>> == Phase::PreviousFrame);
 	static_assert(PhaseOf<NextFrame<Temporal>> == Phase::NextFrame);
 	static_assert(Phase::PreviousFrame < Phase::Early && Phase::Late < Phase::NextFrame);
 
-	// -- compile-time checks: temporal invariant -------------------------------------
-
 	static_assert(TemporalInvariantHolds<PreviousFrame<Temporal>, NextFrame<Temporal>>);
 	static_assert(!TemporalInvariantHolds<PreviousFrame<Temporal>, NextFrame<TypeList<HdrColor>>>);
-
-	// -- compile-time checks: renderability, positive and negative -------------------
 
 	using GoodFrame =
 		FrameSpec<Import<Swapchain>, PreviousFrame<Temporal>, GBufferPass, GtaoPass, LightingPass, TonemapPass>;
 	static_assert(IsRenderable<GoodFrame>);
 
-	// LightingPass reads GTAOData and GtaoPass reads History<GTAOData> -- with no
-	// PreviousFrame node, nothing produces History<GTAOData>.
 	using BrokenFrame =
 		FrameSpec<Import<Swapchain>, GBufferPass, GtaoPass, LightingPass, TonemapPass, NextFrame<Temporal>>;
 	static_assert(!IsRenderable<BrokenFrame>);
@@ -339,8 +295,6 @@ namespace {
 		NextFrame<Temporal>>;
 	static_assert(IsRenderable<CompleteFrame>);
 
-	// -- compile-time checks: subgraph composition -----------------------------------
-
 	using InnerSpec = FrameSpec<GBufferPass, GtaoPass>;
 	using Inner = Subgraph<InnerSpec>;
 
@@ -352,16 +306,12 @@ namespace {
 		FrameSpec<Import<Swapchain>, PreviousFrame<Temporal>, Inner, LightingPass, TonemapPass, NextFrame<Temporal>>;
 	static_assert(IsRenderable<ParentSpec>);
 
-	// -- compile-time checks: NodeKind tagging (Dot.hpp styling/recursion hooks) ----
-
 	static_assert(NodeKindOf<GtaoPass> == NodeKind::Ordinary);
 	static_assert(NodeKindOf<Import<Swapchain>> == NodeKind::Import);
 	static_assert(NodeKindOf<PreviousFrame<Temporal>> == NodeKind::PreviousFrame);
 	static_assert(NodeKindOf<NextFrame<Temporal>> == NodeKind::NextFrame);
 	static_assert(NodeKindOf<Inner> == NodeKind::Subgraph);
 
-	// -- root Frame: this instantiates AssertRenderable, so a broken frame here would
-	// fail to compile with a diagnostic naming the missing keys.
 	using RootFrame = Frame<
 		Import<Swapchain>,
 		PreviousFrame<Temporal>,
@@ -372,8 +322,6 @@ namespace {
 		NextFrame<Temporal>>;
 	static_assert(RootFrame::kRenderable);
 
-	// Same node set as ParentSpec, as an actual Frame -- used by the DOT rendering test below
-	// to exercise recursion into a populated Subgraph.
 	using DotFrame =
 		Frame<Import<Swapchain>, PreviousFrame<Temporal>, Inner, LightingPass, TonemapPass, NextFrame<Temporal>>;
 	static_assert(DotFrame::kRenderable);
@@ -405,7 +353,6 @@ TEST_CASE("ValidateRuntime reports the missing key by name") {
 }
 
 namespace {
-	// Which stage a node index landed in, or -1 if it was culled/not scheduled.
 	std::ptrdiff_t StageOf(const Schedule& schedule, std::size_t nodeIndex) {
 		for (std::size_t s = 0; s < schedule.stages.size(); ++s) {
 			const auto& nodes = schedule.stages[s].nodes;
@@ -428,47 +375,29 @@ namespace {
 
 TEST_CASE("Graph stages nodes by dependency, independent of registration order, with correct transfer barriers") {
 	Graph graph;
-	// Registered out of order on purpose: LightingPass depends on both GBufferPass and
-	// GtaoPass, so a graph that merely executed in registration order (like
-	// external/FrameGraph today) would run it too early.
 	graph.Register<LightingPass>();
 	graph.Register<TonemapPass>();
 	graph.Register<GtaoPass>();
 	graph.Register<GBufferPass>();
 	graph.Register<Import<Swapchain>>();
-	graph.Register<PreviousFrame<Temporal>>(); // satisfies GtaoPass's Read<History<GTAOData>>
+	graph.Register<PreviousFrame<Temporal>>();
 
 	graph.Setup(FrameContext{});
 	REQUIRE(graph.Compile().has_value());
 
 	const auto& schedule = graph.GetSchedule();
 
-	// Registration indices: LightingPass=0, TonemapPass=1, GtaoPass=2, GBufferPass=3,
-	// Import=4, PreviousFrame=5.
-	//
-	// PreviousFrame carries Phase::PreviousFrame (Node.hpp/Frame.hpp), which brackets every
-	// other node from below regardless of resource dependencies -- so it lands alone in stage
-	// 0, one full phase group ahead of everything else, even though nothing here would have
-	// forced that ordering through resource flow alone. GBufferPass/Import share no dependency
-	// on each other and are both Phase::Default, so they still land in the same stage as one
-	// another (just one stage later than before Phase existed): nothing forces an order between
-	// the two of them, which is the parallelism proof Phase leaves untouched within one group.
-	CHECK(StageOf(schedule, 5) == 0); // PreviousFrame -- its own phase, ahead of everything
-	CHECK(StageOf(schedule, 3) == 1); // GBufferPass
-	CHECK(StageOf(schedule, 4) == 1); // Import<Swapchain>
+	CHECK(StageOf(schedule, 5) == 0);
+	CHECK(StageOf(schedule, 3) == 1);
+	CHECK(StageOf(schedule, 4) == 1);
 
-	CHECK(StageOf(schedule, 2) == 2); // GtaoPass: depends on GBufferPass + PreviousFrame
-	CHECK(StageOf(schedule, 0) == 3); // LightingPass: depends on GBufferPass + GtaoPass
-	CHECK(StageOf(schedule, 1) == 4); // TonemapPass: depends on LightingPass
+	CHECK(StageOf(schedule, 2) == 2);
+	CHECK(StageOf(schedule, 0) == 3);
+	CHECK(StageOf(schedule, 1) == 4);
 
 	REQUIRE(schedule.stages.size() == 5);
-	CHECK(schedule.stages[0].preBarriers.Empty()); // nothing precedes the first stage
+	CHECK(schedule.stages[0].preBarriers.Empty());
 
-	// GtaoPass (Compute) consumes GBufferNormal from GBufferPass (Graphics, same phase --
-	// released at the end of stage 1, acquired at the start of stage 2) and History<GTAOData>
-	// from PreviousFrame (Host, an earlier phase -- a forward cross-phase edge, kept and
-	// barriered exactly like an ordinary one: released at the end of stage 0, acquired at the
-	// start of stage 2).
 	CHECK(BarrierBetween(
 		schedule.stages[1].postBarriers,
 		IdOf<GBufferNormal>(),
@@ -494,8 +423,6 @@ TEST_CASE("Graph stages nodes by dependency, independent of registration order, 
 		ExecutionDomain::Compute
 	));
 
-	// LightingPass (Graphics) consumes GBufferAlbedo from GBufferPass (Graphics, same domain
-	// -> ordinary barrier, not a transfer) and GTAOData from GtaoPass (Compute -> transfer).
 	CHECK(BarrierBetween(
 		schedule.stages[3].preBarriers,
 		IdOf<GBufferAlbedo>(),
@@ -515,7 +442,6 @@ TEST_CASE("Graph stages nodes by dependency, independent of registration order, 
 		ExecutionDomain::Graphics
 	));
 
-	// TonemapPass (Graphics) consumes HdrColor from LightingPass (Graphics, same domain).
 	CHECK(BarrierBetween(
 		schedule.stages[4].preBarriers,
 		IdOf<HdrColor>(),
@@ -525,20 +451,16 @@ TEST_CASE("Graph stages nodes by dependency, independent of registration order, 
 }
 
 TEST_CASE("Two nodes plain-Modify the same key in different phases, ordered by phase with no version number") {
-	// The water-pass regression, reduced to the declaration layer: before Phase existed, both
-	// nodes declaring Modify<Swapchain> produced a real two-node cycle (each is simultaneously a
-	// producer and a consumer of the other), and Compile() silently dropped both from every
-	// stage. Phase breaks the tie without either node needing a version number.
 	Graph graph;
-	graph.Register<WaterLikeNode>(); // registered first, on purpose -- phase must still win
+	graph.Register<WaterLikeNode>();
 	graph.Register<DeferredLikeNode>();
 
 	graph.Setup(FrameContext{});
 	REQUIRE(graph.Compile().has_value());
 
 	const auto& schedule = graph.GetSchedule();
-	CHECK(StageOf(schedule, 1) == 0); // DeferredLikeNode: Phase::Default, earlier phase
-	CHECK(StageOf(schedule, 0) == 1); // WaterLikeNode: Phase::Late, later phase
+	CHECK(StageOf(schedule, 1) == 0);
+	CHECK(StageOf(schedule, 0) == 1);
 	REQUIRE(schedule.stages.size() == 2);
 }
 
@@ -551,8 +473,8 @@ TEST_CASE("A node with no resource dependency on anything still schedules after 
 	REQUIRE(graph.Compile().has_value());
 
 	const auto& schedule = graph.GetSchedule();
-	CHECK(StageOf(schedule, 1) == 0); // NodeP: Phase::Default
-	CHECK(StageOf(schedule, 0) == 1); // StandaloneLateNode: Phase::Late, no edge to NodeP at all
+	CHECK(StageOf(schedule, 1) == 0);
+	CHECK(StageOf(schedule, 0) == 1);
 	REQUIRE(schedule.stages.size() == 2);
 }
 
@@ -566,9 +488,9 @@ TEST_CASE("PreviousFrame and NextFrame bracket every other node's phase") {
 	REQUIRE(graph.Compile().has_value());
 
 	const auto& schedule = graph.GetSchedule();
-	CHECK(StageOf(schedule, 2) == 0); // PreviousFrame: Phase::PreviousFrame, first no matter what
-	CHECK(StageOf(schedule, 1) == 1); // GtaoLikeProducer: Phase::Default
-	CHECK(StageOf(schedule, 0) == 2); // NextFrame: Phase::NextFrame, last no matter what
+	CHECK(StageOf(schedule, 2) == 0);
+	CHECK(StageOf(schedule, 1) == 1);
+	CHECK(StageOf(schedule, 0) == 2);
 	REQUIRE(schedule.stages.size() == 3);
 }
 
@@ -576,8 +498,6 @@ TEST_CASE(
 	"Compile() reports a phase violation when only a later-phase node produces what an earlier "
 	"phase needs"
 ) {
-	// Impossible to satisfy no matter how the schedule is arranged -- Phase's ordering guarantee
-	// would otherwise be silently broken (EarlyReader would run before ViolationKey exists).
 	Graph graph;
 	graph.Register<EarlyReader>();
 	graph.Register<LateProducer>();
@@ -601,16 +521,12 @@ TEST_CASE("A later-phase plain reader lifts to the highest version an earlier ph
 	REQUIRE(graph.Compile().has_value());
 
 	const auto& schedule = graph.GetSchedule();
-	CHECK(StageOf(schedule, 2) == 0); // Import<Swapchain>: produces version 0
-	CHECK(StageOf(schedule, 3) == 1); // FirstWriter: consumes version 0, produces version 1
-	CHECK(StageOf(schedule, 1) == 2); // SecondWriter: consumes version 1, produces version 2
-	CHECK(StageOf(schedule, 0) == 3); // LatePlainReader: Phase::Late, lifted to version 2
+	CHECK(StageOf(schedule, 2) == 0);
+	CHECK(StageOf(schedule, 3) == 1);
+	CHECK(StageOf(schedule, 1) == 2);
+	CHECK(StageOf(schedule, 0) == 3);
 	REQUIRE(schedule.stages.size() == 4);
 
-	// The observable proof lifting happened: a barrier from SecondWriter's *version 2* into
-	// LatePlainReader, not from Import's *version 0* -- without lifting, LatePlainReader's bare
-	// Read<Swapchain> would still find a (stale) edge straight to Import, since Import really
-	// does produce bare Swapchain exactly.
 	CHECK(BarrierBetween(
 		schedule.stages[3].preBarriers,
 		IdOf<VersionedKey<Swapchain, 2>>(),
@@ -626,9 +542,6 @@ TEST_CASE("A later-phase plain reader lifts to the highest version an earlier ph
 }
 
 TEST_CASE("Compile() reports a cycle instead of silently dropping the nodes involved") {
-	// The two nodes registered here are the *entire* graph, so this is also the
-	// previously-crashing case: with no cycle detection, LevelNodes returns no levels at all,
-	// m_schedule.stages stays empty, and SynthesizeBarrier would index stages[0] out of bounds.
 	Graph graph;
 	graph.Register<CycleNodeA>();
 	graph.Register<CycleNodeB>();
@@ -646,7 +559,7 @@ TEST_CASE(
 ) {
 	Graph graph;
 	graph.Register<CycleNodeA>();
-	graph.Register<NodeP>(); // same (Default) phase as the cycle, but no edge to either side of it
+	graph.Register<NodeP>();
 	graph.Register<CycleNodeB>();
 
 	graph.Setup(FrameContext{});
@@ -723,12 +636,108 @@ TEST_CASE("ToDot renders nodes, recurses into a populated subgraph, and draws th
 	std::string dot = frame.ToDot("DotFrameTest");
 
 	CHECK(dot.find("digraph") != std::string::npos);
-	CHECK(dot.find("GBufferPass") != std::string::npos); // recursed into the subgraph
-	CHECK(dot.find("GtaoPass") != std::string::npos);    // recursed into the subgraph
+	CHECK(dot.find("GBufferPass") != std::string::npos);
+	CHECK(dot.find("GtaoPass") != std::string::npos);
 	CHECK(dot.find("LightingPass") != std::string::npos);
 	CHECK(dot.find("TonemapPass") != std::string::npos);
-	CHECK(dot.find("cluster") != std::string::npos);    // the Subgraph rendered as a cluster
-	CHECK(dot.find("[transfer]") != std::string::npos); // a cross-domain edge inside the subgraph
-	CHECK(dot.find("gold") != std::string::npos);       // PreviousFrame/NextFrame fill color
-	CHECK(dot.find("purple") != std::string::npos);     // the PreviousFrame -> NextFrame temporal edge
+	CHECK(dot.find("cluster") != std::string::npos);
+	CHECK(dot.find("[transfer]") != std::string::npos);
+	CHECK(dot.find("gold") != std::string::npos);
+	CHECK(dot.find("purple") != std::string::npos);
+}
+
+TEST_CASE("Lighting structs alignment and size layout") {
+	CHECK(sizeof(brassica::LightingUBO) == 1360);
+	CHECK(sizeof(brassica::LightGPU) == 64);
+	CHECK(sizeof(brassica::ClusterGPU) == 272);
+	CHECK(brassica::TOTAL_CLUSTERS == 3457);
+}
+
+TEST_CASE("LightManager day/night cycle and behaviors") {
+	brassica::LightManager mgr;
+
+	CHECK(mgr.GetLights().size() == 2);
+	CHECK(mgr.GetLights()[0].type == brassica::DIRECTIONAL_LIGHT);
+	CHECK(mgr.GetLights()[1].type == brassica::DIRECTIONAL_LIGHT);
+
+	brassica::Light pointLight = brassica::Light::CreatePoint(glm::vec3(10.0f, 5.0f, 0.0f), 20.0f, glm::vec3(1.0f, 0.0f, 0.0f), 50.0f);
+	pointLight.SetPulse(2.0f, 1.0f);
+	int pointId = mgr.AddLight(pointLight);
+
+	CHECK(mgr.GetLights().size() == 3);
+	brassica::Light* addedLight = mgr.GetLight(pointId);
+	REQUIRE(addedLight != nullptr);
+	CHECK(addedLight->type == brassica::POINT_LIGHT);
+
+	mgr.Update(0.5f);
+
+	brassica::LightingUBO ubo = mgr.GetLightingUBO();
+	CHECK(ubo.numLights == 3);
+	CHECK(ubo.dayTime >= 0.0f);
+
+	brassica::LightsSSBOData ssbo = mgr.GetLightsSSBOData();
+	CHECK(ssbo.count == 3);
+	CHECK(ssbo.lights[2].type == brassica::POINT_LIGHT);
+
+	brassica::Light morseLight = brassica::Light::CreatePoint(glm::vec3(0.0f), 10.0f, glm::vec3(0.0f, 1.0f, 0.0f));
+	morseLight.SetMorse("SOS", 0.1f);
+	int morseId = mgr.AddLight(morseLight);
+
+	mgr.Update(0.1f);
+	brassica::Light* updatedMorse = mgr.GetLight(morseId);
+	REQUIRE(updatedMorse != nullptr);
+	CHECK(!updatedMorse->behavior.morseSequence.empty());
+
+	mgr.RemoveLight(pointId);
+	CHECK(mgr.GetLights().size() == 3);
+	mgr.RemoveLight(morseId);
+	CHECK(mgr.GetLights().size() == 2);
+}
+
+TEST_CASE("LightningManager strike generation and flash light updates") {
+	brassica::LightManager lightMgr;
+	brassica::LightningManager lightningMgr;
+
+	CHECK(lightningMgr.GetActiveStrikes().empty());
+
+	lightningMgr.TriggerStrike(
+		brassica::LightningType::BOLT,
+		glm::vec3(0.0f, 500.0f, 0.0f),
+		glm::vec3(10.0f, 0.0f, 10.0f),
+		glm::vec3(0.8f, 0.9f, 1.0f),
+		lightMgr
+	);
+
+	CHECK(lightningMgr.GetActiveStrikes().size() == 1);
+	CHECK(lightMgr.GetLights().size() == 3);
+
+	lightningMgr.Update(0.1f, 0.1f, lightMgr);
+	CHECK(lightningMgr.GetGlobalPulse() > 0.0f);
+}
+
+namespace {
+	struct ClusterLightAssignmentLikeNode {
+		using Resources = Declares<Create<brassica::ClusteredLighting>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct DeferredWithLightingNode {
+		using Resources = Declares<Read<brassica::ClusteredLighting>, Modify<Swapchain>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Execute(NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("Cluster light assignment node creates dependency before deferred shading pass") {
+	Graph graph;
+	graph.Register<DeferredWithLightingNode>();
+	graph.Register<ClusterLightAssignmentLikeNode>();
+	graph.Register<Import<Swapchain>>();
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
 }

@@ -3,6 +3,7 @@
 #include "bindless_tlas.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "clustered_lighting.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -18,7 +19,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  backgroundIndex;
 	uint  clipmapIndex;
 	uint  tlasIndex;
-	uint gDepthIndex;
+	uint  gDepthIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
@@ -99,31 +100,23 @@ void main() {
 	if (albedo.a < 0.01) {
 		hdrColor = hdrBg;
 	} else {
-		vec3 lightDir = normalize(vec3(0.5, 0.2, 0.5));
-		vec3 lightColor = vec3(2.5, 2.3, 2.0); // High intensity HDR light source
-
-		float diff = max(dot(norm, lightDir), 0.0);
-
-		// Ray Query Shadows
 		float shadowFactor = 1.0;
 
-		// Inside main(), replace the existing rayOrigin assignment:
-		if (false && diff > 0.001) {
-			vec3 rayOrigin = pos + norm * 0.1; // Base offset to avoid standard self-shadowing
+		// Ray Query Shadows for primary directional light
+		if (false) {
+			vec3 lightDir = normalize(vec3(0.5, 0.2, 0.5));
+			vec3 rayOrigin = pos + norm * 0.1;
 
-			// Sample the absolute highest-detail terrain height at this coordinate
 			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11).r;
 			vec2 flatXZ0 = pos.xz - uCameraPosition.xz;
 			float dropOff0 = dot(flatXZ0, flatXZ0) / (2.0 * FAKE_PLANET_RADIUS);
 			trueHeight0 -= dropOff0;
 
-			// Dynamically push the ray origin above the LOD 0 surface if the geometry is buried
 			if (rayOrigin.y < trueHeight0 + 0.1) {
 				rayOrigin.y = trueHeight0 + 0.1;
 			}
 
 			float shadowRayTMax = 1000.0;
-
 
 			rayQueryEXT rq;
 			rayQueryInitializeEXT(
@@ -150,18 +143,14 @@ void main() {
 			}
 
 			if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
-				shadowFactor = 0.2; // Shadowed region
+				shadowFactor = 0.2;
 			}
 		}
 
-		vec3 diffuse = albedo.rgb * diff * lightColor * shadowFactor;
-		// diffuse = mix(vec3(0.1,0.2, 0.3), diffuse, exp(-0.10*length(pos)));
-		// diffuse += vec3(1.2, 0.2, 0.2) * exp(-length(pos));
+		vec3 lightContribution = evaluateClusteredLightContribution(pos, norm);
+		vec3 diffuse = albedo.rgb * lightContribution * shadowFactor;
 
-		// Ambient term
-		vec3 ambient = 0.25 * albedo.rgb;
-
-		hdrColor = ambient + diffuse;
+		hdrColor = diffuse;
 	}
 
 	// HDR Tonemapping & Gamma Correction

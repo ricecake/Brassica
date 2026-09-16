@@ -649,6 +649,7 @@ namespace brassica {
 
 		VkPhysicalDeviceFeatures features1{};
 		features1.shaderInt64 = VK_TRUE;
+		features1.fragmentStoresAndAtomics = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
@@ -861,6 +862,9 @@ namespace brassica {
 		}
 
 		UpdateCamera(deltaTime);
+		lightManager.Update(deltaTime);
+		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
+
 		{
 			float altitude = std::max(10.0f, camera.position.y);
 			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
@@ -888,6 +892,18 @@ namespace brassica {
 		if (frameUboMapped[activeFrame]) {
 			std::memcpy(frameUboMapped[activeFrame], &ubo, sizeof(FrameUBO));
 			vmaFlushAllocation(allocator, frameUboAllocations[activeFrame], 0, sizeof(FrameUBO));
+		}
+
+		LightingUBO lightingUbo = lightManager.GetLightingUBO();
+		if (lightingUboMapped[activeFrame]) {
+			std::memcpy(lightingUboMapped[activeFrame], &lightingUbo, sizeof(LightingUBO));
+			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));
+		}
+
+		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
+		if (lightsSSBOMapped[activeFrame]) {
+			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
+			vmaFlushAllocation(allocator, lightsSSBOAllocations[activeFrame], 0, sizeof(LightsSSBOData));
 		}
 
 		// bindlessBindings.set/layout (set 1) never change frame to frame -- only frameSet
@@ -1112,19 +1128,42 @@ namespace brassica {
 			return;
 		}
 
-		vk::DescriptorSetLayoutBinding uboBinding{};
-		uboBinding.setBinding(0)
+		std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+		// Binding 0: FrameUBO
+		bindings[0]
+			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 1: LightingUBO
+		bindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 2: LightsBuffer
+		bindings[2]
+			.setBinding(2)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 3: ClusterGridBuffer
+		bindings[3]
+			.setBinding(3)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(uboBinding);
+		layoutInfo.setBindings(bindings);
 		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
-		vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eUniformBuffer, FRAME_OVERLAP};
+		std::array<vk::DescriptorPoolSize, 2> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 2 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2 * FRAME_OVERLAP}
+		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
-		poolInfo.setPoolSizes(poolSize);
+		poolInfo.setPoolSizes(poolSizes);
 		poolInfo.setMaxSets(FRAME_OVERLAP);
 		frameDescriptorPool = device.createDescriptorPool(poolInfo);
 
@@ -1137,45 +1176,55 @@ namespace brassica {
 		for (size_t i = 0; i < FRAME_OVERLAP; ++i) {
 			frameDescriptorSets[i] = allocatedSets[i];
 
-			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-			bufferInfo.size = sizeof(FrameUBO);
-			bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+			auto createBufferHelper = [&](
+				VkDeviceSize size,
+				VkBufferUsageFlags usage,
+				vk::Buffer& buf,
+				VmaAllocation& alloc,
+				void** mapped
+			) {
+				VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+				bufferInfo.size = size;
+				bufferInfo.usage = usage;
 
-			VmaAllocationCreateInfo allocCreateInfo{};
-			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-				VMA_ALLOCATION_CREATE_MAPPED_BIT;
+				VmaAllocationCreateInfo allocCreateInfo{};
+				allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+				if (mapped) {
+					allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+						VMA_ALLOCATION_CREATE_MAPPED_BIT;
+				}
 
-			VkBuffer          buffer = VK_NULL_HANDLE;
-			VmaAllocationInfo allocResultInfo{};
-			if (vmaCreateBuffer(
-					allocator,
-					&bufferInfo,
-					&allocCreateInfo,
-					&buffer,
-					&frameUboAllocations[i],
-					&allocResultInfo
-				) != VK_SUCCESS) {
-				spdlog::error("Failed to create frame UBO buffer with VMA");
-				return;
-			}
+				VkBuffer          rawBuffer = VK_NULL_HANDLE;
+				VmaAllocationInfo allocResultInfo{};
+				if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &alloc, &allocResultInfo) != VK_SUCCESS) {
+					spdlog::error("Failed to create buffer with VMA");
+					return false;
+				}
+				buf = rawBuffer;
+				if (mapped) {
+					*mapped = allocResultInfo.pMappedData;
+				}
+				return true;
+			};
 
-			frameUboBuffers[i] = buffer;
-			frameUboMapped[i] = allocResultInfo.pMappedData;
+			createBufferHelper(sizeof(FrameUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, frameUboBuffers[i], frameUboAllocations[i], &frameUboMapped[i]);
+			createBufferHelper(sizeof(LightingUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, lightingUboBuffers[i], lightingUboAllocations[i], &lightingUboMapped[i]);
+			createBufferHelper(sizeof(LightsSSBOData), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, lightsSSBOBuffers[i], lightsSSBOAllocations[i], &lightsSSBOMapped[i]);
+			createBufferHelper(TOTAL_CLUSTERS * sizeof(ClusterGPU), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, clusterGridBuffers[i], clusterGridAllocations[i], nullptr);
 
-			vk::DescriptorBufferInfo bufferDescInfo{};
-			bufferDescInfo.setBuffer(frameUboBuffers[i]);
-			bufferDescInfo.setOffset(0);
-			bufferDescInfo.setRange(sizeof(FrameUBO));
+			std::array<vk::DescriptorBufferInfo, 4> bufferDescs{};
+			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
+			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
+			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
+			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
 
-			vk::WriteDescriptorSet uboWrite{};
-			uboWrite.setDstSet(frameDescriptorSets[i]);
-			uboWrite.setDstBinding(0);
-			uboWrite.setDstArrayElement(0);
-			uboWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
-			uboWrite.setBufferInfo(bufferDescInfo);
+			std::array<vk::WriteDescriptorSet, 4> writes{};
+			writes[0].setDstSet(frameDescriptorSets[i]).setDstBinding(0).setDescriptorType(vk::DescriptorType::eUniformBuffer).setBufferInfo(bufferDescs[0]);
+			writes[1].setDstSet(frameDescriptorSets[i]).setDstBinding(1).setDescriptorType(vk::DescriptorType::eUniformBuffer).setBufferInfo(bufferDescs[1]);
+			writes[2].setDstSet(frameDescriptorSets[i]).setDstBinding(2).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(bufferDescs[2]);
+			writes[3].setDstSet(frameDescriptorSets[i]).setDstBinding(3).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(bufferDescs[3]);
 
-			device.updateDescriptorSets(uboWrite, nullptr);
+			device.updateDescriptorSets(writes, nullptr);
 		}
 	}
 
@@ -1186,6 +1235,23 @@ namespace brassica {
 				frameUboBuffers[i] = nullptr;
 				frameUboAllocations[i] = nullptr;
 				frameUboMapped[i] = nullptr;
+			}
+			if (lightingUboBuffers[i] && lightingUboAllocations[i]) {
+				vmaDestroyBuffer(allocator, lightingUboBuffers[i], lightingUboAllocations[i]);
+				lightingUboBuffers[i] = nullptr;
+				lightingUboAllocations[i] = nullptr;
+				lightingUboMapped[i] = nullptr;
+			}
+			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
+				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);
+				lightsSSBOBuffers[i] = nullptr;
+				lightsSSBOAllocations[i] = nullptr;
+				lightsSSBOMapped[i] = nullptr;
+			}
+			if (clusterGridBuffers[i] && clusterGridAllocations[i]) {
+				vmaDestroyBuffer(allocator, clusterGridBuffers[i], clusterGridAllocations[i]);
+				clusterGridBuffers[i] = nullptr;
+				clusterGridAllocations[i] = nullptr;
 			}
 		}
 		if (frameDescriptorPool) {
