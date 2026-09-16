@@ -7,6 +7,8 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "constants.h"
+#include "IManager.hpp"
 #include "vk_mem_alloc.h"
 
 namespace brassica {
@@ -20,12 +22,24 @@ namespace brassica {
 		uint64_t          targetTimelineValue = 0;
 	};
 
-	class AsyncTerrainUploader {
+	class AsyncTerrainUploader: public IManager {
 	public:
 		AsyncTerrainUploader() = default;
-		~AsyncTerrainUploader();
+		~AsyncTerrainUploader() override;
 
-		void Init(vk::Device dev, VmaAllocator alloc, uint32_t queueFamilyIdx, uint32_t maxConcurrentUploads = 32);
+		void Initialize() override { m_initialized = true; }
+
+		void Shutdown() override {
+			Cleanup();
+			m_initialized = false;
+		}
+
+		void Init(
+			vk::Device   dev,
+			VmaAllocator alloc,
+			uint32_t     queueFamilyIdx,
+			uint32_t     maxConcurrentUploads = constants::Class::AsyncTerrain::MaxUploadSlots
+		);
 		void Cleanup();
 
 		// Non-blocking upload request for a clipmap layer

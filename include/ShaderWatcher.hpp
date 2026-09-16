@@ -10,16 +10,20 @@
 #include "efsw/efsw.hpp"
 #include "vulkan/vulkan.hpp"
 
+#include "IManager.hpp"
 #include "Shader.hpp"
 
 namespace brassica {
 
-	class ShaderWatcher: public efsw::FileWatchListener {
+	class ShaderWatcher: public IManager, public efsw::FileWatchListener {
 	public:
 		using ReloadCallback = std::function<void()>;
 
 		ShaderWatcher();
 		~ShaderWatcher() override;
+
+		void Initialize() override;
+		void Shutdown() override;
 
 		bool WatchDirectory(const std::string& directory, bool recursive = true);
 		void StopWatching();
