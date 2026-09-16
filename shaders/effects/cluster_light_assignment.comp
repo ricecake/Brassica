@@ -1,0 +1,161 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 9, local_size_z = 1) in;
+
+#include "../bindless.glsl"
+#include "../lighting.glsl"
+
+void main() {
+	uvec3 clusterID = gl_GlobalInvocationID;
+	if (clusterID.x >= 16 || clusterID.y >= 9 || clusterID.z >= 24) {
+		return;
+	}
+
+	float z_near = uNearPlane;
+	float z_far = uFarPlane;
+
+	// Slices in view space (negative Z)
+	float zNearSlice = -z_near * pow(z_far / z_near, float(clusterID.z) / 24.0);
+	float zFarSlice = -z_near * pow(z_far / z_near, float(clusterID.z + 1) / 24.0);
+
+	// Compute X/Y tile bounds in projection/view space factors
+	float x_min_factor = (2.0 * float(clusterID.x) / 16.0) - 1.0;
+	float x_max_factor = (2.0 * float(clusterID.x + 1) / 16.0) - 1.0;
+	float y_min_factor = (2.0 * float(clusterID.y) / 9.0) - 1.0;
+	float y_max_factor = (2.0 * float(clusterID.y + 1) / 9.0) - 1.0;
+
+	// Map factors to view-space limits using the projection matrix
+	float tan_half_fov_x = 1.0 / uProjMatrix[0][0];
+	float tan_half_fov_y = 1.0 / uProjMatrix[1][1];
+
+	// Evaluate tile boundaries at near and far planes of this Z slice
+	float x_min_near = x_min_factor * tan_half_fov_x * (-zNearSlice);
+	float x_max_near = x_max_factor * tan_half_fov_x * (-zNearSlice);
+	float y_min_near = y_min_factor * tan_half_fov_y * (-zNearSlice);
+	float y_max_near = y_max_factor * tan_half_fov_y * (-zNearSlice);
+
+	float x_min_far = x_min_factor * tan_half_fov_x * (-zFarSlice);
+	float x_max_far = x_max_factor * tan_half_fov_x * (-zFarSlice);
+	float y_min_far = y_min_factor * tan_half_fov_y * (-zFarSlice);
+	float y_max_far = y_max_factor * tan_half_fov_y * (-zFarSlice);
+
+	float exposureScale = 1.0;
+
+	const float GLOBAL_LIGHT_RADIUS_THRESHOLD = 500.0;
+
+	// Populate global lights bucket at uClusters[3456]
+	if (clusterID == uvec3(0, 0, 0)) {
+		uint global_count = 0;
+		uint total_lights = min(uLightCount, 1024u);
+		for (uint i = 2; i < total_lights; ++i) {
+			if (uLights[i].intensity <= 0.0) continue;
+
+			float radius = 0.0;
+			if (uLights[i].type == LIGHT_TYPE_POINT) {
+				if (uLights[i].outerCutoff > 0.0) {
+					radius = uLights[i].outerCutoff * exposureScale;
+				} else {
+					radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0 * exposureScale;
+				}
+			} else if (uLights[i].type == LIGHT_TYPE_SPOT || uLights[i].type == LIGHT_TYPE_EMISSIVE) {
+				radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0;
+				if (uLights[i].type == LIGHT_TYPE_EMISSIVE) {
+					radius += uLights[i].innerCutoff;
+				}
+				radius *= exposureScale;
+			} else if (uLights[i].type == LIGHT_TYPE_FLASH) {
+				radius = 2.0 * uLights[i].innerCutoff * exposureScale;
+			} else {
+				continue;
+			}
+
+			if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD) {
+				if (global_count < 64) {
+					uClusters[3456].lightIndices[global_count] = uint(i);
+					global_count++;
+				}
+			}
+		}
+		uClusters[3456].count = global_count;
+	}
+
+	groupMemoryBarrier();
+	barrier();
+
+	// Determine Axis-Aligned Bounding Box (AABB) in view space
+	vec3 aabbMin = vec3(
+		min(min(x_min_near, x_max_near), min(x_min_far, x_max_far)),
+		min(min(y_min_near, y_max_near), min(y_min_far, y_max_far)),
+		min(zNearSlice, zFarSlice)
+	);
+	vec3 aabbMax = vec3(
+		max(max(x_min_near, x_max_near), max(x_min_far, x_max_far)),
+		max(max(y_min_near, y_max_near), max(y_min_far, y_max_far)),
+		max(zNearSlice, zFarSlice)
+	);
+
+	uint local_count = 0;
+	uint local_light_indices[64];
+
+	// Iterate through local lights (indices starting from 2, index 0 and 1 are reserved for global directional lights)
+	uint total_lights = min(uLightCount, 1024u);
+	for (uint i = 2; i < total_lights; ++i) {
+		if (uLights[i].intensity <= 0.0) continue;
+
+		vec3 light_pos = uLights[i].position;
+		if ((uLights[i].flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
+			light_pos += uCameraPosition.xyz;
+		}
+
+		// Project to View Space
+		vec4 light_view_pos = uViewMatrix * vec4(light_pos, 1.0);
+
+		// Determine light radius of influence
+		float radius = 0.0;
+		if (uLights[i].type == LIGHT_TYPE_POINT) {
+			if (uLights[i].outerCutoff > 0.0) {
+				radius = uLights[i].outerCutoff * exposureScale;
+			} else {
+				radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0 * exposureScale;
+			}
+		} else if (uLights[i].type == LIGHT_TYPE_SPOT || uLights[i].type == LIGHT_TYPE_EMISSIVE) {
+			radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0;
+			if (uLights[i].type == LIGHT_TYPE_EMISSIVE) {
+				radius += uLights[i].innerCutoff;
+			}
+			radius *= exposureScale;
+		} else if (uLights[i].type == LIGHT_TYPE_FLASH) {
+			radius = 2.0 * uLights[i].innerCutoff * exposureScale;
+		} else {
+			continue;
+		}
+
+		if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD) {
+			continue;
+		}
+
+		// Sphere-AABB intersection test in view space
+		float dist_sq = 0.0;
+		for (int d = 0; d < 3; ++d) {
+			float v = light_view_pos[d];
+			if (v < aabbMin[d]) {
+				dist_sq += (aabbMin[d] - v) * (aabbMin[d] - v);
+			} else if (v > aabbMax[d]) {
+				dist_sq += (v - aabbMax[d]) * (v - aabbMax[d]);
+			}
+		}
+
+		if (dist_sq <= radius * radius) {
+			if (local_count < 64) {
+				local_light_indices[local_count] = uint(i);
+				local_count++;
+			}
+		}
+	}
+
+	uint cluster_index = clusterID.x + clusterID.y * 16 + clusterID.z * 16 * 9;
+	uClusters[cluster_index].count = local_count;
+	for (uint i = 0; i < local_count; ++i) {
+		uClusters[cluster_index].lightIndices[i] = local_light_indices[i];
+	}
+}
