@@ -80,19 +80,20 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	// Shore wave steering towards shallower water / coastline
 	float estH = estTerrainHeight(uv);
 	float depth = params.waterLevel - estH;
-	if (depth > -5.0 && depth < 25.0) {
-		float eps = 2.0;
+	// if (depth > -50.0 && depth < 25.0) {
+	if (true) {
+		float eps = mix(25.0, 50.0, smoothstep(-50.0, -10.0, depth));
 		vec2  grad = vec2(
 			estTerrainHeight(uv + vec2(eps, 0.0)) - estTerrainHeight(uv - vec2(eps, 0.0)),
 			estTerrainHeight(uv + vec2(0.0, eps)) - estTerrainHeight(uv - vec2(0.0, eps))
 		);
 		if (dot(grad, grad) > 0.0001) {
-			vec2  shoreDir = normalize(grad);
-			float shoreWeight = clamp(1.0 - depth / 20.0, 0.0, 0.85);
+			vec2  shoreDir = -normalize(grad);
+			float shoreWeight = clamp(1.0 - depth / 20.0, 0.125, 1.0);
 			d1 = normalize(mix(d1, shoreDir, shoreWeight * 0.8));
-			d2 = normalize(mix(d2, shoreDir, shoreWeight * 0.7));
-			d3 = normalize(mix(d3, shoreDir, shoreWeight * 0.6));
-			d4 = normalize(mix(d4, shoreDir, shoreWeight * 0.5));
+			d2 = normalize(mix(d1, shoreDir, shoreWeight * 0.7));
+			d3 = normalize(mix(d1, shoreDir, shoreWeight * 0.6));
+			d4 = normalize(mix(d1, shoreDir, shoreWeight * 0.5));
 		}
 	}
 
@@ -111,9 +112,16 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	// Micro ripples (near camera)
 	if (rippleFade > 0.001) {
 		vec2 d5 = normalize(vec2(0.95 + 0.05 * sin(time * 0.1), 0.1 + 0.05 * cos(time * 0.12)));
+			// Micro ripples (near camera)
+	if (rippleFade > 0.001) {
+		vec2 d5 = normalize(vec2(0.95 + 0.05 * sin(time * 0.1), 0.1 + 0.05 * cos(time * 0.12)));
 		vec2 d6 = normalize(vec2(-0.2 + 0.05 * cos(time * 0.11), 0.98 + 0.05 * sin(time * 0.13)));
-		totalOffset += gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 4.0, tangent, binormal);
-		totalOffset += gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 5.2, tangent, binormal);
+		totalOffset += gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
+		totalOffset += gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
+	}
+vec2 d6 = normalize(vec2(-0.2 + 0.05 * cos(time * 0.11), 0.98 + 0.05 * sin(time * 0.13)));
+		totalOffset += gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
+		totalOffset += gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
 	}
 
 	normal = normalize(cross(binormal, tangent));
