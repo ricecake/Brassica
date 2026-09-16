@@ -97,9 +97,9 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	float smoothH = estSmoothTerrainHeight(uv);
 	float smoothDepth = params.waterLevel - smoothH;
 
-	if (true) {
+	if (smoothDepth >= -30.0) {
 		// Expand the sampling epsilon significantly to average out underlying variations
-		float eps = mix(40.0, 80.0, smoothstep(-50.0, -10.0, smoothDepth));
+		float eps = mix(80.0, 40.0, smoothstep(-50.0, -10.0, smoothDepth));
 		vec2  grad = vec2(
 			estSmoothTerrainHeight(uv + vec2(eps, 0.0)) - estSmoothTerrainHeight(uv - vec2(eps, 0.0)),
 			estSmoothTerrainHeight(uv + vec2(0.0, eps)) - estSmoothTerrainHeight(uv - vec2(0.0, eps))
@@ -108,38 +108,39 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 			vec2  shoreDir = normalize(grad);
 			float shoreWeight = clamp(1.0 - smoothDepth / 20.0, 0.125, 1.0);
 
-			d1 = normalize(mix(d1, shoreDir, shoreWeight * 0.8));
-			d2 = normalize(mix(d2, shoreDir, shoreWeight * 0.7));
-			d3 = normalize(mix(d3, shoreDir, shoreWeight * 0.6));
-			d4 = normalize(mix(d4, shoreDir, shoreWeight * 0.5));
+			d1 = normalize(mix(d1, shoreDir, shoreWeight * 1.1));
+			d2 = normalize(mix(d2, shoreDir, shoreWeight * 1.0));
+			d3 = normalize(mix(d3, shoreDir, shoreWeight * 0.8));
+			d4 = normalize(mix(d4, shoreDir, shoreWeight * 0.7));
 		}
 	}
 
 	// Primary swell (large wavelength)
 	if (mainWaveFade > 0.001) {
-		totalOffset += gerstnerWave(uv, d1, 0.18 * mainWaveFade, 60.0, time * 1.2, tangent, binormal);
-		totalOffset += gerstnerWave(uv, d2, 0.14 * mainWaveFade, 38.0, time * 1.5, tangent, binormal);
+		float vectorAdjustment = dot(d1, d2) * 0.5 + 0.5;
+		mainWaveFade *= vectorAdjustment;
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d1, 0.18 * mainWaveFade, 60.0, time * 1.2, tangent, binormal);
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d2, 0.14 * mainWaveFade, 38.0, time * 1.5, tangent, binormal);
 	}
 
 	// Medium waves
 	if (mediumWaveFade > 0.001) {
-		totalOffset += gerstnerWave(uv, d3, 0.10 * mediumWaveFade, 22.0, time * 2.0, tangent, binormal);
-		totalOffset += gerstnerWave(uv, d4, 0.06 * mediumWaveFade, 12.0, time * 2.8, tangent, binormal);
+		float vectorAdjustment = dot(d3, d4) * 0.5 + 0.5;
+		mediumWaveFade *= vectorAdjustment;
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d3, 0.10 * mediumWaveFade, 22.0, time * 2.0, tangent, binormal);
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d4, 0.06 * mediumWaveFade, 12.0, time * 2.8, tangent, binormal);
 	}
 
 	// Micro ripples (near camera)
 	if (rippleFade > 0.001) {
 		vec2 d5 = normalize(vec2(0.95 + 0.05 * sin(time * 0.1), 0.1 + 0.05 * cos(time * 0.12)));
-			// Micro ripples (near camera)
-	if (rippleFade > 0.001) {
-		vec2 d5 = normalize(vec2(0.95 + 0.05 * sin(time * 0.1), 0.1 + 0.05 * cos(time * 0.12)));
 		vec2 d6 = normalize(vec2(-0.2 + 0.05 * cos(time * 0.11), 0.98 + 0.05 * sin(time * 0.13)));
-		totalOffset += gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
-		totalOffset += gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
-	}
-	vec2 d6 = normalize(vec2(-0.2 + 0.05 * cos(time * 0.11), 0.98 + 0.05 * sin(time * 0.13)));
-		totalOffset += gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
-		totalOffset += gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
+
+		float vectorAdjustment = dot(d5, d6) * 0.5 + 0.5;
+		rippleFade *= vectorAdjustment;
+
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
+		totalOffset += vectorAdjustment * gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
 	}
 
 	normal = normalize(cross(binormal, tangent));
