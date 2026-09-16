@@ -2,7 +2,7 @@ BUILD_DIR = build
 CONFIG = RelWithDebInfo
 APP = sandbox
 
-GRAPH_CXXFLAGS = -std=c++23 -Wall -Wextra -Wpedantic -Iinclude -Iexternal/doctest -Iexternal/entt/src
+GRAPH_CXXFLAGS = -std=c++23 -Wall -Wextra -Wpedantic -Iinclude -Isrc -Iexternal/doctest -Iexternal/entt/src -Iexternal/glm
 
 .PHONY: all clean format run clean-build test profile setup-deps graph-test graph-check
 
@@ -49,7 +49,7 @@ clean:
 # (tests/test_physical_backend.cpp) -- not here.
 graph-test:
 	@mkdir -p $(BUILD_DIR)/bin
-	@$(CXX) $(GRAPH_CXXFLAGS) -o $(BUILD_DIR)/bin/test_graph tests/graph/test_graph.cpp
+	@$(CXX) $(GRAPH_CXXFLAGS) -o $(BUILD_DIR)/bin/test_graph tests/graph/test_graph.cpp src/lighting/LightManager.cpp src/lighting/LightningManager.cpp
 	@$(BUILD_DIR)/bin/test_graph
 
 # Compile-time assertions only, no link/run step. Fastest inner loop while iterating on the

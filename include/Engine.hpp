@@ -12,6 +12,8 @@
 #include "GLFW/glfw3.h"
 #include "graph/PhysicalRegistry.hpp"
 #include "InputHandler.hpp"
+#include "lighting/LightManager.hpp"
+#include "lighting/LightningManager.hpp"
 #include "passes/AllNodes.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -22,6 +24,7 @@
 #include "terrain/TerrainClipmap.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/FrameUBO.hpp"
+#include "types/ubo/LightingUBO.hpp"
 #include "vk_mem_alloc.h"
 #include "VkBootstrap.h"
 
@@ -109,6 +112,14 @@ namespace brassica {
 
 		const CameraData& GetCamera() const { return camera; }
 
+		LightManager& GetLightManager() { return lightManager; }
+
+		const LightManager& GetLightManager() const { return lightManager; }
+
+		LightningManager& GetLightningManager() { return lightningManager; }
+
+		const LightningManager& GetLightningManager() const { return lightningManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -170,19 +181,9 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		// Every top-level render node used to be a named member here (GradientNode, TerrainNode,
-		// DeferredNode, WaterNode, TransmittanceLUTNode, MultiScatteringLUTNode,
-		// ParticleSystemNode) with hand-written Init/Destroy/RegisterRef calls in Engine.cpp for
-		// each. They're auto-registered now (render::EngineNodeRegistry, via
-		// render::NodeRegistrar<T> -- see include/render/NodeLifecycle.hpp and
-		// include/passes/AllNodes.hpp) and live in the registry's own storage instead -- Engine
-		// reaches a specific one only where it still needs to (SetFrameParams, in DrawFrame) via
-		// EngineNodeRegistry::Instance().Get<T>().
+		LightManager     lightManager;
+		LightningManager lightningManager;
 
-		// What's left of the old TerrainPass once its pipeline/shader ownership moved above --
-		// the terrain BLAS/TLAS build, unchanged, now living in terrain/ rather than passes/
-		// (see TerrainAccelerationStructure's own comment for why). Default-constructed, wired
-		// via Init() once instance/device exist, same pattern as physicalRegistry/pipelineLibrary.
 		TerrainAccelerationStructure terrainAS;
 
 		TerrainClipmap       terrainClipmap;
@@ -194,29 +195,30 @@ namespace brassica {
 		// Vulkan Memory Allocator
 		VmaAllocator allocator{VK_NULL_HANDLE};
 
-		// Frame set (set 0): just the FrameUBO, always bound by every node regardless of what
-		// else it touches -- every shader gets ready access to camera/time/frame data without
-		// declaring it as a graph resource dependency. Genuinely double-buffered (unlike the
-		// bindless set below): the UBO's contents are CPU-written fresh every frame, so frame
-		// N's write must not land in the copy frame N-1's still-in-flight GPU work may still be
-		// reading.
+		// Frame set (set 0): persistent engine-wide bindings for FrameUBO, LightingUBO, LightsBuffer, ClusterGridBuffer
 		vk::DescriptorSetLayout frameSetLayout{nullptr};
 		vk::DescriptorPool      frameDescriptorPool{nullptr};
-		vk::Buffer              frameUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
-		VmaAllocation           frameUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
-		void*                   frameUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
-		vk::DescriptorSet       frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
+
+		vk::Buffer    frameUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation frameUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         frameUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
+		vk::Buffer    lightingUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation lightingUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         lightingUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
+		vk::Buffer    lightsSSBOBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation lightsSSBOAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         lightsSSBOMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
+		vk::Buffer    clusterGridBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation clusterGridAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+
+		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
 		void InitFrameSet();
 		void CleanupFrameSet();
 
-		// The bindless set (set 1): one instance, never duplicated per frame -- a resource's
-		// descriptor is written once at creation and read for the rest of its life, so unlike
-		// the frame set above there is no in-flight copy to keep separate. (An earlier version
-		// of this folded the per-frame UBO into this same set, which forced duplicating the
-		// whole set -- and therefore every bindless descriptor write -- per frame just for the
-		// UBO's sake, reintroducing exactly the in-flight write hazard bindless indexing exists
-		// to avoid. See PhysicalResourceRegistry::BindlessBindings.)
 		vk::DescriptorSetLayout bindlessSetLayout{nullptr};
 		vk::DescriptorPool      bindlessDescriptorPool{nullptr};
 		vk::DescriptorSet       bindlessDescriptorSet{nullptr};
@@ -228,23 +230,8 @@ namespace brassica {
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
 
-		// Engine-owned and persistent across frames (not a per-frame stack local, unlike the old
-		// FrameGraph fg;) -- this is what lets a resource a node doesn't touch this frame simply
-		// keep existing rather than being torn down and rebuilt, and is the entire mechanism
-		// behind AtmosphereLUT-style regeneration throttling (see PhysicalResourceRegistry's
-		// desc-match reuse in ProvisionTexture/ProvisionBuffer). Constructed with a default
-		// device/allocator at Engine construction time; SetDeviceAndAllocator wires in the real
-		// ones once InitVulkan has run.
 		graph::PhysicalResourceRegistry physicalRegistry;
-
-		// Engine-owned and persistent across frames, mirroring physicalRegistry immediately
-		// above -- what lets a node reconstructed fresh every frame (GradientNode and everything
-		// ported after it, none of which own a persistent Pass object anymore) resolve the exact
-		// same pipeline request every frame as a cache hit instead of rebuilding a real
-		// vk::Pipeline 60+ times a second. Constructed with a default device/cache at Engine
-		// construction time; SetDeviceAndCache wires in the real ones once InitVulkan has run,
-		// same as physicalRegistry.SetDeviceAndAllocator.
-		render::PipelineLibrary pipelineLibrary;
+		render::PipelineLibrary         pipelineLibrary;
 
 		EngineOptions       options{};
 		uint32_t            validationErrorCount{0};
