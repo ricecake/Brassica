@@ -429,6 +429,28 @@ namespace brassica {
 			static_cast<uint32_t>(swapchainImages.size())
 		);
 
+		argparseManager.Initialize();
+		serviceLocator.Provide<ArgparseManager>(
+			std::shared_ptr<ArgparseManager>(&argparseManager, [](ArgparseManager*) {})
+		);
+
+		configManager.SetApplicationName(options.appName);
+		configManager.Initialize();
+		if (!options.configFile.empty()) {
+			configManager.LoadFromFile(options.configFile);
+		}
+		serviceLocator.Provide<ConfigManager>(
+			std::shared_ptr<ConfigManager>(&configManager, [](ConfigManager*) {})
+		);
+
+		lightManager.Initialize();
+		serviceLocator.Provide<ILightManager>(
+			std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {})
+		);
+		serviceLocator.Provide<LightManager>(
+			std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {})
+		);
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -1089,22 +1111,6 @@ namespace brassica {
 			return;
 		}
 
-		if (imguiManager.IsVisible()) {
-			vk::RenderingAttachmentInfo colorAttachment{};
-			colorAttachment.setImageView(swapchainImageViews[swapchainImageIndex]);
-			colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
-			colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
-			colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
-
-			vk::RenderingInfo renderingInfo{};
-			renderingInfo.setRenderArea(vk::Rect2D({0, 0}, extent));
-			renderingInfo.setLayerCount(1);
-			renderingInfo.setColorAttachments(colorAttachment);
-
-			frame.commandBuffer.beginRendering(renderingInfo);
-			imguiManager.Render(frame.commandBuffer);
-			frame.commandBuffer.endRendering();
-		}
 
 		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
 		// srcStage/srcAccess now come from the registry's tracked state rather than being

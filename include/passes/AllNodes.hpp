@@ -14,6 +14,7 @@
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/GradientNode.hpp"
+#include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
