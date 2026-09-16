@@ -572,15 +572,20 @@ vec3 cross_noise_fbm(vec3 p, int oct, float phase, out mat3 out_jacobian) {
     return val / max_amp;
 }
 
+float biome_map(float temperature, float moisture, float rocky) {
+	return dot(vec3(temperature, moisture, rocky), vec3(0.2126, 0.7152, 0.0722));
+}
+
 // Assuming cross_noise_fbm and dot_noise_fbm from previous implementations are in scope
 struct TerrainConfig {
     float spatial_scale;
     float min_height;
     float max_height;
     float ridge_weight;
+	float biome_bleed;
 };
 
-float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config) {
+float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask) {
 	p *= config.spatial_scale;
     mat3 J_flow;
     vec3 unused_grad; // Placeholder for when you implement full analytical normals
@@ -621,6 +626,27 @@ float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig c
     float ridge_height = (1.0 - abs(raw_ridge)) * ridge_mask; // Ridged multifractal style
 
     float finalHeight = base_height + (ridge_height * 0.5);
+
+	// Inside your evaluate_terrain function, after calculating S, I1, I2, and combined height:
+	vec3 dominant_axis = normalize(S * vec3(1.0, 1.0, 1.0));
+
+	// 1. Establish the base 3D biome coordinates
+	float base_temp = 1.0 - finalHeight;
+	float base_moisture = smoothstep(-1.0, 1.0, I1);
+	float base_rocky = smoothstep(0.0, 0.8, abs(I2)); // Shear stress maps perfectly to rockiness
+
+	vec3 biome_coords = vec3(base_temp, base_moisture, base_rocky);
+
+	// 2. Anisotropic Bleed
+	// Perturb all three parameters along the principal axis of tectonic deformation
+	float biome_dither = raw_ridge * config.biome_bleed;
+	biome_coords += dominant_axis * biome_dither;
+	biome_coords = clamp(biome_coords, 0.0, 1.0);
+
+	// 3. Resolve to the single float output
+	out_biome = biome_map(biome_coords.x, biome_coords.y, biome_coords.z);
+	out_mask = continent_mask;
+
 	return remap(finalHeight, 0.0, 1.0, config.min_height, config.max_height);
 }
 
@@ -629,10 +655,11 @@ vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps
     const vec2 k = vec2(1.0, -1.0);
 
     // Evaluate the terrain 4 times offset in a tetrahedron
-    float h1 = evaluate_terrain(p + k.xyy * eps, phase, warp_strength, config);
-    float h2 = evaluate_terrain(p + k.yyx * eps, phase, warp_strength, config);
-    float h3 = evaluate_terrain(p + k.yxy * eps, phase, warp_strength, config);
-    float h4 = evaluate_terrain(p + k.xxx * eps, phase, warp_strength, config);
+	float b,m;
+    float h1 = evaluate_terrain(p + k.xyy * eps, phase, warp_strength, config, b, m);
+    float h2 = evaluate_terrain(p + k.yyx * eps, phase, warp_strength, config, b, m);
+    float h3 = evaluate_terrain(p + k.yxy * eps, phase, warp_strength, config, b, m);
+    float h4 = evaluate_terrain(p + k.xxx * eps, phase, warp_strength, config, b, m);
 
     // Accumulate the gradient vectors
     vec3 grad = k.xyy * h1 + k.yyx * h2 + k.yxy * h3 + k.xxx * h4;

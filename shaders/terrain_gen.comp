@@ -157,11 +157,13 @@ void main() {
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;
 	vec2 worldXZ = centerWorldPos + deltaWorld;
 
-	TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14);
+	TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14, 0.5);
 	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
 
 	// Evaluate height ONCE per thread
-	float h = evaluate_terrain(p, 0.0, 0.75, con);
+	float biome = 0.0;
+	float land_mask = 0.0;
+	float h = evaluate_terrain(p, 0.0, 0.75, con, biome, land_mask);
 
 	// 3. Quad Swap Differencing
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
@@ -216,7 +218,7 @@ void main() {
 
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(cluster_min, cluster_max, quad_min, quad_max));
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(0.5, 0.0, 1.0), variance, 1.0, 0.5));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, 1.0, land_mask));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
 	}
 }
