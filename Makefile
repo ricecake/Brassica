@@ -18,6 +18,10 @@ format:
 	@cmake -B $(BUILD_DIR)
 	@cmake --build $(BUILD_DIR) --target format
 
+format-shaders:
+	@cmake -B $(BUILD_DIR)
+	@cmake --build $(BUILD_DIR) --target format-shaders
+
 test:
 	@cmake -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG)
 	@cmake --build $(BUILD_DIR) --target tests

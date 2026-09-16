@@ -209,6 +209,14 @@ if(CLANG_FORMAT_EXE)
         COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SOURCES}
         COMMENT "Running clang-format..."
     )
+    file(GLOB_RECURSE FORMAT_SHADER_SOURCES "shaders/*")
+    add_custom_target(format-shaders
+        COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SHADER_SOURCES}
+        COMMENT "Running clang-format on shaders..."
+    )
+
+else()
+    message(WARNING "clang-format not found. The 'format' target will not be available.")
 endif()
 
 # 7. Test Targets
