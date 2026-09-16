@@ -11,12 +11,7 @@ namespace brassica {
 	class IManager {
 	public:
 		IManager() = default;
-
-		virtual ~IManager() {
-			if (m_initialized) {
-				Shutdown();
-			}
-		}
+		virtual ~IManager() = default;
 
 		IManager(const IManager&) = delete;
 		IManager& operator=(const IManager&) = delete;

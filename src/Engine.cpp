@@ -1073,6 +1073,23 @@ namespace brassica {
 			return;
 		}
 
+		if (imguiManager.IsVisible()) {
+			vk::RenderingAttachmentInfo colorAttachment{};
+			colorAttachment.setImageView(swapchainImageViews[swapchainImageIndex]);
+			colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
+			colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
+			colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
+
+			vk::RenderingInfo renderingInfo{};
+			renderingInfo.setRenderArea(vk::Rect2D({0, 0}, extent));
+			renderingInfo.setLayerCount(1);
+			renderingInfo.setColorAttachments(colorAttachment);
+
+			frame.commandBuffer.beginRendering(renderingInfo);
+			imguiManager.Render(frame.commandBuffer);
+			frame.commandBuffer.endRendering();
+		}
+
 		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
 		// srcStage/srcAccess now come from the registry's tracked state rather than being
 		// hardcoded -- DeferredNode's Modify<Swapchain> always leaves it at exactly
