@@ -8,13 +8,16 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams;    // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 lodOffsets0_3;
+	uvec4 lodOffsets4_7;
+	uvec4 lodOffsets8_11;
 	vec3  waterColor;
 	float waterLevel;
+	uint  clipmapIndex;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
 }
 
 params;
@@ -37,14 +40,12 @@ void main() {
 		float distToCamTerrain = length(relTerrainPos);
 		// Terrain is strictly in front of the water mesh fragment
 		if (distToCamTerrain < distToCamWater - 0.2) {
-			outColor = vec4(0.0);
-			return;
+			discard;
 		}
 
 		depthBelowWater = relWaterPos.y - relTerrainPos.y;
 		if (depthBelowWater <= 0.0) {
-			outColor = vec4(0.0);
-			return;
+			discard;
 		}
 	}
 

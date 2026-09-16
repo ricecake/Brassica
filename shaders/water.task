@@ -8,13 +8,16 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 #include "common.glsl"
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams;    // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 lodOffsets0_3;
+	uvec4 lodOffsets4_7;
+	uvec4 lodOffsets8_11;
 	vec3  waterColor;
 	float waterLevel;
+	uint  clipmapIndex;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
 }
 
 params;
