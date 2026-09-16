@@ -6,10 +6,9 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 #include "bindless.glsl"
 #include "common.glsl"
-#include "terrain.glsl"
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
@@ -26,6 +25,14 @@ struct TaskPayload {
 };
 
 taskPayloadSharedEXT TaskPayload payload;
+
+// Water ring distance scale: continuous growth with distance from camera
+float getWaterRingScale(float ring) {
+	if (ring <= 3.0) {
+		return pow(1.8, ring);
+	}
+	return pow(1.8, 3.0) * pow(2.1, ring - 3.0);
+}
 
 // Check AABB against frustum planes
 bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
@@ -49,7 +56,7 @@ bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 		float len = length(planes[i].xyz);
 		vec4  normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
 
-		// Safety margin for wave height displacement (50 units)
+		// Safety margin for wave height displacement
 		if (dot(normPlane.xyz, pVertex) + normPlane.w < -50.0) {
 			return false;
 		}
@@ -70,19 +77,26 @@ void main() {
 	uint meshletID = gl_WorkGroupID.x * 32 + threadID;
 
 	bool visible = false;
-	uint lodLevel = 0;
+	uint ringLevel = 0;
 
 	if (meshletID < params.gridParams.z) {
 		uint meshletsPerRow = params.gridParams.y;
-		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-		lodLevel = min(meshletID / totalPerLOD, params.gridParams.x - 1);
-		uint localID = meshletID % totalPerLOD;
+		uint totalPerRing = meshletsPerRow * meshletsPerRow;
+		uint numRings = params.gridParams.x;
+		ringLevel = min(meshletID / totalPerRing, numRings - 1);
+		uint localID = meshletID % totalPerRing;
 
 		uint row = localID / meshletsPerRow;
 		uint col = localID % meshletsPerRow;
 
-		float baseMeshletSize = 32.0;
-		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
+		// Low camera pitch angle detection: boost density when camera angle is grazing horizontal
+		vec3  camForward = normalize(-uInvViewMatrix[2].xyz);
+		float pitch = abs(camForward.y);
+		float lowAngleFactor = clamp(1.0 - pitch * 2.5, 0.0, 1.0);
+		float angleCompression = mix(1.0, 0.65, lowAngleFactor);
+
+		float baseMeshletSize = 24.0;
+		float meshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel)) * angleCompression;
 
 		vec2  cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 		float maxWaveAmp = 20.0;
@@ -99,15 +113,15 @@ void main() {
 
 		visible = isAABBVisible(minB, maxB, uViewProjMatrix);
 
-		if (visible && lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
+		if (visible && ringLevel > 0) {
+			float prevMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel - 1)) * angleCompression;
 			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
 			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
 
-			// Cull the water meshlet if its entire bounding box is inside the previous finer LOD's area
+			// Cull meshlet if its bounding box is entirely inside the finer inner ring
 			if (insideX && insideZ) {
 				visible = false;
 			}
@@ -117,7 +131,7 @@ void main() {
 	if (visible) {
 		uint index = atomicAdd(meshletCount, 1u);
 		payload.meshletIDs[index] = meshletID;
-		payload.lodLevels[index] = lodLevel;
+		payload.lodLevels[index] = ringLevel;
 	}
 	barrier();
 

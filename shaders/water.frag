@@ -8,7 +8,7 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
