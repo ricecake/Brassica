@@ -1179,7 +1179,7 @@ namespace brassica {
 			auto createBufferHelper = [&](
 				VkDeviceSize size,
 				VkBufferUsageFlags usage,
-				VkBuffer& buf,
+				vk::Buffer& buf,
 				VmaAllocation& alloc,
 				void** mapped
 			) {
@@ -1194,11 +1194,13 @@ namespace brassica {
 						VMA_ALLOCATION_CREATE_MAPPED_BIT;
 				}
 
+				VkBuffer          rawBuffer = VK_NULL_HANDLE;
 				VmaAllocationInfo allocResultInfo{};
-				if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &buf, &alloc, &allocResultInfo) != VK_SUCCESS) {
+				if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &alloc, &allocResultInfo) != VK_SUCCESS) {
 					spdlog::error("Failed to create buffer with VMA");
 					return false;
 				}
+				buf = rawBuffer;
 				if (mapped) {
 					*mapped = allocResultInfo.pMappedData;
 				}

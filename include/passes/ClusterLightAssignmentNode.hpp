@@ -24,7 +24,7 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			compShader.CompileFromFile(services.device, "shaders/effects/cluster_light_assignment.comp");
+			compShader.CompileComputeFromFile(services.device, "shaders/effects/cluster_light_assignment.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
@@ -44,7 +44,7 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<ClusteredLighting>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::BufferDesc(TOTAL_CLUSTERS * sizeof(ClusterGPU), vk::BufferUsageFlagBits::eStorageBuffer),
+					.desc = graph::StorageBufferDesc(TOTAL_CLUSTERS * sizeof(ClusterGPU)),
 				}
 			);
 			return r;
@@ -57,7 +57,7 @@ namespace brassica {
 			};
 
 			render::ComputePipelineRequest request{
-				.computeStage = &compShader,
+				.shader = &compShader,
 				.setLayouts = setLayouts,
 			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
