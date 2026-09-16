@@ -60,6 +60,21 @@ float estTerrainHeight(vec2 worldXZ) {
 	return baseOffset + baseVal * baseHeightScale + detailVal * detailHeightScale * detailFactor;
 }
 
+// Add this above calculateGerstnerOffsetAndNormal
+float estSmoothTerrainHeight(vec2 worldXZ) {
+	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
+
+	// Only evaluate the lowest frequency noise. Skip FBM and detail noise.
+	float b = dot_noise(pos * 0.0003, 0.0);
+	float baseVal = dot_noise(pos * 0.0015, 0.0);
+
+	float biome = clamp(b, 0.0, 1.0);
+	float baseOffset = mix(-35.0, 30.0, biome);
+	float baseHeightScale = mix(40.0, 120.0, biome);
+
+	return baseOffset + baseVal * baseHeightScale;
+}
+
 vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
 	vec3 tangent = vec3(1.0, 0.0, 0.0);
 	vec3 binormal = vec3(0.0, 0.0, 1.0);
@@ -77,23 +92,26 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	vec2 d3 = normalize(vec2(0.3 + 0.18 * sin(time * 0.08), -0.95 + 0.12 * cos(time * 0.09)));
 	vec2 d4 = normalize(vec2(-0.85 + 0.15 * cos(time * 0.06), -0.3 + 0.15 * sin(time * 0.05)));
 
-	// Shore wave steering towards shallower water / coastline
-	float estH = estTerrainHeight(uv);
-	float depth = params.waterLevel - estH;
-	// if (depth > -50.0 && depth < 25.0) {
+
+	// Replace the steering block inside calculateGerstnerOffsetAndNormal
+	float smoothH = estSmoothTerrainHeight(uv);
+	float smoothDepth = params.waterLevel - smoothH;
+
 	if (true) {
-		float eps = mix(25.0, 50.0, smoothstep(-50.0, -10.0, depth));
+		// Expand the sampling epsilon significantly to average out underlying variations
+		float eps = mix(40.0, 80.0, smoothstep(-50.0, -10.0, smoothDepth));
 		vec2  grad = vec2(
-			estTerrainHeight(uv + vec2(eps, 0.0)) - estTerrainHeight(uv - vec2(eps, 0.0)),
-			estTerrainHeight(uv + vec2(0.0, eps)) - estTerrainHeight(uv - vec2(0.0, eps))
+			estSmoothTerrainHeight(uv + vec2(eps, 0.0)) - estSmoothTerrainHeight(uv - vec2(eps, 0.0)),
+			estSmoothTerrainHeight(uv + vec2(0.0, eps)) - estSmoothTerrainHeight(uv - vec2(0.0, eps))
 		);
 		if (dot(grad, grad) > 0.0001) {
-			vec2  shoreDir = -normalize(grad);
-			float shoreWeight = clamp(1.0 - depth / 20.0, 0.125, 1.0);
+			vec2  shoreDir = normalize(grad);
+			float shoreWeight = clamp(1.0 - smoothDepth / 20.0, 0.125, 1.0);
+
 			d1 = normalize(mix(d1, shoreDir, shoreWeight * 0.8));
-			d2 = normalize(mix(d1, shoreDir, shoreWeight * 0.7));
-			d3 = normalize(mix(d1, shoreDir, shoreWeight * 0.6));
-			d4 = normalize(mix(d1, shoreDir, shoreWeight * 0.5));
+			d2 = normalize(mix(d2, shoreDir, shoreWeight * 0.7));
+			d3 = normalize(mix(d3, shoreDir, shoreWeight * 0.6));
+			d4 = normalize(mix(d4, shoreDir, shoreWeight * 0.5));
 		}
 	}
 
@@ -119,7 +137,7 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 		totalOffset += gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
 		totalOffset += gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
 	}
-vec2 d6 = normalize(vec2(-0.2 + 0.05 * cos(time * 0.11), 0.98 + 0.05 * sin(time * 0.13)));
+	vec2 d6 = normalize(vec2(-0.2 + 0.05 * cos(time * 0.11), 0.98 + 0.05 * sin(time * 0.13)));
 		totalOffset += gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
 		totalOffset += gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
 	}
@@ -180,22 +198,22 @@ void main() {
 		}
 	}
 
-	// Shoreline vertex density refinement: shift vertices towards shoreline depth contour to prevent triangular wave shapes
-	float estH = estTerrainHeight(worldXZ);
-	float depth = params.waterLevel - estH;
-	float shoreFactor = clamp(1.0 - abs(depth - 2.0) / 10.0, 0.0, 1.0);
-	if (shoreFactor > 0.01) {
-		float eps = 2.0;
-		vec2  grad = vec2(
-			estTerrainHeight(worldXZ + vec2(eps, 0.0)) - estTerrainHeight(worldXZ - vec2(eps, 0.0)),
-			estTerrainHeight(worldXZ + vec2(0.0, eps)) - estTerrainHeight(worldXZ - vec2(0.0, eps))
-		);
-		float gradLenSq = dot(grad, grad);
-		if (gradLenSq > 0.0001) {
-			vec2 shoreShift = normalize(grad) * (shoreFactor * 1.5);
-			worldXZ += shoreShift * 0.35;
-		}
-	}
+	// // Shoreline vertex density refinement: shift vertices towards shoreline depth contour to prevent triangular wave shapes
+	// float estH = estTerrainHeight(worldXZ);
+	// float depth = params.waterLevel - estH;
+	// float shoreFactor = clamp(1.0 - abs(depth - 2.0) / 10.0, 0.0, 1.0);
+	// if (shoreFactor > 0.01) {
+	// 	float eps = 2.0;
+	// 	vec2  grad = vec2(
+	// 		estTerrainHeight(worldXZ + vec2(eps, 0.0)) - estTerrainHeight(worldXZ - vec2(eps, 0.0)),
+	// 		estTerrainHeight(worldXZ + vec2(0.0, eps)) - estTerrainHeight(worldXZ - vec2(0.0, eps))
+	// 	);
+	// 	float gradLenSq = dot(grad, grad);
+	// 	if (gradLenSq > 0.0001) {
+	// 		vec2 shoreShift = normalize(grad) * (shoreFactor * 1.5);
+	// 		worldXZ += shoreShift * 0.35;
+	// 	}
+	// }
 
 	float distToCam = length(worldXZ - uCameraPosition.xz);
 
