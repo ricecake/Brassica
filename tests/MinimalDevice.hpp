@@ -41,7 +41,6 @@ namespace brassica::testing {
 			features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 			features13.dynamicRendering = VK_TRUE;
 			features13.synchronization2 = VK_TRUE;
-			features13.pNext = &meshFeatures;
 
 			VkPhysicalDeviceVulkan12Features features12{};
 			features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -63,6 +62,7 @@ namespace brassica::testing {
 				.set_required_features_13(features13)
 				.set_required_features_12(features12)
 				.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
+				.add_required_extension_features(meshFeatures)
 				.defer_surface_initialization();
 
 			auto physRes = selector.select();
