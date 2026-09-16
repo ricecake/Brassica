@@ -56,8 +56,14 @@ struct Cluster {
 	uint padding[3];
 };
 
+#ifdef CLUSTER_GRID_WRITABLE
 layout(std430, set = 0, binding = 3) buffer ClusterGridBuffer {
 	Cluster uClusters[];
 };
+#else
+layout(std430, set = 0, binding = 3) readonly buffer ClusterGridBuffer {
+	Cluster uClusters[];
+};
+#endif
 
 #endif // BRASSICA_LIGHTING_GLSL

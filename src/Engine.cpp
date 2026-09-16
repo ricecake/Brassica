@@ -650,6 +650,7 @@ namespace brassica {
 
 		VkPhysicalDeviceFeatures features1{};
 		features1.shaderInt64 = VK_TRUE;
+		features1.fragmentStoresAndAtomics = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
