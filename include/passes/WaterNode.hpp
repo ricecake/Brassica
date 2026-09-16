@@ -93,7 +93,7 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.gridParams = p.terrainGridParams;
+			push.gridParams = glm::uvec4(10, 16, 2560, 0);
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
 		}
