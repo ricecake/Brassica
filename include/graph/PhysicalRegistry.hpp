@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "EngineConstants.hpp"
+#include "IManager.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Graph.hpp"
 #include "graph/PhysicalResource.hpp"
@@ -29,7 +30,7 @@ namespace brassica::graph {
 	// stays alive until that reference drops, even if Reset() or a later Provision() call has
 	// since released the registry's own reference -- real shared ownership, not just a
 	// same-frame borrow.
-	class PhysicalResourceRegistry: public ResourceServices {
+	class PhysicalResourceRegistry: public IManager, public ResourceServices {
 	public:
 		PhysicalResourceRegistry(vk::Device device = {}, VmaAllocator allocator = nullptr, vk::Queue queue = {}):
 			m_device(device),
@@ -38,7 +39,19 @@ namespace brassica::graph {
 			m_imagePool(device, allocator),
 			m_bufferPool(device, allocator) {}
 
-		~PhysicalResourceRegistry() { Reset(); }
+		~PhysicalResourceRegistry() override {
+			if (m_initialized) {
+				Shutdown();
+			} else {
+				Reset();
+			}
+		}
+
+		void Initialize() override { m_initialized = true; }
+		void Shutdown() override {
+			Reset();
+			m_initialized = false;
+		}
 
 		PhysicalResourceRegistry(const PhysicalResourceRegistry&) = delete;
 		PhysicalResourceRegistry& operator=(const PhysicalResourceRegistry&) = delete;

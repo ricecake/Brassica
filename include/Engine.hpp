@@ -11,10 +11,12 @@
 #include "EngineConstants.hpp"
 #include "GLFW/glfw3.h"
 #include "graph/PhysicalRegistry.hpp"
+#include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/AllNodes.hpp"
+#include "ServiceLocator.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -103,6 +105,17 @@ namespace brassica {
 		vk::PipelineCache GetPipelineCache() const { return pipelineCache; }
 
 		ShaderWatcher& GetShaderWatcher() { return shaderWatcher; }
+
+		ImGuiManager& GetImGuiManager() { return imguiManager; }
+		const ImGuiManager& GetImGuiManager() const { return imguiManager; }
+
+		ServiceLocator& GetServiceLocator() { return serviceLocator; }
+		const ServiceLocator& GetServiceLocator() const { return serviceLocator; }
+
+		template <typename T>
+		std::shared_ptr<T> GetService() {
+			return serviceLocator.Get<T>();
+		}
 
 		void SetFov(float fov) { camera.fov = fov; }
 
@@ -233,6 +246,8 @@ namespace brassica {
 		graph::PhysicalResourceRegistry physicalRegistry;
 		render::PipelineLibrary         pipelineLibrary;
 
+		ImGuiManager        imguiManager;
+		ServiceLocator      serviceLocator;
 		EngineOptions       options{};
 		uint32_t            validationErrorCount{0};
 		uint32_t            validationWarningCount{0};

@@ -5,6 +5,7 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "IManager.hpp"
 #include "vk_mem_alloc.h"
 #include "VulkanCompat.hpp"
 
@@ -16,11 +17,23 @@ namespace brassica {
 		class PipelineLibrary;
 	}
 
-	class TerrainAccelerationStructure {
+	class TerrainAccelerationStructure: public IManager {
 	public:
 		TerrainAccelerationStructure() = default;
 
-		~TerrainAccelerationStructure() { DestroyAccelerationStructures(); }
+		~TerrainAccelerationStructure() override {
+			if (m_initialized) {
+				Shutdown();
+			} else {
+				DestroyAccelerationStructures();
+			}
+		}
+
+		void Initialize() override { m_initialized = true; }
+		void Shutdown() override {
+			DestroyAccelerationStructures();
+			m_initialized = false;
+		}
 
 		TerrainAccelerationStructure(const TerrainAccelerationStructure&) = delete;
 		TerrainAccelerationStructure& operator=(const TerrainAccelerationStructure&) = delete;
