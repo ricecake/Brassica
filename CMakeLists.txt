@@ -96,6 +96,7 @@ add_subdirectory(external/tracy)
 add_subdirectory(external/VulkanMemoryAllocator)
 add_subdirectory(external/doctest)
 add_subdirectory(external/FastNoise2)
+add_subdirectory(external/argparse)
 
 # ImGui & ImGuizmo
 set(IMGUI_DIR external/imgui)
@@ -160,6 +161,7 @@ target_link_libraries(brassica
         VulkanMemoryAllocator
         efsw-static
         FastNoise
+        argparse
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)

@@ -397,3 +397,51 @@ float band(float minv, float maxv, float width, float val) {
         FUNC(floor((CUR_LEN) / (SEG_LEN)) + 1.0), \
         smoothstep((SEG_LEN) - (TRANS_LEN), (SEG_LEN), mod((CUR_LEN), (SEG_LEN))) \
     )
+
+float remap(float value, float valueMin, float valueMax) {
+	return (value - valueMin) / (valueMax - valueMin);
+}
+
+float remapClamp(float value, float inMin, float inMax, float outMin, float outMax) {
+    float t = clamp((value - inMin) / (inMax - inMin), 0.0, 1.0);
+    return mix(outMin, outMax, t);
+}
+
+float adjust(float value, float scaly) {
+	float f = 1.0 - value;
+	float h = 0.4; // adjustable filter
+
+	float a = scaly * (1.0-h) + h;
+	return clamp((remap(a, f, f + h)), 0.0, 1.0);
+}
+
+// https://iquilezles.org/articles/smin
+float smin( float a, float b, float k )
+{
+	float h = max(k-abs(a-b),0.0);
+	return min(a, b) - h*h*0.25/k;
+}
+
+float smaxCubic(float a, float b, float k) {
+	k *= 1.4;
+	float h = max(k - abs(a - b), 0.0);
+	return max(a, b) + h * h * h / (6.0 * k * k);
+}
+
+float schlickGain(float x, float g) {
+	g = clamp(g, 0.001, 0.999);
+	float absDiff = abs(2.0 * x - 1.0);
+	float denominator = g + absDiff * (1.0 - 2.0 * g);
+	return 0.5 + ((x - 0.5) * (1.0 - g)) / denominator;
+}
+
+float schlickBias(float x, float g) {
+	// Guard inputs to safe analytical ranges
+	float xx = clamp(x, 0.0, 1.0);
+	float gg = clamp(g, 1e-4, 1.0 - 1e-4);
+
+	// Convert bias parameter to Schlick formulation factor
+	// Schlick's fast alternative: f(x) = x / ((1/a - 2) * (1.0 - x) + 1.0)
+	float k = (1.0 / gg) - 2.0;
+	return xx / (k * (1.0 - xx) + 1.0);
+}
