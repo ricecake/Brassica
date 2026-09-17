@@ -90,8 +90,8 @@ void main() {
         uint r1_k0 = 1u + (r + 1u) * pointsPerRing + k;
         uint r1_k1 = 1u + (r + 1u) * pointsPerRing + nextK;
 
-        gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u] = uvec3(r0_k0, r1_k0, r1_k1);
-        gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u + 1u] = uvec3(r0_k0, r1_k1, r0_k1);
+        gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u] = uvec3(r0_k0, r1_k1, r1_k0);
+        gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u + 1u] = uvec3(r0_k0, r0_k1, r1_k1);
     }
 
     // Bottom pole fan
@@ -101,6 +101,6 @@ void main() {
 
     for (uint k = tid; k < pointsPerRing; k += 32u) {
         uint nextK = (k + 1u) % pointsPerRing;
-        gl_PrimitiveTriangleIndicesEXT[bottomOffset + k] = uvec3(southPole, lastRingStart + nextK, lastRingStart + k);
+        gl_PrimitiveTriangleIndicesEXT[bottomOffset + k] = uvec3(southPole, lastRingStart + k, lastRingStart + nextK);
     }
 }

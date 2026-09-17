@@ -5,6 +5,7 @@
 #include "Engine.hpp"
 #include "SystemHandler.hpp"
 #include "passes/BallNode.hpp"
+#include "terrain/TerrainClipmap.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 
@@ -13,10 +14,14 @@ namespace brassica {
 	class BallSystemHandler: public SystemHandler {
 	public:
 		void Setup(Engine& engine, const FrameDetails& frameDetails) override {
+			float targetX = 0.0f;
+			float targetZ = -20.0f;
+			float terrainY = TerrainClipmap::SampleTerrain(targetX, targetZ, 0.5f).r;
+
 			TransformComponent transform{};
-			transform.position = glm::vec3(0.0f, 15.0f, 0.0f);
+			transform.position = glm::vec3(targetX, terrainY + 12.0f, targetZ);
 			transform.rotation = glm::vec3(0.0f);
-			transform.scale = glm::vec3(3.0f);
+			transform.scale = glm::vec3(4.0f);
 
 			ballEntity = RegisterEntity(engine, transform);
 
@@ -45,7 +50,13 @@ namespace brassica {
 
 			auto* transform = registry.try_get<TransformComponent>(entity);
 			if (transform) {
-				transform->position.y = 15.0f + static_cast<float>(std::sin(frameDetails.totalTime * 2.0)) * 2.0f;
+				float targetX = 0.0f;
+				float targetZ = -20.0f;
+				float terrainY = TerrainClipmap::SampleTerrain(targetX, targetZ, 0.5f).r;
+
+				transform->position.x = targetX;
+				transform->position.z = targetZ;
+				transform->position.y = terrainY + 12.0f + static_cast<float>(std::sin(frameDetails.totalTime * 2.0)) * 2.0f;
 				UpdateRenderData(*transform);
 			}
 		}

@@ -35,7 +35,7 @@ namespace brassica {
 		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Create<BallIndirectBuffer>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
-			.cullMode = vk::CullModeFlagBits::eBack,
+			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
 			.depthWrite = true,
 			.depthCompareOp = vk::CompareOp::eLess,
