@@ -19,7 +19,6 @@ layout(location = 0) out vec3 vWorldPos[];
 layout(location = 1) out vec3 vNormal[];
 layout(location = 2) out vec4 vColor[];
 
-const float PI = 3.14159265359;
 const float GOLDEN_ANGLE = 2.39996322972865332; // Golden angle in radians
 
 void main() {
