@@ -10,13 +10,16 @@ layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams;    // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 lodOffsets0_3;
+	uvec4 lodOffsets4_7;
+	uvec4 lodOffsets8_11;
 	vec3  waterColor;
 	float waterLevel;
+	uint  clipmapIndex;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
 }
 
 params;
@@ -37,42 +40,6 @@ float getWaterRingScale(float ring) {
 		return pow(1.8, ring);
 	}
 	return pow(1.8, 3.0) * pow(2.1, ring - 3.0);
-}
-
-float estTerrainHeight(vec2 worldXZ) {
-	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
-	vec3 warp = cross_noise_fbm(pos * 0.005, 3, 0.0);
-	pos += 50.0 * warp;
-	float b = dot_noise(pos * 0.0003, 0.0);
-	float m = dot_noise(pos * 0.0008, 0.0);
-	float baseVal = dot_noise_fbm(pos * 0.0015, 4, 0.0);
-	float detailVal = dot_noise_fbm(pos * 0.006, 4, 0.0);
-
-	float biome = clamp(b, 0.0, 1.0);
-	float mountainFactor = clamp((m - (-0.1)) / 0.4, 0.0, 1.0);
-	mountainFactor = mountainFactor * mountainFactor * (3.0 - 2.0 * mountainFactor);
-	float detailFactor = (0.15 + 0.85 * mountainFactor) * mix(0.3, 1.2, biome);
-
-	float baseOffset = mix(-35.0, 30.0, biome);
-	float baseHeightScale = mix(40.0, 120.0, biome);
-	float detailHeightScale = mix(20.0, 80.0, biome);
-
-	return baseOffset + baseVal * baseHeightScale + detailVal * detailHeightScale * detailFactor;
-}
-
-// Add this above calculateGerstnerOffsetAndNormal
-float estSmoothTerrainHeight(vec2 worldXZ) {
-	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
-
-	// Only evaluate the lowest frequency noise. Skip FBM and detail noise.
-	float b = dot_noise(pos * 0.0003, 0.0);
-	float baseVal = dot_noise(pos * 0.0015, 0.0);
-
-	float biome = clamp(b, 0.0, 1.0);
-	float baseOffset = mix(-35.0, 30.0, biome);
-	float baseHeightScale = mix(40.0, 120.0, biome);
-
-	return baseOffset + baseVal * baseHeightScale;
 }
 
 vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
@@ -101,15 +68,21 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	float wl3 = 22.0, spd3 = 2.0;
 	float wl4 = 12.0, spd4 = 2.8;
 
-	float smoothH = estSmoothTerrainHeight(uv);
+	vec4 hSample = sampleTerrainClipmap(
+		params.clipmapIndex,
+		uv,
+		0u,
+		params.gridParams.w,
+		params.lodOffsets0_3,
+		params.lodOffsets4_7,
+		params.lodOffsets8_11
+	);
+	float smoothH = hSample.r;
+	vec3  terrainNormal = hSample.gba;
 	float smoothDepth = params.waterLevel - smoothH;
 
 	if (smoothDepth >= -30.0) {
-		float eps = mix(80.0, 40.0, smoothstep(-50.0, -10.0, smoothDepth));
-		vec2  grad = vec2(
-			estSmoothTerrainHeight(uv + vec2(eps, 0.0)) - estSmoothTerrainHeight(uv - vec2(eps, 0.0)),
-			estSmoothTerrainHeight(uv + vec2(0.0, eps)) - estSmoothTerrainHeight(uv - vec2(0.0, eps))
-		);
+		vec2 grad = -terrainNormal.xz;
 
 		if (dot(grad, grad) > 0.0001) {
 			vec2  shoreDir = normalize(grad);
@@ -250,7 +223,7 @@ void main() {
 			float nextMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel + 1)) * angleCompression;
 			float targetCellSize = nextMeshletSize * 0.1;
 			vec2  targetXZ = floor(worldXZ / targetCellSize) * targetCellSize;
-			worldXZ = mix(worldXZ, targetXZ, alpha * 0.4);
+			worldXZ = mix(worldXZ, targetXZ, alpha);
 		}
 	}
 
@@ -312,7 +285,7 @@ void main() {
 			vec2 quadCenterWorld = meshletMin.xz + quadCenterLocal;
 
 			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
-			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
+			if (max(dist.x, dist.y) < prevExtent - 0.001) {
 				cullQuad = true;
 			}
 		}

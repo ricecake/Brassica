@@ -217,8 +217,7 @@ void main() {
 			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
 
 			// Cull if the quad center is strictly inside the previous LOD's active area.
-			// The -0.01 margin prevents floating point inaccuracies from culling edge quads.
-			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
+			if (max(dist.x, dist.y) < prevExtent - 0.001) {
 				cullQuad = true;
 			}
 		}

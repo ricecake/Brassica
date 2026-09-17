@@ -22,13 +22,16 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct WaterPushConstants {
-		glm::uvec4    gridParams{10, 16, 2560, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+		glm::uvec4    gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4    lodOffsets0_3{0u};              // Toroidal offsets for LOD 0-3
+		glm::uvec4    lodOffsets4_7{0u};              // Toroidal offsets for LOD 4-7
+		glm::uvec4    lodOffsets8_11{0u};             // Toroidal offsets for LOD 8-11
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
+		std::uint32_t clipmapIndex{0};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
-		std::uint32_t padding{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -43,7 +46,10 @@ namespace brassica {
 	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
 	// so this is what actually proves the blend-state plumbing works for something real.
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
-		using Resources = graph::Declares<GBuffer<graph::Read>, graph::Modify<Swapchain>>;
+		using Resources = graph::Declares<
+			GBuffer<graph::Read>,
+			graph::Read<TerrainClipmapTexture>,
+			graph::Modify<Swapchain>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
@@ -56,6 +62,9 @@ namespace brassica {
 		// support (tests/test_water_node.cpp) rather than only compiling.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
+			.depthTest = true,
+			.depthWrite = false,
+			.depthCompareOp = vk::CompareOp::eLessOrEqual,
 			.enableBlend = true,
 			.enableShadingRate = false,
 		};
@@ -93,7 +102,10 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.gridParams = glm::uvec4(10, 16, 2560, 0);
+			push.gridParams = glm::uvec4(10, 16, 2560, p.terrainGridParams.w);
+			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
+			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
+			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
 		}
@@ -107,10 +119,18 @@ namespace brassica {
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferDepth>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+				}
+			);
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
@@ -131,6 +151,7 @@ namespace brassica {
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
+				.depthFormat = vk::Format::eD32Sfloat,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};
