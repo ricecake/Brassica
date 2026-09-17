@@ -33,10 +33,10 @@ layout(location = 1) out vec3 outNormal[];
 
 // Water ring distance scale: continuous growth with distance from camera
 float getWaterRingScale(float ring) {
-	if (ring <= 3.0) {
-		return pow(1.8, ring);
-	}
-	return pow(1.8, 3.0) * pow(2.1, ring - 3.0);
+	// if (ring <= 3.0) {
+		return pow(2.0, ring);
+	// }
+	// return pow(2.0, 3.0) * pow(2.0, ring - 3.0);
 }
 
 float estTerrainHeight(vec2 worldXZ) {
@@ -201,45 +201,81 @@ void main() {
 		cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
 	);
 
+// 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
+// 	vec2 baseWorldXZ = meshletMin.xz + localPos;
+// 	vec2 worldXZ = baseWorldXZ;
+
+// 	// Low camera angle forward-view density boost: compress vertex distribution towards view direction
+// 	if (lowAngleFactor > 0.01) {
+// 		vec2  toVertex = worldXZ - uCameraPosition.xz;
+// 		float distToCam = length(toVertex);
+// 		if (distToCam > 1.0) {
+// 			vec2  dir = toVertex / distToCam;
+// 			float viewDot = dot(dir, normalize(camForward.xz + vec2(0.0001)));
+// 			if (viewDot > 0.0) {
+// 				float bias = lowAngleFactor * 0.15 * viewDot * exp(-distToCam * 0.001);
+// 				worldXZ -= dir * (distToCam * bias);
+// 			}
+// 		}
+// 	}
+
+// 	// // Shoreline vertex density refinement: shift vertices towards shoreline depth contour to prevent triangular wave shapes
+// 	// float estH = estTerrainHeight(worldXZ);
+// 	// float depth = params.waterLevel - estH;
+// 	// float shoreFactor = clamp(1.0 - abs(depth - 2.0) / 10.0, 0.0, 1.0);
+// 	// if (shoreFactor > 0.01) {
+// 	// 	float eps = 2.0;
+// 	// 	vec2  grad = vec2(
+// 	// 		estTerrainHeight(worldXZ + vec2(eps, 0.0)) - estTerrainHeight(worldXZ - vec2(eps, 0.0)),
+// 	// 		estTerrainHeight(worldXZ + vec2(0.0, eps)) - estTerrainHeight(worldXZ - vec2(0.0, eps))
+// 	// 	);
+// 	// 	float gradLenSq = dot(grad, grad);
+// 	// 	if (gradLenSq > 0.0001) {
+// 	// 		vec2 shoreShift = normalize(grad) * (shoreFactor * 1.5);
+// 	// 		worldXZ += shoreShift * 0.35;
+// 	// 	}
+// 	// }
+
+// vec2 offsetDist = abs(worldXZ - cameraSnap);
+// float distToCam = max(offsetDist.x, offsetDist.y);
+// 	// float distToCam = length(worldXZ - uCameraPosition.xz);
+
+// 	// Morphing towards coarse grid at outer boundaries
+// 	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
+// 	if (ringLevel < params.gridParams.x - 1 && outerDist > 0.0) {
+// 		float morphWidth = 2.0 * meshletSize;
+// 		float morphStart = max(0.0, outerDist - morphWidth);
+// 		if (distToCam > morphStart) {
+// 			float alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
+// 			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+
+// 			float nextMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel + 1)) * angleCompression;
+// 			float targetCellSize = nextMeshletSize * 0.1;
+// vec2 targetLocalPos = vec2(
+//     floor(float(lx) / 2.0) * 2.0,
+//     floor(float(ly) / 2.0) * 2.0
+// ) * (meshletSize / 10.0);
+
+// vec2 targetXZ = meshletMin.xz + targetLocalPos;
+
+// // Apply morph
+// worldXZ = mix(worldXZ, targetXZ, alpha);
+
+// 		}
+// 	}
+
+
+
+
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec2 baseWorldXZ = meshletMin.xz + localPos;
-	vec2 worldXZ = baseWorldXZ;
 
-	// Low camera angle forward-view density boost: compress vertex distribution towards view direction
-	if (lowAngleFactor > 0.01) {
-		vec2  toVertex = worldXZ - uCameraPosition.xz;
-		float distToCam = length(toVertex);
-		if (distToCam > 1.0) {
-			vec2  dir = toVertex / distToCam;
-			float viewDot = dot(dir, normalize(camForward.xz + vec2(0.0001)));
-			if (viewDot > 0.0) {
-				float bias = lowAngleFactor * 0.15 * viewDot * exp(-distToCam * 0.001);
-				worldXZ -= dir * (distToCam * bias);
-			}
-		}
-	}
-
-	// // Shoreline vertex density refinement: shift vertices towards shoreline depth contour to prevent triangular wave shapes
-	// float estH = estTerrainHeight(worldXZ);
-	// float depth = params.waterLevel - estH;
-	// float shoreFactor = clamp(1.0 - abs(depth - 2.0) / 10.0, 0.0, 1.0);
-	// if (shoreFactor > 0.01) {
-	// 	float eps = 2.0;
-	// 	vec2  grad = vec2(
-	// 		estTerrainHeight(worldXZ + vec2(eps, 0.0)) - estTerrainHeight(worldXZ - vec2(eps, 0.0)),
-	// 		estTerrainHeight(worldXZ + vec2(0.0, eps)) - estTerrainHeight(worldXZ - vec2(0.0, eps))
-	// 	);
-	// 	float gradLenSq = dot(grad, grad);
-	// 	if (gradLenSq > 0.0001) {
-	// 		vec2 shoreShift = normalize(grad) * (shoreFactor * 1.5);
-	// 		worldXZ += shoreShift * 0.35;
-	// 	}
-	// }
-
-	float distToCam = length(worldXZ - uCameraPosition.xz);
-
-	// Morphing towards coarse grid at outer boundaries
+	// 1. Evaluate morphing against the pure, unshifted grid
+	vec2 offsetDist = abs(baseWorldXZ - cameraSnap);
+	float distToCam = max(offsetDist.x, offsetDist.y);
 	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
+	vec2 morphedXZ = baseWorldXZ;
+
 	if (ringLevel < params.gridParams.x - 1 && outerDist > 0.0) {
 		float morphWidth = 2.0 * meshletSize;
 		float morphStart = max(0.0, outerDist - morphWidth);
@@ -247,15 +283,34 @@ void main() {
 			float alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
 
-			float nextMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel + 1)) * angleCompression;
-			float targetCellSize = nextMeshletSize * 0.1;
-			vec2  targetXZ = floor(worldXZ / targetCellSize) * targetCellSize;
-			worldXZ = mix(worldXZ, targetXZ, alpha * 0.4);
+			vec2 targetLocalPos = vec2(floor(float(lx) / 2.0) * 2.0, floor(float(ly) / 2.0) * 2.0) * (meshletSize / 10.0);
+			vec2 targetXZ = meshletMin.xz + targetLocalPos;
+			morphedXZ = mix(baseWorldXZ, targetXZ, alpha);
 		}
 	}
 
+	vec2 worldXZ = morphedXZ;
+
+	// // 2. Apply camera angle density boost to the already-morphed coordinates
+	// if (lowAngleFactor > 0.01) {
+	// 	vec2 toVertex = worldXZ - uCameraPosition.xz;
+	// 	float actualDist = length(toVertex);
+	// 	if (actualDist > 1.0) {
+	// 		vec2 dir = toVertex / actualDist;
+	// 		float viewDot = dot(dir, normalize(camForward.xz + vec2(0.0001)));
+	// 		if (viewDot > 0.0) {
+	// 			float bias = lowAngleFactor * 0.15 * viewDot * exp(-actualDist * 0.001);
+	// 			worldXZ -= dir * (actualDist * bias);
+	// 		}
+	// 	}
+	// }
+
+	// 3. Generate Gerstner waves at final coordinate
 	vec3 waveNormal;
-	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, distToCam, float(ringLevel), waveNormal);
+	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, length(worldXZ - uCameraPosition.xz), float(ringLevel), waveNormal);
+
+	// vec3 waveNormal;
+	// vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, distToCam, float(ringLevel), waveNormal);
 	vec3 finalWorldPos = vec3(worldXZ.x, params.waterLevel, worldXZ.y) + waveOffset;
 
 	// Curved planet horizon dropoff
