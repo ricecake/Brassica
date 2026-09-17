@@ -40,13 +40,16 @@ void main() {
 		float distToCamTerrain = length(relTerrainPos);
 		// Terrain is strictly in front of the water mesh fragment
 		if (distToCamTerrain < distToCamWater - 0.2) {
-			discard;
+			outColor = vec4(0.0);
+			return;
 		}
 
 		depthBelowWater = relWaterPos.y - relTerrainPos.y;
-		if (depthBelowWater <= 0.0) {
-			discard;
+		if (depthBelowWater <= -1.0) {
+			outColor = vec4(0.0);
+			return;
 		}
+		depthBelowWater = max(0.0, depthBelowWater);
 	}
 
 	vec3 waveNormal = normalize(inNormal);

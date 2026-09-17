@@ -223,7 +223,7 @@ void main() {
 			float nextMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel + 1)) * angleCompression;
 			float targetCellSize = nextMeshletSize * 0.1;
 			vec2  targetXZ = floor(worldXZ / targetCellSize) * targetCellSize;
-			worldXZ = mix(worldXZ, targetXZ, alpha * 0.4);
+			worldXZ = mix(worldXZ, targetXZ, alpha);
 		}
 	}
 
@@ -305,8 +305,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = true;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = true;
 	}
 
 	if (ly == 10 && lx < 10 && lx % 2 == 0) { // Bottom edge
@@ -319,8 +319,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = true;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = true;
 	}
 
 	if (lx == 0 && ly < 10 && ly % 2 == 0) { // Left edge
@@ -333,8 +333,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = true;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = true;
 	}
 
 	if (lx == 10 && ly < 10 && ly % 2 == 0) { // Right edge
@@ -347,7 +347,7 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = true;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = true;
 	}
 }
