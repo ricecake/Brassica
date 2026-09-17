@@ -22,6 +22,10 @@
 #include "graph/Validation.hpp"
 #include "ArgparseManager.hpp"
 #include "ConfigManager.hpp"
+#include "SystemHandler.hpp"
+#include "types/FrameDetails.hpp"
+#include "types/TransformComponent.hpp"
+#include <entt/entity/registry.hpp>
 #include "lighting/ILightManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
@@ -909,4 +913,92 @@ TEST_CASE("Multi-queue domain mapping and queue family barrier propagation") {
 		}
 	}
 	CHECK(foundCrossQueueBarrier == true);
+}
+
+namespace {
+	class DummyEngine {
+	public:
+		entt::registry& GetRegistry() { return registry; }
+		entt::registry registry;
+	};
+
+	class MockTestSystemHandler: public brassica::SystemHandler {
+	public:
+		bool setupCalled{false};
+		bool preFrameCalled{false};
+		bool postFrameCalled{false};
+		bool cleanupCalled{false};
+		uint32_t updateEntityCalls{0};
+		uint32_t lastFrameIndex{0};
+
+		void Setup(brassica::Engine&, const brassica::FrameDetails& details) override {
+			setupCalled = true;
+			lastFrameIndex = details.frameIndex;
+		}
+
+		entt::entity RegisterTestEntity(entt::registry& reg, const brassica::TransformComponent& transform) {
+			entt::entity entity = reg.create();
+			reg.emplace<brassica::TransformComponent>(entity, transform);
+			m_entities.push_back(entity);
+			return entity;
+		}
+
+		void PreFrame(brassica::Engine&, const brassica::FrameDetails&) override { preFrameCalled = true; }
+
+		void PostFrame(brassica::Engine&, const brassica::FrameDetails&) override { postFrameCalled = true; }
+
+		void Cleanup(brassica::Engine&) override { cleanupCalled = true; }
+
+		void UpdateEntity(entt::entity, brassica::Engine&, const brassica::FrameDetails& details) override {
+			updateEntityCalls++;
+			lastFrameIndex = details.frameIndex;
+		}
+	};
+} // namespace
+
+TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") {
+	DummyEngine engine;
+	brassica::TransformComponent initialTransform{
+		.position = glm::vec3(1.0f, 2.0f, 3.0f),
+		.rotation = glm::vec3(0.0f),
+		.scale = glm::vec3(2.0f)
+	};
+
+	MockTestSystemHandler handler;
+	entt::entity e1 = handler.RegisterTestEntity(engine.GetRegistry(), initialTransform);
+
+	CHECK(engine.GetRegistry().valid(e1));
+	auto* transform = engine.GetRegistry().try_get<brassica::TransformComponent>(e1);
+	REQUIRE(transform != nullptr);
+	CHECK(transform->position.x == doctest::Approx(1.0f));
+	CHECK(transform->position.y == doctest::Approx(2.0f));
+	CHECK(transform->position.z == doctest::Approx(3.0f));
+	CHECK(transform->scale.x == doctest::Approx(2.0f));
+
+	glm::mat4 mat = transform->GetTransformMatrix();
+	CHECK(mat[3][0] == doctest::Approx(1.0f));
+	CHECK(mat[3][1] == doctest::Approx(2.0f));
+	CHECK(mat[3][2] == doctest::Approx(3.0f));
+
+	brassica::FrameDetails details{
+		.deltaTime = 0.016f,
+		.totalTime = 1.0,
+		.frameIndex = 42,
+		.camera = nullptr
+	};
+
+	auto* dummyEnginePtr = reinterpret_cast<brassica::Engine*>(&engine);
+
+	handler.PreFrame(*dummyEnginePtr, details);
+	CHECK(handler.preFrameCalled == true);
+
+	handler.Update(*dummyEnginePtr, details);
+	CHECK(handler.updateEntityCalls == 1);
+	CHECK(handler.lastFrameIndex == 42);
+
+	handler.PostFrame(*dummyEnginePtr, details);
+	CHECK(handler.postFrameCalled == true);
+
+	handler.Cleanup(*dummyEnginePtr);
+	CHECK(handler.cleanupCalled == true);
 }

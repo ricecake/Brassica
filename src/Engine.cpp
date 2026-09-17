@@ -229,7 +229,31 @@ namespace brassica {
 		}
 	}
 
+	void Engine::AddSystemHandler(std::shared_ptr<SystemHandler> handler) {
+		if (!handler) {
+			return;
+		}
+		systemHandlers.push_back(handler);
+		if (device) {
+			FrameDetails details{
+				.deltaTime = 0.0f,
+				.totalTime = glfwGetTime(),
+				.frameIndex = frameNumber,
+				.camera = &camera,
+			};
+			handler->Setup(*this, details);
+		}
+	}
+
 	void Engine::Cleanup() {
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->Cleanup(*this);
+			}
+		}
+		systemHandlers.clear();
+		registry.clear();
+
 		if (device) {
 			device.waitIdle();
 
@@ -461,6 +485,18 @@ namespace brassica {
 			std::shared_ptr<graph::PhysicalResourceRegistry>(&physicalRegistry, [](graph::PhysicalResourceRegistry*) {})
 		);
 		serviceLocator.Provide<ImGuiManager>(std::shared_ptr<ImGuiManager>(&imguiManager, [](ImGuiManager*) {}));
+
+		FrameDetails initialDetails{
+			.deltaTime = 0.0f,
+			.totalTime = glfwGetTime(),
+			.frameIndex = 0,
+			.camera = &camera,
+		};
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->Setup(*this, initialDetails);
+			}
+		}
 
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
 	}
@@ -956,6 +992,20 @@ namespace brassica {
 		lightManager.Update(deltaTime);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
+		FrameDetails frameDetails{
+			.deltaTime = deltaTime,
+			.totalTime = currentTime,
+			.frameIndex = frameNumber,
+			.camera = &camera,
+		};
+
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->PreFrame(*this, frameDetails);
+				handler->Update(*this, frameDetails);
+			}
+		}
+
 		{
 			float altitude = std::max(10.0f, camera.position.y);
 			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
@@ -1212,6 +1262,12 @@ namespace brassica {
 		    windowResized) {
 			windowResized = false;
 			RecreateSwapchain();
+		}
+
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->PostFrame(*this, frameDetails);
+			}
 		}
 
 		frameNumber++;
