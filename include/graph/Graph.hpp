@@ -10,6 +10,7 @@
 #include "graph/Execution.hpp"
 #include "graph/Node.hpp"
 #include "graph/ResourceKey.hpp"
+#include "Scheduler.hpp"
 
 namespace brassica::graph {
 
@@ -77,6 +78,23 @@ namespace brassica::graph {
 	// this class.
 	class Graph {
 	public:
+		void SetQueueSet(const QueueSet& queues) { m_queues = queues; }
+
+		[[nodiscard]] const QueueSet& GetQueueSet() const { return m_queues; }
+
+		[[nodiscard]] std::uint32_t QueueFamilyForDomain(ExecutionDomain domain) const {
+			switch (domain) {
+			case ExecutionDomain::Graphics:
+				return m_queues.graphics.familyIndex;
+			case ExecutionDomain::Compute:
+				return m_queues.compute.familyIndex;
+			case ExecutionDomain::Transfer:
+				return m_queues.transfer.familyIndex;
+			case ExecutionDomain::Host:
+				return kQueueFamilyIgnored;
+			}
+			return kQueueFamilyIgnored;
+		}
 		template <NodeLike T, typename... Args>
 		void Register(Args&&... args) {
 			Add(NodeHandle::Make<T>(std::forward<Args>(args)...));
@@ -251,7 +269,22 @@ namespace brassica::graph {
 					}
 				}
 
-				std::vector<std::vector<std::size_t>> levels = LevelNodes(n, group, groupEdges);
+				std::vector<ExecutionDomain> domains(n, ExecutionDomain::Graphics);
+				for (std::size_t i = 0; i < n; ++i) {
+					if (i < m_recipes.size()) {
+						domains[i] = m_recipes[i].domain;
+					}
+				}
+
+				std::vector<std::vector<std::size_t>> successors(n);
+				for (const Edge& edge : groupEdges) {
+					successors[edge.producer].push_back(edge.consumer);
+				}
+
+				DynamicWeights weights;
+				std::vector<int> ranks = CalculateAllUpwardRanks(n, domains, successors, weights);
+
+				std::vector<std::vector<std::size_t>> levels = LevelNodes(n, group, groupEdges, ranks);
 
 				std::size_t scheduled = 0;
 				for (const auto& level : levels) {
@@ -373,7 +406,7 @@ namespace brassica::graph {
 		// dependents/indegree vectors to the full node count so `group`'s indices (global, not
 		// contiguous) can index directly into them; only entries named by `group` are ever read.
 		static std::vector<std::vector<std::size_t>>
-		LevelNodes(std::size_t n, std::span<const std::size_t> group, const std::vector<Edge>& edges) {
+		LevelNodes(std::size_t n, std::span<const std::size_t> group, const std::vector<Edge>& edges, const std::vector<int>& ranks) {
 			std::vector<std::vector<std::size_t>> dependents(n);
 			std::vector<std::size_t>              indegree(n, 0);
 
@@ -401,7 +434,12 @@ namespace brassica::graph {
 
 			std::vector<std::vector<std::size_t>> levels;
 			while (!frontier.empty()) {
-				std::sort(frontier.begin(), frontier.end());
+				std::stable_sort(frontier.begin(), frontier.end(), [&](std::size_t a, std::size_t b) {
+					if (ranks[a] != ranks[b]) {
+						return ranks[a] > ranks[b];
+					}
+					return a < b;
+				});
 				std::vector<std::size_t> next;
 				for (std::size_t node : frontier) {
 					for (std::size_t dependent : dependents[node]) {
@@ -454,6 +492,9 @@ namespace brassica::graph {
 			const std::size_t     producerStage = nodeStage[edge.producer];
 			const std::size_t     consumerStage = nodeStage[edge.consumer];
 
+			const std::uint32_t srcQueueFam = QueueFamilyForDomain(producerDomain);
+			const std::uint32_t dstQueueFam = QueueFamilyForDomain(consumerDomain);
+
 			if (producerDomain == consumerDomain) {
 				m_schedule.stages[consumerStage].preBarriers.Add(
 					MemoryBarrier{
@@ -461,6 +502,8 @@ namespace brassica::graph {
 						.access = consumerAccess,
 						.srcDomain = producerDomain,
 						.dstDomain = consumerDomain,
+						.srcQueueFamily = srcQueueFam,
+						.dstQueueFamily = dstQueueFam,
 					}
 				);
 				return;
@@ -472,6 +515,8 @@ namespace brassica::graph {
 					.access = producerAccess,
 					.srcDomain = producerDomain,
 					.dstDomain = consumerDomain,
+					.srcQueueFamily = srcQueueFam,
+					.dstQueueFamily = dstQueueFam,
 				}
 			);
 			m_schedule.stages[consumerStage].preBarriers.Add(
@@ -480,6 +525,8 @@ namespace brassica::graph {
 					.access = consumerAccess,
 					.srcDomain = producerDomain,
 					.dstDomain = consumerDomain,
+					.srcQueueFamily = srcQueueFam,
+					.dstQueueFamily = dstQueueFam,
 				}
 			);
 		}
@@ -487,6 +534,7 @@ namespace brassica::graph {
 		std::vector<NodeHandle> m_nodes;
 		std::vector<Recipe>     m_recipes;
 		Schedule                m_schedule;
+		QueueSet                m_queues{};
 	};
 
 } // namespace brassica::graph

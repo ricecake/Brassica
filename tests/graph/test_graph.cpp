@@ -819,3 +819,94 @@ TEST_CASE("ImGuiNode toggles active state in frame graph based on ImGuiManager v
 	REQUIRE(r2.realizations.size() == 1);
 	CHECK(r2.realizations[0].key == IdOf<Swapchain>());
 }
+
+namespace {
+	struct EntityDataKey {};
+
+	struct HostEntityLogicNode {
+		using Resources = Declares<Create<EntityDataKey>>;
+		bool* executedFlag = nullptr;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Host}; }
+		void Execute(NodeContext&) {
+			if (executedFlag) {
+				*executedFlag = true;
+			}
+		}
+	};
+
+	struct GpuRenderUsingEntityDataNode {
+		using Resources = Declares<Read<EntityDataKey>, Modify<Swapchain>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Execute(NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("Host queue CPU node executes entity logic before GPU consumers") {
+	bool entityLogicExecuted = false;
+	HostEntityLogicNode hostNode{.executedFlag = &entityLogicExecuted};
+
+	Graph graph;
+	graph.Register<GpuRenderUsingEntityDataNode>();
+	graph.RegisterRef<HostEntityLogicNode>(hostNode);
+	graph.Register<Import<Swapchain>>();
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
+
+	NodeContext ctx{};
+	graph.Execute(ctx);
+	CHECK(entityLogicExecuted == true);
+}
+
+TEST_CASE("Multi-queue domain mapping and queue family barrier propagation") {
+	CHECK(DomainToLane(ExecutionDomain::Graphics) == 0);
+	CHECK(DomainToLane(ExecutionDomain::Compute) == 1);
+	CHECK(DomainToLane(ExecutionDomain::Transfer) == 2);
+	CHECK(DomainToLane(ExecutionDomain::Host) == 3);
+
+	CHECK(LaneToDomain(0) == ExecutionDomain::Graphics);
+	CHECK(LaneToDomain(1) == ExecutionDomain::Compute);
+	CHECK(LaneToDomain(2) == ExecutionDomain::Transfer);
+	CHECK(LaneToDomain(3) == ExecutionDomain::Host);
+
+	QueueSet qset;
+	qset.graphics = QueueInfo{.queue = (void*)0x1, .familyIndex = 0};
+	qset.compute = QueueInfo{.queue = (void*)0x2, .familyIndex = 1};
+	qset.transfer = QueueInfo{.queue = (void*)0x3, .familyIndex = 2};
+
+	Graph graph;
+	graph.SetQueueSet(qset);
+	CHECK(graph.QueueFamilyForDomain(ExecutionDomain::Graphics) == 0);
+	CHECK(graph.QueueFamilyForDomain(ExecutionDomain::Compute) == 1);
+	CHECK(graph.QueueFamilyForDomain(ExecutionDomain::Transfer) == 2);
+	CHECK(graph.QueueFamilyForDomain(ExecutionDomain::Host) == kQueueFamilyIgnored);
+
+	graph.Register<GtaoPass>(); // Compute domain
+	graph.Register<GBufferPass>(); // Graphics domain
+	graph.Register<PreviousFrame<Temporal>>(); // Provides History<GTAOData>
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	REQUIRE(schedule.stages.size() >= 2);
+
+	bool foundCrossQueueBarrier = false;
+	for (const auto& stage : schedule.stages) {
+		for (const auto& item : stage.preBarriers.Items()) {
+			if (item.srcQueueFamily == 0 && item.dstQueueFamily == 1) {
+				foundCrossQueueBarrier = true;
+			}
+		}
+		for (const auto& item : stage.postBarriers.Items()) {
+			if (item.srcQueueFamily == 0 && item.dstQueueFamily == 1) {
+				foundCrossQueueBarrier = true;
+			}
+		}
+	}
+	CHECK(foundCrossQueueBarrier == true);
+}
