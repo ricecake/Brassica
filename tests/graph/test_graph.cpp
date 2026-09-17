@@ -950,6 +950,35 @@ namespace {
 	};
 } // namespace
 
+namespace {
+	struct BallLikeNode {
+		using Resources = Declares<
+			Modify<GBufferAlbedo>,
+			Modify<GBufferNormal>,
+			Create<brassica::BallIndirectBuffer>
+		>;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Execute(NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("BallNode compiles smoothly in graph with GBuffer and Deferred nodes") {
+	Graph graph;
+	graph.Register<GBufferPass>();
+	graph.Register<BallLikeNode>();
+	graph.Register<ClusterLightAssignmentLikeNode>();
+	graph.Register<DeferredWithLightingNode>();
+	graph.Register<Import<Swapchain>>();
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	CHECK(StageOf(schedule, 0) <= StageOf(schedule, 1));
+	CHECK(StageOf(schedule, 1) <= StageOf(schedule, 3));
+}
+
 TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") {
 	entt::registry registry;
 	brassica::TransformComponent initialTransform{

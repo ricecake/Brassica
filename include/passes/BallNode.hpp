@@ -32,7 +32,7 @@ namespace brassica {
 	};
 
 	struct BallNode: render::NodeRegistrar<BallNode> {
-		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Read<BallIndirectBuffer>>;
+		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Create<BallIndirectBuffer>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eBack,
@@ -111,7 +111,7 @@ namespace brassica {
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<BallIndirectBuffer>(),
-					.access = graph::AccessKind::Read,
+					.access = graph::AccessKind::Write,
 					.desc = indirectDesc,
 				}
 			);
