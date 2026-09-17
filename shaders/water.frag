@@ -36,6 +36,8 @@ void main() {
 	float distToCamWater = length(relWaterPos);
 	float depthBelowWater = 100.0; // Default deep water depth when background is sky
 
+	bool cameraUnderwater = uCameraPosition.y < params.waterLevel;
+
 	if (albedo.a >= 0.01) {
 		float distToCamTerrain = length(relTerrainPos);
 		// Terrain is strictly in front of the water mesh fragment
@@ -44,12 +46,16 @@ void main() {
 			return;
 		}
 
-		depthBelowWater = relWaterPos.y - relTerrainPos.y;
-		if (depthBelowWater <= -1.0) {
-			outColor = vec4(0.0);
-			return;
+		if (!cameraUnderwater) {
+			depthBelowWater = relWaterPos.y - relTerrainPos.y;
+			if (depthBelowWater <= -1.0) {
+				outColor = vec4(0.0);
+				return;
+			}
+			depthBelowWater = max(0.0, depthBelowWater);
+		} else {
+			depthBelowWater = max(0.0, params.waterLevel - relTerrainPos.y);
 		}
-		depthBelowWater = max(0.0, depthBelowWater);
 	}
 
 	vec3 waveNormal = normalize(inNormal);

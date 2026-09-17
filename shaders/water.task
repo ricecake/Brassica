@@ -121,8 +121,8 @@ void main() {
 			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
-			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
-			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
+			bool insideX = minB.x > prevCameraSnap.x - prevExtent && maxB.x < prevCameraSnap.x + prevExtent;
+			bool insideZ = minB.z > prevCameraSnap.y - prevExtent && maxB.z < prevCameraSnap.y + prevExtent;
 
 			// Cull meshlet if its bounding box is entirely inside the finer inner ring
 			if (insideX && insideZ) {

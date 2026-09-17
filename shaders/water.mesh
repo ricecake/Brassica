@@ -285,7 +285,7 @@ void main() {
 			vec2 quadCenterWorld = meshletMin.xz + quadCenterLocal;
 
 			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
-			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
+			if (max(dist.x, dist.y) < prevExtent - 0.001) {
 				cullQuad = true;
 			}
 		}
