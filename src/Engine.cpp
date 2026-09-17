@@ -1088,7 +1088,7 @@ namespace brassica {
 			.sunRadiance = sunRadiance,
 			.moonDir = moonDir,
 			.moonRadiance = moonRadiance,
-			.time = frameUbo.time,
+			.time = ubo.time,
 			.worldScale = 1.0f,
 			.multiScatScale = 1.0f,
 			.cloudShadowIntensity = 0.5f,
