@@ -95,31 +95,15 @@ void main() {
 	float land_mask = 0.0;
 	float h = evaluate_terrain(p, 0.0, 0.75, con, biome, land_mask);
 
+// Calculate the normal using the hybrid swap/evaluation function
+    float eps = max(0.25, texelSize);
+    // vec3 normal = evaluate_hybrid_normal(p, h, eps, 0.0, 0.75, con);
+	vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con);
+
 	// 3. Quad Swap Differencing
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
 	float h_swap_y = subgroupQuadSwapVertical(h);
 	float h_swap_diag = subgroupQuadSwapDiagonal(h);
-
-	// Swap world coordinates to detect toroidal wrap boundaries
-	float wx_swap_x = subgroupQuadSwapHorizontal(worldXZ.x);
-	float wz_swap_y = subgroupQuadSwapVertical(worldXZ.y);
-
-	bool is_left = (thread_in_quad & 1) == 0;
-	bool is_top  = (thread_in_quad >> 1) == 0;
-
-	// Calculate forward difference
-	float ddx = is_left ? (h_swap_x - h) : (h - h_swap_x);
-	float ddy = is_top  ? (h_swap_y - h) : (h - h_swap_y);
-
-	// Calculate actual world delta to identify clipmap wrap boundaries
-	float dx = is_left ? (wx_swap_x - worldXZ.x) : (worldXZ.x - wx_swap_x);
-	float dz = is_top  ? (wz_swap_y - worldXZ.y) : (worldXZ.y - wz_swap_y);
-
-	// If the swapped coordinate is on the other side of the clipmap, flatten the derivative
-	if (abs(dx) > texelSize * 2.0) ddx = 0.0;
-	if (abs(dz) > texelSize * 2.0) ddy = 0.0;
-
-	vec3 normal = normalize(vec3(-ddx, texelSize, -ddy));
 
 	// Only run the store logic if this specific thread was actually dirty
 	if (is_dirty) {
