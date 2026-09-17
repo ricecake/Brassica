@@ -8,6 +8,7 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -31,7 +32,7 @@ namespace brassica {
 	};
 
 	struct BallNode: render::NodeRegistrar<BallNode> {
-		using Resources = graph::Declares<GBuffer<graph::Modify>>;
+		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Read<BallIndirectBuffer>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eBack,
@@ -104,11 +105,26 @@ namespace brassica {
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 				}
 			);
+
+			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(MeshTasksIndirectCommand));
+			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<BallIndirectBuffer>(),
+					.access = graph::AccessKind::Read,
+					.desc = indirectDesc,
+				}
+			);
+
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push = s_currentPush;
+
+			ctx.WriteSpan<BallIndirectBuffer>(
+				std::span<const MeshTasksIndirectCommand>(&s_indirectCmd, 1)
+			);
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
@@ -162,7 +178,24 @@ namespace brassica {
 				&push
 			);
 
-			if (dls && dls->vkCmdDrawMeshTasksEXT) {
+			vk::Buffer indirectBuf{nullptr};
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					if (auto physBuf = registry->GetBuffer<BallIndirectBuffer>()) {
+						indirectBuf = physBuf->GetBuffer();
+					}
+				}
+			}
+
+			if (dls && dls->vkCmdDrawMeshTasksIndirectEXT && indirectBuf) {
+				dls->vkCmdDrawMeshTasksIndirectEXT(
+					static_cast<VkCommandBuffer>(ctx.cmd.vkCmd),
+					static_cast<VkBuffer>(indirectBuf),
+					0,
+					1,
+					sizeof(MeshTasksIndirectCommand)
+				);
+			} else if (dls && dls->vkCmdDrawMeshTasksEXT) {
 				std::uint32_t groups = s_indirectCmd.groupCountX > 0 ? s_indirectCmd.groupCountX : 1;
 				vkCmd.drawMeshTasksEXT(groups, 1, 1, *dls);
 			}

@@ -916,12 +916,6 @@ TEST_CASE("Multi-queue domain mapping and queue family barrier propagation") {
 }
 
 namespace {
-	class DummyEngine {
-	public:
-		entt::registry& GetRegistry() { return registry; }
-		entt::registry registry;
-	};
-
 	class MockTestSystemHandler: public brassica::SystemHandler {
 	public:
 		bool setupCalled{false};
@@ -957,7 +951,7 @@ namespace {
 } // namespace
 
 TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") {
-	DummyEngine engine;
+	entt::registry registry;
 	brassica::TransformComponent initialTransform{
 		.position = glm::vec3(1.0f, 2.0f, 3.0f),
 		.rotation = glm::vec3(0.0f),
@@ -965,10 +959,10 @@ TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") 
 	};
 
 	MockTestSystemHandler handler;
-	entt::entity e1 = handler.RegisterTestEntity(engine.GetRegistry(), initialTransform);
+	entt::entity e1 = handler.RegisterTestEntity(registry, initialTransform);
 
-	CHECK(engine.GetRegistry().valid(e1));
-	auto* transform = engine.GetRegistry().try_get<brassica::TransformComponent>(e1);
+	CHECK(registry.valid(e1));
+	auto* transform = registry.try_get<brassica::TransformComponent>(e1);
 	REQUIRE(transform != nullptr);
 	CHECK(transform->position.x == doctest::Approx(1.0f));
 	CHECK(transform->position.y == doctest::Approx(2.0f));
@@ -987,18 +981,18 @@ TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") 
 		.camera = nullptr
 	};
 
-	auto* dummyEnginePtr = reinterpret_cast<brassica::Engine*>(&engine);
+	brassica::Engine* enginePtr = nullptr;
 
-	handler.PreFrame(*dummyEnginePtr, details);
+	handler.PreFrame(*enginePtr, details);
 	CHECK(handler.preFrameCalled == true);
 
-	handler.Update(*dummyEnginePtr, details);
+	handler.Update(*enginePtr, details);
 	CHECK(handler.updateEntityCalls == 1);
 	CHECK(handler.lastFrameIndex == 42);
 
-	handler.PostFrame(*dummyEnginePtr, details);
+	handler.PostFrame(*enginePtr, details);
 	CHECK(handler.postFrameCalled == true);
 
-	handler.Cleanup(*dummyEnginePtr);
+	handler.Cleanup(*enginePtr);
 	CHECK(handler.cleanupCalled == true);
 }
