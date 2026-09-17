@@ -12,13 +12,17 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "types/SkyPushConstants.hpp"
 
 namespace brassica {
 
 	class ShaderWatcher;
 
 	struct GradientNode: render::NodeRegistrar<GradientNode> {
-		using Resources = graph::Declares<graph::Create<GradientBackground>>;
+		using Resources = graph::Declares<
+			graph::Read<SkyViewLUT>,
+			graph::Read<TransmittanceLUT>,
+			graph::Create<GradientBackground>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -27,6 +31,7 @@ namespace brassica {
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		VertexShader             vertShader;
 		FragmentShader           fragShader;
+		SkyPushConstants         push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -47,8 +52,29 @@ namespace brassica {
 			fragShader.Destroy(device);
 		}
 
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			push.sunDirAndAureole = glm::vec4(p.sunDir, 0.5f);
+			push.moonDirAndCirrus = glm::vec4(p.moonDir, 0.3f);
+			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
+			push.worldScale = p.worldScale;
+		}
+
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TransmittanceLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<GradientBackground>(),
@@ -60,11 +86,17 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
+
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(SkyPushConstants)}
 			};
 
 			render::GraphicsPipelineRequest request{
@@ -72,6 +104,7 @@ namespace brassica {
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
 				.setLayouts = setLayouts,
+				.pushConstantRanges = pushConstantRanges,
 			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
@@ -93,6 +126,15 @@ namespace brassica {
 				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 			vkCmd.setViewport(0, viewport);
 			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
+
+			vkCmd.pushConstants(
+				resolved.layout,
+				vk::ShaderStageFlagBits::eFragment,
+				0,
+				sizeof(SkyPushConstants),
+				&push
+			);
+
 			vkCmd.draw(3, 1, 0, 0);
 		}
 	};
