@@ -1,4 +1,3 @@
-#version 460
 #include "bindless.glsl"
 #include "lighting.glsl"
 

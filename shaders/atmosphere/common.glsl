@@ -4,16 +4,19 @@
 const float PI = 3.14159265359;
 const float kEarthRadius = 6360.0; // km
 
-// The push_constant block itself is declared per-shader now, not here: each of
-// transmittance_lut.comp/multiscattering_lut.comp appends its own trailing bindless index
-// field(s) after the same 13 atmosphere-parameter fields, at an explicit layout(offset=...) that
-// matches AtmospherePushConstants's real C++ size (80 bytes, not the 76 its last named field
-// implies -- alignas(16) on the vec3 members pulls the whole struct's alignment, and therefore
-// its size, up to a multiple of 16). Getting that offset from natural/implicit packing alone
-// would silently disagree between GLSL and C++; see passes/AtmosphereLUTNode.hpp for the
-// static_assert that keeps them honest. Every macro below just reads u_atmosphere.field, so it
-// works identically regardless of which shader declared the block, as long as the instance name
-// matches.
+#ifdef ATMOSPHERE_NO_PUSH_CONSTANTS
+const vec3 kRayleighScattering = vec3(5.802e-3, 13.558e-3, 33.100e-3);
+const float kRayleighScaleHeight = 8.0;
+const vec3 kOzoneAbsorption = vec3(0.650e-3, 1.881e-3, 0.085e-3);
+const float kMieScaleHeight = 1.2;
+const vec3 hazeColor = vec3(0.6, 0.7, 0.8);
+const vec3 kMieScattering = vec3(3.996e-3);
+const vec3 kMieExtinction = vec3(4.440e-3);
+const float u_rayleighScale = 1.1;
+const float u_mieScale = 0.35;
+const float u_mieAnisotropy = 0.8;
+const float kAtmosphereHeight = 100.0;
+#else
 #define kRayleighScattering u_atmosphere.rayleighScatteringBase
 #define kRayleighScaleHeight u_atmosphere.rayleighScaleHeight
 #define kOzoneAbsorption u_atmosphere.ozoneAbsorptionBase
@@ -25,6 +28,7 @@ const float kEarthRadius = 6360.0; // km
 #define u_mieScale u_atmosphere.mieScale
 #define u_mieAnisotropy u_atmosphere.mieAnisotropy
 #define kAtmosphereHeight u_atmosphere.atmosphereHeight
+#endif
 #define kTopRadius (kEarthRadius + kAtmosphereHeight)
 
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {

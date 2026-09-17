@@ -144,6 +144,52 @@ TEST_CASE("Shader Recursive Include Processing, Guards, Comments, and Interpolat
 	std::filesystem::remove_all(testDir);
 }
 
+TEST_CASE("Atmosphere Sky Shaders Load and Compile") {
+	brassica::ComputeShader skyViewShader;
+	bool loadedComp = skyViewShader.LoadFromFile("shaders/atmosphere/sky_view_lut.comp");
+	CHECK(loadedComp);
+	if (loadedComp) {
+		shaderc::Compiler       compiler;
+		shaderc::CompileOptions options;
+		options.SetOptimizationLevel(shaderc_optimization_level_performance);
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+
+		auto res = compiler.CompileGlslToSpv(
+			skyViewShader.GetSource(),
+			shaderc_glsl_compute_shader,
+			"sky_view_lut.comp",
+			options
+		);
+		if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
+			MESSAGE("sky_view_lut.comp error: ", res.GetErrorMessage());
+		}
+		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
+	}
+
+	brassica::FragmentShader gradientFragShader;
+	bool loadedFrag = gradientFragShader.LoadFromFile("shaders/gradient.frag");
+	CHECK(loadedFrag);
+	if (loadedFrag) {
+		shaderc::Compiler       compiler;
+		shaderc::CompileOptions options;
+		options.SetOptimizationLevel(shaderc_optimization_level_performance);
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+
+		auto res = compiler.CompileGlslToSpv(
+			gradientFragShader.GetSource(),
+			shaderc_glsl_fragment_shader,
+			"gradient.frag",
+			options
+		);
+		if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
+			MESSAGE("gradient.frag error: ", res.GetErrorMessage());
+		}
+		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
+	}
+}
+
 TEST_CASE("GLSL 4.6 Mesh Shader Compilation with Shaderc") {
 	std::string meshSource = R"(#version 460
 #extension GL_EXT_mesh_shader : require
