@@ -145,6 +145,12 @@ TEST_CASE("Shader Recursive Include Processing, Guards, Comments, and Interpolat
 }
 
 TEST_CASE("Atmosphere Sky Shaders Load and Compile") {
+	brassica::Shader::ClearConstants();
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
 	brassica::ComputeShader skyViewShader;
 	bool loadedComp = skyViewShader.LoadFromFile("shaders/atmosphere/sky_view_lut.comp");
 	CHECK(loadedComp);
@@ -188,6 +194,8 @@ TEST_CASE("Atmosphere Sky Shaders Load and Compile") {
 		}
 		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
 	}
+
+	brassica::Shader::ClearConstants();
 }
 
 TEST_CASE("GLSL 4.6 Mesh Shader Compilation with Shaderc") {
