@@ -17,6 +17,19 @@ namespace brassica::graph {
 
 	enum class ExecutionDomain : std::uint8_t { Graphics, Compute, Transfer, Host };
 
+	inline constexpr std::uint32_t kQueueFamilyIgnored = 0xFFFFFFFFu;
+
+	struct QueueInfo {
+		void*         queue = nullptr; // Opaque VkQueue
+		std::uint32_t familyIndex = kQueueFamilyIgnored;
+	};
+
+	struct QueueSet {
+		QueueInfo graphics{};
+		QueueInfo compute{};
+		QueueInfo transfer{};
+	};
+
 	enum class AccessKind : std::uint8_t { Read, Write, ReadWrite };
 
 	// Governs whether a resource's underlying buffer is CPU-writable, and if so, how a write
@@ -263,6 +276,8 @@ namespace brassica::graph {
 		std::uint32_t   newLayout = 0;
 		ExecutionDomain srcDomain = ExecutionDomain::Graphics;
 		ExecutionDomain dstDomain = ExecutionDomain::Graphics;
+		std::uint32_t   srcQueueFamily = kQueueFamilyIgnored;
+		std::uint32_t   dstQueueFamily = kQueueFamilyIgnored;
 	};
 
 	class Resource {

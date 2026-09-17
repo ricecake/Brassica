@@ -176,6 +176,11 @@ namespace brassica {
 		vk::SurfaceKHR             surface;
 		vk::Queue                  graphicsQueue;
 		uint32_t                   graphicsQueueFamily{0};
+		vk::Queue                  computeQueue;
+		uint32_t                   computeQueueFamily{0};
+		vk::Queue                  transferQueue;
+		uint32_t                   transferQueueFamily{0};
+		graph::QueueSet            queueSet{};
 		vkb::Swapchain             vkbSwapchain;
 		std::vector<vk::Image>     swapchainImages;
 		std::vector<vk::ImageView> swapchainImageViews;

@@ -1,8 +1,147 @@
+#pragma once
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <iostream>
 #include <queue>
 #include <unordered_map>
 #include <vector>
+
+#include "graph/Execution.hpp"
+
+namespace brassica::graph {
+
+	inline constexpr std::size_t kNumExecutionDomains = 4;
+
+	inline std::size_t DomainToLane(ExecutionDomain domain) {
+		switch (domain) {
+		case ExecutionDomain::Graphics:
+			return 0;
+		case ExecutionDomain::Compute:
+			return 1;
+		case ExecutionDomain::Transfer:
+			return 2;
+		case ExecutionDomain::Host:
+			return 3;
+		}
+		return 0;
+	}
+
+	inline ExecutionDomain LaneToDomain(std::size_t lane) {
+		switch (lane) {
+		case 0:
+			return ExecutionDomain::Graphics;
+		case 1:
+			return ExecutionDomain::Compute;
+		case 2:
+			return ExecutionDomain::Transfer;
+		case 3:
+			return ExecutionDomain::Host;
+		}
+		return ExecutionDomain::Graphics;
+	}
+
+	struct DynamicWeights {
+		std::unordered_map<std::size_t, int>                                   node_execution_weights;
+		std::unordered_map<std::size_t, std::unordered_map<std::size_t, int>> edge_latencies;
+
+		[[nodiscard]] int GetNodeWeight(std::size_t nodeIndex, ExecutionDomain domain) const {
+			auto it = node_execution_weights.find(nodeIndex);
+			if (it != node_execution_weights.end()) {
+				return it->second;
+			}
+			switch (domain) {
+			case ExecutionDomain::Graphics:
+				return 10;
+			case ExecutionDomain::Compute:
+				return 8;
+			case ExecutionDomain::Transfer:
+				return 4;
+			case ExecutionDomain::Host:
+				return 2;
+			}
+			return 10;
+		}
+
+		[[nodiscard]] int
+		GetEdgeLatency(std::size_t from, std::size_t to, ExecutionDomain srcDomain, ExecutionDomain dstDomain) const {
+			if (srcDomain == dstDomain) {
+				return 0;
+			}
+			auto itFrom = edge_latencies.find(from);
+			if (itFrom != edge_latencies.end()) {
+				auto itTo = itFrom->second.find(to);
+				if (itTo != itFrom->second.end()) {
+					return itTo->second;
+				}
+			}
+			return 5;
+		}
+	};
+
+	struct ScheduledTask {
+		std::size_t     node_id;
+		int             start_time;
+		int             end_time;
+		ExecutionDomain domain;
+		std::size_t     queue_id;
+	};
+
+	inline int CalculateUpwardRank(
+		std::size_t                                  nodeIndex,
+		std::size_t                                  totalNodes,
+		const std::vector<ExecutionDomain>&          domains,
+		const std::vector<std::vector<std::size_t>>& successors,
+		const DynamicWeights&                        weights,
+		std::vector<int>&                            ranks,
+		std::vector<bool>&                           visited,
+		std::vector<bool>&                           inStack
+	) {
+		if (visited[nodeIndex]) {
+			return ranks[nodeIndex];
+		}
+		if (inStack[nodeIndex]) {
+			return 0; // Break cycle recursion safely
+		}
+
+		inStack[nodeIndex] = true;
+
+		int                   maxSuccessorCost = 0;
+		const ExecutionDomain currDomain = (nodeIndex < domains.size()) ? domains[nodeIndex] : ExecutionDomain::Graphics;
+		const int             currWeight = weights.GetNodeWeight(nodeIndex, currDomain);
+
+		if (nodeIndex < successors.size()) {
+			for (std::size_t succ : successors[nodeIndex]) {
+				const ExecutionDomain succDomain = (succ < domains.size()) ? domains[succ] : ExecutionDomain::Graphics;
+				int commOverhead = weights.GetEdgeLatency(nodeIndex, succ, currDomain, succDomain);
+				int succRank = CalculateUpwardRank(succ, totalNodes, domains, successors, weights, ranks, visited, inStack);
+				maxSuccessorCost = std::max(maxSuccessorCost, commOverhead + succRank);
+			}
+		}
+
+		int rank = currWeight + maxSuccessorCost;
+		ranks[nodeIndex] = rank;
+		inStack[nodeIndex] = false;
+		visited[nodeIndex] = true;
+		return rank;
+	}
+
+	inline std::vector<int> CalculateAllUpwardRanks(
+		std::size_t                                  totalNodes,
+		const std::vector<ExecutionDomain>&          domains,
+		const std::vector<std::vector<std::size_t>>& successors,
+		const DynamicWeights&                        weights = {}
+	) {
+		std::vector<int>  ranks(totalNodes, 0);
+		std::vector<bool> visited(totalNodes, false);
+		std::vector<bool> inStack(totalNodes, false);
+		for (std::size_t i = 0; i < totalNodes; ++i) {
+			CalculateUpwardRank(i, totalNodes, domains, successors, weights, ranks, visited, inStack);
+		}
+		return ranks;
+	}
+
+} // namespace brassica::graph
 
 struct Node {
 	int id;
@@ -14,10 +153,7 @@ struct Edge {
 	int to;
 };
 
-struct DynamicWeights {
-	std::unordered_map<int, int>                          node_execution_weights;
-	std::unordered_map<int, std::unordered_map<int, int>> edge_latencies;
-};
+using DynamicWeights = brassica::graph::DynamicWeights;
 
 struct ScheduledTask {
 	int node_id;
@@ -43,14 +179,16 @@ struct CompilerGraph {
 };
 
 // Calculates the Upward Rank for priority sorting
-int calculate_upward_rank(int node_id, CompilerGraph& graph, const DynamicWeights& weights) {
+inline int calculate_upward_rank(int node_id, CompilerGraph& graph, const DynamicWeights& weights) {
 	if (graph.upward_ranks.find(node_id) != graph.upward_ranks.end()) {
 		return graph.upward_ranks[node_id];
 	}
 
 	int         max_successor_cost = 0;
 	const Node& curr_node = graph.nodes[node_id];
-	int         current_weight = weights.node_execution_weights.at(node_id);
+	int         current_weight = weights.node_execution_weights.count(node_id)
+        ? weights.node_execution_weights.at(node_id)
+        : 10;
 
 	if (graph.adj_list.find(node_id) != graph.adj_list.end()) {
 		for (const auto& edge : graph.adj_list[node_id]) {
@@ -58,6 +196,8 @@ int calculate_upward_rank(int node_id, CompilerGraph& graph, const DynamicWeight
 			if (curr_node.allowed_queue != graph.nodes[edge.to].allowed_queue) {
 				if (weights.edge_latencies.count(edge.from) && weights.edge_latencies.at(edge.from).count(edge.to)) {
 					comm_overhead = weights.edge_latencies.at(edge.from).at(edge.to);
+				} else {
+					comm_overhead = 5;
 				}
 			}
 			int successor_rank = calculate_upward_rank(edge.to, graph, weights);
@@ -71,7 +211,7 @@ int calculate_upward_rank(int node_id, CompilerGraph& graph, const DynamicWeight
 }
 
 // Main scheduling and bottleneck detection algorithm
-void identify_bottlenecks(CompilerGraph& graph, const DynamicWeights& weights, int num_queues) {
+inline void identify_bottlenecks(CompilerGraph& graph, const DynamicWeights& weights, int num_queues) {
 	graph.clear_evaluations();
 	for (const auto& pair : graph.nodes) {
 		calculate_upward_rank(pair.first, graph, weights);

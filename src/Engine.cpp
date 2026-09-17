@@ -768,6 +768,39 @@ namespace brassica {
 		graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
 		graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
+		auto compQ = vkbDevice.get_queue(vkb::QueueType::compute);
+		auto compIdx = vkbDevice.get_queue_index(vkb::QueueType::compute);
+		if (compQ && compIdx) {
+			computeQueue = compQ.value();
+			computeQueueFamily = compIdx.value();
+		} else {
+			computeQueue = graphicsQueue;
+			computeQueueFamily = graphicsQueueFamily;
+		}
+
+		auto transQ = vkbDevice.get_queue(vkb::QueueType::transfer);
+		auto transIdx = vkbDevice.get_queue_index(vkb::QueueType::transfer);
+		if (transQ && transIdx) {
+			transferQueue = transQ.value();
+			transferQueueFamily = transIdx.value();
+		} else {
+			transferQueue = graphicsQueue;
+			transferQueueFamily = graphicsQueueFamily;
+		}
+
+		queueSet.graphics = graph::QueueInfo{
+			.queue = static_cast<void*>(static_cast<VkQueue>(graphicsQueue)),
+			.familyIndex = graphicsQueueFamily
+		};
+		queueSet.compute = graph::QueueInfo{
+			.queue = static_cast<void*>(static_cast<VkQueue>(computeQueue)),
+			.familyIndex = computeQueueFamily
+		};
+		queueSet.transfer = graph::QueueInfo{
+			.queue = static_cast<void*>(static_cast<VkQueue>(transferQueue)),
+			.familyIndex = transferQueueFamily
+		};
+
 		// Initialize VMA
 		VmaAllocatorCreateInfo allocatorInfo{};
 		allocatorInfo.physicalDevice = chosenGPU;
@@ -1057,6 +1090,7 @@ namespace brassica {
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);
+		backend.SetQueueSet(queueSet);
 		graph::CommandBuffer            graphCmd{static_cast<void*>(static_cast<VkCommandBuffer>(frame.commandBuffer))};
 
 		try {
