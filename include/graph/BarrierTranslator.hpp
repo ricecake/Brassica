@@ -74,6 +74,8 @@ namespace brassica::graph {
 			vk::ImageLayout                                layout{}; // only meaningful when tex is set
 			vk::PipelineStageFlags2                        stage{};
 			vk::AccessFlags2                               access{};
+			std::uint32_t                                  srcQueueFamily = kQueueFamilyIgnored;
+			std::uint32_t                                  dstQueueFamily = kQueueFamilyIgnored;
 			int                                            priority = -1;
 		};
 
@@ -131,6 +133,11 @@ namespace brassica::graph {
 					entry.layout = derived.layout;
 					entry.priority = priority;
 				}
+				if (mb.srcQueueFamily != kQueueFamilyIgnored && mb.dstQueueFamily != kQueueFamilyIgnored &&
+				    mb.srcQueueFamily != mb.dstQueueFamily) {
+					entry.srcQueueFamily = mb.srcQueueFamily;
+					entry.dstQueueFamily = mb.dstQueueFamily;
+				}
 				entry.stage |= derived.stage;
 				entry.access |= derived.access;
 			}
@@ -141,9 +148,24 @@ namespace brassica::graph {
 
 			for (auto& [resource, entry] : coalesced) {
 				if (entry.tex) {
-					EmitImageBarrier(*entry.tex, entry.layout, entry.stage, entry.access, imageBarriers);
+					EmitImageBarrier(
+						*entry.tex,
+						entry.layout,
+						entry.stage,
+						entry.access,
+						imageBarriers,
+						entry.srcQueueFamily,
+						entry.dstQueueFamily
+					);
 				} else if (entry.buf) {
-					EmitBufferBarrier(*entry.buf, entry.stage, entry.access, bufferBarriers);
+					EmitBufferBarrier(
+						*entry.buf,
+						entry.stage,
+						entry.access,
+						bufferBarriers,
+						entry.srcQueueFamily,
+						entry.dstQueueFamily
+					);
 				} else {
 					EmitAccelerationStructureBarrier(*entry.as, entry.stage, entry.access, memoryBarriers);
 				}
@@ -171,16 +193,23 @@ namespace brassica::graph {
 			vk::ImageLayout                       newLayout,
 			vk::PipelineStageFlags2               dstStage,
 			vk::AccessFlags2                      dstAccess,
-			std::vector<vk::ImageMemoryBarrier2>& out
+			std::vector<vk::ImageMemoryBarrier2>& out,
+			std::uint32_t                         srcQueueFamily = kQueueFamilyIgnored,
+			std::uint32_t                         dstQueueFamily = kQueueFamilyIgnored
 		) {
 			const bool readAfterRead = tex.GetCurrentLayout() == newLayout && !IsWrite(tex.GetLastAccess()) &&
-				!IsWrite(dstAccess);
+				!IsWrite(dstAccess) && (srcQueueFamily == dstQueueFamily || srcQueueFamily == kQueueFamilyIgnored);
 			if (readAfterRead) {
 				tex.SetLastStageAccess(tex.GetLastStage() | dstStage, tex.GetLastAccess() | dstAccess);
 				return;
 			}
 
-			const auto& desc = tex.GetDesc();
+			const auto&         desc = tex.GetDesc();
+			const std::uint32_t srcQueue = (srcQueueFamily != kQueueFamilyIgnored) ? srcQueueFamily
+																				   : VK_QUEUE_FAMILY_IGNORED;
+			const std::uint32_t dstQueue = (dstQueueFamily != kQueueFamilyIgnored) ? dstQueueFamily
+																				   : VK_QUEUE_FAMILY_IGNORED;
+
 			out.push_back(
 				vk::ImageMemoryBarrier2{
 					tex.GetLastStage() ? tex.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
@@ -189,8 +218,8 @@ namespace brassica::graph {
 					dstAccess,
 					tex.GetCurrentLayout(),
 					newLayout,
-					VK_QUEUE_FAMILY_IGNORED,
-					VK_QUEUE_FAMILY_IGNORED,
+					srcQueue,
+					dstQueue,
 					tex.GetImage(),
 					vk::ImageSubresourceRange(
 						AspectFor(static_cast<vk::Format>(desc.formatCode)),
@@ -209,25 +238,31 @@ namespace brassica::graph {
 			PhysicalBuffer&                        buf,
 			vk::PipelineStageFlags2                dstStage,
 			vk::AccessFlags2                       dstAccess,
-			std::vector<vk::BufferMemoryBarrier2>& out
+			std::vector<vk::BufferMemoryBarrier2>& out,
+			std::uint32_t                          srcQueueFamily = kQueueFamilyIgnored,
+			std::uint32_t                          dstQueueFamily = kQueueFamilyIgnored
 		) {
-			// No layout for a buffer, so the skip rule's layout-equality half is vacuously true --
-			// a read-after-read is just "neither side is a write."
-			const bool readAfterRead = !IsWrite(buf.GetLastAccess()) && !IsWrite(dstAccess);
+			const bool readAfterRead = !IsWrite(buf.GetLastAccess()) && !IsWrite(dstAccess) &&
+				(srcQueueFamily == dstQueueFamily || srcQueueFamily == kQueueFamilyIgnored);
 			if (readAfterRead) {
 				buf.SetLastStageAccess(buf.GetLastStage() | dstStage, buf.GetLastAccess() | dstAccess);
 				return;
 			}
 
-			const auto& desc = buf.GetDesc();
+			const auto&         desc = buf.GetDesc();
+			const std::uint32_t srcQueue = (srcQueueFamily != kQueueFamilyIgnored) ? srcQueueFamily
+																				   : VK_QUEUE_FAMILY_IGNORED;
+			const std::uint32_t dstQueue = (dstQueueFamily != kQueueFamilyIgnored) ? dstQueueFamily
+																				   : VK_QUEUE_FAMILY_IGNORED;
+
 			out.push_back(
 				vk::BufferMemoryBarrier2{
 					buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
 					buf.GetLastAccess(),
 					dstStage,
 					dstAccess,
-					VK_QUEUE_FAMILY_IGNORED,
-					VK_QUEUE_FAMILY_IGNORED,
+					srcQueue,
+					dstQueue,
 					buf.GetBuffer(),
 					0,
 					desc.byteSize ? desc.byteSize : VK_WHOLE_SIZE,

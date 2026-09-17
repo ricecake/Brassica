@@ -339,6 +339,10 @@ namespace brassica::graph {
 	public:
 		PhysicalExecutionBackend(PhysicalResourceRegistry& registry): m_registry(registry) {}
 
+		void SetQueueSet(const QueueSet& queues) { m_queues = queues; }
+
+		const QueueSet& GetQueueSet() const { return m_queues; }
+
 		void Execute(Graph& graph, const FrameContext& ctx, CommandBuffer& cmd, bool enableAliasing = true) {
 			// 1. Setup recipes for the frame. Recursive: Subgraph::Setup (Frame.hpp) compiles
 			// its own inner graph as part of this call, so every nesting level's Schedule/
@@ -516,6 +520,7 @@ namespace brassica::graph {
 		}
 
 		PhysicalResourceRegistry& m_registry;
+		QueueSet                  m_queues{};
 	};
 
 } // namespace brassica::graph
