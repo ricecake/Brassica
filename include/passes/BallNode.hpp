@@ -49,8 +49,8 @@ namespace brassica {
 		const DispatchLoaderDynamic* dls = nullptr;
 		BallPushConstants            push{};
 
-		static BallPushConstants        s_currentPush;
-		static MeshTasksIndirectCommand s_indirectCmd;
+		inline static BallPushConstants        s_currentPush{};
+		inline static MeshTasksIndirectCommand s_indirectCmd{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;

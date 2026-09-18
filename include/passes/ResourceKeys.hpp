@@ -48,8 +48,6 @@ namespace brassica {
 
 	struct MultiScatteringLUT {};
 
-	struct SkyViewLUT {};
-
 	struct ParticleBuffer {};
 
 	struct ParticleTypeBuffer {};
@@ -57,7 +55,5 @@ namespace brassica {
 	struct ParticleAliveBuffer {};
 
 	struct ParticleIndirectBuffer {};
-
-	struct BallIndirectBuffer {};
 
 } // namespace brassica

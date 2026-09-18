@@ -229,31 +229,7 @@ namespace brassica {
 		}
 	}
 
-	void Engine::AddSystemHandler(std::shared_ptr<SystemHandler> handler) {
-		if (!handler) {
-			return;
-		}
-		systemHandlers.push_back(handler);
-		if (device) {
-			FrameDetails details{
-				.deltaTime = 0.0f,
-				.totalTime = glfwGetTime(),
-				.frameIndex = frameNumber,
-				.camera = &camera,
-			};
-			handler->Setup(*this, details);
-		}
-	}
-
 	void Engine::Cleanup() {
-		for (auto& handler : systemHandlers) {
-			if (handler) {
-				handler->Cleanup(*this);
-			}
-		}
-		systemHandlers.clear();
-		registry.clear();
-
 		if (device) {
 			device.waitIdle();
 
@@ -485,18 +461,6 @@ namespace brassica {
 			std::shared_ptr<graph::PhysicalResourceRegistry>(&physicalRegistry, [](graph::PhysicalResourceRegistry*) {})
 		);
 		serviceLocator.Provide<ImGuiManager>(std::shared_ptr<ImGuiManager>(&imguiManager, [](ImGuiManager*) {}));
-
-		FrameDetails initialDetails{
-			.deltaTime = 0.0f,
-			.totalTime = glfwGetTime(),
-			.frameIndex = 0,
-			.camera = &camera,
-		};
-		for (auto& handler : systemHandlers) {
-			if (handler) {
-				handler->Setup(*this, initialDetails);
-			}
-		}
 
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
 	}
@@ -992,20 +956,6 @@ namespace brassica {
 		lightManager.Update(deltaTime);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
-		FrameDetails frameDetails{
-			.deltaTime = deltaTime,
-			.totalTime = currentTime,
-			.frameIndex = frameNumber,
-			.camera = &camera,
-		};
-
-		for (auto& handler : systemHandlers) {
-			if (handler) {
-				handler->PreFrame(*this, frameDetails);
-				handler->Update(*this, frameDetails);
-			}
-		}
-
 		{
 			float altitude = std::max(10.0f, camera.position.y);
 			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
@@ -1114,14 +1064,6 @@ namespace brassica {
 		// per-frame data (GradientNode, the atmosphere LUT nodes, ParticleSystemNode) are silently
 		// skipped, so Engine builds exactly one NodeFrameParams and hands it to every registered
 		// node uniformly, the same shape as InitAll/DestroyAll/RegisterAllInto.
-		const auto& lights = lightManager.GetLights();
-		glm::vec3   sunDir = (lights.size() > 0) ? glm::normalize(-lights[0].direction) : glm::vec3(0.0f, 1.0f, 0.0f);
-		glm::vec3   sunRadiance = (lights.size() > 0) ? (lights[0].color * lights[0].intensity)
-													  : glm::vec3(3.0f, 2.94f, 2.76f);
-		glm::vec3   moonDir = (lights.size() > 1) ? glm::normalize(-lights[1].direction) : glm::vec3(0.0f, -1.0f, 0.0f);
-		glm::vec3   moonRadiance = (lights.size() > 1) ? (lights[1].color * lights[1].intensity)
-													   : glm::vec3(0.1f, 0.12f, 0.16f);
-
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,
 			.terrainGridParams = terrainPush.gridParams,
@@ -1134,15 +1076,6 @@ namespace brassica {
 			.terrainHasUpdate = terrainHasUpdate,
 			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
 			.waterLevel = 0.0f,
-			.sunDir = sunDir,
-			.sunRadiance = sunRadiance,
-			.moonDir = moonDir,
-			.moonRadiance = moonRadiance,
-			.time = ubo.time,
-			.worldScale = 1.0f,
-			.multiScatScale = 1.0f,
-			.cloudShadowIntensity = 0.5f,
-			.skyExposure = lightManager.GetSkyExposure(),
 		};
 		auto& nodeRegistry = render::EngineNodeRegistry::Instance();
 		nodeRegistry.SetFrameParamsAll(frameParams);
@@ -1279,12 +1212,6 @@ namespace brassica {
 		    windowResized) {
 			windowResized = false;
 			RecreateSwapchain();
-		}
-
-		for (auto& handler : systemHandlers) {
-			if (handler) {
-				handler->PostFrame(*this, frameDetails);
-			}
 		}
 
 		frameNumber++;
