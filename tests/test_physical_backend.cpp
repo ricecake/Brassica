@@ -1404,6 +1404,10 @@ TEST_CASE(
 
 		PhysicalResourceRegistry::BindlessBindings bindings{};
 		bindings.set = set;
+		bindings.sampledImage2DBinding = 0xFFFFFFFFu;
+		bindings.sampledImage2DArrayBinding = 0xFFFFFFFFu;
+		bindings.samplerBinding = 0xFFFFFFFFu;
+		bindings.storageImageBinding = 0xFFFFFFFFu;
 		bindings.accelerationStructureBinding = 0;
 
 		PhysicalResourceRegistry registry(device, engine.GetAllocator());
@@ -1412,12 +1416,8 @@ TEST_CASE(
 		// Fake, non-null handles -- safe here for the same reason the AS-barrier test elsewhere
 		// in this file uses one: nothing in this path ever dereferences the handle, it's only
 		// stored and named in a descriptor write.
-		auto handleA = vk::AccelerationStructureKHR{
-			reinterpret_cast<VkAccelerationStructureKHR>(static_cast<std::uintptr_t>(1))
-		};
-		auto handleB = vk::AccelerationStructureKHR{
-			reinterpret_cast<VkAccelerationStructureKHR>(static_cast<std::uintptr_t>(2))
-		};
+		auto handleA = vk::AccelerationStructureKHR{};
+		auto handleB = vk::AccelerationStructureKHR{};
 
 		registry.RegisterImportedAccelerationStructure<TestTLAS>(handleA);
 		const std::uint32_t index = registry.GetAccelerationStructureBindlessIndex<TestTLAS>();

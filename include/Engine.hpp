@@ -22,15 +22,19 @@
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "SystemHandler.hpp"
 #include "TaskScheduler.h"
 #include "terrain/AsyncTerrainUploader.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
 #include "terrain/TerrainClipmap.hpp"
 #include "types/CameraData.hpp"
+#include "types/FrameDetails.hpp"
+#include "types/TransformComponent.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "vk_mem_alloc.h"
 #include "VkBootstrap.h"
+#include <entt/entity/registry.hpp>
 
 namespace brassica {
 
@@ -152,6 +156,21 @@ namespace brassica {
 
 		void OnFramebufferResize(int width, int height);
 
+		entt::registry& GetRegistry() { return registry; }
+
+		const entt::registry& GetRegistry() const { return registry; }
+
+		void AddSystemHandler(std::shared_ptr<SystemHandler> handler);
+
+		template <typename T, typename... Args>
+		std::shared_ptr<T> AddSystemHandler(Args&&... args) {
+			auto handler = std::make_shared<T>(std::forward<Args>(args)...);
+			AddSystemHandler(handler);
+			return handler;
+		}
+
+		const std::vector<std::shared_ptr<SystemHandler>>& GetSystemHandlers() const { return systemHandlers; }
+
 	private:
 		void InitWindow();
 		bool InitVulkan();
@@ -257,6 +276,9 @@ namespace brassica {
 		ConfigManager       configManager;
 		ShaderWatcher       shaderWatcher;
 		enki::TaskScheduler taskScheduler;
+
+		entt::registry                              registry;
+		std::vector<std::shared_ptr<SystemHandler>> systemHandlers;
 	};
 
 } // namespace brassica

@@ -229,7 +229,31 @@ namespace brassica {
 		}
 	}
 
+	void Engine::AddSystemHandler(std::shared_ptr<SystemHandler> handler) {
+		if (!handler) {
+			return;
+		}
+		systemHandlers.push_back(handler);
+		if (device) {
+			FrameDetails details{
+				.deltaTime = 0.0f,
+				.totalTime = glfwGetTime(),
+				.frameIndex = frameNumber,
+				.camera = &camera,
+			};
+			handler->Setup(*this, details);
+		}
+	}
+
 	void Engine::Cleanup() {
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->Cleanup(*this);
+			}
+		}
+		systemHandlers.clear();
+		registry.clear();
+
 		if (device) {
 			device.waitIdle();
 
@@ -462,6 +486,18 @@ namespace brassica {
 		);
 		serviceLocator.Provide<ImGuiManager>(std::shared_ptr<ImGuiManager>(&imguiManager, [](ImGuiManager*) {}));
 
+		FrameDetails initialDetails{
+			.deltaTime = 0.0f,
+			.totalTime = glfwGetTime(),
+			.frameIndex = 0,
+			.camera = &camera,
+		};
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->Setup(*this, initialDetails);
+			}
+		}
+
 		spdlog::info("Brassica Engine Initialized (headless: {}).", options.headless);
 	}
 
@@ -689,7 +725,7 @@ namespace brassica {
 		VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
 		meshFeatures.meshShader = VK_TRUE;
 		meshFeatures.taskShader = VK_TRUE;
-		meshFeatures.primitiveFragmentShadingRateMeshShader = VK_TRUE;
+		meshFeatures.primitiveFragmentShadingRateMeshShader = VK_FALSE;
 
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{
 			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
@@ -698,12 +734,6 @@ namespace brassica {
 
 		VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
 		rqFeatures.rayQuery = VK_TRUE;
-
-		VkPhysicalDeviceFragmentShadingRateFeaturesKHR variableShadingRate{
-			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR
-		};
-		variableShadingRate.primitiveFragmentShadingRate = VK_TRUE;
-		variableShadingRate.attachmentFragmentShadingRate = VK_TRUE;
 
 		VkPhysicalDeviceFeatures features1{};
 		features1.shaderInt64 = VK_TRUE;
@@ -718,12 +748,10 @@ namespace brassica {
 			.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
 			.add_required_extension_features(meshFeatures)
 			.add_required_extension_features(asFeatures)
-			.add_required_extension_features(rqFeatures)
-			.add_required_extension_features(variableShadingRate);
+			.add_required_extension_features(rqFeatures);
 
 		auto phys_ret = selector.select();
 		if (!phys_ret) {
@@ -955,6 +983,20 @@ namespace brassica {
 		UpdateCamera(deltaTime);
 		lightManager.Update(deltaTime);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
+
+		FrameDetails frameDetails{
+			.deltaTime = deltaTime,
+			.totalTime = currentTime,
+			.frameIndex = frameNumber,
+			.camera = &camera,
+		};
+
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->PreFrame(*this, frameDetails);
+				handler->Update(*this, frameDetails);
+			}
+		}
 
 		{
 			float altitude = std::max(10.0f, camera.position.y);
@@ -1229,6 +1271,12 @@ namespace brassica {
 		    windowResized) {
 			windowResized = false;
 			RecreateSwapchain();
+		}
+
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->PostFrame(*this, frameDetails);
+			}
 		}
 
 		frameNumber++;
