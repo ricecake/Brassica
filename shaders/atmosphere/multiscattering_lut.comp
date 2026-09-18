@@ -23,8 +23,7 @@ layout(push_constant) uniform MultiScatteringPushConstants {
 
 u_atmosphere;
 
-#include "common.glsl"
-
+#include "atmosphere/common.glsl"
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
 	return SAMPLE_LINEAR(u_atmosphere.transmittanceIndex, uv).rgb;

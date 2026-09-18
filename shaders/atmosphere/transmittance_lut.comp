@@ -22,7 +22,7 @@ layout(push_constant) uniform TransmittancePushConstants {
 
 u_atmosphere;
 
-#include "common.glsl"
+#include "atmosphere/common.glsl"
 
 vec3 calculateTransmittance(float r, float mu) {
 	vec3  ro = vec3(0, r, 0);
