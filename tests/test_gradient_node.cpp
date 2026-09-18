@@ -5,7 +5,7 @@
 #include "graph/Graph.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
-#include "passes/AtmosphereSkyNode.hpp"
+#include "passes/GradientNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 
@@ -55,15 +55,19 @@ TEST_CASE("GradientNode renders through PhysicalExecutionBackend with no validat
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, engine.GetPipelineCache());
 
-		AtmosphereSkyNode skyNode;
-		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		GradientNode gradientNode;
+		gradientNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 
 		graph::PhysicalResourceRegistry registry(vkDevice, engine.GetAllocator());
 		graph::PhysicalExecutionBackend backend(registry);
 
+		// Two frames, not one: proves ResolveCached's second-frame call is a real cache hit (no
+		// duplicate pipeline creation) rather than something that only happens to work once, and
+		// that GradientBackground's desc-match reuse (PhysicalRegistry::ProvisionTexture) holds
+		// across frames the same way it does for every other steady-state resource.
 		for (std::uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex) {
 			graph::Graph graph;
-			graph.RegisterRef(skyNode);
+			graph.RegisterRef(gradientNode);
 
 			graph::FrameContext ctx{.width = 256, .height = 256, .frameIndex = frameIndex};
 
@@ -81,7 +85,7 @@ TEST_CASE("GradientNode renders through PhysicalExecutionBackend with no validat
 		CHECK(registry.GetTexture<GradientBackground>() != nullptr);
 
 		pipelineLibrary.Reset();
-		skyNode.Destroy(vkDevice);
+		gradientNode.Destroy(vkDevice);
 		vkDevice.destroyCommandPool(pool);
 	}
 
