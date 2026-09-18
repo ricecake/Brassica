@@ -171,6 +171,10 @@ namespace brassica {
 
 		const std::vector<std::shared_ptr<SystemHandler>>& GetSystemHandlers() const { return systemHandlers; }
 
+		graph::PhysicalResourceRegistry& GetPhysicalRegistry() { return physicalRegistry; }
+
+		const graph::PhysicalResourceRegistry& GetPhysicalRegistry() const { return physicalRegistry; }
+
 	private:
 		void InitWindow();
 		bool InitVulkan();

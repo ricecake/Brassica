@@ -16,8 +16,14 @@ namespace brassica {
 		alignas(4) float mieScale{0.35f};
 		alignas(4) float mieAnisotropy{0.8f};
 		alignas(4) float atmosphereHeight{100.0f};
-		alignas(4) float hazeDensity{0.0f};
+		alignas(4) float hazeDensity{0.015f};
 		alignas(4) float hazeHeight{20.0f};
+		alignas(4) float waterLevel{0.0f};
+		alignas(4) float padding1{0.0f};
+		alignas(16) glm::vec3 waterScatteringBase{0.003f, 0.007f, 0.012f};
+		alignas(4) float waterScale{1.0f};
+		alignas(16) glm::vec3 waterExtinctionBase{0.12f, 0.04f, 0.02f};
+		alignas(4) float padding2{0.0f};
 	};
 
 } // namespace brassica
