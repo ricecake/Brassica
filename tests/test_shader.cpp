@@ -173,8 +173,30 @@ TEST_CASE("Atmosphere Sky Shaders Load and Compile") {
 		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
 	}
 
-	brassica::FragmentShader gradientFragShader;
-	bool loadedFrag = gradientFragShader.LoadFromFile("shaders/gradient.frag");
+	brassica::VertexShader skyVertShader;
+	bool loadedVert = skyVertShader.LoadFromFile("shaders/atmosphere/sky.vert");
+	CHECK(loadedVert);
+	if (loadedVert) {
+		shaderc::Compiler       compiler;
+		shaderc::CompileOptions options;
+		options.SetOptimizationLevel(shaderc_optimization_level_performance);
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+
+		auto res = compiler.CompileGlslToSpv(
+			skyVertShader.GetSource(),
+			shaderc_glsl_vertex_shader,
+			"sky.vert",
+			options
+		);
+		if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
+			MESSAGE("sky.vert error: ", res.GetErrorMessage());
+		}
+		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
+	}
+
+	brassica::FragmentShader skyFragShader;
+	bool loadedFrag = skyFragShader.LoadFromFile("shaders/atmosphere/sky.frag");
 	CHECK(loadedFrag);
 	if (loadedFrag) {
 		shaderc::Compiler       compiler;
@@ -184,13 +206,13 @@ TEST_CASE("Atmosphere Sky Shaders Load and Compile") {
 		options.SetTargetSpirv(shaderc_spirv_version_1_5);
 
 		auto res = compiler.CompileGlslToSpv(
-			gradientFragShader.GetSource(),
+			skyFragShader.GetSource(),
 			shaderc_glsl_fragment_shader,
-			"gradient.frag",
+			"sky.frag",
 			options
 		);
 		if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
-			MESSAGE("gradient.frag error: ", res.GetErrorMessage());
+			MESSAGE("sky.frag error: ", res.GetErrorMessage());
 		}
 		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
 	}

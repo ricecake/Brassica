@@ -278,14 +278,12 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.sunDir = p.sunDir;
-			push.time = p.time;
-			push.sunRadiance = p.sunRadiance;
 			push.worldScale = p.worldScale;
-			push.moonDir = p.moonDir;
+			push.sunRadiance = p.sunRadiance;
 			push.multiScatScale = p.multiScatScale;
-			push.moonRadiance = p.moonRadiance;
+			push.moonDir = p.moonDir;
 			push.cloudShadowIntensity = p.cloudShadowIntensity;
-			push.cameraPos = p.cameraPosition;
+			push.moonRadiance = p.moonRadiance;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext&) {

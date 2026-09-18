@@ -1,8 +1,10 @@
 #ifndef ATMOSPHERE_COMMON_GLSL
 #define ATMOSPHERE_COMMON_GLSL
 
+#include "common.glsl"
+
 const float PI = 3.14159265359;
-const float kEarthRadius = 6360.0; // km
+const float kEarthRadius = FAKE_PLANET_RADIUS / 1000.0; // 600.0 km
 
 #ifdef ATMOSPHERE_NO_PUSH_CONSTANTS
 const vec3 kRayleighScattering = vec3(5.802e-3, 13.558e-3, 33.100e-3);

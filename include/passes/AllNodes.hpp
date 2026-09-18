@@ -13,7 +13,7 @@
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"
-#include "passes/GradientNode.hpp"
+#include "passes/AtmosphereSkyNode.hpp"
 #include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/TerrainGenNode.hpp"

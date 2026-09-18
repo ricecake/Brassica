@@ -18,7 +18,7 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	struct GradientNode: render::NodeRegistrar<GradientNode> {
+	struct AtmosphereSkyNode: render::NodeRegistrar<AtmosphereSkyNode> {
 		using Resources = graph::Declares<
 			graph::Read<SkyViewLUT>,
 			graph::Read<TransmittanceLUT>,
@@ -35,8 +35,8 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			vertShader.CompileVertexFromFile(services.device, "shaders/gradient.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/gradient.frag");
+			vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert");
+			fragShader.CompileFragmentFromFile(services.device, "shaders/atmosphere/sky.frag");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
@@ -139,6 +139,6 @@ namespace brassica {
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(GradientNode);
+	BRASSICA_REGISTER_NODE(AtmosphereSkyNode);
 
 } // namespace brassica

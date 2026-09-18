@@ -1,3 +1,4 @@
+#version 460
 #include "bindless.glsl"
 #include "lighting.glsl"
 
@@ -37,9 +38,8 @@ vec3 getTransmittance(float r, float mu) {
 
 void main() {
 	vec2 clipCoord = inUV * 2.0 - 1.0;
-	vec4 farPoint4 = uInvViewProjMatrix * vec4(clipCoord, 1.0, 1.0);
-	vec3 farPoint = farPoint4.xyz / farPoint4.w;
-	vec3 worldRay = normalize(farPoint - uCameraPosition.xyz);
+	vec4 viewRay = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
+	vec3 worldRay = normalize((uInvViewMatrix * vec4(viewRay.xy, -1.0, 0.0)).xyz);
 
 	float worldScale = max(0.001, push.worldScale);
 	float r = kEarthRadius + max(0.0, uCameraPosition.y / (1000.0 * worldScale));
