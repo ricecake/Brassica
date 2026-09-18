@@ -22,7 +22,7 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct WaterPushConstants {
-		glm::uvec4    gridParams{10, 16, 2560, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+		glm::uvec4    gridParams{14, 16, 3584, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
@@ -56,6 +56,9 @@ namespace brassica {
 		// support (tests/test_water_node.cpp) rather than only compiling.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
+			.depthTest = true,
+			.depthWrite = false,
+			.depthCompareOp = vk::CompareOp::eLessOrEqual,
 			.enableBlend = true,
 			.enableShadingRate = false,
 		};
@@ -93,13 +96,20 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.gridParams = glm::uvec4(10, 16, 2560, 0);
+			push.gridParams = glm::uvec4(14, 16, 3584, 0);
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferDepth>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+				}
+			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<Swapchain>(),
@@ -131,6 +141,7 @@ namespace brassica {
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
+				.depthFormat = vk::Format::eD32Sfloat,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};

@@ -5,8 +5,8 @@
 #include "graph/Graph.hpp"
 #include "graph/Node.hpp"
 #include "graph/PhysicalRegistry.hpp"
+#include "passes/AtmosphereSkyNode.hpp"
 #include "passes/DeferredNode.hpp"
-#include "passes/GradientNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
 
@@ -24,7 +24,7 @@ using namespace brassica;
 // fg.execute() either) -- this proves the real production nodes compose into a renderable,
 // correctly-scheduled graph; PhysicalExecutionBackend's actual Provision/barrier/render path has
 // its own dedicated coverage in tests/test_physical_backend.cpp.
-TEST_CASE("Real TerrainGenNode/GradientNode/TerrainNode/DeferredNode compose into a renderable, correctly-staged graph") {
+TEST_CASE("Real TerrainGenNode/AtmosphereSkyNode/TerrainNode/DeferredNode compose into a renderable, correctly-staged graph") {
 	brassica::Engine        engine;
 	brassica::EngineOptions opts;
 	opts.headless = true;
@@ -47,7 +47,7 @@ TEST_CASE("Real TerrainGenNode/GradientNode/TerrainNode/DeferredNode compose int
 		// scope is Setup()+Compile() only (see the header comment above), and Execute (the only
 		// place those fields are read) is never called here.
 		frameGraph.Register<TerrainGenNode>(TerrainGenNode{});
-		frameGraph.Register<GradientNode>(GradientNode{});
+		frameGraph.Register<AtmosphereSkyNode>(AtmosphereSkyNode{});
 		frameGraph.Register<TerrainNode>(TerrainNode{});
 		frameGraph.Register<DeferredNode>(DeferredNode{
 			.swapchainFormat = vk::Format::eB8G8R8A8Unorm,
