@@ -134,6 +134,20 @@ void main() {
 	vec3 moonTransmittance = max(getTransmittance(r, moonDir.y), vec3(0.001));
 	vec3 moonDisc = moonRadiance * phasedMask * moonTransmittance * smoothstep(-0.01, 0.01, moonDir.y);
 
-	vec3 finalColor = skyRadiance + sunDisc + moonDisc + spaceBackground;
+	// 5. Scaffolding Hooks: Volumetric Lighting & Raymarched Clouds
+	vec4 cloudResult = evaluateRaymarchedClouds(uCameraPosition.xyz / 1000.0, worldRay, 100.0, sunDir, sunRadiance);
+	vec3 skyWithClouds = mix(skyRadiance, cloudResult.rgb, cloudResult.a);
+
+	vec3 finalColor = skyWithClouds + sunDisc + moonDisc + spaceBackground;
+
+	// 6. Underwater Submersion Adaptation
+	if (uCameraPosition.y < u_waterLevel) {
+		float depthBelowWater = (u_waterLevel - uCameraPosition.y);
+		float rayWaterLength = depthBelowWater / max(0.01, abs(worldRay.y));
+		vec3 waterTransmittance = exp(-kWaterExtinction * u_waterScale * (rayWaterLength / 1000.0));
+		vec3 waterFogColor = kWaterScattering * u_waterScale * vec3(0.12, 0.62, 0.78);
+		finalColor = mix(waterFogColor, finalColor * waterTransmittance, clamp(exp(-rayWaterLength * 0.01), 0.0, 1.0));
+	}
+
 	outColor = vec4(finalColor, 1.0);
 }

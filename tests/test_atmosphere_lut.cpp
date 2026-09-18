@@ -14,7 +14,7 @@
 #include "types/AtmospherePushConstants.hpp"
 
 TEST_CASE("AtmospherePushConstants Struct Layout and Size") {
-	CHECK(sizeof(brassica::AtmospherePushConstants) == 80);
+	CHECK(sizeof(brassica::AtmospherePushConstants) == 128);
 
 	brassica::AtmospherePushConstants push{};
 	CHECK(offsetof(brassica::AtmospherePushConstants, rayleighScatteringBase) == 0);
@@ -30,11 +30,17 @@ TEST_CASE("AtmospherePushConstants Struct Layout and Size") {
 	CHECK(offsetof(brassica::AtmospherePushConstants, atmosphereHeight) == 64);
 	CHECK(offsetof(brassica::AtmospherePushConstants, hazeDensity) == 68);
 	CHECK(offsetof(brassica::AtmospherePushConstants, hazeHeight) == 72);
+	CHECK(offsetof(brassica::AtmospherePushConstants, waterLevel) == 76);
+	CHECK(offsetof(brassica::AtmospherePushConstants, waterScatteringBase) == 96);
+	CHECK(offsetof(brassica::AtmospherePushConstants, waterScale) == 108);
+	CHECK(offsetof(brassica::AtmospherePushConstants, waterExtinctionBase) == 112);
 
 	CHECK(push.rayleighScatteringBase.x == doctest::Approx(5.802e-3f));
 	CHECK(push.rayleighScaleHeight == doctest::Approx(8.0f));
 	CHECK(push.mieScaleHeight == doctest::Approx(1.2f));
 	CHECK(push.atmosphereHeight == doctest::Approx(100.0f));
+	CHECK(push.waterScatteringBase.x == doctest::Approx(0.003f));
+	CHECK(push.waterExtinctionBase.x == doctest::Approx(0.12f));
 }
 
 // offsetof checks for the two node-specific wrapper structs live in AtmosphereLUTNode.hpp itself
@@ -45,9 +51,9 @@ TEST_CASE(
 	"TransmittanceLUTPushConstants/MultiScatteringLUTPushConstants place their bindless "
 	"index fields where the shaders expect"
 ) {
-	CHECK(offsetof(brassica::TransmittanceLUTPushConstants, outIndex) == 80);
-	CHECK(offsetof(brassica::MultiScatteringLUTPushConstants, outIndex) == 80);
-	CHECK(offsetof(brassica::MultiScatteringLUTPushConstants, transmittanceIndex) == 84);
+	CHECK(offsetof(brassica::TransmittanceLUTPushConstants, outIndex) == 128);
+	CHECK(offsetof(brassica::MultiScatteringLUTPushConstants, outIndex) == 128);
+	CHECK(offsetof(brassica::MultiScatteringLUTPushConstants, transmittanceIndex) == 132);
 }
 
 TEST_CASE("Atmosphere Shaders Compilation") {

@@ -17,7 +17,13 @@ layout(push_constant) uniform MultiScatteringPushConstants {
 	float                    atmosphereHeight;
 	float                    hazeDensity;
 	float                    hazeHeight;
-	layout(offset = 80) uint outIndex;
+	float                    waterLevel;
+	float                    padding1;
+	vec3                     waterScatteringBase;
+	float                    waterScale;
+	vec3                     waterExtinctionBase;
+	float                    padding2;
+	layout(offset = 128) uint outIndex;
 	uint                     transmittanceIndex;
 }
 

@@ -5,6 +5,9 @@
 #include "terrain.glsl"
 #include "clustered_lighting.glsl"
 
+#define ATMOSPHERE_NO_PUSH_CONSTANTS
+#include "atmosphere/common.glsl"
+
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
@@ -120,12 +123,43 @@ void main() {
 	} else {
 		float shadowFactor = 1.0;
 
-		// Ray Query Shadows for primary directional light (disabled)
-
 		vec3 lightContribution = evaluateClusteredLightContribution(pos, norm);
 		vec3 diffuse = albedo.rgb * lightContribution * shadowFactor;
 
-		hdrColor = diffuse;
+		// Extract primary directional light for aerial perspective / atmosphere scattering
+		vec3 sunDir = normalize(vec3(0.4, 0.8, 0.4));
+		vec3 sunRadiance = vec3(10.0, 9.5, 8.5);
+
+		for (uint i = 0u; i < uLightCount; ++i) {
+			if (uLights[i].type == LIGHT_TYPE_DIRECTIONAL) {
+				sunDir = normalize(uLights[i].direction);
+				sunRadiance = uLights[i].color * uLights[i].intensity;
+				break;
+			}
+		}
+
+		float distMeters = length(relPos);
+		float distKM = distMeters / 1000.0;
+		vec3  rayDir = relPos / max(0.001, distMeters);
+
+		// Evaluate atmospheric scattering, aerial perspective, and exponential fog
+		vec3 transmittance = vec3(1.0);
+		vec3 rayCamOriginKM = uCameraPosition.xyz / 1000.0;
+		vec3 inScattered = evaluateAerialPerspective(rayCamOriginKM, rayDir, distKM, sunDir, sunRadiance, transmittance);
+
+		// Scaffolding: Volumetric lighting along view ray to surface
+		vec3 vLight = evaluateVolumetricLighting(rayCamOriginKM, rayDir, distKM, sunDir, sunRadiance);
+
+		hdrColor = (diffuse * vLight) * transmittance + inScattered;
+
+		// Underwater Medium Adaptation for rendered surfaces
+		if (uCameraPosition.y < u_waterLevel) {
+			float depthBelowWater = (u_waterLevel - uCameraPosition.y);
+			float rayWaterLength = min(distMeters, depthBelowWater / max(0.01, abs(rayDir.y)));
+			vec3  waterTransmittance = exp(-kWaterExtinction * u_waterScale * (rayWaterLength / 1000.0));
+			vec3  waterFogColor = kWaterScattering * u_waterScale * vec3(0.12, 0.62, 0.78);
+			hdrColor = mix(waterFogColor, hdrColor * waterTransmittance, clamp(exp(-rayWaterLength * 0.01), 0.0, 1.0));
+		}
 	}
 
 	// HDR Tonemapping & Gamma Correction
