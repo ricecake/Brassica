@@ -16,6 +16,7 @@
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "types/AtmospherePushConstants.hpp"
+#include "types/SkyViewPushConstants.hpp"
 
 namespace brassica {
 
@@ -254,5 +255,110 @@ namespace brassica {
 	};
 
 	BRASSICA_REGISTER_NODE(MultiScatteringLUTNode);
+
+	struct SkyViewLUTNode: render::NodeRegistrar<SkyViewLUTNode> {
+		using Resources = graph::Declares<
+			graph::Read<TransmittanceLUT>,
+			graph::Read<MultiScatteringLUT>,
+			graph::Create<SkyViewLUT>>;
+
+		render::PipelineLibrary* pipelineLibrary = nullptr;
+		ComputeShader            shader;
+		SkyViewPushConstants     push{};
+
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			shader.CompileComputeFromFile(services.device, "shaders/atmosphere/sky_view_lut.comp");
+			if (services.shaderWatcher) {
+				services.shaderWatcher->RegisterShader(&shader);
+			}
+		}
+
+		void Destroy(vk::Device device) { shader.Destroy(device); }
+
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			push.sunDir = p.sunDir;
+			push.worldScale = p.worldScale;
+			push.sunRadiance = p.sunRadiance;
+			push.multiScatScale = p.multiScatScale;
+			push.moonDir = p.moonDir;
+			push.cloudShadowIntensity = p.cloudShadowIntensity;
+			push.moonRadiance = p.moonRadiance;
+		}
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			graph::Recipe r{
+				.domain = graph::ExecutionDomain::Compute,
+				.isActive = true
+			};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TransmittanceLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<MultiScatteringLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(32, 32, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext& ctx) {
+			push.outIndex = ctx.StorageIndex<SkyViewLUT>();
+			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
+			push.multiScatteringIndex = ctx.Index<MultiScatteringLUT>();
+
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(SkyViewPushConstants)}
+			};
+			render::ComputePipelineRequest request{
+				.shader = &shader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushConstantRanges,
+			};
+			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (resolved.pipeline) {
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
+			}
+
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
+			}
+
+			vkCmd.pushConstants(
+				resolved.layout,
+				vk::ShaderStageFlagBits::eCompute,
+				0,
+				sizeof(SkyViewPushConstants),
+				&push
+			);
+
+			vkCmd.dispatch((192 + 7) / 8, (108 + 7) / 8, 1);
+		}
+	};
+
+	BRASSICA_REGISTER_NODE(SkyViewLUTNode);
 
 } // namespace brassica
