@@ -14,7 +14,7 @@ layout(push_constant) uniform WaterPushConstants {
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
-	uint  gAlbedoIndex;
+	uint  sceneColorIndex;
 	uint  gNormalIndex;
 	uint  padding;
 }

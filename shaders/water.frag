@@ -13,7 +13,7 @@ layout(push_constant) uniform WaterPushConstants {
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
-	uint  gAlbedoIndex;
+	uint  sceneColorIndex;
 	uint  gNormalIndex;
 	uint  padding;
 }
@@ -22,12 +22,12 @@ params;
 
 void main() {
 	ivec2 gTexSize = textureSize(
-		sampler2D(uTextures2D[nonuniformEXT(params.gAlbedoIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		sampler2D(uTextures2D[nonuniformEXT(params.sceneColorIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
 		0
 	);
 	vec2 screenUV = gl_FragCoord.xy / vec2(gTexSize);
 
-	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, screenUV);
+	vec4 sceneColor = SAMPLE_NEAREST(params.sceneColorIndex, screenUV);
 	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
 	vec3 relWaterPos = inWorldPos - uCameraPosition.xyz;
 
@@ -35,8 +35,9 @@ void main() {
 	float rayLengthThroughWater = 100.0; // Default deep water ray length when background is sky
 	float depthBelowWater = 100.0;       // Vertical Y depth below water
 
-	if (albedo.a >= 0.01) {
-		float distToCamTerrain = length(relTerrainPos);
+	float distToCamTerrain = length(relTerrainPos);
+	// Position texture valid for terrain geometry
+	if (distToCamTerrain > 0.01) {
 		// Terrain is strictly in front of the water mesh fragment
 		if (distToCamTerrain < distToCamWater - 0.2) {
 			outColor = vec4(0.0);
@@ -78,14 +79,14 @@ void main() {
 	float closeThreshold = 800.0;
 	float closeFactor = clamp(1.0 - distToCam / closeThreshold, 0.0, 1.0);
 
-	// Refraction: distort G-Buffer sample UVs based on wave normal and optical depth
+	// Refraction: distort scene UVs based on wave normal and optical depth
 	vec2 refractOffset = waveNormal.xz * clamp(rayLengthThroughWater * 0.008, 0.0, 0.03);
 	vec2 refractUV = clamp(screenUV + refractOffset, vec2(0.0), vec2(1.0));
 
-	vec4 refractedAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, refractUV);
+	vec4 refractedSceneColor = SAMPLE_NEAREST(params.sceneColorIndex, refractUV);
 	vec3 relRefractedPos = SAMPLE_NEAREST(params.gPositionIndex, refractUV).rgb;
-	if (relWaterPos.y - relRefractedPos.y <= 0.0 || refractedAlbedo.a < 0.01) {
-		refractedAlbedo = albedo;
+	if (length(relRefractedPos) > 0.01 && relWaterPos.y - relRefractedPos.y <= 0.0) {
+		refractedSceneColor = sceneColor;
 	}
 
 	// Translucency & Beer-Lambert absorption along true view ray path length:
@@ -128,7 +129,7 @@ void main() {
 	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);
 	vec3 finalWaterTint = mix(waterBodyColor, vec3(0.65, 0.82, 1.0), fresnel * 0.5);
 
-	vec3 blendedColor = mix(refractedAlbedo.rgb, finalWaterTint, alpha) + shineColor;
+	vec3 blendedColor = mix(refractedSceneColor.rgb, finalWaterTint, alpha) + shineColor;
 
 	// Shoreline foam and wave crest foam
 	float shoreFoam = clamp(1.0 - depthBelowWater / 2.2, 0.0, 1.0);
