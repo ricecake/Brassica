@@ -58,7 +58,7 @@ namespace brassica {
 		std::uint32_t           outIndex{0};
 	};
 
-	static_assert(offsetof(TransmittanceLUTPushConstants, outIndex) == 80);
+	static_assert(offsetof(TransmittanceLUTPushConstants, outIndex) == 128);
 
 	struct MultiScatteringLUTPushConstants {
 		AtmospherePushConstants atmosphere;
@@ -66,8 +66,8 @@ namespace brassica {
 		std::uint32_t           transmittanceIndex{0};
 	};
 
-	static_assert(offsetof(MultiScatteringLUTPushConstants, outIndex) == 80);
-	static_assert(offsetof(MultiScatteringLUTPushConstants, transmittanceIndex) == 84);
+	static_assert(offsetof(MultiScatteringLUTPushConstants, outIndex) == 128);
+	static_assert(offsetof(MultiScatteringLUTPushConstants, transmittanceIndex) == 132);
 
 	// Replaces AtmosphereLUTPass's transmittance half: no per-node descriptor set, no per-frame
 	// descriptor writes -- the output LUT is a bindless storage index
