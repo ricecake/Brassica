@@ -171,6 +171,9 @@ namespace brassica {
 
 		const std::vector<std::shared_ptr<SystemHandler>>& GetSystemHandlers() const { return systemHandlers; }
 
+		graph::PhysicalResourceRegistry& GetPhysicalRegistry() { return physicalRegistry; }
+		const graph::PhysicalResourceRegistry& GetPhysicalRegistry() const { return physicalRegistry; }
+
 	private:
 		void InitWindow();
 		bool InitVulkan();
@@ -263,9 +266,6 @@ namespace brassica {
 		void CleanupGlobalDescriptors();
 
 		FrameData& GetCurrentFrame() { return frames[frameNumber % FRAME_OVERLAP]; }
-
-		graph::PhysicalResourceRegistry& GetPhysicalRegistry() { return physicalRegistry; }
-		const graph::PhysicalResourceRegistry& GetPhysicalRegistry() const { return physicalRegistry; }
 
 		graph::PhysicalResourceRegistry physicalRegistry;
 		render::PipelineLibrary         pipelineLibrary;
