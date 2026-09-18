@@ -1,5 +1,6 @@
 #version 460
 
+#include "bindless.glsl"
 #include "common.glsl"
 
 layout(location = 0) in vec3 vWorldPos;

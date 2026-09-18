@@ -106,7 +106,7 @@ namespace brassica {
 				}
 			);
 
-			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(MeshTasksIndirectCommand));
+			graph::ResourceDesc indirectDesc = graph::MappedStorageBufferDesc(sizeof(MeshTasksIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -178,11 +178,13 @@ namespace brassica {
 				&push
 			);
 
-			vk::Buffer indirectBuf{nullptr};
+			vk::Buffer    indirectBuf{nullptr};
+			std::uint64_t offset = 0;
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					if (auto physBuf = registry->GetBuffer<BallIndirectBuffer>()) {
 						indirectBuf = physBuf->GetBuffer();
+						offset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
 					}
 				}
 			}
@@ -191,7 +193,7 @@ namespace brassica {
 				dls->vkCmdDrawMeshTasksIndirectEXT(
 					static_cast<VkCommandBuffer>(ctx.cmd.vkCmd),
 					static_cast<VkBuffer>(indirectBuf),
-					0,
+					offset,
 					1,
 					sizeof(MeshTasksIndirectCommand)
 				);

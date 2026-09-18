@@ -35,7 +35,7 @@ namespace brassica::render {
 		// all, silently ignoring VRS while Gradient/Deferred honored it -- ported as `false` for
 		// Terrain specifically (TerrainPass::InitPipeline) to stay pixel-identical for now.
 		// Flipping it to fix that divergence is a deliberate, separately-validated follow-up.
-		bool enableShadingRate = true;
+		bool enableShadingRate = false;
 	};
 
 	struct GraphicsPipelineRequest {

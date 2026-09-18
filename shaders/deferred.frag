@@ -120,50 +120,7 @@ void main() {
 	} else {
 		float shadowFactor = 1.0;
 
-		// Ray Query Shadows for primary directional light
-		if (false) {
-			vec3 lightDir = normalize(vec3(0.5, 0.2, 0.5));
-			vec3 rayOrigin = pos + norm * 0.1;
-
-			float trueHeight0 = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w, params.lodOffsets0_3, params.lodOffsets4_7, params.lodOffsets8_11).r;
-			vec2 flatXZ0 = pos.xz - uCameraPosition.xz;
-			float dropOff0 = dot(flatXZ0, flatXZ0) / (2.0 * FAKE_PLANET_RADIUS);
-			trueHeight0 -= dropOff0;
-
-			if (rayOrigin.y < trueHeight0 + 0.1) {
-				rayOrigin.y = trueHeight0 + 0.1;
-			}
-
-			float shadowRayTMax = 1000.0;
-
-			rayQueryEXT rq;
-			rayQueryInitializeEXT(
-				rq,
-				uTLAS[nonuniformEXT(params.tlasIndex)],
-				gl_RayFlagsNoneEXT,
-				0xFF,
-				rayOrigin,
-				0.1,
-				lightDir,
-				shadowRayTMax
-			);
-
-			float camDistToShaded = length(pos);
-
-			while (rayQueryProceedEXT(rq)) {
-				uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);
-				if (candidateType == gl_RayQueryCandidateIntersectionAABBEXT) {
-					float hitT;
-					if (checkTerrainAABBIntersection(rayOrigin, lightDir, camDistToShaded, hitT)) {
-						rayQueryGenerateIntersectionEXT(rq, hitT);
-					}
-				}
-			}
-
-			if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
-				shadowFactor = 0.2;
-			}
-		}
+		// Ray Query Shadows for primary directional light (disabled)
 
 		vec3 lightContribution = evaluateClusteredLightContribution(pos, norm);
 		vec3 diffuse = albedo.rgb * lightContribution * shadowFactor;

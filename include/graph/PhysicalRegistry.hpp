@@ -667,10 +667,14 @@ namespace brassica::graph {
 			if (!m_bindless.set) {
 				return;
 			}
+			std::uint32_t binding = isArray ? m_bindless.sampledImage2DArrayBinding : m_bindless.sampledImage2DBinding;
+			if (binding == 0xFFFFFFFFu) {
+				return;
+			}
 			vk::DescriptorImageInfo imageInfo{{}, view, layout};
 			vk::WriteDescriptorSet  write{
 				m_bindless.set,
-				isArray ? m_bindless.sampledImage2DArrayBinding : m_bindless.sampledImage2DBinding,
+				binding,
 				index,
 				1,
 				vk::DescriptorType::eSampledImage,
@@ -680,7 +684,7 @@ namespace brassica::graph {
 		}
 
 		void WriteStorageImageDescriptor(std::uint32_t index, vk::ImageView view) {
-			if (!m_bindless.set) {
+			if (!m_bindless.set || m_bindless.storageImageBinding == 0xFFFFFFFFu) {
 				return;
 			}
 			// Always eGeneral: the only layout a storage image is ever legally accessed through
@@ -698,7 +702,7 @@ namespace brassica::graph {
 		}
 
 		void WriteAccelerationStructureDescriptor(std::uint32_t index, vk::AccelerationStructureKHR as) {
-			if (!m_bindless.set) {
+			if (!m_bindless.set || m_bindless.accelerationStructureBinding == 0xFFFFFFFFu) {
 				return;
 			}
 			vk::WriteDescriptorSetAccelerationStructureKHR asInfo{};
