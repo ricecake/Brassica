@@ -101,7 +101,7 @@ TEST_CASE("AtmosphereLUT nodes regenerate only when push constants actually chan
 	{
 		brassica::render::PipelineLibrary         pipelineLibrary(device, nullptr);
 		brassica::AtmosphereRegenerationState     throttle{};
-		brassica::graph::PhysicalResourceRegistry registry(device, engine.GetAllocator());
+		brassica::graph::PhysicalResourceRegistry& registry = engine.GetPhysicalRegistry();
 		brassica::graph::PhysicalExecutionBackend backend(registry);
 
 		brassica::render::NodeServices services{.device = device, .pipelineLibrary = &pipelineLibrary};
