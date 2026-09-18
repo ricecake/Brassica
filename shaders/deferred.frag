@@ -130,7 +130,8 @@ void main() {
 		vec3 sunDir = normalize(vec3(0.4, 0.8, 0.4));
 		vec3 sunRadiance = vec3(10.0, 9.5, 8.5);
 
-		for (uint i = 0u; i < uLightCount; ++i) {
+		uint numDirectionalCheck = min(uLightCount, 16u);
+		for (uint i = 0u; i < numDirectionalCheck; ++i) {
 			if (uLights[i].type == LIGHT_TYPE_DIRECTIONAL) {
 				sunDir = normalize(uLights[i].direction);
 				sunRadiance = uLights[i].color * uLights[i].intensity;

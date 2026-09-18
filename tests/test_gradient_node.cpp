@@ -50,7 +50,7 @@ TEST_CASE("GradientNode renders through PhysicalExecutionBackend with no validat
 		AtmosphereSkyNode skyNode;
 		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 
-		graph::PhysicalResourceRegistry registry(vkDevice, engine.GetAllocator());
+		graph::PhysicalResourceRegistry& registry = engine.GetPhysicalRegistry();
 		graph::PhysicalExecutionBackend backend(registry);
 
 		for (std::uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex) {

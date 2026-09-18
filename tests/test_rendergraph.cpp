@@ -31,16 +31,9 @@ TEST_CASE("Real TerrainGenNode/AtmosphereSkyNode/TerrainNode/DeferredNode compos
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		frameGraph.Register<graph::Import<Swapchain>>();
 
-		frameGraph.Register<TransmittanceLUTNode>(TransmittanceLUTNode{});
-		frameGraph.Register<MultiScatteringLUTNode>(MultiScatteringLUTNode{});
-		frameGraph.Register<SkyViewLUTNode>(SkyViewLUTNode{});
-		frameGraph.Register<TerrainGenNode>(TerrainGenNode{});
-		frameGraph.Register<AtmosphereSkyNode>(AtmosphereSkyNode{});
-		frameGraph.Register<TerrainNode>(TerrainNode{});
-		frameGraph.Register<DeferredNode>(DeferredNode{
-			.swapchainFormat = vk::Format::eB8G8R8A8Unorm,
-		});
+		render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
 
 		graph::FrameContext ctx{.width = 1280, .height = 720};
 		frameGraph.Setup(ctx);
