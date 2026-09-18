@@ -104,19 +104,39 @@ namespace {
 	WaterBindlessSet CreateWaterBindlessSet(vk::Device device, VmaAllocator allocator) {
 		WaterBindlessSet result;
 
-		// -- Frame set (set 0): just the FrameUBO --
-		vk::DescriptorSetLayoutBinding uboBinding{};
-		uboBinding.setBinding(0)
+		// -- Frame set (set 0): FrameUBO, LightingUBO, LightsBuffer, ClusterGridBuffer --
+		std::array<vk::DescriptorSetLayoutBinding, 4> uboBindings{};
+		uboBindings[0]
+			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		uboBindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		uboBindings[2]
+			.setBinding(2)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		uboBindings[3]
+			.setBinding(3)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+
 		vk::DescriptorSetLayoutCreateInfo frameLayoutInfo{};
-		frameLayoutInfo.setBindings(uboBinding);
+		frameLayoutInfo.setBindings(uboBindings);
 		result.frameLayout = device.createDescriptorSetLayout(frameLayoutInfo);
 
-		vk::DescriptorPoolSize        framePoolSize{vk::DescriptorType::eUniformBuffer, 1};
+		std::array<vk::DescriptorPoolSize, 2> framePoolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 2},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2},
+		};
 		vk::DescriptorPoolCreateInfo framePoolInfo{};
-		framePoolInfo.setPoolSizes(framePoolSize);
+		framePoolInfo.setPoolSizes(framePoolSizes);
 		framePoolInfo.setMaxSets(1);
 		result.framePool = device.createDescriptorPool(framePoolInfo);
 

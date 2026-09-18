@@ -28,11 +28,10 @@ taskPayloadSharedEXT TaskPayload payload;
 
 // Water ring distance scale: continuous growth with distance from camera
 float getWaterRingScale(float ring) {
-	return pow(2.0, ring);
 	// if (ring <= 3.0) {
-	// 	return pow(1.8, ring);
+		return pow(2.0, ring);
 	// }
-	// return pow(1.8, 3.0) * pow(2.1, ring - 3.0);
+	// return 8.0 * pow(2.25, ring - 3.0);
 }
 
 // Check AABB against frustum planes
