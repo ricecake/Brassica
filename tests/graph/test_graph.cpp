@@ -754,6 +754,63 @@ TEST_CASE("Cluster light assignment node creates dependency before deferred shad
 	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
 }
 
+namespace {
+	struct TransmittanceLUTLikeNode {
+		using Resources = Declares<Create<brassica::TransmittanceLUT>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct MultiScatteringLUTLikeNode {
+		using Resources = Declares<Read<brassica::TransmittanceLUT>, Create<brassica::MultiScatteringLUT>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct SkyViewLUTLikeNode {
+		using Resources = Declares<
+			Read<brassica::TransmittanceLUT>,
+			Read<brassica::MultiScatteringLUT>,
+			Create<brassica::SkyViewLUT>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct SkyBackgroundLikeNode {
+		using Resources = Declares<
+			Read<brassica::SkyViewLUT>,
+			Read<brassica::TransmittanceLUT>,
+			Create<brassica::GradientBackground>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct DeferredReadingSkyNode {
+		using Resources = Declares<Read<brassica::GradientBackground>, Modify<Swapchain>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Execute(NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("Atmosphere Sky pipeline stages nodes by dependency Transmittance -> MultiScattering -> SkyView -> SkyBackground -> Deferred") {
+	Graph graph;
+	graph.Register<DeferredReadingSkyNode>();
+	graph.Register<SkyBackgroundLikeNode>();
+	graph.Register<SkyViewLUTLikeNode>();
+	graph.Register<MultiScatteringLUTLikeNode>();
+	graph.Register<TransmittanceLUTLikeNode>();
+	graph.Register<Import<Swapchain>>();
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	CHECK(StageOf(schedule, 4) < StageOf(schedule, 3));
+	CHECK(StageOf(schedule, 3) < StageOf(schedule, 2));
+	CHECK(StageOf(schedule, 2) < StageOf(schedule, 1));
+	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
+}
+
 TEST_CASE("ArgparseManager CLI options parsing") {
 	brassica::ArgparseManager argMgr("TestApp", "1.0.0");
 	argMgr.Initialize();

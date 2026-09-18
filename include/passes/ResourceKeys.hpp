@@ -48,6 +48,8 @@ namespace brassica {
 
 	struct MultiScatteringLUT {};
 
+	struct SkyViewLUT {};
+
 	struct ParticleBuffer {};
 
 	struct ParticleTypeBuffer {};
