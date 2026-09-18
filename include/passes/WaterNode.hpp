@@ -26,7 +26,7 @@ namespace brassica {
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
-		std::uint32_t sceneColorIndex{0};
+		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
 		std::uint32_t padding{0};
 	};
@@ -122,7 +122,7 @@ namespace brassica {
 
 		void Execute(graph::NodeContext& ctx) {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
-			push.sceneColorIndex = ctx.Index<Swapchain>();
+			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 
 			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
