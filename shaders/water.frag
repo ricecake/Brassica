@@ -21,10 +21,7 @@ layout(push_constant) uniform WaterPushConstants {
 params;
 
 void main() {
-	ivec2 gTexSize = textureSize(
-		sampler2D(uTextures2D[nonuniformEXT(params.gPositionIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
-		0
-	);
+	ivec2 gTexSize = textureSize(uTextures2D[nonuniformEXT(params.gPositionIndex)], 0);
 	vec2 screenUV = gl_FragCoord.xy / vec2(gTexSize);
 
 	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
@@ -69,8 +66,8 @@ void main() {
 		cos(w1.x + w1.y * 1.2) * 0.18 + cos(w2.x) * 0.10 + sin(w3.x - w3.y) * 0.05,
 		sin(w1.y - w1.x * 0.8) * 0.18 + sin(w2.y) * 0.10 + cos(w3.y + w3.x) * 0.05
 	);
-	sinGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.01, 2, t).xz;
-	sinGrad *= smoothstep(1000.0, 2000.0, distToCamWater) * (1.0 - smoothstep(3000.0, 20000.0, distToCamWater));
+	vec2 noiseGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.01, 2.0, t).xz;
+	sinGrad += noiseGrad * smoothstep(1000.0, 2000.0, distToCamWater) * (1.0 - smoothstep(3000.0, 20000.0, distToCamWater));
 
 	vec3 waveNormal = normalize(baseNormal + vec3(-sinGrad.x, 0.0, -sinGrad.y));
 
