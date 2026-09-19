@@ -1,10 +1,16 @@
 #include "ImGuiManager.hpp"
 
+#include <algorithm>
+#include <map>
+#include <string>
+
 #include "spdlog/spdlog.h"
 
 #include "GLFW/glfw3.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
+#include "imgui_internal.h"
+#include "ui/QuickSettingsWidget.hpp"
 
 namespace brassica {
 
@@ -27,6 +33,9 @@ namespace brassica {
 		ImGui::StyleColorsDark();
 
 		m_initialized = true;
+
+		// Add default Quick Settings widget
+		AddWidget(std::make_shared<ui::QuickSettingsWidget>());
 	}
 
 	void ImGuiManager::InitVulkanAndGlfw(
@@ -118,6 +127,12 @@ namespace brassica {
 		m_initialized = false;
 	}
 
+	void ImGuiManager::AddWidget(std::shared_ptr<ui::IWidget> widget) {
+		if (widget) {
+			m_widgets.push_back(widget);
+		}
+	}
+
 	void ImGuiManager::OnKey(int key, int action) {
 		if ((key == GLFW_KEY_GRAVE_ACCENT || key == 96) && action == GLFW_PRESS) {
 			m_visible = !m_visible;
@@ -138,7 +153,39 @@ namespace brassica {
 
 		ImGui::NewFrame();
 
+		bool anyHudVisible = std::any_of(m_widgets.begin(), m_widgets.end(), [](const auto& widget) {
+			return widget->IsHud() && widget->IsVisible();
+		});
+
 		if (m_visible) {
+			// Top level main menu bar
+			if (ImGui::BeginMainMenuBar()) {
+				// Group widgets by category
+				std::map<std::string, std::vector<std::shared_ptr<ui::IWidget>>> categorizedWidgets;
+				for (const auto& widget : m_widgets) {
+					categorizedWidgets[std::string(widget->GetCategory())].push_back(widget);
+				}
+
+				for (auto& [category, widgets] : categorizedWidgets) {
+					if (ImGui::BeginMenu(category.c_str())) {
+						for (auto& widget : widgets) {
+							bool        visible = widget->IsVisible();
+							std::string titleStr(widget->GetTitle());
+							if (ImGui::MenuItem(titleStr.c_str(), nullptr, &visible)) {
+								widget->SetVisible(visible);
+								if (visible) {
+									ImGui::SetWindowCollapsed(titleStr.c_str(), false);
+								}
+							}
+						}
+						ImGui::EndMenu();
+					}
+				}
+
+				ImGui::EndMainMenuBar();
+			}
+
+			// Render bottom HUD overlay (Location and FPS status)
 			ImGuiIO&       io = ImGui::GetIO();
 			ImGuiViewport* viewport = ImGui::GetMainViewport();
 
@@ -168,6 +215,75 @@ namespace brassica {
 				);
 			}
 			ImGui::End();
+		}
+
+		// Draw registered widgets
+		for (const auto& widget : m_widgets) {
+			if (widget->IsHud() || m_visible) {
+				widget->Draw();
+			}
+		}
+
+		if (m_visible) {
+			PositionMinimizedWindows();
+		}
+	}
+
+	void ImGuiManager::PositionMinimizedWindows() {
+		ImGuiContext& g = *GImGui;
+		ImGuiIO&      io = ImGui::GetIO();
+
+		const float padding = 10.0f;
+		const float uniform_width = 250.0f;
+		float       current_y = padding + 20.0f; // Below main menu bar
+
+		std::vector<ImGuiWindow*> collapsed_windows;
+
+		for (int i = 0; i < g.Windows.Size; i++) {
+			ImGuiWindow* window = g.Windows[i];
+
+			if (window->Hidden || (window->Flags & ImGuiWindowFlags_ChildWindow))
+				continue;
+
+			if (window->LastFrameActive < g.FrameCount)
+				continue;
+
+			if (window->Flags & ImGuiWindowFlags_Tooltip || window->Flags & ImGuiWindowFlags_Popup)
+				continue;
+
+			// Skip bottom overlay window from collapsed stack positioning
+			if (std::string_view(window->Name).find("Brassica Minimal Overlay") != std::string_view::npos)
+				continue;
+
+			WindowState& state = m_windowStates[window->ID];
+
+			if (window->Collapsed) {
+				if (!state.was_collapsed) {
+					state.last_expanded_pos = window->Pos;
+					state.last_expanded_size = window->SizeFull;
+					state.was_collapsed = true;
+				}
+				collapsed_windows.push_back(window);
+			} else {
+				if (state.was_collapsed) {
+					window->SizeFull = state.last_expanded_size;
+					window->Pos = ImVec2(io.DisplaySize.x - window->SizeFull.x - padding, padding + 20.0f);
+					state.was_collapsed = false;
+				} else {
+					state.last_expanded_pos = window->Pos;
+					state.last_expanded_size = window->SizeFull;
+				}
+			}
+		}
+
+		std::sort(collapsed_windows.begin(), collapsed_windows.end(), [](ImGuiWindow* a, ImGuiWindow* b) {
+			return a->ID < b->ID;
+		});
+
+		for (ImGuiWindow* window : collapsed_windows) {
+			window->SizeFull.x = uniform_width;
+			window->Pos = ImVec2(io.DisplaySize.x - uniform_width - padding, current_y);
+			current_y += window->TitleBarHeight + 5.0f;
 		}
 	}
 
