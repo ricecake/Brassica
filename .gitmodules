@@ -71,8 +71,6 @@
 	path = external/boidish
 	url = https://github.com/ricecake/boidsish.git
 	branch = wtf-omg-why
-	fetchRecurseSubmodules = false
-	ignore = all
 [submodule "external/argparse"]
 	path = external/argparse
 	url = https://github.com/p-ranav/argparse.git
