@@ -2,6 +2,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "lighting.glsl"
+#include "clustered_lighting.glsl"
 
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
@@ -20,6 +21,16 @@ layout(push_constant) uniform WaterPushConstants {
 
 params;
 
+// ACES Filmic Tone Mapping Curve (matches deferred.frag)
+vec3 ACESFilm(vec3 x) {
+	float a = 2.51f;
+	float b = 0.03f;
+	float c = 2.43f;
+	float d = 0.59f;
+	float e = 0.14f;
+	return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
 void main() {
 	ivec2 gTexSize = textureSize(
 		sampler2D(uTextures2D[nonuniformEXT(params.gPositionIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
@@ -27,6 +38,7 @@ void main() {
 	);
 	vec2 screenUV = gl_FragCoord.xy / vec2(gTexSize);
 
+	vec4 rawAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, screenUV);
 	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
 	vec3 relWaterPos = inWorldPos - uCameraPosition.xyz;
 
@@ -35,8 +47,7 @@ void main() {
 	float depthBelowWater = 100.0;       // Vertical Y depth below water
 
 	float distToCamTerrain = length(relTerrainPos);
-	// Position texture valid for terrain geometry
-	if (distToCamTerrain > 0.01) {
+	if (rawAlbedo.a >= 0.01 || distToCamTerrain > 0.01) {
 		// Terrain is strictly in front of the water mesh fragment
 		if (distToCamTerrain < distToCamWater - 0.2) {
 			outColor = vec4(0.0);
@@ -78,8 +89,27 @@ void main() {
 	float closeThreshold = 800.0;
 	float closeFactor = clamp(1.0 - distToCam / closeThreshold, 0.0, 1.0);
 
-	// Translucency & Beer-Lambert absorption along true view ray path length:
-	// Red light absorbed fastest, blue/green least, giving accurate color absorption at all view angles
+	// Wave distortion refraction: distort G-Buffer sample UVs based on wave normal & optical depth
+	vec2 refractOffset = waveNormal.xz * clamp(rayLengthThroughWater * 0.008, 0.0, 0.03);
+	vec2 refractUV = clamp(screenUV + refractOffset, vec2(0.0), vec2(1.0));
+
+	vec4 refrAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, refractUV);
+	vec3 refrNorm = SAMPLE_NEAREST(params.gNormalIndex, refractUV).rgb;
+	vec3 refrRelPos = SAMPLE_NEAREST(params.gPositionIndex, refractUV).rgb;
+
+	// Fallback to unrefracted sample if refracted sample hits above water
+	if (refrAlbedo.a < 0.01 || relWaterPos.y - refrRelPos.y <= 0.0) {
+		refrAlbedo = rawAlbedo;
+		refrNorm = SAMPLE_NEAREST(params.gNormalIndex, screenUV).rgb;
+		refrRelPos = relTerrainPos;
+	}
+
+	// Evaluate HDR lighting for the refracted terrain surface
+	vec3 refrWorldPos = refrRelPos + uCameraPosition.xyz;
+	vec3 terrainLightContrib = evaluateClusteredLightContribution(refrWorldPos, normalize(refrNorm));
+	vec3 litRefractedTerrain = refrAlbedo.rgb * terrainLightContrib;
+
+	// Translucency & Beer-Lambert absorption along view ray path length through water
 	vec3 extinctionCoeff = vec3(0.28, 0.07, 0.02);
 	vec3 transmittance = exp(-extinctionCoeff * rayLengthThroughWater);
 
@@ -88,9 +118,10 @@ void main() {
 	vec3 baseTint = mix(shallowWaterTint, params.waterColor, clamp(depthBelowWater / 5.0, 0.0, 1.0));
 	vec3 waterBodyColor = mix(deepWaterColor, baseTint, transmittance);
 
-	float alpha = clamp(1.0 - dot(transmittance, vec3(0.333)), 0.35, 0.95);
+	// Blend lit refracted terrain with water body optical absorption
+	vec3 underwaterSceneHDR = mix(waterBodyColor, litRefractedTerrain, transmittance);
 
-	// Locate active directional sun light from LightingUBO / uLights
+	// Active directional sun light for specular reflections
 	vec3 sunDir = normalize(vec3(0.5, 0.8, 0.5));
 	vec3 sunColor = vec3(1.2, 1.1, 0.9);
 	float sunIntensity = 1.0;
@@ -103,7 +134,7 @@ void main() {
 		}
 	}
 
-	// Specular sun glare and reflections at distance (no distance cutoff)
+	// Specular sun glare
 	vec3 viewDir = normalize(-relWaterPos);
 	vec3 halfDir = normalize(sunDir + viewDir);
 
@@ -113,15 +144,12 @@ void main() {
 	float specular = specSharp + specBloom;
 	vec3 shineColor = sunColor * sunIntensity * specular * 1.5;
 
-	// Schlick's Fresnel reflection (increases at grazing view angles)
+	// Schlick's Fresnel reflection
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
 	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);
-	vec3 finalWaterTint = mix(waterBodyColor, vec3(0.65, 0.82, 1.0), fresnel * 0.5);
+	vec3 hdrWaterColor = mix(underwaterSceneHDR, vec3(0.65, 0.82, 1.0), fresnel * 0.5) + shineColor;
 
-	// Output water surface color to be hardware alpha-blended over Swapchain
-	vec3 blendedColor = finalWaterTint + shineColor;
-
-	// Shoreline foam and wave crest foam
+	// Shoreline foam & wave crest foam
 	float shoreFoam = clamp(1.0 - depthBelowWater / 2.2, 0.0, 1.0);
 	shoreFoam = pow(shoreFoam, 1.4);
 	float foamNoise = InterleavedGradientNoise(inWorldPos.xz * 3.5, int(uTime * 12.0));
@@ -133,8 +161,11 @@ void main() {
 	float totalFoam = clamp(shoreFoam * 1.25 + crestFoam * 0.6, 0.0, 1.0);
 	vec3 foamColor = vec3(0.92, 0.96, 1.0);
 
-	blendedColor = mix(blendedColor, foamColor, totalFoam);
-	alpha = max(alpha, totalFoam * 0.92);
+	hdrWaterColor = mix(hdrWaterColor, foamColor, totalFoam);
 
-	outColor = vec4(blendedColor, alpha);
+	// Tonemap & Gamma correction (matches deferred.frag so water output matches scene brightness)
+	vec3 ldrColor = ACESFilm(hdrWaterColor);
+	ldrColor = pow(ldrColor, vec3(1.0 / 2.2));
+
+	outColor = vec4(ldrColor, 1.0);
 }
