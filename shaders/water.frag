@@ -61,15 +61,7 @@ void main() {
 	vec2 waveXZ = inWorldPos.xz;
 	float t = uTime * smoothstep(800.0, 1800.0, distToCamWater) * max(1.0, 1000.0/distToCamWater);
 
-	vec2 w1 = waveXZ * 0.06 + vec2(t * 0.8, t * 0.5);
-	vec2 w2 = waveXZ * 0.15 + vec2(-t * 0.7, t * 1.1);
-	vec2 w3 = waveXZ * 0.35 + vec2(t * 1.3, -t * 0.9);
-
-	vec2 sinGrad = vec2(
-		cos(w1.x + w1.y * 1.2) * 0.18 + cos(w2.x) * 0.10 + sin(w3.x - w3.y) * 0.05,
-		sin(w1.y - w1.x * 0.8) * 0.18 + sin(w2.y) * 0.10 + cos(w3.y + w3.x) * 0.05
-	);
-	sinGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.01, 2, t).xz;
+	vec2 sinGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.004 + abs(dot_noise(inWorldPos * 0.0025, t * 0.5)), 4, t * 0.25).xz;
 	sinGrad *= smoothstep(1000.0, 2000.0, distToCamWater) * (1.0 - smoothstep(3000.0, 20000.0, distToCamWater));
 
 	vec3 waveNormal = normalize(baseNormal + vec3(-sinGrad.x, 0.0, -sinGrad.y));
