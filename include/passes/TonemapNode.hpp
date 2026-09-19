@@ -3,51 +3,27 @@
 #include <array>
 #include <cstdint>
 
-#include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
+
+#include "VulkanCompat.hpp"
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
-#include "passes/ResourceGroups.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "types/TonemapPushConstants.hpp"
 
 namespace brassica {
 
-	class ShaderWatcher;
+	struct TonemapNode: render::NodeRegistrar<TonemapNode> {
+		using Resources = graph::Declares<graph::Read<HdrColor>, graph::Modify<Swapchain>>;
 
-	struct DeferredPushConstants {
-		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-		glm::uvec4 lodOffsets0_3{0u};
-		glm::uvec4 lodOffsets4_7{0u};
-		glm::uvec4 lodOffsets8_11{0u};
-		std::uint32_t gPositionIndex{0};
-		std::uint32_t gNormalIndex{0};
-		std::uint32_t gAlbedoIndex{0};
-		std::uint32_t backgroundIndex{0};
-		std::uint32_t clipmapIndex{0};
-		std::uint32_t tlasIndex{0};
-		std::uint32_t gDepthIndex{0};
-		std::uint32_t minMaxIndex{0};
-		std::uint32_t biomeIndex{0};
-		std::uint32_t visibilityIndex{0};
-	};
-
-	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<GradientBackground>,
-			graph::Read<ClusteredLighting>,
-			graph::Read<TerrainClipmapTexture>,
-			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>,
-			graph::Read<TerrainTLAS>,
-			graph::Create<HdrColor>>;
+		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -57,13 +33,13 @@ namespace brassica {
 		VertexShader             vertShader;
 		FragmentShader           fragShader;
 		vk::Format               swapchainFormat = vk::Format::eUndefined;
-		DeferredPushConstants    push{};
+		TonemapPushConstants     push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			swapchainFormat = services.swapchainFormat;
-			vertShader.CompileVertexFromFile(services.device, "shaders/deferred.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/deferred.frag");
+			vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert");
+			fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
@@ -79,11 +55,8 @@ namespace brassica {
 			fragShader.Destroy(device);
 		}
 
-		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.gridParams = p.terrainGridParams;
-			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
-			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
-			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
+		void SetFrameParams(const render::NodeFrameParams& /*p*/) {
+			push = s_tonemapPush;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -91,33 +64,32 @@ namespace brassica {
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::Write,
+					.access = graph::AccessKind::Read,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<Swapchain>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
 				}
 			);
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			push.gPositionIndex = ctx.Index<GBufferPosition>();
-			push.gNormalIndex = ctx.Index<GBufferNormal>();
-			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
-			push.gDepthIndex = ctx.Index<GBufferDepth>();
-			push.backgroundIndex = ctx.Index<GradientBackground>();
-			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
-			push.tlasIndex = ctx.Index<TerrainTLAS>();
-			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
-			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
-			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+			push = s_tonemapPush;
+			push.hdrColorIndex = ctx.Index<HdrColor>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
-			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
+			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(DeferredPushConstants)}
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(TonemapPushConstants)}
 			};
 			render::GraphicsPipelineRequest request{
 				.stages = stages,
@@ -151,7 +123,7 @@ namespace brassica {
 				resolved.layout,
 				vk::ShaderStageFlagBits::eFragment,
 				0,
-				sizeof(DeferredPushConstants),
+				sizeof(TonemapPushConstants),
 				&push
 			);
 
@@ -159,6 +131,6 @@ namespace brassica {
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(DeferredNode);
+	BRASSICA_REGISTER_NODE(TonemapNode);
 
 } // namespace brassica

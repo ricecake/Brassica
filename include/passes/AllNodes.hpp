@@ -19,4 +19,5 @@
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
+#include "passes/TonemapNode.hpp"
 #include "passes/WaterNode.hpp"

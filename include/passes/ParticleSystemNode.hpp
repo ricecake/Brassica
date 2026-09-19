@@ -429,7 +429,7 @@ namespace brassica {
 			graph::Read<ParticleTypeBuffer>,
 			graph::Read<ParticleAliveBuffer>,
 			graph::Read<ParticleIndirectBuffer>,
-			graph::Modify<Swapchain>>;
+			graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
@@ -507,9 +507,9 @@ namespace brassica {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<Swapchain>(),
+					.key = graph::IdOf<HdrColor>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;
@@ -519,7 +519,7 @@ namespace brassica {
 			// No descriptor-set update here -- ParticleResetNode::Execute refreshes it once per
 			// frame, before this node runs (see detail::RefreshParticleDescriptorSet's comment).
 			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
-			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
+			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
 			render::GraphicsPipelineRequest        request{
 				.stages = stages,
