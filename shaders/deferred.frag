@@ -55,13 +55,11 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 		float t = (float(i) / float(numSteps)) * rayLength;
 		vec3  samplePos = rayOrigin + rayDir * t;
 
-		// Fetch the appropriate LOD for the current spatial step
 		uint stepLod = calculateRayLOD(samplePos.xz);
 
 		vec2  flatXZ = samplePos.xz - uCameraPosition.xz;
 		float dropOff = dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
 
-		// Accelerate raymarching via min-max height map check if minMaxIndex is set
 		if (params.minMaxIndex > 0u) {
 			vec2 minMax = sampleTerrainMinMax(
 				params.minMaxIndex,
@@ -73,7 +71,7 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 				params.lodOffsets8_11
 			);
 			if (samplePos.y > minMax.y - dropOff + 1.0) {
-				continue; // Ray is safely above the maximum height in this cell
+				continue;
 			}
 		}
 
@@ -99,7 +97,8 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 
 void main() {
 	vec4  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
-	vec3  norm = SAMPLE_NEAREST(params.gNormalIndex, inUV).rgb;
+	vec4  normalSample = SAMPLE_NEAREST(params.gNormalIndex, inUV);
+	vec3  norm = normalSample.rgb;
 	vec3  relPos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
 	vec3  pos = relPos + uCameraPosition.xyz;
 	vec3  hdrBg = SAMPLE_NEAREST(params.backgroundIndex, inUV).rgb;
@@ -111,10 +110,11 @@ void main() {
 	if (albedo.a < 0.01) {
 		hdrColor = hdrBg;
 	} else {
-		float shadowFactor = 1.0;
+		float roughness = normalSample.a > 0.0 ? normalSample.a : 0.7;
+		float metallic = 0.0;
+		float ao = 1.0;
 
-		vec3 lightContribution = evaluateClusteredLightContribution(pos, norm);
-		vec3 diffuse = albedo.rgb * lightContribution * shadowFactor;
+		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, albedo.rgb, roughness, metallic, ao);
 
 		// Extract primary directional light for aerial perspective / atmosphere scattering
 		vec3 sunDir = normalize(vec3(0.4, 0.8, 0.4));
@@ -133,17 +133,14 @@ void main() {
 		float distKM = distMeters / 1000.0;
 		vec3  rayDir = relPos / max(0.001, distMeters);
 
-		// Evaluate atmospheric scattering, aerial perspective, and exponential fog
 		vec3 transmittance = vec3(1.0);
 		vec3 rayCamOriginKM = uCameraPosition.xyz / 1000.0;
 		vec3 inScattered = evaluateAerialPerspective(rayCamOriginKM, rayDir, distKM, sunDir, sunRadiance, transmittance);
 
-		// Scaffolding: Volumetric lighting along view ray to surface
 		vec3 vLight = evaluateVolumetricLighting(rayCamOriginKM, rayDir, distKM, sunDir, sunRadiance);
 
-		hdrColor = (diffuse * vLight) * transmittance + inScattered;
+		hdrColor = (litSurface * vLight) * transmittance + inScattered;
 
-		// Underwater Medium Adaptation for rendered surfaces
 		if (uCameraPosition.y < u_waterLevel) {
 			float depthBelowWater = (u_waterLevel - uCameraPosition.y);
 			float rayWaterLength = min(distMeters, depthBelowWater / max(0.01, abs(rayDir.y)));

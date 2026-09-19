@@ -2,6 +2,7 @@
 #define BRASSICA_CLUSTERED_LIGHTING_GLSL
 
 #include "lighting.glsl"
+#include "helpers/lighting.glsl"
 
 /**
  * Computes the 1D cluster index for a given world-space position.
@@ -26,21 +27,36 @@ uint getClusterIndex(vec3 frag_pos) {
 }
 
 /**
- * High-level GLSL helper to evaluate clustered local light contribution with normal.
+ * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR BRDF.
  */
-vec3 evaluateClusteredLightContribution(vec3 frag_pos, vec3 normal) {
-	vec3 n = normalize(normal);
-	vec3 total_light = uAmbientLight.rgb;
+vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albedo, float roughness, float metallic, float ao) {
+	vec3 N = normalize(normal);
+	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
 
-	float exposureScale = 1.0;
+	vec3 F0 = mix(vec3(0.04), albedo, metallic);
+	vec3 Lo = vec3(0.0);
+	float spec_lum = 0.0;
 
 	// Evaluate directional lights (indices 0 and 1)
 	uint dir_count = min(uLightCount, 2u);
 	for (uint i = 0u; i < dir_count; ++i) {
 		if (uLights[i].type == LIGHT_TYPE_DIRECTIONAL && uLights[i].intensity > 0.0) {
-			vec3 L = normalize(-uLights[i].direction);
-			float NdotL = max(dot(n, L), 0.0);
-			total_light += uLights[i].color * uLights[i].intensity * NdotL;
+			vec3 L;
+			float attenuation;
+			calculateLightContribution(
+				uLights[i].type,
+				uLights[i].position,
+				uLights[i].direction,
+				uLights[i].innerCutoff,
+				uLights[i].outerCutoff,
+				uLights[i].intensity,
+				frag_pos,
+				L,
+				attenuation
+			);
+
+			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
+			evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, 1.0, Lo, spec_lum);
 		}
 	}
 
@@ -56,50 +72,23 @@ vec3 evaluateClusteredLightContribution(vec3 frag_pos, vec3 normal) {
 		}
 
 		vec3 L;
-		float attenuation = 1.0;
+		float attenuation;
+		calculateLightContribution(
+			uLights[light_index].type,
+			light_pos,
+			uLights[light_index].direction,
+			uLights[light_index].innerCutoff,
+			uLights[light_index].outerCutoff,
+			uLights[light_index].intensity,
+			frag_pos,
+			L,
+			attenuation
+		);
 
-		if (uLights[light_index].type == LIGHT_TYPE_POINT) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_SPOT) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
+		if (attenuation <= 0.0) continue;
 
-			float theta = dot(L, normalize(-uLights[light_index].direction));
-			float epsilon = uLights[light_index].innerCutoff - uLights[light_index].outerCutoff;
-			float angular_intensity = clamp((theta - uLights[light_index].outerCutoff) / epsilon, 0.0, 1.0);
-			attenuation *= angular_intensity;
-		} else if (uLights[light_index].type == LIGHT_TYPE_EMISSIVE) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			float emissive_radius = uLights[light_index].innerCutoff;
-			float effective_dist = max(distance - emissive_radius * 0.5, 0.0);
-			attenuation = 1.0 / (1.0 + 0.09 * effective_dist + 0.032 * effective_dist * effective_dist);
-			float proximity_boost = smoothstep(emissive_radius * 2.0, 0.0, distance);
-			attenuation = mix(attenuation, 1.0, proximity_boost * 0.5);
-			float radius = (sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 + emissive_radius) * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_FLASH) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			float flash_radius = uLights[light_index].innerCutoff;
-			float falloff_exp = uLights[light_index].outerCutoff;
-			float norm_dist = distance / max(flash_radius, 0.001);
-			attenuation = 1.0 / pow(1.0 + norm_dist, falloff_exp);
-			float radius = 2.0 * flash_radius * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else {
-			continue;
-		}
-
-		float NdotL = max(dot(n, L), 0.0);
-		total_light += uLights[light_index].color * uLights[light_index].intensity * attenuation * NdotL;
+		vec3 radiance = uLights[light_index].color * (uLights[light_index].intensity * PBR_INTENSITY_BOOST) * attenuation;
+		evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, 1.0, Lo, spec_lum);
 	}
 
 	uint cluster_index = getClusterIndex(frag_pos);
@@ -115,177 +104,44 @@ vec3 evaluateClusteredLightContribution(vec3 frag_pos, vec3 normal) {
 		}
 
 		vec3 L;
-		float attenuation = 1.0;
+		float attenuation;
+		calculateLightContribution(
+			uLights[light_index].type,
+			light_pos,
+			uLights[light_index].direction,
+			uLights[light_index].innerCutoff,
+			uLights[light_index].outerCutoff,
+			uLights[light_index].intensity,
+			frag_pos,
+			L,
+			attenuation
+		);
 
-		if (uLights[light_index].type == LIGHT_TYPE_POINT) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_SPOT) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
+		if (attenuation <= 0.0) continue;
 
-			float theta = dot(L, normalize(-uLights[light_index].direction));
-			float epsilon = uLights[light_index].innerCutoff - uLights[light_index].outerCutoff;
-			float angular_intensity = clamp((theta - uLights[light_index].outerCutoff) / epsilon, 0.0, 1.0);
-			attenuation *= angular_intensity;
-		} else if (uLights[light_index].type == LIGHT_TYPE_EMISSIVE) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			float emissive_radius = uLights[light_index].innerCutoff;
-			float effective_dist = max(distance - emissive_radius * 0.5, 0.0);
-			attenuation = 1.0 / (1.0 + 0.09 * effective_dist + 0.032 * effective_dist * effective_dist);
-			float proximity_boost = smoothstep(emissive_radius * 2.0, 0.0, distance);
-			attenuation = mix(attenuation, 1.0, proximity_boost * 0.5);
-			float radius = (sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 + emissive_radius) * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_FLASH) {
-			L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			float flash_radius = uLights[light_index].innerCutoff;
-			float falloff_exp = uLights[light_index].outerCutoff;
-			float norm_dist = distance / max(flash_radius, 0.001);
-			attenuation = 1.0 / pow(1.0 + norm_dist, falloff_exp);
-			float radius = 2.0 * flash_radius * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else {
-			continue;
-		}
-
-		float NdotL = max(dot(n, L), 0.0);
-		total_light += uLights[light_index].color * uLights[light_index].intensity * attenuation * NdotL;
+		vec3 radiance = uLights[light_index].color * (uLights[light_index].intensity * PBR_INTENSITY_BOOST) * attenuation;
+		evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, 1.0, Lo, spec_lum);
 	}
 
-	return total_light;
+	float terrainOcc = calculateTerrainOcclusion(frag_pos, N);
+	vec3 spatialSHAmbient = getSpatialAmbientSH(frag_pos, N);
+	vec3 ambient = spatialSHAmbient * uAmbientLight.rgb * albedo * (ao * terrainOcc);
+
+	return ambient + Lo;
 }
 
 /**
- * High-level GLSL helper to evaluate clustered local light contribution without normals.
+ * Standard diffuse/specular wrapper for existing shaders.
+ */
+vec3 evaluateClusteredLightContribution(vec3 frag_pos, vec3 normal) {
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, vec3(1.0), 0.7, 0.0, 1.0);
+}
+
+/**
+ * Helper to evaluate clustered local light contribution without normals.
  */
 vec3 evaluateClusteredLightContributionSimple(vec3 frag_pos) {
-	vec3 total_light = uAmbientLight.rgb;
-
-	float exposureScale = 1.0;
-
-	uint dir_count = min(uLightCount, 2u);
-	for (uint i = 0u; i < dir_count; ++i) {
-		if (uLights[i].type == LIGHT_TYPE_DIRECTIONAL && uLights[i].intensity > 0.0) {
-			total_light += uLights[i].color * uLights[i].intensity;
-		}
-	}
-
-	Cluster global_cluster = uClusters[3456];
-	for (uint i = 0; i < global_cluster.count; ++i) {
-		uint light_index = global_cluster.lightIndices[i];
-		if (uLights[light_index].intensity <= 0.0) continue;
-
-		vec3 light_pos = uLights[light_index].position;
-		if ((uLights[light_index].flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
-			light_pos += uCameraPosition.xyz;
-		}
-
-		float attenuation = 1.0;
-
-		if (uLights[light_index].type == LIGHT_TYPE_POINT) {
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_SPOT) {
-			vec3 L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-
-			float theta = dot(L, normalize(-uLights[light_index].direction));
-			float epsilon = uLights[light_index].innerCutoff - uLights[light_index].outerCutoff;
-			float angular_intensity = clamp((theta - uLights[light_index].outerCutoff) / epsilon, 0.0, 1.0);
-			attenuation *= angular_intensity;
-		} else if (uLights[light_index].type == LIGHT_TYPE_EMISSIVE) {
-			float distance = length(light_pos - frag_pos);
-			float emissive_radius = uLights[light_index].innerCutoff;
-			float effective_dist = max(distance - emissive_radius * 0.5, 0.0);
-			attenuation = 1.0 / (1.0 + 0.09 * effective_dist + 0.032 * effective_dist * effective_dist);
-			float proximity_boost = smoothstep(emissive_radius * 2.0, 0.0, distance);
-			attenuation = mix(attenuation, 1.0, proximity_boost * 0.5);
-			float radius = (sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 + emissive_radius) * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_FLASH) {
-			float distance = length(light_pos - frag_pos);
-			float flash_radius = uLights[light_index].innerCutoff;
-			float falloff_exp = uLights[light_index].outerCutoff;
-			float norm_dist = distance / max(flash_radius, 0.001);
-			attenuation = 1.0 / pow(1.0 + norm_dist, falloff_exp);
-			float radius = 2.0 * flash_radius * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else {
-			continue;
-		}
-
-		total_light += uLights[light_index].color * uLights[light_index].intensity * attenuation;
-	}
-
-	uint cluster_index = getClusterIndex(frag_pos);
-	Cluster cluster = uClusters[cluster_index];
-
-	for (uint i = 0; i < cluster.count; ++i) {
-		uint light_index = cluster.lightIndices[i];
-		if (uLights[light_index].intensity <= 0.0) continue;
-
-		vec3 light_pos = uLights[light_index].position;
-		if ((uLights[light_index].flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
-			light_pos += uCameraPosition.xyz;
-		}
-
-		float attenuation = 1.0;
-
-		if (uLights[light_index].type == LIGHT_TYPE_POINT) {
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_SPOT) {
-			vec3 L = normalize(light_pos - frag_pos);
-			float distance = length(light_pos - frag_pos);
-			attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-			float radius = sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-
-			float theta = dot(L, normalize(-uLights[light_index].direction));
-			float epsilon = uLights[light_index].innerCutoff - uLights[light_index].outerCutoff;
-			float angular_intensity = clamp((theta - uLights[light_index].outerCutoff) / epsilon, 0.0, 1.0);
-			attenuation *= angular_intensity;
-		} else if (uLights[light_index].type == LIGHT_TYPE_EMISSIVE) {
-			float distance = length(light_pos - frag_pos);
-			float emissive_radius = uLights[light_index].innerCutoff;
-			float effective_dist = max(distance - emissive_radius * 0.5, 0.0);
-			attenuation = 1.0 / (1.0 + 0.09 * effective_dist + 0.032 * effective_dist * effective_dist);
-			float proximity_boost = smoothstep(emissive_radius * 2.0, 0.0, distance);
-			attenuation = mix(attenuation, 1.0, proximity_boost * 0.5);
-			float radius = (sqrt(max(0.1, uLights[light_index].intensity)) * 50.0 + emissive_radius) * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else if (uLights[light_index].type == LIGHT_TYPE_FLASH) {
-			float distance = length(light_pos - frag_pos);
-			float flash_radius = uLights[light_index].innerCutoff;
-			float falloff_exp = uLights[light_index].outerCutoff;
-			float norm_dist = distance / max(flash_radius, 0.001);
-			attenuation = 1.0 / pow(1.0 + norm_dist, falloff_exp);
-			float radius = 2.0 * flash_radius * exposureScale;
-			attenuation *= smoothstep(1.0, 0.8, distance / max(radius, 0.001));
-		} else {
-			continue;
-		}
-
-		total_light += uLights[light_index].color * uLights[light_index].intensity * attenuation;
-	}
-
-	return total_light;
+	return evaluateClusteredLightContributionPBR(frag_pos, vec3(0.0, 1.0, 0.0), vec3(1.0), 1.0, 0.0, 1.0);
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL
