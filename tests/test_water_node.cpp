@@ -18,10 +18,10 @@ using namespace brassica;
 namespace {
 
 	// Stands in for TerrainNode + DeferredNode: writes the G-buffer inputs WaterNode reads
-	// and the Swapchain target it composites onto, with nothing in its own Execute -- this test
+	// and the HdrColor target it composites onto, with nothing in its own Execute -- this test
 	// is about WaterNode's own pipeline/barrier/blend correctness, not about rendering a real
 	// scene into the G-buffer first. graph::Phase::Default (its default), strictly before
-	// WaterNode's Phase::Late, is what makes a plain Modify<Swapchain> on both nodes -- with no
+	// WaterNode's Phase::Late, is what makes a plain Modify<HdrColor> on both nodes -- with no
 	// version number between them -- schedule correctly; see WaterNode.hpp's own comment.
 	struct FakeSceneProducer {
 		using Resources = graph::Declares<
@@ -29,7 +29,7 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
-			graph::Modify<Swapchain>>;
+			graph::Create<HdrColor>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -66,9 +66,9 @@ namespace {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<Swapchain>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
+					.key = graph::IdOf<HdrColor>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;

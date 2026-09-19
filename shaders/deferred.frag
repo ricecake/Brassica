@@ -97,16 +97,6 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 	return false;
 }
 
-// ACES Filmic Tone Mapping Curve
-vec3 ACESFilm(vec3 x) {
-	float a = 2.51f;
-	float b = 0.03f;
-	float c = 2.43f;
-	float d = 0.59f;
-	float e = 0.14f;
-	return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
-
 void main() {
 	vec4  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
 	vec3  norm = SAMPLE_NEAREST(params.gNormalIndex, inUV).rgb;
@@ -163,9 +153,5 @@ void main() {
 		}
 	}
 
-	// HDR Tonemapping & Gamma Correction
-	vec3 ldrColor = ACESFilm(hdrColor);
-	ldrColor = pow(ldrColor, vec3(1.0 / 2.2));
-
-	outColor = vec4(ldrColor, 1.0);
+	outColor = vec4(hdrColor, 1.0);
 }
