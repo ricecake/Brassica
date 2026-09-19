@@ -22,28 +22,29 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct WaterPushConstants {
-		glm::uvec4    gridParams{14, 16, 3584, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+		glm::uvec4    gridParams{14, 16, 3584, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
-		std::uint32_t padding{0};
+		std::uint32_t biomeIndex{0};
+		std::uint32_t visibilityIndex{0};
+		std::uint32_t clipmapIndex{0};
+		std::uint32_t padding0{0};
+		std::uint32_t padding1{0};
+		glm::uvec4    lodOffsets0_3{0u};
+		glm::uvec4    lodOffsets4_7{0u};
 	};
 
-	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
-	// unification: no descriptor set, no pipeline layout boilerplate, no positional
-	// pipeline-creation call. Just a resource contract, a phase, a pipeline-state literal, and
-	// two shaders. Runs at Phase::Late so it composites over whatever DeferredNode already wrote
-	// -- both declare a plain Modify<Swapchain> with no version number between them, which is
-	// exactly what Phase (rather than a resource-version chain) is for: see Modify's own comment,
-	// graph/Declaration.hpp.
-	//
-	// The first real consumer of GraphicsPipelineState::enableBlend outside a synthetic test --
-	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
-	// so this is what actually proves the blend-state plumbing works for something real.
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
-		using Resources = graph::Declares<GBuffer<graph::Read>, graph::Modify<Swapchain>>;
+		using Resources = graph::Declares<
+			GBuffer<graph::Read>,
+			graph::Read<TerrainBiomeTexture>,
+			graph::Read<TerrainTileVisibilityTexture>,
+			graph::Read<TerrainClipmapTexture>,
+			graph::Modify<Swapchain>
+		>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
@@ -96,9 +97,11 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.gridParams = glm::uvec4(14, 16, 3584, 0);
+			push.gridParams = glm::uvec4(14, 16, 3584, 1088);
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
+			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
+			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -124,6 +127,9 @@ namespace brassica {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
+			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
+			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 
 			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};

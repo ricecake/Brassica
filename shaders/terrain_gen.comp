@@ -90,15 +90,36 @@ void main() {
 	TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14, 0.5);
 	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
 
-	// Evaluate height ONCE per thread
+	// Evaluate height with Nyquist bandlimiting
 	float biome = 0.0;
 	float land_mask = 0.0;
-	float h = evaluate_terrain(p, 0.0, 0.75, con, biome, land_mask);
+	float h = evaluate_terrain(p, 0.0, 0.75, con, biome, land_mask, texelSize);
 
-// Calculate the normal using the hybrid swap/evaluation function
-    float eps = max(0.25, texelSize);
-    // vec3 normal = evaluate_hybrid_normal(p, h, eps, 0.0, 0.75, con);
-	vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con);
+	// Calculate normal with bandlimited evaluation
+	float eps = max(0.25, texelSize);
+	vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con, texelSize);
+
+	// Subpixel sampling along high frequency gradients to prevent ridge combing
+	float sub_eps = texelSize * 0.35;
+	float b_sub, m_sub;
+	float h_px = evaluate_terrain(p + vec3(sub_eps, 0.0, 0.0), 0.0, 0.75, con, b_sub, m_sub, texelSize);
+	float h_nx = evaluate_terrain(p - vec3(sub_eps, 0.0, 0.0), 0.0, 0.75, con, b_sub, m_sub, texelSize);
+	float h_pz = evaluate_terrain(p + vec3(0.0, 0.0, sub_eps), 0.0, 0.75, con, b_sub, m_sub, texelSize);
+	float h_nz = evaluate_terrain(p - vec3(0.0, 0.0, sub_eps), 0.0, 0.75, con, b_sub, m_sub, texelSize);
+
+	vec2 grad_h = vec2(h_px - h_nx, h_pz - h_nz) / (2.0 * sub_eps);
+	float grad_len = length(grad_h);
+
+	if (grad_len > 0.15) {
+		float sub_max = max(h, max(max(h_px, h_nx), max(h_pz, h_nz)));
+		float blend_grad = smoothstep(0.15, 0.60, grad_len);
+		h = mix(h, sub_max, blend_grad);
+	}
+
+	// Compute fluid flow direction and shore distance
+	vec2 flowDir = (grad_len > 0.0001) ? -normalize(grad_h) : vec2(0.0, 1.0);
+	float flowStrength = clamp(grad_len * 0.5, 0.0, 1.0);
+	float shoreDist = (h - 0.0) / sqrt(grad_len * grad_len + 0.04);
 
 	// 3. Quad Swap Differencing
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
@@ -127,12 +148,11 @@ void main() {
 		// True variance
 		float variance = max(0.0, mean_h2 - (mean_h * mean_h));
 
-
 		ivec3 storeCoord = ivec3(globalId.xy, lod);
 
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(cluster_min, cluster_max, quad_min, quad_max));
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, 1.0, land_mask));
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, flowDir.x, flowDir.y));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(shoreDist, flowStrength, 1.0, land_mask));
 	}
 }
