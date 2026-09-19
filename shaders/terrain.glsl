@@ -114,8 +114,8 @@ vec4 sampleTerrainBiome(
 	return sampleTerrainBiome(biomeIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, uvec4(0u));
 }
 
-// Sample terrain tile visibility map (r = visibility flag / occlusion factor)
-float sampleTerrainTileVisibility(
+// Sample terrain tile visibility map (r = shore distance, g = flow strength, b = visibility flag, a = land mask)
+vec4 sampleTerrainTileVisibility(
 	uint  visIndex,
 	vec2  worldXZ,
 	uint  level,
@@ -125,10 +125,10 @@ float sampleTerrainTileVisibility(
 	uvec4 lodOffsets8_11
 ) {
 	vec2 uv = sampleToroidalUV(worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, lodOffsets8_11);
-	return SAMPLE_ARRAY_WRAP(visIndex, vec3(uv, float(level))).r;
+	return SAMPLE_ARRAY_WRAP(visIndex, vec3(uv, float(level)));
 }
 
-float sampleTerrainTileVisibility(
+vec4 sampleTerrainTileVisibility(
 	uint  visIndex,
 	vec2  worldXZ,
 	uint  level,
@@ -137,6 +137,53 @@ float sampleTerrainTileVisibility(
 	uvec4 lodOffsets4_7
 ) {
 	return sampleTerrainTileVisibility(visIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, uvec4(0u));
+}
+
+// Helper functions for sampling fluid flow map and shore distance
+vec2 sampleTerrainFlow(
+	uint  biomeIndex,
+	vec2  worldXZ,
+	uint  level,
+	uint  textureDim,
+	uvec4 lodOffsets0_3,
+	uvec4 lodOffsets4_7,
+	uvec4 lodOffsets8_11
+) {
+	return sampleTerrainBiome(biomeIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, lodOffsets8_11).ba;
+}
+
+vec2 sampleTerrainFlow(
+	uint  biomeIndex,
+	vec2  worldXZ,
+	uint  level,
+	uint  textureDim,
+	uvec4 lodOffsets0_3,
+	uvec4 lodOffsets4_7
+) {
+	return sampleTerrainFlow(biomeIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, uvec4(0u));
+}
+
+float sampleTerrainShoreDistance(
+	uint  visIndex,
+	vec2  worldXZ,
+	uint  level,
+	uint  textureDim,
+	uvec4 lodOffsets0_3,
+	uvec4 lodOffsets4_7,
+	uvec4 lodOffsets8_11
+) {
+	return sampleTerrainTileVisibility(visIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, lodOffsets8_11).r;
+}
+
+float sampleTerrainShoreDistance(
+	uint  visIndex,
+	vec2  worldXZ,
+	uint  level,
+	uint  textureDim,
+	uvec4 lodOffsets0_3,
+	uvec4 lodOffsets4_7
+) {
+	return sampleTerrainShoreDistance(visIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, uvec4(0u));
 }
 
 #endif // BRASSICA_TERRAIN_GLSL

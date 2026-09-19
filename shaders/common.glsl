@@ -468,7 +468,7 @@ float dot_noise(vec3 p, float phase, out vec3 grad) {
     return dot(cos_u, sin_v);
 }
 
-float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad) {
+float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad, float texelSize, float spatialScale) {
     float val = 0.0;
     vec3 grad = vec3(0.0);
 
@@ -477,28 +477,34 @@ float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad) {
     float max_amp = 0.0;
 
     for (int i = 0; i < max(0, oct); i++) {
-        vec3 g_noise;
+        float octave_freq = spatialScale * freq;
+        float sample_freq = octave_freq * texelSize;
+        float attn = (texelSize > 0.0) ? clamp(1.0 - smoothstep(0.25, 0.50, sample_freq), 0.0, 1.0) : 1.0;
 
-        // (p + (val/freq)) * freq simplifies algebraically to (p * freq + val)
-        // Since val is a float, GLSL adds it to each component of the vec3.
+        if (attn <= 0.0) {
+            break;
+        }
+
+        vec3 g_noise;
         vec3 p_warp = p * freq + val;
 
         float n = dot_noise(p_warp, phase * freq, g_noise);
 
-        // Accumulate the gradient using the chain rule for the domain warping.
-        // The Jacobian of (p * freq + val) introduces the dot product here
-        // because the scalar `val` is added uniformly across all three dimensions.
-        grad += amp * (freq * g_noise + dot(g_noise, vec3(1.0)) * grad);
+        grad += (amp * attn) * (freq * g_noise + dot(g_noise, vec3(1.0)) * grad);
 
-        val += amp * n;
-        max_amp += amp;
+        val += (amp * attn) * n;
+        max_amp += amp * attn;
 
         amp *= 0.5;
         freq *= 2.0;
     }
 
-    out_grad = grad / max_amp;
-    return val / max_amp;
+    out_grad = (max_amp > 0.0) ? (grad / max_amp) : vec3(0.0);
+    return (max_amp > 0.0) ? (val / max_amp) : 0.0;
+}
+
+float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad) {
+    return dot_noise_fbm(p, oct, phase, out_grad, 0.0, 1.0);
 }
 
 // Skew-symmetric matrix helper (takes column-major order)
@@ -538,7 +544,7 @@ vec3 cross_noise(vec3 p, float phase, out mat3 jacobian) {
     return cross(cos_u, sin_v);
 }
 
-vec3 cross_noise_fbm(vec3 p, int oct, float phase, out mat3 out_jacobian) {
+vec3 cross_noise_fbm(vec3 p, int oct, float phase, out mat3 out_jacobian, float texelSize, float spatialScale) {
     vec3 val = vec3(0.0);
     mat3 jacobian = mat3(0.0);
 
@@ -546,30 +552,37 @@ vec3 cross_noise_fbm(vec3 p, int oct, float phase, out mat3 out_jacobian) {
     float freq = 1.0;
     float max_amp = 0.0;
 
-    // Identity matrix in GLSL
     mat3 I = mat3(1.0);
 
     for (int i = 0; i < max(0, oct); i++) {
-        mat3 J_noise;
+        float octave_freq = spatialScale * freq;
+        float sample_freq = octave_freq * texelSize;
+        float attn = (texelSize > 0.0) ? clamp(1.0 - smoothstep(0.25, 0.50, sample_freq), 0.0, 1.0) : 1.0;
 
+        if (attn <= 0.0) {
+            break;
+        }
+
+        mat3 J_noise;
         vec3 p_warp = p * freq + val;
         vec3 n = cross_noise(p_warp, phase * freq, J_noise);
 
-        // J_warp is the derivative of (p * freq + val)
         mat3 J_warp = freq * I + jacobian;
 
-        // Chain rule applies standard matrix multiplication: J_outer * J_inner
-        jacobian += amp * (J_noise * J_warp);
-
-        val += amp * n;
-        max_amp += amp;
+        jacobian += (amp * attn) * (J_noise * J_warp);
+        val += (amp * attn) * n;
+        max_amp += amp * attn;
 
         amp *= 0.5;
         freq *= 2.0;
     }
 
-    out_jacobian = jacobian / max_amp;
-    return val / max_amp;
+    out_jacobian = (max_amp > 0.0) ? (jacobian / max_amp) : mat3(0.0);
+    return (max_amp > 0.0) ? (val / max_amp) : vec3(0.0);
+}
+
+vec3 cross_noise_fbm(vec3 p, int oct, float phase, out mat3 out_jacobian) {
+    return cross_noise_fbm(p, oct, phase, out_jacobian, 0.0, 1.0);
 }
 
 float biome_map(float temperature, float moisture, float rocky) {
@@ -585,13 +598,13 @@ struct TerrainConfig {
 	float biome_bleed;
 };
 
-float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask) {
+float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask, float texelSize) {
 	p *= config.spatial_scale;
     mat3 J_flow;
     vec3 unused_grad; // Placeholder for when you implement full analytical normals
 
     // 1. Evaluate the divergence-free vector field and its Jacobian
-    vec3 flow = cross_noise_fbm(p, 3, phase, J_flow);
+    vec3 flow = cross_noise_fbm(p, 3, phase, J_flow, texelSize, config.spatial_scale);
 
     // 2. Isolate the symmetric strain tensor (S)
     mat3 S = 0.5 * (J_flow + transpose(J_flow));
@@ -611,7 +624,7 @@ float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig c
     float continent_mask = smoothstep(0.2, -0.5, I1);
 
     // Evaluate low-frequency baseline elevation
-    float base_height = dot_noise_fbm(p, 4, phase, unused_grad) * continent_mask;
+    float base_height = dot_noise_fbm(p, 4, phase, unused_grad, texelSize, config.spatial_scale) * continent_mask;
 
     // 5. Anisotropic Domain Warping
     // Multiply p by the strain tensor to stretch the coordinate space along the principal axes of deformation
@@ -622,7 +635,7 @@ float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig c
     float ridge_mask = smoothstep(0.0, 0.8, abs(I2)) * continent_mask;
 
     // Evaluate high-frequency noise using the warped domain, mapped to a sharp ridge function
-    float raw_ridge = dot_noise_fbm(p_warped, 6, phase + 42.0, unused_grad);
+    float raw_ridge = dot_noise_fbm(p_warped, 6, phase + 42.0, unused_grad, texelSize, config.spatial_scale);
     float ridge_height = (1.0 - abs(raw_ridge)) * ridge_mask; // Ridged multifractal style
 
     float finalHeight = base_height + (ridge_height * 0.5);
@@ -650,16 +663,20 @@ float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig c
 	return remap(finalHeight, 0.0, 1.0, config.min_height, config.max_height);
 }
 
+float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask) {
+	return evaluate_terrain(p, phase, warp_strength, config, out_biome, out_mask, 0.0);
+}
 
-vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps, TerrainConfig config) {
+
+vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps, TerrainConfig config, float texelSize) {
     const vec2 k = vec2(1.0, -1.0);
 
     // Evaluate the terrain 4 times offset in a tetrahedron
 	float b,m;
-    float h1 = evaluate_terrain(p + k.xyy * eps, phase, warp_strength, config, b, m);
-    float h2 = evaluate_terrain(p + k.yyx * eps, phase, warp_strength, config, b, m);
-    float h3 = evaluate_terrain(p + k.yxy * eps, phase, warp_strength, config, b, m);
-    float h4 = evaluate_terrain(p + k.xxx * eps, phase, warp_strength, config, b, m);
+    float h1 = evaluate_terrain(p + k.xyy * eps, phase, warp_strength, config, b, m, texelSize);
+    float h2 = evaluate_terrain(p + k.yyx * eps, phase, warp_strength, config, b, m, texelSize);
+    float h3 = evaluate_terrain(p + k.yxy * eps, phase, warp_strength, config, b, m, texelSize);
+    float h4 = evaluate_terrain(p + k.xxx * eps, phase, warp_strength, config, b, m, texelSize);
 
     // Accumulate the gradient vectors
     vec3 grad = k.xyy * h1 + k.yyx * h2 + k.yxy * h3 + k.xxx * h4;
@@ -667,4 +684,8 @@ vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps
     // Normalize to get the surface normal.
     // The exact scaling of grad.y vs grad.xz depends on your world-space scale.
     return normalize(vec3(grad.x, 2.0 * eps, grad.z));
+}
+
+vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps, TerrainConfig config) {
+    return evaluate_terrain_normal(p, phase, warp_strength, eps, config, 0.0);
 }
