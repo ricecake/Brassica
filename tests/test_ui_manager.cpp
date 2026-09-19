@@ -1,7 +1,9 @@
 #include "doctest/doctest.h"
 
 #include "ConfigManager.hpp"
+#include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
+#include "types/TonemapPushConstants.hpp"
 #include "ui/IWidget.hpp"
 #include "ui/QuickSettingsWidget.hpp"
 
@@ -53,6 +55,32 @@ namespace brassica {
 		CHECK(quickWidget.IsVisible() == true);
 
 		ServiceLocator::SetInstance(nullptr);
+	}
+
+	TEST_CASE("TonemapPushConstants Post-Processing and CDL Parameters") {
+		TonemapPushConstants push{};
+		CHECK(push.toneMapMode == 5); // Default Uchimura
+		CHECK(push.exposure == 1.0f);
+		CHECK(push.cdlSlope == glm::vec4(1.0f));
+		CHECK(push.cdlOffset == glm::vec4(0.0f));
+		CHECK(push.cdlPower == glm::vec4(1.0f));
+		CHECK(push.cdlSaturation == 1.0f);
+	}
+
+	TEST_CASE("LightManager Physical Values and Day/Night Cycle") {
+		LightManager lightMgr;
+		lightMgr.Update(0.016f);
+
+		const auto& lights = lightMgr.GetLights();
+		REQUIRE(lights.size() >= 2);
+
+		// Directional Sun physical radiance
+		CHECK(lights[0].type == DIRECTIONAL_LIGHT);
+		CHECK(lights[0].baseIntensity == 10.0f);
+
+		// Directional Moon reflected radiance
+		CHECK(lights[1].type == DIRECTIONAL_LIGHT);
+		CHECK(lights[1].baseIntensity >= 0.0f);
 	}
 
 } // namespace brassica
