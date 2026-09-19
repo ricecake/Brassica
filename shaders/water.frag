@@ -21,7 +21,10 @@ layout(push_constant) uniform WaterPushConstants {
 params;
 
 void main() {
-	ivec2 gTexSize = textureSize(uTextures2D[nonuniformEXT(params.gPositionIndex)], 0);
+	ivec2 gTexSize = textureSize(
+		sampler2D(uTextures2D[nonuniformEXT(params.gPositionIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		0
+	);
 	vec2 screenUV = gl_FragCoord.xy / vec2(gTexSize);
 
 	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
