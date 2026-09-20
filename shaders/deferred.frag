@@ -123,9 +123,7 @@ void main() {
 
 		ao *= gtaoAO;
 
-		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, albedo.rgb, roughness, metallic, ao);
-
-		litSurface *= sssFactor;
+		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, albedo.rgb, roughness, metallic, ao, sssFactor);
 		litSurface += ssgi;
 
 		// Extract primary directional light for aerial perspective / atmosphere scattering

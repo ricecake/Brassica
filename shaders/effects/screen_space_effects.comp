@@ -43,11 +43,21 @@ vec4 spatiotemporalNoise(ivec2 pixel, uint frameIndex) {
 }
 
 vec3 getViewPosFromDepth(vec2 uv, float depth) {
-	vec4 clipPos = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+	vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
 	vec4 viewPos = uInvProjMatrix * clipPos;
-	return viewPos.xyz / max(0.0001, viewPos.w);
+	return viewPos.xyz / viewPos.w;
 }
 
+// Jimenez 2016 GTAO inner slice integral
+float gtaoIntegrateSlice(float h1, float h2, float gamma) {
+	float sinGamma = sin(gamma);
+	float cosGamma = cos(gamma);
+
+	float i1 = cosGamma + 2.0 * h1 * sinGamma - cos(2.0 * h1 - gamma);
+	float i2 = cosGamma + 2.0 * h2 * sinGamma - cos(2.0 * h2 - gamma);
+
+	return (i1 + i2) * 0.25;
+}
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -67,7 +77,7 @@ void main() {
 		return;
 	}
 
-	vec3 relPos = SAMPLE_NEAREST(params.gPositionIndex, uv).rgb;
+	vec3 vPos = getViewPosFromDepth(uv, depth);
 	vec3 worldNorm = normalize(SAMPLE_NEAREST(params.gNormalIndex, uv).rgb);
 	if (length(worldNorm) < 0.1) {
 		if (params.ssgiEnabled != 0u || params.gtaoEnabled != 0u) {
@@ -79,7 +89,6 @@ void main() {
 		return;
 	}
 
-	vec3 vPos = (uViewMatrix * vec4(relPos, 0.0)).xyz;
 	vec3 vNorm = normalize((uViewMatrix * vec4(worldNorm, 0.0)).xyz);
 
 	vec4 bn = spatiotemporalNoise(pixel, uFrameIndex);
@@ -100,44 +109,47 @@ void main() {
 		float dotNL = dot(vNorm, lightDirView);
 
 		if (dotNL <= 0.0) {
-			sssVisibility = 0.0;
+			sssVisibility = 1.0;
 		} else {
 			float maxDist = params.sssRadius * uWorldScale;
-			float distBias = params.sssBias * uWorldScale * (1.0 + vPos.z * vPos.z * 0.00005);
-			vec3  rayStartPos = vPos + (vNorm * 0.4 + lightDirView * 0.1) * distBias;
-			float stepSize = maxDist / float(params.sssSteps);
-			vec3  rayStep = lightDirView * stepSize;
-			vec3  rayPos = rayStartPos + rayStep * bn.r;
+			float distBias = params.sssBias * uWorldScale * max(0.05, (1.0 - dotNL) * 0.2);
+			vec3  rayStartPos = vPos + (vNorm * 0.5 + lightDirView * 0.5) * distBias;
 
 			float minContactDist = maxDist;
 			float finalEdgeFade = 1.0;
 			bool  hit = false;
 
+			vec2 texelSize = 1.5 / vec2(size);
+
 			for (uint i = 0u; i < params.sssSteps; ++i) {
+				float t = ((float(i) + 1.0 + bn.r) / float(max(1u, params.sssSteps))) * maxDist;
+				vec3  rayPos = rayStartPos + lightDirView * t;
+
 				vec4 clipPos = uProjMatrix * vec4(rayPos, 1.0);
 				vec3 ndcPos = clipPos.xyz / max(0.0001, clipPos.w);
 				vec2 sampleUV = ndcPos.xy * 0.5 + 0.5;
 
 				if (sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0 || ndcPos.z > 1.0 ||
-					ndcPos.z < -1.0)
+					ndcPos.z < 0.0)
 					break;
+
+				if (length(sampleUV - uv) < max(texelSize.x, texelSize.y)) continue;
 
 				float sampleDepth = SAMPLE_NEAREST(params.gDepthIndex, sampleUV).r;
 				float sampleZView = getViewPosFromDepth(sampleUV, sampleDepth).z;
 
 				float penetration = sampleZView - rayPos.z;
-				if (rayPos.z < sampleZView && penetration > 0.01 * uWorldScale && penetration < 2.0 * uWorldScale) {
+				if (rayPos.z < sampleZView - 0.005 && penetration > 0.01 * uWorldScale && penetration < 2.0 * uWorldScale) {
 					vec2  edgeDist = min(sampleUV, 1.0 - sampleUV);
 					float edgeFade = clamp(min(edgeDist.x, edgeDist.y) * 10.0, 0.0, 1.0);
 					if (edgeFade > 0.0) {
 						sssVisibility = 0.0;
-						minContactDist = distance(rayPos, rayStartPos);
+						minContactDist = t;
 						finalEdgeFade = edgeFade;
 						hit = true;
 						break;
 					}
 				}
-				rayPos += rayStep;
 			}
 			if (hit) {
 				float shadowStrength = clamp(minContactDist / maxDist, 0.0, 1.0);
@@ -157,40 +169,81 @@ void main() {
 	if (params.gtaoEnabled != 0u) {
 		float gtao_ao = 0.0;
 		vec3  gtao_bent_normal = vec3(0.0);
-		vec3  viewDir = normalize(-vPos);
-		float projScale = uProjMatrix[0][0] * 0.5;
-		float screenRadius = (params.gtaoRadius * projScale) / max(0.001, -vPos.z);
-		float stepSize = params.gtaoRadius / float(params.gtaoSteps);
+		vec3  V = normalize(-vPos);
+		vec2  projScale = vec2(uProjMatrix[0][0] * 0.5, abs(uProjMatrix[1][1]) * 0.5);
 
 		for (uint i = 0u; i < params.gtaoDirections; ++i) {
 			float angle = (float(i) + bn.x) * (PI / float(params.gtaoDirections));
 			vec2  dir = vec2(cos(angle), sin(angle));
-			float h1 = -1.0, h2 = -1.0;
+			vec2  screenDir = vec2(dir.x * projScale.x, -dir.y * projScale.y) / max(0.1, -vPos.z);
+
+			vec3  T = vec3(cos(angle), sin(angle), 0.0);
+			vec3  sliceDir = normalize(T - dot(T, V) * V);
+
+			vec3  axis = cross(sliceDir, V);
+			vec3  projN = vNorm - axis * dot(vNorm, axis);
+			float projNLen = length(projN);
+			vec3  projNNorm = projN / max(0.0001, projNLen);
+
+			float gamma = atan(dot(projNNorm, sliceDir), dot(projNNorm, V));
+
+			float h1 = -PI * 0.5;
+			float h2 = -PI * 0.5;
 
 			for (uint j = 1u; j <= params.gtaoSteps; ++j) {
-				float dist = float(j) * stepSize;
-				vec2  offset = dir * dist * screenRadius;
-				vec3  p1 = getViewPosFromDepth(uv + offset, SAMPLE_NEAREST(params.gDepthIndex, uv + offset).r);
-				vec3  p2 = getViewPosFromDepth(uv - offset, SAMPLE_NEAREST(params.gDepthIndex, uv - offset).r);
-				vec3  v1 = p1 - vPos, v2 = p2 - vPos;
-				float d1 = length(v1), d2 = length(v2);
-				float f1 = max(0.0, 1.0 - (d1 * d1) / (params.gtaoRadius * params.gtaoRadius));
-				float f2 = max(0.0, 1.0 - (d2 * d2) / (params.gtaoRadius * params.gtaoRadius));
-				if (d1 < params.gtaoRadius) h1 = max(h1, dot(normalize(v1), viewDir) * f1);
-				if (d2 < params.gtaoRadius) h2 = max(h2, dot(normalize(v2), viewDir) * f2);
+				float stepTexel = float(j) / float(params.gtaoSteps);
+				vec2  offset = screenDir * (stepTexel * params.gtaoRadius);
+
+				vec2 uv1 = uv + offset;
+				vec2 uv2 = uv - offset;
+
+				if (uv1.x >= 0.0 && uv1.x <= 1.0 && uv1.y >= 0.0 && uv1.y <= 1.0) {
+					vec3 p1 = getViewPosFromDepth(uv1, SAMPLE_NEAREST(params.gDepthIndex, uv1).r);
+					vec3 v1 = p1 - vPos;
+					float d1 = length(v1);
+					if (d1 > 0.001 && d1 < params.gtaoRadius) {
+						vec3 u1 = v1 / d1;
+						if (dot(u1, V) > 0.0) {
+							float w = clamp(1.0 - (d1 / params.gtaoRadius), 0.0, 1.0);
+							w = w * w;
+							float sinH = dot(u1, sliceDir);
+							float cosH = dot(u1, V);
+							float angleH = atan(sinH, cosH);
+							h1 = max(h1, mix(-PI * 0.5, angleH, w));
+						}
+					}
+				}
+
+				if (uv2.x >= 0.0 && uv2.x <= 1.0 && uv2.y >= 0.0 && uv2.y <= 1.0) {
+					vec3 p2 = getViewPosFromDepth(uv2, SAMPLE_NEAREST(params.gDepthIndex, uv2).r);
+					vec3 v2 = p2 - vPos;
+					float d2 = length(v2);
+					if (d2 > 0.001 && d2 < params.gtaoRadius) {
+						vec3 u2 = v2 / d2;
+						if (dot(u2, V) > 0.0) {
+							float w = clamp(1.0 - (d2 / params.gtaoRadius), 0.0, 1.0);
+							w = w * w;
+							float sinH = dot(u2, -sliceDir);
+							float cosH = dot(u2, V);
+							float angleH = atan(sinH, cosH);
+							h2 = max(h2, mix(-PI * 0.5, angleH, w));
+						}
+					}
+				}
 			}
 
-			float theta1 = acos(clamp(h1, -1.0, 1.0));
-			float theta2 = acos(clamp(h2, -1.0, 1.0));
-			gtao_ao += (theta1 + theta2) / 2.0;
+			float h1Clamped = clamp(max(h1, gamma - PI * 0.5), -PI * 0.5, PI * 0.5);
+			float h2Clamped = clamp(max(h2, -gamma - PI * 0.5), -PI * 0.5, PI * 0.5);
 
-			vec3  sliceDir = vec3(dir.x, dir.y, 0.0);
-			float bisectorAngle = (theta1 - theta2) * 0.5;
-			vec3  sliceUnoccludedDir = cos(bisectorAngle) * viewDir + sin(bisectorAngle) * sliceDir;
-			gtao_bent_normal += sliceUnoccludedDir * (theta1 + theta2);
+			float sliceAo = projNLen * gtaoIntegrateSlice(h1Clamped, h2Clamped, gamma);
+			gtao_ao += max(0.0, sliceAo);
+
+			float bisectorAngle = (h1Clamped + h2Clamped) * 0.5;
+			vec3 sliceUnoccludedDir = cos(bisectorAngle) * V + sin(bisectorAngle) * sliceDir;
+			gtao_bent_normal += sliceUnoccludedDir * (h1Clamped - h2Clamped);
 		}
 
-		float visibility = gtao_ao / (float(params.gtaoDirections) * PI);
+		float visibility = gtao_ao / float(max(1u, params.gtaoDirections));
 		ao = clamp(1.0 - (1.0 - visibility) * params.gtaoIntensity, 0.0, 1.0);
 
 		if (length(gtao_bent_normal) > 0.001) {
@@ -203,10 +256,8 @@ void main() {
 	if (params.ssgiEnabled != 0u) {
 		vec3  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, uv).rgb;
 		vec4  normalSample = SAMPLE_NEAREST(params.gNormalIndex, uv);
-		float roughness = normalSample.a > 0.0 ? normalSample.a : 0.7;
 
 		vec3 V = normalize(-vPos);
-		float NdotV = max(0.0, dot(vNorm, V));
 
 		for (uint r = 0u; r < params.ssgiRayCount; ++r) {
 			vec2 jitterDir = fract(bn.xy + vec2(float(r) * 0.618, float(r) * 0.382));
@@ -218,33 +269,26 @@ void main() {
 			if (dot(rayDir, vNorm) < 0.0) continue;
 
 			float stepSize = params.ssgiRadius / float(params.ssgiSteps);
-			float rayDist = stepSize * jitterDist.x;
-			bool  hit = false;
+			float rayDist = stepSize * (0.5 + jitterDist.x);
 
 			for (uint i = 0u; i < params.ssgiSteps; ++i) {
-				rayDist += stepSize;
 				vec3 samplePos = vPos + rayDir * rayDist;
 				vec4 offsetClip = uProjMatrix * vec4(samplePos, 1.0);
-				vec2 offsetUV = (offsetClip.xy / offsetClip.w) * 0.5 + 0.5;
+				vec2 offsetUV = (offsetClip.xy / max(0.0001, offsetClip.w)) * 0.5 + 0.5;
 
 				if (offsetUV.x < 0.0 || offsetUV.x > 1.0 || offsetUV.y < 0.0 || offsetUV.y > 1.0) break;
 
 				float sampledDepth = SAMPLE_NEAREST(params.gDepthIndex, offsetUV).r;
 				float sampledZView = getViewPosFromDepth(offsetUV, sampledDepth).z;
 
-				if (samplePos.z < sampledZView) {
-					if (samplePos.z > sampledZView - 0.5 * uWorldScale) {
-						hit = true;
-						vec3  hitAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, offsetUV).rgb;
-						float falloff = exp(-rayDist / max(0.001, params.ssgiRadius));
-						indirect += hitAlbedo * weight * falloff;
-						break;
-					}
+				float penetration = sampledZView - samplePos.z;
+				if (samplePos.z < sampledZView - 0.005 && penetration > 0.01 * uWorldScale && penetration < 0.5 * uWorldScale) {
+					vec3  hitAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, offsetUV).rgb;
+					float falloff = exp(-rayDist / max(0.001, params.ssgiRadius));
+					indirect += hitAlbedo * weight * falloff;
+					break;
 				}
-			}
-			if (!hit) {
-				vec3 spatialSHAmbient = uAmbientLight.rgb * albedo;
-				indirect += spatialSHAmbient * weight * 0.25 * ao;
+				rayDist += stepSize;
 			}
 		}
 		indirect /= float(max(1u, params.ssgiRayCount));

@@ -12,7 +12,6 @@
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
-#include "passes/RenderPhases.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -41,8 +40,6 @@ namespace brassica {
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
-		static constexpr graph::Phase kPhase = SubPhase::DeferredShading;
-
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
 			graph::Read<GradientBackground>,
