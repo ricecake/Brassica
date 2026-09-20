@@ -2,7 +2,8 @@
 #define BRASSICA_LIGHTING_GLSL
 
 #include "bindless.glsl"
-
+#ifndef LIGHTING_TYPES
+#define LIGHTING_TYPES
 const int LIGHT_FLAG_CASTS_SHADOW = 1;
 const int LIGHT_FLAG_VOLUMETRIC_SHADOW = 2;
 const int LIGHT_FLAG_CAMERA_RELATIVE = 4;
@@ -13,6 +14,7 @@ const int LIGHT_TYPE_DIRECTIONAL = 1;
 const int LIGHT_TYPE_SPOT = 2;
 const int LIGHT_TYPE_EMISSIVE = 3;
 const int LIGHT_TYPE_FLASH = 4;
+#endif
 
 layout(std140, set = 0, binding = 1) uniform LightingUBO {
 	uint  uNumLights;

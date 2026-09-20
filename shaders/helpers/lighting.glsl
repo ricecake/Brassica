@@ -3,6 +3,8 @@
 
 #include "brdf.glsl"
 
+#ifndef LIGHTING_TYPES
+#define LIGHTING_TYPES
 const int LIGHT_TYPE_POINT = 0;
 const int LIGHT_TYPE_DIRECTIONAL = 1;
 const int LIGHT_TYPE_SPOT = 2;
@@ -14,7 +16,7 @@ const int LIGHT_FLAG_CASTS_SHADOW = 1;
 const int LIGHT_FLAG_VOLUMETRIC_SHADOW = 2;
 const int LIGHT_FLAG_CAMERA_RELATIVE = 4;
 const int LIGHT_FLAG_CLOUD_EMISSIVE = 8;
-
+#endif
 // PBR intensity multiplier
 const float PBR_INTENSITY_BOOST = 1.0;
 
