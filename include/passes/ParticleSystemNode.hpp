@@ -181,24 +181,24 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe       r{.domain = graph::ExecutionDomain::Compute};
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::Write,
-					.desc = indirectDesc,
+			return graph::Recipe{
+				.domain = graph::ExecutionDomain::Compute,
+				.isActive = true,
+				.realizations = {
+					graph::ResourceRealization{
+						.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::Write,
+						.desc = indirectDesc,
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::Write,
+						.desc = indirectDesc,
+					}
 				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::Write,
-					.desc = indirectDesc,
-				}
-			);
-			return r;
+			};
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -255,52 +255,44 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleBuffer>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleTypeBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AboveWaterParticleAliveBuffer>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
-				}
-			);
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = indirectDesc,
+			return graph::Recipe{
+				.domain = graph::ExecutionDomain::Compute,
+				.isActive = true,
+				.realizations = {
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleBuffer>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleTypeBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<AboveWaterParticleAliveBuffer>(),
+						.access = graph::AccessKind::Write,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = indirectDesc,
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<UnderwaterParticleAliveBuffer>(),
+						.access = graph::AccessKind::Write,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = indirectDesc,
+					}
 				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<UnderwaterParticleAliveBuffer>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = indirectDesc,
-				}
-			);
-			return r;
+			};
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -367,52 +359,44 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleBuffer>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleTypeBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AboveWaterParticleAliveBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
-				}
-			);
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = indirectDesc,
+			return graph::Recipe{
+				.domain = graph::ExecutionDomain::Compute,
+				.isActive = true,
+				.realizations = {
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleBuffer>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleTypeBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<AboveWaterParticleAliveBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = indirectDesc,
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<UnderwaterParticleAliveBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = indirectDesc,
+					}
 				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<UnderwaterParticleAliveBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = indirectDesc,
-				}
-			);
-			return r;
+			};
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -499,45 +483,39 @@ namespace brassica {
 		void SetIndirectBuffer(vk::Buffer buf) { indirectBuffer = buf; }
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleTypeBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<UnderwaterParticleAliveBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
-				}
-			);
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = indirectDesc,
+			return graph::Recipe{
+				.domain = graph::ExecutionDomain::Graphics,
+				.isActive = true,
+				.realizations = {
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleTypeBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<UnderwaterParticleAliveBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = indirectDesc,
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<HdrColor>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+					}
 				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+			};
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -651,45 +629,39 @@ namespace brassica {
 		void SetIndirectBuffer(vk::Buffer buf) { indirectBuffer = buf; }
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ParticleTypeBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AboveWaterParticleAliveBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
-				}
-			);
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
-					.access = graph::AccessKind::Read,
-					.desc = indirectDesc,
+			return graph::Recipe{
+				.domain = graph::ExecutionDomain::Graphics,
+				.isActive = true,
+				.realizations = {
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleTypeBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(16 * sizeof(ParticleType)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<AboveWaterParticleAliveBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = indirectDesc,
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<HdrColor>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+					}
 				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+			};
 		}
 
 		void Execute(graph::NodeContext& ctx) {
