@@ -56,7 +56,6 @@ layout(push_constant) uniform ParticleLivenessPushConstants {
 	float deltaTime;
 } uPush;
 
-// Pseudo-random helper
 float hash1(uint n) {
 	n = (n << 13U) ^ n;
 	return float((n * (n * n * 15731U + 789221U) + 1376312589U) & 0x7fffffffU) / 2147483648.0;
@@ -79,28 +78,28 @@ void main() {
 	uParticles[idx].type = pType;
 
 	float distToCam = length(uParticles[idx].position.xyz - camPos);
-	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 1500.0;
+	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 250.0;
 
 	if (expired) {
-		uParticles[idx].lifetime = 10.0 + hash1(idx * 7u + uFrameIndex) * 10.0;
+		uParticles[idx].lifetime = 8.0 + hash1(idx * 7u + uFrameIndex) * 8.0;
 		uParticles[idx].maxLifetime = uParticles[idx].lifetime;
 
-		float rFwd   = 30.0 + hash1(idx * 13u + uFrameIndex) * 200.0;
-		float rRight = (hash1(idx * 17u + uFrameIndex) - 0.5) * 250.0;
-		float rUp    = (hash1(idx * 23u + uFrameIndex) - 0.5) * 100.0;
+		float rFwd   = 15.0 + hash1(idx * 13u + uFrameIndex) * 70.0;
+		float rRight = (hash1(idx * 17u + uFrameIndex) - 0.5) * 80.0;
+		float rUp    = (hash1(idx * 23u + uFrameIndex) - 0.5) * 40.0;
 
 		vec3 spawnCenter = camPos + camFwd * rFwd + camRight * rRight + camUp * rUp;
 
 		if (pType == 0u) { // Birds (Above water)
-			spawnCenter.y = max(spawnCenter.y, 10.0 + hash1(idx * 31u) * 40.0);
+			spawnCenter.y = max(spawnCenter.y, max(camPos.y + 2.0, 5.0));
 			vec3 flyDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5));
-			uParticles[idx].velocity = vec4(flyDir * (15.0 + hash1(idx * 41u) * 10.0), 0.0);
-			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0); // Wing flap phase
+			uParticles[idx].velocity = vec4(flyDir * (12.0 + hash1(idx * 41u) * 8.0), 0.0);
+			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0);
 		} else { // Fish (Underwater)
-			spawnCenter.y = min(spawnCenter.y, -5.0 - hash1(idx * 31u) * 20.0);
+			spawnCenter.y = min(spawnCenter.y, min(camPos.y - 2.0, -1.0));
 			vec3 swimDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5));
 			uParticles[idx].velocity = vec4(swimDir * (5.0 + hash1(idx * 41u) * 5.0), 0.0);
-			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0); // Swim wiggle phase
+			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0);
 		}
 
 		uParticles[idx].position = vec4(spawnCenter, 1.0);

@@ -237,7 +237,7 @@ namespace brassica {
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
-		std::uint32_t            maxParticles{1024};
+		std::uint32_t            maxParticles{8192};
 		float                    deltaTime{0.016f};
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
@@ -341,7 +341,7 @@ namespace brassica {
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
-		std::uint32_t            maxParticles{1024};
+		std::uint32_t            maxParticles{8192};
 		float                    deltaTime{0.016f};
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
@@ -459,7 +459,7 @@ namespace brassica {
 		vk::DescriptorSetLayout      particleSetLayout;
 		vk::DescriptorSet            particleSet;
 		vk::Buffer                   indirectBuffer;
-		std::uint32_t                maxParticles{1024};
+		std::uint32_t                maxParticles{8192};
 
 		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -605,7 +605,7 @@ namespace brassica {
 		vk::DescriptorSetLayout      particleSetLayout;
 		vk::DescriptorSet            particleSet;
 		vk::Buffer                   indirectBuffer;
-		std::uint32_t                maxParticles{1024};
+		std::uint32_t                maxParticles{8192};
 
 		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
 			pipelineLibrary = services.pipelineLibrary;
