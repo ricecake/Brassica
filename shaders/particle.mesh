@@ -38,33 +38,50 @@ layout(std430, set = 2, binding = 1) readonly buffer ParticleTypes {
 	ParticleType uParticleTypes[];
 };
 
-layout(std430, set = 2, binding = 2) readonly buffer AliveIndices {
-	uint uAliveIndices[];
+layout(std430, set = 2, binding = 2) readonly buffer AboveWaterAliveIndices {
+	uint uAboveWaterAliveIndices[];
 };
 
-layout(std430, set = 2, binding = 3) readonly buffer IndirectCommandBuffer {
-	IndirectCommand uIndirectCommand;
+layout(std430, set = 2, binding = 3) readonly buffer AboveWaterIndirectCommandBuffer {
+	IndirectCommand uAboveWaterIndirectCommand;
 };
+
+layout(std430, set = 2, binding = 4) readonly buffer UnderwaterAliveIndices {
+	uint uUnderwaterAliveIndices[];
+};
+
+layout(std430, set = 2, binding = 5) readonly buffer UnderwaterIndirectCommandBuffer {
+	IndirectCommand uUnderwaterIndirectCommand;
+};
+
+layout(push_constant) uniform ParticleRenderPushConstants {
+	uint isUnderwater;
+} uPush;
 
 layout(location = 0) out struct ParticleVertexOutput {
 	vec4 color;
 	vec2 uv;
 	vec4 misc;
+	vec3 worldPos;
+	flat uint particleType;
 } OUT[];
 
 void main() {
 	uint liveIdx = gl_WorkGroupID.x;
-	if (liveIdx >= uIndirectCommand.groupCountX) {
+	uint liveCount = (uPush.isUnderwater != 0u) ? uUnderwaterIndirectCommand.groupCountX : uAboveWaterIndirectCommand.groupCountX;
+
+	if (liveIdx >= liveCount) {
 		SetMeshOutputsEXT(0, 0);
 		return;
 	}
 
-	uint         particleIdx = uAliveIndices[liveIdx];
-	Particle     p = uParticles[particleIdx];
+	uint particleIdx = (uPush.isUnderwater != 0u) ? uUnderwaterAliveIndices[liveIdx] : uAboveWaterAliveIndices[liveIdx];
+	Particle p = uParticles[particleIdx];
 	ParticleType pType = uParticleTypes[p.type];
 
 	vec3 camPos = uCameraPosition.xyz;
 	vec3 pos = p.position.xyz;
+
 	vec3 forward = normalize(camPos - pos);
 	vec3 up = vec3(0.0, 1.0, 0.0);
 	if (abs(dot(forward, up)) > 0.99) {
@@ -73,10 +90,7 @@ void main() {
 	vec3 right = normalize(cross(up, forward));
 	up = cross(forward, right);
 
-	float size = pType.size;
-	if (size < 1.0) {
-		size = 10.0;
-	}
+	float size = (p.type == 0u) ? 6.0 : 4.0; // Birds size 6.0, Fish size 4.0
 	float halfSize = size * 0.5;
 
 	vec3 offsets[4] = vec3[4](
@@ -90,22 +104,25 @@ void main() {
 
 	SetMeshOutputsEXT(4, 2);
 
-	vec4 particleColor = pType.color;
-	if (length(particleColor.rgb) < 0.1) {
-		particleColor = vec4(1.0, 0.9, 0.1, 1.0);
+	vec4 baseColor;
+	if (p.type == 0u) {
+		baseColor = vec4(0.95, 0.95, 1.0, 0.9); // White/light blue bird feathers
+	} else {
+		baseColor = vec4(0.2, 0.8, 0.9, 0.85); // Cyan/orange underwater fish sheen
 	}
 
+	float lifeRatio = clamp(p.lifetime / max(p.maxLifetime, 0.0001), 0.0, 1.0);
+	baseColor.a *= min(1.0, lifeRatio * 2.0);
+
 	for (uint i = 0u; i < 4u; ++i) {
-		vec4 worldPos = vec4(pos + offsets[i], 1.0);
-		gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * worldPos;
+		vec3 vWorldPos = pos + offsets[i];
+		gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(vWorldPos, 1.0);
 
-		float lifeRatio = clamp(p.lifetime / max(p.maxLifetime, 0.0001), 0.0, 1.0);
-		vec4  finalColor = particleColor;
-		finalColor.a *= lifeRatio;
-
-		OUT[i].color = finalColor;
+		OUT[i].color = baseColor;
 		OUT[i].uv = uvs[i];
 		OUT[i].misc = p.misc;
+		OUT[i].worldPos = vWorldPos;
+		OUT[i].particleType = p.type;
 	}
 
 	gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);

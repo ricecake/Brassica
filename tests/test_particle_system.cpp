@@ -60,6 +60,11 @@ TEST_CASE("Particle struct layouts match std430 16-byte alignment requirements")
 	CHECK(sizeof(ParticleIndirectCommand) == 12);
 }
 
+TEST_CASE("Underwater and AboveWater particle render nodes schedule before and after WaterNode") {
+	CHECK(brassica::SubPhase::UnderwaterParticleRender < brassica::SubPhase::WaterRender);
+	CHECK(brassica::SubPhase::WaterRender < brassica::SubPhase::ParticleRender);
+}
+
 TEST_CASE("ParticleSystemNode executes in Phase::Late after DeferredNode in Phase::Default") {
 	graph::Graph graph;
 	graph.Register<DeferredShadingProducer>();
@@ -122,11 +127,14 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
-		bindings[0].setBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
-		bindings[1].setBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
-		bindings[2].setBinding(2).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
-		bindings[3].setBinding(3).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
+		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		for (uint32_t i = 0; i < 6; ++i) {
+			bindings[i]
+				.setBinding(i)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setDescriptorCount(1)
+				.setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
+		}
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
@@ -153,12 +161,16 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		ParticleBehaviorNode behaviorNode;
 		behaviorNode.Init(services, particleSetLayout, nullptr);
 
-		ParticleRenderNode renderNode;
+		UnderwaterParticleRenderNode underwaterRenderNode;
+		underwaterRenderNode.Init(services, particleSetLayout, nullptr);
+
+		AboveWaterParticleRenderNode renderNode;
 		renderNode.Init(services, particleSetLayout, nullptr);
 
 		resetNode.Destroy(vkDevice);
 		livenessNode.Destroy(vkDevice);
 		behaviorNode.Destroy(vkDevice);
+		underwaterRenderNode.Destroy(vkDevice);
 		renderNode.Destroy(vkDevice);
 
 		Shader::ClearConstants();
@@ -205,8 +217,8 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
-		for (uint32_t i = 0; i < 4; ++i) {
+		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		for (uint32_t i = 0; i < 6; ++i) {
 			bindings[i]
 				.setBinding(i)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
@@ -217,11 +229,8 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		layoutInfo.setBindings(bindings);
 		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
 
-		// A real, bound-but-never-updated set -- matches the reported bug's actual condition
-		// (allocated, bound at dispatch time, but vkUpdateDescriptorSets never ran on it) rather
-		// than a completely unbound set 2, which crashes instead of just validation-erroring.
 		std::array<vk::DescriptorPoolSize, 1> particlePoolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 4}
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 6}
 		};
 		vk::DescriptorPoolCreateInfo particlePoolInfo{};
 		particlePoolInfo.setPoolSizes(particlePoolSizes);
@@ -399,13 +408,17 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 
 		auto pBuf = registry.GetBuffer<ParticleBuffer>();
 		auto pTypeBuf = registry.GetBuffer<ParticleTypeBuffer>();
-		auto pAliveBuf = registry.GetBuffer<ParticleAliveBuffer>();
-		auto pIndirectBuf = registry.GetBuffer<ParticleIndirectBuffer>();
+		auto pAboveAliveBuf = registry.GetBuffer<AboveWaterParticleAliveBuffer>();
+		auto pAboveIndirectBuf = registry.GetBuffer<AboveWaterParticleIndirectBuffer>();
+		auto pUnderAliveBuf = registry.GetBuffer<UnderwaterParticleAliveBuffer>();
+		auto pUnderIndirectBuf = registry.GetBuffer<UnderwaterParticleIndirectBuffer>();
 
 		CHECK(pBuf != nullptr);
 		CHECK(pTypeBuf != nullptr);
-		CHECK(pAliveBuf != nullptr);
-		CHECK(pIndirectBuf != nullptr);
+		CHECK(pAboveAliveBuf != nullptr);
+		CHECK(pAboveIndirectBuf != nullptr);
+		CHECK(pUnderAliveBuf != nullptr);
+		CHECK(pUnderIndirectBuf != nullptr);
 
 		resetNode.Destroy(vkDevice);
 		livenessNode.Destroy(vkDevice);
