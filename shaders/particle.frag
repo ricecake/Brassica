@@ -1,12 +1,12 @@
 #version 460 core
 #include "bindless.glsl"
 
-layout(location = 0) in struct ParticleVertexOutput {
+layout(location = 0) flat in struct ParticleVertexOutput {
 	vec4 color;
 	vec2 uv;
 	vec4 misc;
 	vec3 worldPos;
-	flat uint particleType;
+	uint particleType;
 } IN;
 
 layout(location = 0) out vec4 outColor;

@@ -58,12 +58,12 @@ layout(push_constant) uniform ParticleRenderPushConstants {
 	uint isUnderwater;
 } uPush;
 
-layout(location = 0) out struct ParticleVertexOutput {
+layout(location = 0) flat out struct ParticleVertexOutput {
 	vec4 color;
 	vec2 uv;
 	vec4 misc;
 	vec3 worldPos;
-	flat uint particleType;
+	uint particleType;
 } OUT[];
 
 void main() {
