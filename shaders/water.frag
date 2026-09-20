@@ -9,18 +9,19 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams;
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
 	uint  padding;
-}
-
-params;
+} params;
 
 void main() {
+	// 1. DETERMINE VIEW ORIENTATION
+	bool isAboveWater = gl_FrontFacing;
+
 	ivec2 gTexSize = textureSize(
 		sampler2D(uTextures2D[nonuniformEXT(params.gAlbedoIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
 		0
@@ -32,67 +33,106 @@ void main() {
 	vec3 relWaterPos = inWorldPos - uCameraPosition.xyz;
 
 	float distToCamWater = length(relWaterPos);
-	float rayLengthThroughWater = 100.0; // Default deep water ray length when background is sky
-	float depthBelowWater = 100.0;       // Vertical Y depth below water
+	float rayLengthThroughWater = 100.0;
+	float depthBelowWater = 100.0;
 
+	float distToCamTerrain = length(relTerrainPos);
 	if (albedo.a >= 0.01) {
-		float distToCamTerrain = length(relTerrainPos);
-		// Terrain is strictly in front of the water mesh fragment
 		if (distToCamTerrain < distToCamWater - 0.2) {
-			outColor = vec4(0.0);
-			return;
-		}
-
-		rayLengthThroughWater = max(0.0, distToCamTerrain - distToCamWater);
-		depthBelowWater = relWaterPos.y - relTerrainPos.y;
-		if (depthBelowWater <= 0.0 && rayLengthThroughWater <= 0.0) {
-			outColor = vec4(0.0);
-			return;
+			discard;
 		}
 	}
 
-	// Base surface normal
+
+	// 2. DUAL-SIDED OPTICAL DEPTH CALCULATION
+	if (albedo.a >= 0.01) {
+
+		if (isAboveWater) {
+			// Looking DOWN into the water
+			if (distToCamTerrain <= distToCamWater) {
+				discard; // Terrain is strictly in front of the water mesh
+			}
+
+			rayLengthThroughWater = max(0.0, distToCamTerrain - distToCamWater);
+			depthBelowWater = relWaterPos.y - relTerrainPos.y;
+
+			if (depthBelowWater <= 0.0 && rayLengthThroughWater <= 0.0) {
+				discard;
+			}
+		} else {
+			// Looking UP at the water surface from below
+			// The view ray travels entirely through the water volume from camera to surface
+			rayLengthThroughWater = distToCamWater;
+			depthBelowWater = params.waterLevel - uCameraPosition.y;
+		}
+	} else {
+		// Sky background
+		rayLengthThroughWater = isAboveWater ? 100.0 : distToCamWater;
+		depthBelowWater = isAboveWater ? 100.0 : (params.waterLevel - uCameraPosition.y);
+	}
+
 	vec3 baseNormal = normalize(inNormal);
+	if (!isAboveWater) {
+		baseNormal = -baseNormal; // Flip normal if viewing from below
+	}
 	if (length(baseNormal) < 0.1) {
-		baseNormal = vec3(0.0, 1.0, 0.0);
+		baseNormal = isAboveWater ? vec3(0.0, 1.0, 0.0) : vec3(0.0, -1.0, 0.0);
 	}
 
-	// Animated multi-frequency sine wave normal perturbations for wave motion across all distances
 	vec2 waveXZ = inWorldPos.xz;
 	float t = uTime * smoothstep(800.0, 1800.0, distToCamWater) * max(1.0, 1000.0/distToCamWater);
 
 	vec2 sinGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.004 + abs(dot_noise(inWorldPos * 0.0025, t * 0.5)), 4, t * 0.25).xz;
 	sinGrad *= smoothstep(1000.0, 2000.0, distToCamWater) * (1.0 - smoothstep(3000.0, 20000.0, distToCamWater));
 
+	// Ensure wave perturbation follows the flipped backface normal
 	vec3 waveNormal = normalize(baseNormal + vec3(-sinGrad.x, 0.0, -sinGrad.y));
 
 	float distToCam = distToCamWater;
 	float closeThreshold = 800.0;
 	float closeFactor = clamp(1.0 - distToCam / closeThreshold, 0.0, 1.0);
 
-	// Refraction: distort G-Buffer sample UVs based on wave normal and optical depth
-	vec2 refractOffset = waveNormal.xz * clamp(rayLengthThroughWater * 0.008, 0.0, 0.03);
+	// 3. PHYSICAL REFRACTION & TOTAL INTERNAL REFLECTION
+	vec3 viewDir = normalize(-relWaterPos);
+	float iorRatio = isAboveWater ? (1.0 / 1.333) : (1.333 / 1.0);
+	vec3 refractDir = refract(-viewDir, waveNormal, iorRatio);
+
+	vec2 refractOffset = vec2(0.0);
+	bool isTIR = false;
+
+	if (isAboveWater) {
+		refractOffset = waveNormal.xz * clamp(rayLengthThroughWater * 0.008, 0.0, 0.03);
+	} else {
+		if (length(refractDir) < 0.01) {
+			isTIR = true; // Total Internal Reflection
+		} else {
+			refractOffset = refractDir.xz * 0.05; // Refracting the sky above
+		}
+	}
+
 	vec2 refractUV = clamp(screenUV + refractOffset, vec2(0.0), vec2(1.0));
 
 	vec4 refractedAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, refractUV);
 	vec3 relRefractedPos = SAMPLE_NEAREST(params.gPositionIndex, refractUV).rgb;
-	if (relWaterPos.y - relRefractedPos.y <= 0.0 || refractedAlbedo.a < 0.01) {
+
+	if (isAboveWater && (relWaterPos.y - relRefractedPos.y <= 0.0 || refractedAlbedo.a < 0.01)) {
 		refractedAlbedo = albedo;
 	}
 
-	// Translucency & Beer-Lambert absorption along true view ray path length:
-	// Red light absorbed fastest, blue/green least, giving accurate color absorption at all view angles
 	vec3 extinctionCoeff = vec3(0.28, 0.07, 0.02);
 	vec3 transmittance = exp(-extinctionCoeff * rayLengthThroughWater);
 
 	vec3 shallowWaterTint = vec3(0.12, 0.62, 0.78);
 	vec3 deepWaterColor = vec3(0.01, 0.12, 0.32);
 	vec3 baseTint = mix(shallowWaterTint, params.waterColor, clamp(depthBelowWater / 5.0, 0.0, 1.0));
+
+	// Out-scattering color of the water volume itself
 	vec3 waterBodyColor = mix(deepWaterColor, baseTint, transmittance);
 
-	float alpha = clamp(1.0 - dot(transmittance, vec3(0.333)), 0.35, 0.95);
+	// 4. MANUAL COMPOSITE (Bypassing fixed-function blend)
+	// Absorb the background light and add the water's scattered light
+	vec3 integratedColor = (refractedAlbedo.rgb * transmittance) + (waterBodyColor * (1.0 - transmittance));
 
-	// Locate active directional sun light from LightingUBO / uLights
 	vec3 sunDir = normalize(vec3(0.5, 0.8, 0.5));
 	vec3 sunColor = vec3(1.2, 1.1, 0.9);
 	float sunIntensity = 1.0;
@@ -105,24 +145,25 @@ void main() {
 		}
 	}
 
-	// Specular sun glare and reflections at distance (no distance cutoff)
-	vec3 viewDir = normalize(-relWaterPos);
 	vec3 halfDir = normalize(sunDir + viewDir);
-
 	float NdotH = max(dot(waveNormal, halfDir), 0.0);
 	float specSharp = pow(NdotH, 256.0);
 	float specBloom = pow(NdotH, 20.0) * 0.15;
 	float specular = specSharp + specBloom;
-	vec3 shineColor = sunColor * sunIntensity * specular * 1.5;
 
-	// Schlick's Fresnel reflection (increases at grazing view angles)
+	// Specular sunlight only applies if viewing from above
+	vec3 shineColor = isAboveWater ? (sunColor * sunIntensity * specular * 1.5) : vec3(0.0);
+
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
 	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);
-	vec3 finalWaterTint = mix(waterBodyColor, vec3(0.65, 0.82, 1.0), fresnel * 0.5);
 
-	vec3 blendedColor = mix(refractedAlbedo.rgb, finalWaterTint, alpha) + shineColor;
+	if (isTIR) {
+		fresnel = 1.0;
+	}
 
-	// Shoreline foam and wave crest foam
+	vec3 surfaceReflectionColor = isAboveWater ? vec3(0.65, 0.82, 1.0) : deepWaterColor;
+	vec3 finalColor = mix(integratedColor, surfaceReflectionColor, fresnel * 0.5) + shineColor;
+
 	float shoreFoam = clamp(1.0 - depthBelowWater / 2.2, 0.0, 1.0);
 	shoreFoam = pow(shoreFoam, 1.4);
 	float foamNoise = InterleavedGradientNoise(inWorldPos.xz * 3.5, int(uTime * 12.0));
@@ -132,10 +173,11 @@ void main() {
 	float crestFoam = crestFactor * closeFactor * (0.5 + 0.5 * sin(uTime * 3.0 + inWorldPos.x * 0.5));
 
 	float totalFoam = clamp(shoreFoam * 1.25 + crestFoam * 0.6, 0.0, 1.0);
+	if (!isAboveWater) totalFoam *= 0.15; // Diminish foam visibility heavily from underneath
+	// totalFoam = 0.0;
 	vec3 foamColor = vec3(0.92, 0.96, 1.0);
+	finalColor = mix(finalColor, foamColor, totalFoam);
 
-	blendedColor = mix(blendedColor, foamColor, totalFoam);
-	alpha = max(alpha, totalFoam * 0.92);
-
-	outColor = vec4(blendedColor, alpha);
+	// Output completely opaque fragment to overwrite the G-Buffer composite
+	outColor = vec4(finalColor, 1.0);
 }

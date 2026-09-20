@@ -58,8 +58,7 @@ namespace brassica {
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
 			.depthWrite = false,
-			.depthCompareOp = vk::CompareOp::eLessOrEqual,
-			.enableBlend = true,
+			.depthCompareOp = vk::CompareOp::eLess,
 			.enableShadingRate = false,
 		};
 
