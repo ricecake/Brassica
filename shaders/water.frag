@@ -117,6 +117,12 @@ void main() {
 
 	if (isAboveWater && (relWaterPos.y - relRefractedPos.y <= 0.0 || refractedAlbedo.a < 0.01)) {
 		refractedAlbedo = albedo;
+		relRefractedPos = relTerrainPos; // Ensure position falls back too
+	}
+
+	if (isTIR && refractedAlbedo.a >= 0.01) {
+		float surfaceToTerrain = length(relRefractedPos - relWaterPos);
+		rayLengthThroughWater = distToCamWater + surfaceToTerrain;
 	}
 
 	vec3 extinctionCoeff = vec3(0.28, 0.07, 0.02);

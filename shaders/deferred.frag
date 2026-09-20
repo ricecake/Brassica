@@ -142,11 +142,10 @@ void main() {
 		hdrColor = (litSurface * vLight) * transmittance + inScattered;
 
 		if (uCameraPosition.y < u_waterLevel) {
-			float depthBelowWater = (u_waterLevel - uCameraPosition.y);
-			float rayWaterLength = min(distMeters, depthBelowWater / max(0.01, abs(rayDir.y)));
-			vec3  waterTransmittance = exp(-kWaterExtinction * u_waterScale * (rayWaterLength / 1000.0));
+			float pathLength = pos.y + distMeters;
+			vec3  waterTransmittance = exp(-kWaterExtinction * u_waterScale * (pathLength / 1000.0));
 			vec3  waterFogColor = kWaterScattering * u_waterScale * vec3(0.12, 0.62, 0.78);
-			hdrColor = mix(waterFogColor, hdrColor * waterTransmittance, clamp(exp(-rayWaterLength * 0.01), 0.0, 1.0));
+			hdrColor = mix(waterFogColor, hdrColor * waterTransmittance, clamp(exp(-pathLength * 0.01), 0.0, 1.0));
 		}
 	}
 
