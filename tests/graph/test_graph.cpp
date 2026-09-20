@@ -674,7 +674,7 @@ TEST_CASE("LightManager day/night cycle and behaviors") {
 
 	mgr.GetDayNightCycle().time = 12.0f; // Noon (sun at zenith)
 	mgr.Update(0.0f);
-	CHECK(mgr.GetLights()[0].intensity == doctest::Approx(1.0f));
+	CHECK(mgr.GetLights()[0].intensity == doctest::Approx(10.0f));
 
 	brassica::Light pointLight = brassica::Light::CreatePoint(glm::vec3(10.0f, 5.0f, 0.0f), 20.0f, glm::vec3(1.0f, 0.0f, 0.0f), 50.0f);
 	pointLight.SetPulse(2.0f, 1.0f);

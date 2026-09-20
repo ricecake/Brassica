@@ -11,6 +11,8 @@ namespace brassica {
 
 	struct Swapchain {};
 
+	struct HdrColor {};
+
 	struct GradientBackground {};
 
 	struct GBufferPosition {};

@@ -25,7 +25,7 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
-			graph::Modify<Swapchain>>;
+			graph::Create<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Default;
 
@@ -33,9 +33,9 @@ namespace {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<Swapchain>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.key = graph::IdOf<HdrColor>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;

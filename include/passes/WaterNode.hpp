@@ -43,7 +43,7 @@ namespace brassica {
 	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
 	// so this is what actually proves the blend-state plumbing works for something real.
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
-		using Resources = graph::Declares<GBuffer<graph::Read>, graph::Modify<Swapchain>>;
+		using Resources = graph::Declares<GBuffer<graph::Read>, graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Late;
 
@@ -112,9 +112,9 @@ namespace brassica {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<Swapchain>(),
+					.key = graph::IdOf<HdrColor>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;
@@ -126,7 +126,7 @@ namespace brassica {
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 
 			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
-			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
+			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)

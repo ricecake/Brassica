@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
+#include "types/TonemapPushConstants.hpp"
 
 namespace brassica::ui {
 
@@ -28,7 +29,7 @@ namespace brassica::ui {
 			return;
 
 		ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f - 175.0f, 30.0f), ImGuiCond_FirstUseEver);
-		ImGui::SetNextWindowSize(ImVec2(350, 300), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(350, 450), ImGuiCond_FirstUseEver);
 
 		ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
 
@@ -70,12 +71,47 @@ namespace brassica::ui {
 
 			ImGui::Separator();
 
-			// Mood Engine
-			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Mood Engine:");
-			if (ImGui::Checkbox("Enable Mood Engine##Quick", &m_enableMood)) {
-				if (cfg) {
-					cfg->SetAppSetting("quick_mood_enabled", m_enableMood);
-				}
+			// Exposure & Post-Processing Tone / CDL
+			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Exposure & Tone Mapping:");
+			ImGui::SliderFloat("Exposure##Tone", &s_tonemapPush.exposure, 0.01f, 10.0f, "%.2f");
+
+			const char* toneModes[] = {
+				"ACES",
+				"Filmic",
+				"Lottes",
+				"Reinhard",
+				"Reinhard2",
+				"Uchimura",
+				"Uncharted 2",
+				"Unreal",
+				"Debug",
+				"None"
+			};
+			int currentMode = static_cast<int>(s_tonemapPush.toneMapMode);
+			if (ImGui::Combo("Mode##Tone", &currentMode, toneModes, IM_ARRAYSIZE(toneModes))) {
+				s_tonemapPush.toneMapMode = static_cast<std::uint32_t>(currentMode);
+			}
+
+			if (currentMode == 5) { // Uchimura
+				ImGui::SliderFloat("Uchimura P##Tone", &s_tonemapPush.pMax, 0.1f, 5.0f);
+				ImGui::SliderFloat("Uchimura a##Tone", &s_tonemapPush.pA, 0.1f, 5.0f);
+				ImGui::SliderFloat("Uchimura m##Tone", &s_tonemapPush.pM, 0.0f, 1.0f);
+				ImGui::SliderFloat("Uchimura l##Tone", &s_tonemapPush.pL, 0.0f, 1.0f);
+				ImGui::SliderFloat("Uchimura c##Tone", &s_tonemapPush.pC, 0.1f, 5.0f);
+				ImGui::SliderFloat("Uchimura b##Tone", &s_tonemapPush.pB, 0.0f, 1.0f);
+			}
+
+			ImGui::SliderFloat("Contrast##Tone", &s_tonemapPush.contrast, 0.0f, 3.0f);
+			ImGui::SliderFloat("Saturation##Tone", &s_tonemapPush.saturation, 0.0f, 3.0f);
+			ImGui::SliderFloat("Temperature##Tone", &s_tonemapPush.temperature, -1.0f, 1.0f);
+			ImGui::SliderFloat("Tint##Tone", &s_tonemapPush.tint, -1.0f, 1.0f);
+
+			if (ImGui::TreeNode("ASC CDL Color Grading")) {
+				ImGui::ColorEdit3("Slope##CDL", &s_tonemapPush.cdlSlope.x);
+				ImGui::ColorEdit3("Offset##CDL", &s_tonemapPush.cdlOffset.x);
+				ImGui::ColorEdit3("Power##CDL", &s_tonemapPush.cdlPower.x);
+				ImGui::SliderFloat("CDL Saturation##CDL", &s_tonemapPush.cdlSaturation, 0.0f, 3.0f);
+				ImGui::TreePop();
 			}
 
 			ImGui::Separator();

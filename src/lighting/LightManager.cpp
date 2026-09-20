@@ -144,47 +144,39 @@ namespace brassica {
 				float moonVis = glm::sin(glm::radians(_lights[1].elevation));
 
 				float sunFade = 1.0f;
-				if (sunVis > 0.05f) {
+				if (sunVis > -0.10f) {
 					sunFade = 1.0f;
-				} else if (sunVis < -0.20f) {
-					sunFade = 0.0f;
 				} else {
-					float t = (sunVis - (-0.20f)) / (0.05f - (-0.20f));
-					sunFade = glm::smoothstep(0.0f, 1.0f, t);
+					sunFade = 0.0f;
 				}
 				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
-				_lights[0].baseIntensity = 1.0f * sunFade;
+				_lights[0].baseIntensity = 10.0f * sunFade;
 
 				glm::vec3 sunDir = glm::normalize(-_lights[0].direction);
 				glm::vec3 moonDir = glm::normalize(-_lights[1].direction);
 
-				float cosAlpha = glm::clamp(-glm::dot(sunDir, moonDir), -1.0f, 1.0f);
-				float alphaDeg = glm::degrees(glm::acos(cosAlpha));
+				float cosPhase = glm::dot(sunDir, moonDir);
+				float phase = glm::clamp((-cosPhase + 1.0f) * 0.5f, 0.05f, 1.0f);
 
-				float alpha2 = alphaDeg * alphaDeg;
-				float alpha4 = alpha2 * alpha2;
-				float deltaM = 0.026f * alphaDeg + 0.000000004f * alpha4;
-				float phaseFactor = std::pow(10.0f, -0.4f * deltaM);
-				phaseFactor = glm::max(phaseFactor, 0.00015f);
+				const float     lunarAlbedo = _cycle.lunarAlbedo;
+				const glm::vec3 lunarTint = _cycle.moonTint;
 
-				_lights[1].color = _cycle.moonTint;
+				glm::vec3 sunFullRadiance = _lights[0].color * 10.0f;
+				_lights[1].color = sunFullRadiance * lunarAlbedo * phase * lunarTint;
 
 				float moonFade = 1.0f;
-				if (moonVis > 0.05f) {
+				if (moonVis > 0.0f) {
 					moonFade = 1.0f;
-				} else if (moonVis < -0.05f) {
-					moonFade = 0.0f;
 				} else {
-					float t = (moonVis - (-0.05f)) / (0.05f - (-0.05f));
-					moonFade = glm::smoothstep(0.0f, 1.0f, t);
+					moonFade = 0.0f;
 				}
-				_lights[1].baseIntensity = 0.34f * phaseFactor * moonFade;
+				_lights[1].baseIntensity = 1.0f * moonFade;
 
 				_cycle.nightFactor = glm::smoothstep(0.2f, -0.2f, sunVis);
 
 				glm::vec3 dayAmbient{0.2f, 0.2f, 0.25f};
 				glm::vec3 nightAmbient = dayAmbient * 0.15f + _lights[1].color * 0.3f * std::max(0.0f, moonVis);
-				float     ambientFactor = glm::smoothstep(-0.20f, 0.05f, sunVis);
+				float     ambientFactor = std::clamp(sunVis * 5.0f + 0.5f, 0.0f, 1.0f);
 				_ambientLight = glm::mix(nightAmbient, dayAmbient, ambientFactor);
 			}
 		}

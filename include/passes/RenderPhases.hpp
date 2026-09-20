@@ -19,11 +19,17 @@ namespace brassica {
 	namespace SubPhase {
 		inline constexpr graph::Phase Prepare = graph::Phase(-500);
 		inline constexpr graph::Phase GBuffer = graph::Phase(0);
-		inline constexpr graph::Phase LightPreparation = graph::Phase(500); //Light Clustering & Froxel Volumetric Injection
+		inline constexpr graph::Phase LightPreparation = graph::Phase(
+			500
+		); // Light Clustering & Froxel Volumetric Injection
 		inline constexpr graph::Phase GIComput = graph::Phase(600);
-		inline constexpr graph::Phase DeferredShading = graph::Phase(700);//Deferred Direct Lighting (Reads G-Buffer, Lights, GI, and Froxels)
-		inline constexpr graph::Phase Reflection = graph::Phase(800); //SSR Compute & Composite (Reads G-Buffer, HZB, and Lit HDR)
-		inline constexpr graph::Phase Atmosphere = graph::Phase(900);//Distant Volumetrics & Atmosphere Composite
+		inline constexpr graph::Phase DeferredShading = graph::Phase(
+			700
+		); // Deferred Direct Lighting (Reads G-Buffer, Lights, GI, and Froxels)
+		inline constexpr graph::Phase Reflection = graph::Phase(
+			800
+		); // SSR Compute & Composite (Reads G-Buffer, HZB, and Lit HDR)
+		inline constexpr graph::Phase Atmosphere = graph::Phase(900); // Distant Volumetrics & Atmosphere Composite
 		inline constexpr graph::Phase UnderwaterStructuralTranslucentRender = graph::Phase(1000);
 		inline constexpr graph::Phase UnderwaterParticleRender = graph::Phase(1100);
 		inline constexpr graph::Phase WaterRender = graph::Phase(1200);
