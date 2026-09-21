@@ -1,5 +1,6 @@
 #pragma once
 
+#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
 #include "vulkan/vulkan.hpp"
 
 // Vulkan-Hpp portability shim for the dispatcher-related classes that
@@ -20,3 +21,16 @@ namespace brassica {
 #endif
 
 } // namespace brassica
+
+#else
+
+namespace vk {
+	enum class Format { eUndefined = 0 };
+	class Device {};
+} // namespace vk
+
+namespace brassica {
+	struct DispatchLoaderDynamic {};
+} // namespace brassica
+
+#endif

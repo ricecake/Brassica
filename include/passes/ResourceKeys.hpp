@@ -60,6 +60,9 @@ namespace brassica {
 
 	struct ParticleIndirectBuffer {};
 
-	struct BallIndirectBuffer {};
+	template <typename Tag = struct DefaultEntityTag>
+	struct EntityIndirectBuffer {};
+
+	using BallIndirectBuffer = EntityIndirectBuffer<struct BallSystemHandlerTag>;
 
 } // namespace brassica
