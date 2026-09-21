@@ -1163,7 +1163,7 @@ namespace brassica {
 		nodeRegistry.RegisterAllInto(frameGraph);
 		for (auto& handler : systemHandlers) {
 			if (handler) {
-				frameGraph.RegisterRef(handler->GetEntityNode());
+				handler->GetEntityNode().RegisterInto(frameGraph);
 			}
 		}
 
