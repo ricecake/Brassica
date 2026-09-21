@@ -24,14 +24,26 @@ namespace brassica::graph {
 		std::size_t lastPass = 0;
 	};
 
+	struct PhysicalResourceRegistryState {
+		bool aliasingEnabled{true};
+
+		auto GetReflection() const {
+			return std::make_tuple(
+				MakeField("aliasingEnabled", "Enable Resource Aliasing", &PhysicalResourceRegistryState::aliasingEnabled)
+			);
+		}
+	};
+
 	// Owns (or references, for imported resources) the physical Vulkan objects backing the
 	// graph's declared resource keys, provisioning them from a compiled Schedule. Handles are
 	// std::shared_ptr<PhysicalTexture>/<PhysicalBuffer>: a resource handed out to a consumer
 	// stays alive until that reference drops, even if Reset() or a later Provision() call has
 	// since released the registry's own reference -- real shared ownership, not just a
 	// same-frame borrow.
-	class PhysicalResourceRegistry: public IManager, public ResourceServices {
+	class PhysicalResourceRegistry: public ManagerBase<PhysicalResourceRegistry, PhysicalResourceRegistryState>, public ResourceServices {
 	public:
+		using State = PhysicalResourceRegistryState;
+
 		PhysicalResourceRegistry(vk::Device device = {}, VmaAllocator allocator = nullptr, vk::Queue queue = {}):
 			m_device(device),
 			m_allocator(allocator),
@@ -53,6 +65,12 @@ namespace brassica::graph {
 			Reset();
 			m_initialized = false;
 		}
+
+		std::string GetManagerName() const override { return "PhysicalResourceRegistry"; }
+
+		State GetState() const override { return State{m_aliasingEnabled}; }
+
+		void SetState(const State& state) override { m_aliasingEnabled = state.aliasingEnabled; }
 
 		PhysicalResourceRegistry(const PhysicalResourceRegistry&) = delete;
 		PhysicalResourceRegistry& operator=(const PhysicalResourceRegistry&) = delete;
@@ -1001,6 +1019,7 @@ namespace brassica::graph {
 		BindlessArena    m_storageArena;
 		BindlessArena    m_accelStructArena;
 		std::shared_ptr<PhysicalTexture> m_fallbackTexture;
+		bool             m_aliasingEnabled{true};
 	};
 
 } // namespace brassica::graph

@@ -15,15 +15,42 @@
 
 namespace brassica {
 
-	class ShaderWatcher: public IManager, public efsw::FileWatchListener {
+	struct ShaderWatcherState {
+		bool        enabled{true};
+		std::string watchedDir{"shaders"};
+
+		auto GetReflection() const {
+			return std::make_tuple(
+				MakeField("enabled", "Enable Shader Hot Reloading", &ShaderWatcherState::enabled),
+				MakeField("watchedDir", "Watched Directory", &ShaderWatcherState::watchedDir)
+			);
+		}
+	};
+
+	class ShaderWatcher: public ManagerBase<ShaderWatcher, ShaderWatcherState>, public efsw::FileWatchListener {
 	public:
 		using ReloadCallback = std::function<void()>;
+		using State = ShaderWatcherState;
 
 		ShaderWatcher();
 		~ShaderWatcher() override;
 
 		void Initialize() override;
 		void Shutdown() override;
+
+		std::string GetManagerName() const override { return "ShaderWatcher"; }
+
+		State GetState() const override {
+			return State{watchID != -1, watchedDir};
+		}
+
+		void SetState(const State& state) override {
+			if (state.enabled && watchID == -1 && !state.watchedDir.empty()) {
+				WatchDirectory(state.watchedDir);
+			} else if (!state.enabled && watchID != -1) {
+				StopWatching();
+			}
+		}
 
 		bool WatchDirectory(const std::string& directory, bool recursive = true);
 		void StopWatching();
