@@ -1,7 +1,7 @@
 #version 460
 #include "bindless.glsl"
 #include "common.glsl"
-#include "lighting.glsl"
+#include "clustered_lighting.glsl"
 
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
@@ -140,26 +140,16 @@ void main() {
 	// Absorb the background light and add the water's scattered light
 	vec3 integratedColor = (refractedAlbedo.rgb * transmittance) + (waterBodyColor * (1.0 - transmittance));
 
-	vec3 sunDir = normalize(vec3(0.5, 0.8, 0.5));
-	vec3 sunColor = vec3(1.2, 1.1, 0.9);
-	float sunIntensity = 1.0;
-	for (uint i = 0u; i < min(uLightCount, 2u); ++i) {
-		if (uLights[i].type == LIGHT_TYPE_DIRECTIONAL && uLights[i].intensity > 0.0) {
-			sunDir = normalize(-uLights[i].direction);
-			sunColor = uLights[i].color;
-			sunIntensity = uLights[i].intensity;
-			break;
-		}
-	}
-
-	vec3 halfDir = normalize(sunDir + viewDir);
-	float NdotH = max(dot(waveNormal, halfDir), 0.0);
-	float specSharp = pow(NdotH, 256.0);
-	float specBloom = pow(NdotH, 20.0) * 0.15;
-	float specular = specSharp + specBloom;
-
-	// Specular sunlight only applies if viewing from above
-	vec3 shineColor = isAboveWater ? (sunColor * sunIntensity * specular * 1.5) : vec3(0.0);
+	// Water has no Lambertian diffuse term of its own (its visible color comes entirely from the
+	// volume-scattering/transmittance math above) -- zero albedo means evaluate_brdf's diffuse
+	// lobe contributes nothing and this reduces to a real Cook-Torrance specular highlight driven
+	// by every light in range (sun, moon, points/spots via the cluster grid), not just a hardcoded
+	// single directional "sun" reimplementing Blinn-Phong. Low roughness keeps the highlight tight,
+	// matching the old pow(NdotH, 256) sharpness; the wave normal's own noise perturbation already
+	// carries the surface's visual roughness.
+	vec3 shineColor =
+		isAboveWater ? evaluateClusteredLightContributionPBR(inWorldPos, waveNormal, vec3(0.0), 0.05, 0.0, 1.0)
+					 : vec3(0.0);
 
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
 	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);
