@@ -111,10 +111,9 @@ void main() {
 		hdrColor = hdrBg;
 	} else {
 		float roughness = normalSample.a > 0.0 ? normalSample.a : 0.7;
-		float metallic = 0.0;
-		float ao = 1.0;
+		Material material = Material(albedo.rgb, roughness, 0.0, 1.0);
 
-		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, albedo.rgb, roughness, metallic, ao);
+		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, material).color;
 
 		// Extract primary directional light for aerial perspective / atmosphere scattering
 		vec3 sunDir = normalize(vec3(0.4, 0.8, 0.4));

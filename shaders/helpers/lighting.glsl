@@ -2,6 +2,7 @@
 #define HELPERS_LIGHTING_GLSL
 
 #include "brdf.glsl"
+#include "material.glsl"
 
 #ifndef LIGHTING_TYPES
 #define LIGHTING_TYPES
@@ -110,31 +111,41 @@ float get_luminance(vec3 color) {
 }
 
 /**
- * Cook-Torrance BRDF evaluation for direct light.
+ * Accumulated output of the lighting system: total lit color, plus the specular-only luminance
+ * broken out (previously computed and silently discarded) so a future glint/bloom hook has
+ * something real to read instead of needing to re-derive it.
  */
-void evaluate_brdf(
-	vec3 N, vec3 V, vec3 L, vec3 albedo, float roughness, float metallic, vec3 F0,
-	vec3 radiance, float shadow, inout vec3 Lo, inout float spec_lum)
-{
+struct LightingResult {
+	vec3  color;
+	float specularLuminance;
+};
+
+/**
+ * Cook-Torrance BRDF evaluation for direct light. Takes the whole Material rather than unpacked
+ * albedo/roughness/metallic so a new material property only needs to be read here, not added to
+ * this signature and every call site -- see material.glsl.
+ */
+void evaluate_brdf(vec3 N, vec3 V, vec3 L, Material material, vec3 radiance, float shadow, inout LightingResult result) {
 	float NdotL = max(dot(N, L), 0.0);
 	if (NdotL <= 0.0) return;
 
 	float NdotV = max(dot(N, V), 1e-4);
 	vec3 H = normalize(V + L);
 	float HdotV = max(dot(H, V), 0.0);
+	vec3 F0 = mix(vec3(0.04), material.albedo, material.metallic);
 
-	float NDF = DistributionGGX(N, H, roughness);
-	float V_term = VisibilitySmithGGXCorrelated(NdotL, NdotV, roughness);
+	float NDF = DistributionGGX(N, H, material.roughness);
+	float V_term = VisibilitySmithGGXCorrelated(NdotL, NdotV, material.roughness);
 	vec3 F = fresnelSchlickFast(HdotV, F0);
 	vec3 specular = NDF * V_term * F;
 
 	vec3 kS = F;
-	vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+	vec3 kD = (vec3(1.0) - kS) * (1.0 - material.metallic);
 
 	vec3 specular_radiance = specular * radiance * NdotL * shadow;
 
-	Lo += (kD * albedo / PI) * radiance * NdotL * shadow + specular_radiance;
-	spec_lum += get_luminance(specular_radiance);
+	result.color += (kD * material.albedo / PI) * radiance * NdotL * shadow + specular_radiance;
+	result.specularLuminance += get_luminance(specular_radiance);
 }
 
 /**

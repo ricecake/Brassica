@@ -147,9 +147,9 @@ void main() {
 	// single directional "sun" reimplementing Blinn-Phong. Low roughness keeps the highlight tight,
 	// matching the old pow(NdotH, 256) sharpness; the wave normal's own noise perturbation already
 	// carries the surface's visual roughness.
-	vec3 shineColor =
-		isAboveWater ? evaluateClusteredLightContributionPBR(inWorldPos, waveNormal, vec3(0.0), 0.05, 0.0, 1.0)
-					 : vec3(0.0);
+	Material waterMaterial = Material(vec3(0.0), 0.05, 0.0, 1.0);
+	vec3     shineColor =
+		isAboveWater ? evaluateClusteredLightContributionPBR(inWorldPos, waveNormal, waterMaterial).color : vec3(0.0);
 
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
 	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);

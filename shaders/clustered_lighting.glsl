@@ -27,15 +27,16 @@ uint getClusterIndex(vec3 frag_pos) {
 }
 
 /**
- * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR BRDF.
+ * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR
+ * BRDF. This is the only entry point -- callers that don't have every Material field on hand
+ * should start from materialDefault() (material.glsl) and override what they know, rather than a
+ * separate defaults-filling wrapper.
  */
-vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albedo, float roughness, float metallic, float ao) {
+LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
 
-	vec3 F0 = mix(vec3(0.04), albedo, metallic);
-	vec3 Lo = vec3(0.0);
-	float spec_lum = 0.0;
+	LightingResult result = LightingResult(vec3(0.0), 0.0);
 
 	// Evaluate directional lights (indices 0 and 1)
 	uint dir_count = min(uLightCount, 2u);
@@ -56,7 +57,7 @@ vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albe
 			);
 
 			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
-			evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, 1.0, Lo, spec_lum);
+			evaluate_brdf(N, V, L, material, radiance, 1.0, result);
 		}
 	}
 
@@ -88,7 +89,7 @@ vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albe
 		if (attenuation <= 0.0) continue;
 
 		vec3 radiance = uLights[light_index].color * (uLights[light_index].intensity * PBR_INTENSITY_BOOST) * attenuation;
-		evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, 1.0, Lo, spec_lum);
+		evaluate_brdf(N, V, L, material, radiance, 1.0, result);
 	}
 
 	uint cluster_index = getClusterIndex(frag_pos);
@@ -120,28 +121,14 @@ vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albe
 		if (attenuation <= 0.0) continue;
 
 		vec3 radiance = uLights[light_index].color * (uLights[light_index].intensity * PBR_INTENSITY_BOOST) * attenuation;
-		evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, 1.0, Lo, spec_lum);
+		evaluate_brdf(N, V, L, material, radiance, 1.0, result);
 	}
 
 	float terrainOcc = calculateTerrainOcclusion(frag_pos, N);
 	vec3 spatialSHAmbient = getSpatialAmbientSH(frag_pos, N);
-	vec3 ambient = spatialSHAmbient * uAmbientLight.rgb * albedo * (ao * terrainOcc);
+	result.color += spatialSHAmbient * uAmbientLight.rgb * material.albedo * (material.ao * terrainOcc);
 
-	return ambient + Lo;
-}
-
-/**
- * Standard diffuse/specular wrapper for existing shaders.
- */
-vec3 evaluateClusteredLightContribution(vec3 frag_pos, vec3 normal) {
-	return evaluateClusteredLightContributionPBR(frag_pos, normal, vec3(1.0), 0.7, 0.0, 1.0);
-}
-
-/**
- * Helper to evaluate clustered local light contribution without normals.
- */
-vec3 evaluateClusteredLightContributionSimple(vec3 frag_pos) {
-	return evaluateClusteredLightContributionPBR(frag_pos, vec3(0.0, 1.0, 0.0), vec3(1.0), 1.0, 0.0, 1.0);
+	return result;
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL
