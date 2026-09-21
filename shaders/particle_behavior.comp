@@ -21,12 +21,6 @@ struct ParticleType {
 	float padding;
 };
 
-struct IndirectCommand {
-	uint groupCountX;
-	uint groupCountY;
-	uint groupCountZ;
-};
-
 layout(std430, set = 2, binding = 0) buffer Particles {
 	Particle uParticles[];
 };
@@ -35,38 +29,36 @@ layout(std430, set = 2, binding = 1) readonly buffer ParticleTypes {
 	ParticleType uParticleTypes[];
 };
 
-layout(std430, set = 2, binding = 2) readonly buffer AliveIndices {
-	uint uAliveIndices[];
-};
-
-layout(std430, set = 2, binding = 3) readonly buffer IndirectCommandBuffer {
-	IndirectCommand uIndirectCommand;
-};
-
 layout(push_constant) uniform ParticleBehaviorPushConstants {
 	uint  maxParticles;
 	float deltaTime;
-}
-
-uPush;
+} uPush;
 
 void main() {
-	uint invocationIdx = gl_GlobalInvocationID.x;
-	uint liveCount = uIndirectCommand.groupCountX;
+	uint idx = gl_GlobalInvocationID.x;
 
-	if (invocationIdx >= liveCount) {
+	if (idx >= uPush.maxParticles) {
 		return;
 	}
 
-	uint         particleIdx = uAliveIndices[invocationIdx];
-	Particle     p = uParticles[particleIdx];
-	ParticleType pType = uParticleTypes[p.type];
+	Particle p = uParticles[idx];
+	if (p.lifetime <= 0.0) {
+		return;
+	}
 
-	vec3 gravity = vec3(0.0, -9.81 * pType.gravityScale, 0.0);
-	p.velocity.xyz += gravity * uPush.deltaTime;
-	p.velocity.xyz *= max(0.0, 1.0 - pType.drag * uPush.deltaTime);
+	if (p.type == 0u) { // Birds
+		p.misc.x += uPush.deltaTime * 8.0; // Wing flap animation phase
+		// Curved flight vector perturbation
+		vec3 perturbation = vec3(cos(p.misc.x * 0.2), sin(p.misc.x * 0.4) * 0.3, sin(p.misc.x * 0.2)) * 2.0;
+		p.position.xyz += (p.velocity.xyz + perturbation) * uPush.deltaTime;
+		p.position.y = max(p.position.y, 2.0); // Stay above water
+	} else { // Fish
+		p.misc.x += uPush.deltaTime * 6.0; // Tail wiggle animation phase
+		// Swimming undulating path
+		vec3 perturbation = vec3(sin(p.misc.x * 0.5) * 1.5, cos(p.misc.x * 0.8) * 0.2, cos(p.misc.x * 0.5) * 1.5);
+		p.position.xyz += (p.velocity.xyz + perturbation) * uPush.deltaTime;
+		p.position.y = min(p.position.y, -1.0); // Stay below water
+	}
 
-	p.position.xyz += p.velocity.xyz * uPush.deltaTime;
-
-	uParticles[particleIdx] = p;
+	uParticles[idx] = p;
 }

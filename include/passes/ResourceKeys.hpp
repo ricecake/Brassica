@@ -56,9 +56,17 @@ namespace brassica {
 
 	struct ParticleTypeBuffer {};
 
-	struct ParticleAliveBuffer {};
+	struct UnderwaterParticleAliveBuffer {};
 
-	struct ParticleIndirectBuffer {};
+	struct UnderwaterParticleIndirectBuffer {};
+
+	struct AboveWaterParticleAliveBuffer {};
+
+	struct AboveWaterParticleIndirectBuffer {};
+
+	using ParticleAliveBuffer = AboveWaterParticleAliveBuffer;
+
+	using ParticleIndirectBuffer = AboveWaterParticleIndirectBuffer;
 
 	struct BallIndirectBuffer {};
 

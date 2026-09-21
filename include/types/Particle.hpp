@@ -20,11 +20,12 @@ namespace brassica {
 	static_assert(sizeof(Particle) == 64, "Particle struct must be 64 bytes (16-byte aligned for GLSL std430)");
 
 	// Particle type properties defining visual and physical characteristics for a particle type.
+	// Type 0: Birds (above water), Type 1: Fish (underwater).
 	struct ParticleType {
-		glm::vec4 color{1.0f, 0.9f, 0.1f, 1.0f}; // Bright yellow/gold color
-		float     size{10.0f};                   // 10.0-unit billboard size for ease of visibility
-		float     gravityScale{0.1f};
-		float     drag{0.05f};
+		glm::vec4 color{1.0f, 0.9f, 0.1f, 1.0f}; // Default color
+		float     size{10.0f};                   // Billboard size
+		float     gravityScale{0.0f};            // Gravity influence
+		float     drag{0.02f};
 		float     padding{0.0f};
 	};
 
