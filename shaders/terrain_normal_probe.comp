@@ -1,0 +1,64 @@
+#version 460
+
+// Test-only fixture for tests/test_terrain_normal.cpp -- not a production render pass. Isolates
+// evaluate_terrain_normal (common.glsl) so its sign convention can be checked against a real
+// device (MoltenVK included -- this needs no mesh shader/ray query/AS, so it's a plain core
+// Vulkan 1.3 dispatch through brassica::testing::MinimalDevice) instead of only reasoned about
+// statically.
+//
+// For each input point, writes both the function-under-test's normal and an independently
+// computed central-difference height gradient, so the test can compare their signs without
+// duplicating evaluate_terrain_normal's own math.
+
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer PointsBuffer {
+	vec4 points[]; // xyz = world-space p, w unused
+}
+pointsBuf;
+
+layout(std430, set = 0, binding = 1) writeonly buffer NormalsBuffer {
+	vec4 normals[]; // xyz = evaluate_terrain_normal's result, w unused
+}
+normalsBuf;
+
+layout(std430, set = 0, binding = 2) writeonly buffer GradientsBuffer {
+	vec4 gradients[]; // x = dHeight/dx, y = dHeight/dz (independent central difference), zw unused
+}
+gradientsBuf;
+
+layout(push_constant) uniform PushConstants {
+	float spatial_scale;
+	float min_height;
+	float max_height;
+	float ridge_weight;
+	float biome_bleed;
+	float phase;
+	float warp_strength;
+	float eps;
+}
+push;
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+	vec3 p = pointsBuf.points[idx].xyz;
+
+	TerrainConfig cfg =
+		TerrainConfig(push.spatial_scale, push.min_height, push.max_height, push.ridge_weight, push.biome_bleed);
+
+	vec3 tetraNormal = evaluate_terrain_normal(p, push.phase, push.warp_strength, push.eps, cfg);
+
+	float unusedBiome, unusedMask;
+	float hxp = evaluate_terrain(p + vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
+	float hxm = evaluate_terrain(p - vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
+	float hzp = evaluate_terrain(p + vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
+	float hzm = evaluate_terrain(p - vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
+
+	float dHdx = (hxp - hxm) / (2.0 * push.eps);
+	float dHdz = (hzp - hzm) / (2.0 * push.eps);
+
+	normalsBuf.normals[idx] = vec4(tetraNormal, 0.0);
+	gradientsBuf.gradients[idx] = vec4(dHdx, dHdz, 0.0, 0.0);
+}

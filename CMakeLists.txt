@@ -233,7 +233,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     target_link_libraries(${TEST_NAME} PRIVATE brassica doctest::doctest)
     target_include_directories(${TEST_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
     set_target_properties(${TEST_NAME} PROPERTIES EXCLUDE_FROM_ALL TRUE)
-    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     list(APPEND ALL_TEST_TARGETS ${TEST_NAME})
 endforeach()
 

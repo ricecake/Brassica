@@ -669,7 +669,9 @@ vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps
     // Accumulate the gradient vectors
     vec3 grad = k.xyy * h1 + k.yyx * h2 + k.yxy * h3 + k.xxx * h4;
 
-    // Normalize to get the surface normal.
+    // Normalize to get the surface normal. grad.x/grad.z are proportional to +dHeight/dx,
+    // +dHeight/dz (tetrahedron-gradient identity); the up-facing height-field normal needs
+    // -dHeight/dx, -dHeight/dz (from Tx x Tz for a surface (x, H(x,z), z)), hence the negation.
     // The exact scaling of grad.y vs grad.xz depends on your world-space scale.
-    return normalize(vec3(grad.x, 2.0 * eps, grad.z));
+    return normalize(vec3(-grad.x, 2.0 * eps, -grad.z));
 }
