@@ -1,5 +1,6 @@
 *.patch
 *.bin
+scratch/**
 
 # Build artifacts
 build/
