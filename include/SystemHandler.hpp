@@ -50,16 +50,16 @@ namespace brassica {
 
 		[[nodiscard]] const std::vector<entt::entity>& GetEntities() const { return m_entities; }
 
-		[[nodiscard]] EntityNode& GetEntityNode() {
+		[[nodiscard]] IEntityNode& GetEntityNode() {
 			if (!m_entityNode) {
-				m_entityNode = std::make_shared<EntityNode>();
+				m_entityNode = std::make_shared<EntityNode<SystemHandler>>();
 			}
 			return *m_entityNode;
 		}
 
-		[[nodiscard]] const EntityNode& GetEntityNode() const {
+		[[nodiscard]] const IEntityNode& GetEntityNode() const {
 			if (!m_entityNode) {
-				m_entityNode = std::make_shared<EntityNode>();
+				m_entityNode = std::make_shared<EntityNode<SystemHandler>>();
 			}
 			return *m_entityNode;
 		}
@@ -81,9 +81,14 @@ namespace brassica {
 		[[nodiscard]] bool IsNodeInitialized() const { return m_nodeInitialized; }
 
 	protected:
-		std::vector<entt::entity>           m_entities;
-		mutable std::shared_ptr<EntityNode> m_entityNode;
-		bool                                m_nodeInitialized{false};
+		template <typename Tag>
+		void CreateEntityNode() {
+			m_entityNode = std::make_shared<EntityNode<Tag>>();
+		}
+
+		std::vector<entt::entity>            m_entities;
+		mutable std::shared_ptr<IEntityNode> m_entityNode;
+		bool                                 m_nodeInitialized{false};
 	};
 
 } // namespace brassica

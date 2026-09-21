@@ -45,8 +45,20 @@ namespace brassica {
 		std::uint32_t groupCountZ{1};
 	};
 
-	struct EntityNode {
-		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Modify<EntityIndirectBuffer>>;
+	struct IEntityNode {
+		virtual ~IEntityNode() = default;
+		virtual void Init(const render::NodeServices& services) = 0;
+		virtual void Destroy(vk::Device device) = 0;
+		virtual void RegisterInto(graph::Graph& graph) = 0;
+		virtual void SetPushConstants(const EntityPushConstants& p) = 0;
+		virtual void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) = 0;
+		virtual EntityPushConstants& GetPushConstants() = 0;
+		virtual MeshTasksIndirectCommand& GetIndirectCommand() = 0;
+	};
+
+	template <typename Tag = struct DefaultEntityTag>
+	struct EntityNode: public IEntityNode {
+		using Resources = graph::Declares<GBuffer<graph::Create>, graph::Create<EntityIndirectBuffer<Tag>>>;
 
 #if BRASSICA_HAS_VULKAN
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -67,11 +79,19 @@ namespace brassica {
 		EntityPushConstants          push{};
 		MeshTasksIndirectCommand     indirectCmd{0, 0, 0};
 
-		void SetPushConstants(const EntityPushConstants& p) { push = p; }
+		void SetPushConstants(const EntityPushConstants& p) override { push = p; }
 
-		void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) { indirectCmd = cmd; }
+		void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) override { indirectCmd = cmd; }
 
-		void Init(const render::NodeServices& services) {
+		EntityPushConstants& GetPushConstants() override { return push; }
+
+		MeshTasksIndirectCommand& GetIndirectCommand() override { return indirectCmd; }
+
+		void RegisterInto(graph::Graph& graph) override {
+			graph.RegisterRef(*this);
+		}
+
+		void Init(const render::NodeServices& services) override {
 #if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			dls = services.dispatchLoader;
@@ -96,7 +116,7 @@ namespace brassica {
 #endif
 		}
 
-		void Destroy(vk::Device device) {
+		void Destroy(vk::Device device) override {
 #if BRASSICA_HAS_VULKAN
 			taskShader.Destroy(device);
 			meshShader.Destroy(device);
@@ -144,7 +164,7 @@ namespace brassica {
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<EntityIndirectBuffer>(),
+					.key = graph::IdOf<EntityIndirectBuffer<Tag>>(),
 					.access = graph::AccessKind::Write,
 					.desc = indirectDesc,
 				}
@@ -158,7 +178,7 @@ namespace brassica {
 
 		void Execute(graph::NodeContext& ctx) {
 #if BRASSICA_HAS_VULKAN
-			ctx.WriteSpan<EntityIndirectBuffer>(std::span<const MeshTasksIndirectCommand>(&indirectCmd, 1));
+			ctx.WriteSpan<EntityIndirectBuffer<Tag>>(std::span<const MeshTasksIndirectCommand>(&indirectCmd, 1));
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
@@ -216,7 +236,7 @@ namespace brassica {
 			std::uint64_t offset = 0;
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					if (auto physBuf = registry->GetBuffer<EntityIndirectBuffer>()) {
+					if (auto physBuf = registry->GetBuffer<EntityIndirectBuffer<Tag>>()) {
 						indirectBuf = physBuf->GetBuffer();
 						offset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
 					}
@@ -241,6 +261,6 @@ namespace brassica {
 		}
 	};
 
-	using BallNode = EntityNode;
+	using BallNode = EntityNode<struct BallSystemHandlerTag>;
 
 } // namespace brassica

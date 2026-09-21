@@ -390,7 +390,11 @@ TEST_CASE("Graph stages nodes by dependency, independent of registration order, 
 	graph.Register<PreviousFrame<Temporal>>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto compileRes = graph.Compile();
+	if (!compileRes) {
+		MESSAGE(compileRes.error().message);
+	}
+	REQUIRE(compileRes.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 
@@ -463,7 +467,11 @@ TEST_CASE("Two nodes plain-Modify the same key in different phases, ordered by p
 	graph.Register<DeferredLikeNode>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto res = graph.Compile();
+	if (!res) {
+		MESSAGE(res.error().message);
+	}
+	REQUIRE(res.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 1) == 0);
@@ -477,7 +485,11 @@ TEST_CASE("A node with no resource dependency on anything still schedules after 
 	graph.Register<NodeP>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto res = graph.Compile();
+	if (!res) {
+		MESSAGE(res.error().message);
+	}
+	REQUIRE(res.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 1) == 0);
@@ -492,7 +504,11 @@ TEST_CASE("PreviousFrame and NextFrame bracket every other node's phase") {
 	graph.Register<PreviousFrame<Temporal>>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto compileResult = graph.Compile();
+	if (!compileResult) {
+		MESSAGE(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 2) == 0);
@@ -525,7 +541,11 @@ TEST_CASE("A later-phase plain reader lifts to the highest version an earlier ph
 	graph.Register<FirstWriter>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto compileResult = graph.Compile();
+	if (!compileResult) {
+		MESSAGE(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 2) == 0);
@@ -583,7 +603,11 @@ TEST_CASE("Independent nodes on different domains land in the same stage with ze
 	graph.Register<NodeQ>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto compileRes = graph.Compile();
+	if (!compileRes) {
+		MESSAGE(compileRes.error().message);
+	}
+	REQUIRE(compileRes.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	REQUIRE(schedule.stages.size() == 1);
@@ -752,7 +776,11 @@ TEST_CASE("Cluster light assignment node creates dependency before deferred shad
 	graph.Register<Import<Swapchain>>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto compileResult = graph.Compile();
+	if (!compileResult) {
+		MESSAGE(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
@@ -806,7 +834,11 @@ TEST_CASE("Atmosphere Sky pipeline stages nodes by dependency Transmittance -> M
 	graph.Register<Import<Swapchain>>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto compileResult = graph.Compile();
+	if (!compileResult) {
+		MESSAGE(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 4) < StageOf(schedule, 3));
@@ -913,7 +945,11 @@ TEST_CASE("Host queue CPU node executes entity logic before GPU consumers") {
 	graph.Register<Import<Swapchain>>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto compileResult = graph.Compile();
+	if (!compileResult) {
+		MESSAGE(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
@@ -951,7 +987,11 @@ TEST_CASE("Multi-queue domain mapping and queue family barrier propagation") {
 	graph.Register<PreviousFrame<Temporal>>(); // Provides History<GTAOData>
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto testCompileRes = graph.Compile();
+	if (!testCompileRes) {
+		MESSAGE(testCompileRes.error().message);
+	}
+	REQUIRE(testCompileRes.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	REQUIRE(schedule.stages.size() >= 2);
@@ -1029,7 +1069,11 @@ TEST_CASE("BallNode compiles smoothly in graph with GBuffer and Deferred nodes")
 	graph.Register<Import<Swapchain>>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto testCompileRes = graph.Compile();
+	if (!testCompileRes) {
+		MESSAGE(testCompileRes.error().message);
+	}
+	REQUIRE(testCompileRes.has_value());
 
 	const auto& schedule = graph.GetSchedule();
 	CHECK(StageOf(schedule, 0) <= StageOf(schedule, 1));
@@ -1081,4 +1125,86 @@ TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") 
 
 	handler.Cleanup(*enginePtr);
 	CHECK(handler.cleanupCalled == true);
+}
+
+namespace {
+	struct GBufferFullProducer {
+		using Resources = Declares<
+			Create<GBufferAlbedo>,
+			Create<GBufferNormal>,
+			Create<brassica::GBufferPosition>,
+			Create<brassica::GBufferDepth>
+		>;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+
+		void Execute(NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("Multiple SystemHandlers register distinct EntityNode instances into graph") {
+	class BallHandlerTag {};
+	class CubeHandlerTag {};
+
+	class BallHandler: public brassica::SystemHandler {
+	public:
+		BallHandler() {
+			CreateEntityNode<BallHandlerTag>();
+		}
+		void Setup(brassica::Engine&, const brassica::FrameDetails&) override {
+			brassica::MeshTasksIndirectCommand cmd{1, 1, 1};
+			GetEntityNode().SetIndirectCommand(cmd);
+			brassica::EntityPushConstants push{};
+			push.color = glm::vec4(0.0f, 0.4f, 1.0f, 1.0f); // Blue
+			GetEntityNode().SetPushConstants(push);
+		}
+	};
+
+	class CubeHandler: public brassica::SystemHandler {
+	public:
+		CubeHandler() {
+			CreateEntityNode<CubeHandlerTag>();
+		}
+		void Setup(brassica::Engine&, const brassica::FrameDetails&) override {
+			brassica::MeshTasksIndirectCommand cmd{2, 1, 1};
+			GetEntityNode().SetIndirectCommand(cmd);
+			brassica::EntityPushConstants push{};
+			push.color = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f); // Red
+			GetEntityNode().SetPushConstants(push);
+		}
+	};
+
+	BallHandler handler1;
+	CubeHandler handler2;
+
+	brassica::FrameDetails details{};
+	brassica::Engine* enginePtr = nullptr;
+	handler1.Setup(*enginePtr, details);
+	handler2.Setup(*enginePtr, details);
+
+	CHECK(handler1.GetEntityNode().GetPushConstants().color.r == doctest::Approx(0.0f));
+	CHECK(handler1.GetEntityNode().GetPushConstants().color.b == doctest::Approx(1.0f));
+	CHECK(handler1.GetEntityNode().GetIndirectCommand().groupCountX == 1);
+
+	CHECK(handler2.GetEntityNode().GetPushConstants().color.r == doctest::Approx(1.0f));
+	CHECK(handler2.GetEntityNode().GetPushConstants().color.b == doctest::Approx(0.0f));
+	CHECK(handler2.GetEntityNode().GetIndirectCommand().groupCountX == 2);
+
+	Graph graph;
+	graph.Register<GBufferFullProducer>();
+	handler1.GetEntityNode().RegisterInto(graph);
+	handler2.GetEntityNode().RegisterInto(graph);
+	graph.Register<DeferredWithLightingNode>();
+	graph.Register<ClusterLightAssignmentLikeNode>();
+	graph.Register<Import<Swapchain>>();
+
+	graph.Setup(FrameContext{});
+	auto testGraphRes = graph.Compile();
+	if (!testGraphRes) {
+		MESSAGE(testGraphRes.error().message);
+	}
+	REQUIRE(testGraphRes.has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	REQUIRE(schedule.stages.size() >= 2);
 }
