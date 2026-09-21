@@ -105,7 +105,7 @@ namespace brassica {
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Read,
+					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 				}
 			);
