@@ -90,7 +90,7 @@ void main() {
 	vec3 right = normalize(cross(up, forward));
 	up = cross(forward, right);
 
-	float size = (p.type == 0u) ? 25.0 : 18.0; // Birds size 25.0, Fish size 18.0
+	float size = (pType.size > 0.0) ? pType.size : ((p.type == 0u) ? 3.0 : 2.0);
 	float halfSize = size * 0.5;
 
 	vec3 offsets[4] = vec3[4](
@@ -105,7 +105,9 @@ void main() {
 	SetMeshOutputsEXT(4, 2);
 
 	vec4 baseColor;
-	if (p.type == 0u) {
+	if (pType.color.a > 0.0) {
+		baseColor = pType.color;
+	} else if (p.type == 0u) {
 		baseColor = vec4(1.0, 0.95, 0.7, 0.95); // Warm golden/white luminous bird plumage
 	} else {
 		baseColor = vec4(0.1, 0.95, 0.85, 0.95); // Vibrant cyan/seafoam underwater fish sheen

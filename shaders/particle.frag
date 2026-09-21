@@ -39,9 +39,9 @@ void main() {
 	float alpha = IN.color.a * shapeAlpha;
 
 	// McGuire Weighted Order-Independent Translucency / Blending (WOITB) weight
-	float z = length(IN.worldPos - uCameraPosition.xyz);
-	float weight = alpha * clamp(10.0 / (1e-5 + pow(z / 150.0, 3.0)), 0.1, 1000.0);
+	float z = max(0.1, length(IN.worldPos - uCameraPosition.xyz));
+	float weight = clamp(10.0 / (1e-5 + pow(z / 150.0, 3.0)), 0.1, 1.0);
 
-	float woitbAlpha = clamp(alpha * (weight / 5.0), 0.15, 1.0);
-	outColor = vec4(IN.color.rgb, woitbAlpha);
+	float finalAlpha = clamp(alpha * weight, 0.0, 1.0);
+	outColor = vec4(IN.color.rgb, finalAlpha);
 }

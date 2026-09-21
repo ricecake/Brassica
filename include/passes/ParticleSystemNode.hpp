@@ -160,7 +160,7 @@ namespace brassica {
 		using Resources = graph::Declares<
 			graph::Modify<AboveWaterParticleIndirectBuffer>,
 			graph::Modify<UnderwaterParticleIndirectBuffer>>;
-		static constexpr graph::Phase kPhase = graph::Phase::Early;
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary*        pipelineLibrary = nullptr;
 		ComputeShader                   compShader;
@@ -235,12 +235,15 @@ namespace brassica {
 			graph::Modify<UnderwaterParticleAliveBuffer>,
 			graph::Modify<UnderwaterParticleIndirectBuffer>>;
 
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
+
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
 		std::uint32_t            maxParticles{8192};
 		float                    deltaTime{0.016f};
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
+		detail::ParticleDescriptorCache descriptorCache{};
 
 		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -296,6 +299,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+				}
+			}
+
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleLivenessPushConstants)}
@@ -438,6 +447,7 @@ namespace brassica {
 			graph::Read<ParticleTypeBuffer>,
 			graph::Read<UnderwaterParticleAliveBuffer>,
 			graph::Read<UnderwaterParticleIndirectBuffer>,
+			graph::Modify<GBufferDepth>,
 			graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::UnderwaterParticleRender;
@@ -460,6 +470,7 @@ namespace brassica {
 		vk::DescriptorSet            particleSet;
 		vk::Buffer                   indirectBuffer;
 		std::uint32_t                maxParticles{8192};
+		detail::ParticleDescriptorCache descriptorCache{};
 
 		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -510,6 +521,11 @@ namespace brassica {
 						.desc = indirectDesc,
 					},
 					graph::ResourceRealization{
+						.key = graph::IdOf<GBufferDepth>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+					},
+					graph::ResourceRealization{
 						.key = graph::IdOf<HdrColor>(),
 						.access = graph::AccessKind::ReadWrite,
 						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
@@ -519,6 +535,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+				}
+			}
+
 			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
@@ -584,6 +606,7 @@ namespace brassica {
 			graph::Read<ParticleTypeBuffer>,
 			graph::Read<AboveWaterParticleAliveBuffer>,
 			graph::Read<AboveWaterParticleIndirectBuffer>,
+			graph::Modify<GBufferDepth>,
 			graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::ParticleRender;
@@ -606,6 +629,7 @@ namespace brassica {
 		vk::DescriptorSet            particleSet;
 		vk::Buffer                   indirectBuffer;
 		std::uint32_t                maxParticles{8192};
+		detail::ParticleDescriptorCache descriptorCache{};
 
 		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -656,6 +680,11 @@ namespace brassica {
 						.desc = indirectDesc,
 					},
 					graph::ResourceRealization{
+						.key = graph::IdOf<GBufferDepth>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+					},
+					graph::ResourceRealization{
 						.key = graph::IdOf<HdrColor>(),
 						.access = graph::AccessKind::ReadWrite,
 						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
@@ -665,6 +694,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+				}
+			}
+
 			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
@@ -747,7 +782,10 @@ namespace brassica {
 		vk::DescriptorSet       particleSet{nullptr};
 
 		graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType> typeBufferNode{
-			std::vector<ParticleType>(16, ParticleType{})
+			std::vector<ParticleType>{
+				ParticleType{.color = glm::vec4(1.0f, 0.95f, 0.7f, 0.95f), .size = 3.0f, .gravityScale = 0.0f, .drag = 0.1f},
+				ParticleType{.color = glm::vec4(0.1f, 0.95f, 0.85f, 0.95f), .size = 2.0f, .gravityScale = 0.0f, .drag = 0.1f},
+			}
 		};
 		ParticleResetNode            resetNode;
 		ParticleLivenessNode         livenessNode;
