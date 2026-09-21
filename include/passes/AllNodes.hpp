@@ -12,7 +12,6 @@
 
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/AtmosphereSkyNode.hpp"
-#include "passes/BallNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/ImGuiNode.hpp"

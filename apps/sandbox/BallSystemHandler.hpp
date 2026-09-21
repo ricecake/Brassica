@@ -3,7 +3,7 @@
 #include <cmath>
 
 #include "Engine.hpp"
-#include "passes/BallNode.hpp"
+#include "passes/EntityNode.hpp"
 #include "SystemHandler.hpp"
 #include "terrain/TerrainClipmap.hpp"
 #include "types/FrameDetails.hpp"
@@ -13,6 +13,10 @@ namespace brassica {
 
 	class BallSystemHandler: public SystemHandler {
 	public:
+		BallSystemHandler() {
+			CreateEntityNode<BallSystemHandler>();
+		}
+
 		void Setup(Engine& engine, const FrameDetails& frameDetails) override {
 			float targetX = 0.0f;
 			float targetZ = -20.0f;
@@ -33,7 +37,7 @@ namespace brassica {
 			cmd.groupCountX = 1;
 			cmd.groupCountY = 1;
 			cmd.groupCountZ = 1;
-			BallNode::s_indirectCmd = cmd;
+			GetEntityNode().SetIndirectCommand(cmd);
 
 			UpdateRenderData(transform);
 		}
@@ -64,12 +68,12 @@ namespace brassica {
 
 	private:
 		void UpdateRenderData(const TransformComponent& transform) {
-			BallPushConstants push{};
+			EntityPushConstants push{};
 			push.positionAndScale = glm::vec4(transform.position, transform.scale.x);
 			push.color = ballColor;
 			push.params = glm::uvec4(rings, pointsPerRing, 0, 0);
 
-			BallNode::s_currentPush = push;
+			GetEntityNode().SetPushConstants(push);
 		}
 
 		entt::entity ballEntity{entt::null};

@@ -235,6 +235,17 @@ namespace brassica {
 		}
 		systemHandlers.push_back(handler);
 		if (device) {
+			render::NodeServices nodeServices{
+				.device = device,
+				.pipelineLibrary = &pipelineLibrary,
+				.shaderWatcher = &shaderWatcher,
+				.terrainAS = &terrainAS,
+				.dispatchLoader = &terrainAS.GetDls(),
+				.physicalRegistry = &physicalRegistry,
+				.swapchainFormat = GetSwapchainFormat(),
+			};
+			handler->InitNode(nodeServices);
+
 			FrameDetails details{
 				.deltaTime = 0.0f,
 				.totalTime = glfwGetTime(),
@@ -248,6 +259,9 @@ namespace brassica {
 	void Engine::Cleanup() {
 		for (auto& handler : systemHandlers) {
 			if (handler) {
+				if (device) {
+					handler->DestroyNode(device);
+				}
 				handler->Cleanup(*this);
 			}
 		}
@@ -496,6 +510,7 @@ namespace brassica {
 		};
 		for (auto& handler : systemHandlers) {
 			if (handler) {
+				handler->InitNode(nodeServices);
 				handler->Setup(*this, initialDetails);
 			}
 		}
@@ -1148,6 +1163,11 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		nodeRegistry.RegisterAllInto(frameGraph);
+		for (auto& handler : systemHandlers) {
+			if (handler) {
+				handler->GetEntityNode().RegisterInto(frameGraph);
+			}
+		}
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);
