@@ -28,7 +28,7 @@ namespace brassica {
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
-		std::uint32_t padding{0};
+		std::uint32_t sceneColor{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -123,6 +123,7 @@ namespace brassica {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
+			push.sceneColor = ctx.Index<HdrColor>();
 
 			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

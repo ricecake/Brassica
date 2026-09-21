@@ -591,7 +591,7 @@ float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig c
     vec3 unused_grad; // Placeholder for when you implement full analytical normals
 
     // 1. Evaluate the divergence-free vector field and its Jacobian
-    vec3 flow = cross_noise_fbm(p, 3, phase, J_flow);
+    vec3 flow = cross_noise_fbm(p, 2, phase, J_flow);
 
     // 2. Isolate the symmetric strain tensor (S)
     mat3 S = 0.5 * (J_flow + transpose(J_flow));
@@ -606,24 +606,29 @@ float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig c
     // Second invariant (I2) yields a scalar representation of shear stress
     float I2 = 0.5 * (I1 * I1 - tr_S2);
 
+    // float continent_mask = smoothstep(0.2, -0.5, I1);
+    // float base_height = dot_noise_fbm(p, 4, phase, unused_grad) * continent_mask;
+    // vec3 p_warped = p + (S * p) * warp_strength;
+
     // 4. Base Continent Mask
     // Map negative divergence (convergence) to 1.0 (land), positive to 0.0 (ocean/valleys)
-    float continent_mask = smoothstep(0.2, -0.5, I1);
+    float continent_mask = 1.0 - smoothstep(-0.5, 0.2, I1);
 
     // Evaluate low-frequency baseline elevation
-    float base_height = dot_noise_fbm(p, 4, phase, unused_grad) * continent_mask;
-
+    float terrain_noise = dot_noise_fbm(p, 4, phase, unused_grad);
+	float base_height = remap(terrain_noise, -1.0, 1.50*continent_mask, -1, 2.0*continent_mask);
     // 5. Anisotropic Domain Warping
     // Multiply p by the strain tensor to stretch the coordinate space along the principal axes of deformation
-    vec3 p_warped = p + (S * p) * warp_strength;
+    vec3 p_warped = p+(S * p) * warp_strength;
 
     // 6. Shear-Guided High-Frequency Detail
     // Isolate areas of high shear stress using I2 to mask the jagged ridges
-    float ridge_mask = smoothstep(0.0, 0.8, abs(I2)) * continent_mask;
+    float ridge_mask = smoothstep(0.0, 0.5, abs(I2)) * continent_mask;
 
     // Evaluate high-frequency noise using the warped domain, mapped to a sharp ridge function
     float raw_ridge = dot_noise_fbm(p_warped, 6, phase + 42.0, unused_grad);
-    float ridge_height = (1.0 - abs(raw_ridge)) * ridge_mask; // Ridged multifractal style
+    float ridge_height = (1.0 - remap(raw_ridge, -1, 1, 0, 1)) * ridge_mask; // Ridged multifractal style
+    // float ridge_height = (1.0 - abs(raw_ridge)) * ridge_mask; // Ridged multifractal style
 
     float finalHeight = base_height + (ridge_height * 0.5);
 

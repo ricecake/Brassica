@@ -15,7 +15,7 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
+	uint  sceneColorIndex;
 } params;
 
 void main() {
@@ -29,6 +29,7 @@ void main() {
 	vec2 screenUV = gl_FragCoord.xy / vec2(gTexSize);
 
 	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, screenUV);
+	vec4 sceneColor = SAMPLE_NEAREST(params.sceneColorIndex, screenUV);
 	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
 	vec3 relWaterPos = inWorldPos - uCameraPosition.xyz;
 
@@ -112,11 +113,11 @@ void main() {
 
 	vec2 refractUV = clamp(screenUV + refractOffset, vec2(0.0), vec2(1.0));
 
-	vec4 refractedAlbedo = SAMPLE_NEAREST(params.gAlbedoIndex, refractUV);
+	vec4 refractedAlbedo = SAMPLE_NEAREST(params.sceneColorIndex, refractUV);
 	vec3 relRefractedPos = SAMPLE_NEAREST(params.gPositionIndex, refractUV).rgb;
 
 	if (isAboveWater && (relWaterPos.y - relRefractedPos.y <= 0.0 || refractedAlbedo.a < 0.01)) {
-		refractedAlbedo = albedo;
+		refractedAlbedo = sceneColor;
 		relRefractedPos = relTerrainPos; // Ensure position falls back too
 	}
 
@@ -176,7 +177,7 @@ void main() {
 	shoreFoam *= 0.65 + 0.35 * foamNoise;
 
 	float crestFactor = clamp((1.0 - waveNormal.y) * 3.5, 0.0, 1.0);
-	float crestFoam = crestFactor * closeFactor * (0.5 + 0.5 * sin(uTime * 3.0 + inWorldPos.x * 0.5));
+	float crestFoam = crestFactor * closeFactor;// * (0.5 + 0.5 * sin(uTime * 3.0 + inWorldPos.x * 0.5));
 
 	float totalFoam = clamp(shoreFoam * 1.25 + crestFoam * 0.6, 0.0, 1.0);
 	if (!isAboveWater) totalFoam *= 0.15; // Diminish foam visibility heavily from underneath

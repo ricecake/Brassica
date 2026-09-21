@@ -4,6 +4,7 @@
 #include "ConfigManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
+#include "terrain/ITerrainClipmap.hpp"
 #include "types/TonemapPushConstants.hpp"
 #include "ui/IWidget.hpp"
 #include "ui/QuickSettingsWidget.hpp"
@@ -41,6 +42,33 @@ namespace brassica {
 
 		widget.Draw();
 		CHECK(widget.m_drawCount == 1);
+	}
+
+	class MockTerrainClipmap: public ITerrainClipmap {
+	public:
+		void Initialize() override { m_initialized = true; }
+		void Shutdown() override { m_initialized = false; }
+		void Regenerate() override { m_regenerated = true; }
+
+		bool m_regenerated{false};
+	};
+
+	TEST_CASE("ITerrainClipmap Service Locator and Regeneration") {
+		ServiceLocator locator;
+		ServiceLocator::SetInstance(&locator);
+
+		auto terrainMock = std::make_shared<MockTerrainClipmap>();
+		terrainMock->Initialize();
+		locator.Provide<ITerrainClipmap>(terrainMock);
+
+		CHECK(locator.Has<ITerrainClipmap>());
+		auto retrieved = locator.Get<ITerrainClipmap>();
+		CHECK_FALSE(terrainMock->m_regenerated);
+
+		retrieved->Regenerate();
+		CHECK(terrainMock->m_regenerated);
+
+		ServiceLocator::SetInstance(nullptr);
 	}
 
 	TEST_CASE("QuickSettingsWidget Configuration Initialization") {
