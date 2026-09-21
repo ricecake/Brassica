@@ -1,53 +1,30 @@
 #pragma once
 
 #include <array>
-#include <cstdint>
 
 #include "vulkan/vulkan.hpp"
-#include <glm/glm.hpp>
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
-#include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "types/SkyPushConstants.hpp"
 
 namespace brassica {
 
 	class ShaderWatcher;
 
-	struct DeferredPushConstants {
-		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-		glm::uvec4 lodOffsets0_3{0u};
-		glm::uvec4 lodOffsets4_7{0u};
-		glm::uvec4 lodOffsets8_11{0u};
-		std::uint32_t gPositionIndex{0};
-		std::uint32_t gNormalIndex{0};
-		std::uint32_t gAlbedoIndex{0};
-		std::uint32_t backgroundIndex{0};
-		std::uint32_t clipmapIndex{0};
-		std::uint32_t tlasIndex{0};
-		std::uint32_t gDepthIndex{0};
-		std::uint32_t minMaxIndex{0};
-		std::uint32_t biomeIndex{0};
-		std::uint32_t visibilityIndex{0};
-	};
-
-	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<AtmosphereRadiance>,
-			graph::Read<ClusteredLighting>,
-			graph::Read<TerrainClipmapTexture>,
-			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>,
-			graph::Read<TerrainTLAS>,
-			graph::Create<HdrColor>>;
+	// Named for what it produces (AtmosphereRadiance: the sky-view/transmittance LUTs composited
+	// with the sun/moon/star discs into a per-pixel HDR radiance value), not for drawing the sky
+	// specifically -- DeferredNode reads that same output as its backdrop wherever no opaque
+	// surface was rendered, not just this node's own fullscreen draw.
+	struct AtmosphereCompositeNode: render::NodeRegistrar<AtmosphereCompositeNode> {
+		using Resources =
+			graph::Declares<graph::Read<SkyViewLUT>, graph::Read<TransmittanceLUT>, graph::Create<AtmosphereRadiance>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -56,14 +33,12 @@ namespace brassica {
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		VertexShader             vertShader;
 		FragmentShader           fragShader;
-		vk::Format               swapchainFormat = vk::Format::eUndefined;
-		DeferredPushConstants    push{};
+		SkyPushConstants         push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			swapchainFormat = services.swapchainFormat;
-			vertShader.CompileVertexFromFile(services.device, "shaders/deferred.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/deferred.frag");
+			vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert");
+			fragShader.CompileFragmentFromFile(services.device, "shaders/atmosphere/sky.frag");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
@@ -80,17 +55,31 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.gridParams = p.terrainGridParams;
-			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
-			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
-			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
+			push.sunDirAndAureole = glm::vec4(p.sunDir, 0.5f);
+			push.moonDirAndCirrus = glm::vec4(p.moonDir, 0.3f);
+			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
+			push.worldScale = p.worldScale;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TransmittanceLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<AtmosphereRadiance>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
@@ -99,16 +88,8 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			push.gPositionIndex = ctx.Index<GBufferPosition>();
-			push.gNormalIndex = ctx.Index<GBufferNormal>();
-			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
-			push.gDepthIndex = ctx.Index<GBufferDepth>();
-			push.backgroundIndex = ctx.Index<AtmosphereRadiance>();
-			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
-			push.tlasIndex = ctx.Index<TerrainTLAS>();
-			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
-			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
-			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
@@ -117,8 +98,9 @@ namespace brassica {
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(DeferredPushConstants)}
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(SkyPushConstants)}
 			};
+
 			render::GraphicsPipelineRequest request{
 				.stages = stages,
 				.state = kPipelineState,
@@ -147,18 +129,13 @@ namespace brassica {
 			vkCmd.setViewport(0, viewport);
 			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eFragment,
-				0,
-				sizeof(DeferredPushConstants),
-				&push
-			);
+			vkCmd
+				.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(SkyPushConstants), &push);
 
 			vkCmd.draw(3, 1, 0, 0);
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(DeferredNode);
+	BRASSICA_REGISTER_NODE(AtmosphereCompositeNode);
 
 } // namespace brassica

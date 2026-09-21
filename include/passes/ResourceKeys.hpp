@@ -13,7 +13,7 @@ namespace brassica {
 
 	struct HdrColor {};
 
-	struct GradientBackground {};
+	struct AtmosphereRadiance {};
 
 	struct GBufferPosition {};
 

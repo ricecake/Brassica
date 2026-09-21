@@ -6,14 +6,14 @@
 #include "graph/Node.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "passes/AtmosphereLUTNode.hpp"
-#include "passes/AtmosphereSkyNode.hpp"
+#include "passes/AtmosphereCompositeNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
 
 using namespace brassica;
 
-TEST_CASE("Real TerrainGenNode/AtmosphereSkyNode/TerrainNode/DeferredNode compose into a renderable, correctly-staged graph") {
+TEST_CASE("Real TerrainGenNode/AtmosphereCompositeNode/TerrainNode/DeferredNode compose into a renderable, correctly-staged graph") {
 	brassica::Engine        engine;
 	brassica::EngineOptions opts;
 	opts.headless = true;

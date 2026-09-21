@@ -784,13 +784,13 @@ namespace {
 		using Resources = Declares<
 			Read<brassica::SkyViewLUT>,
 			Read<brassica::TransmittanceLUT>,
-			Create<brassica::GradientBackground>>;
+			Create<brassica::AtmosphereRadiance>>;
 		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
 		void Execute(NodeContext&) {}
 	};
 
 	struct DeferredReadingSkyNode {
-		using Resources = Declares<Read<brassica::GradientBackground>, Modify<Swapchain>>;
+		using Resources = Declares<Read<brassica::AtmosphereRadiance>, Modify<Swapchain>>;
 		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
 		void Execute(NodeContext&) {}
 	};
