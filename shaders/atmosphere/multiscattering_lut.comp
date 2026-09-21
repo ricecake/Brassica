@@ -4,40 +4,20 @@
 layout(local_size_x = 32, local_size_y = 32) in;
 
 layout(push_constant) uniform MultiScatteringPushConstants {
-	vec3                     rayleighScatteringBase;
-	float                    rayleighScaleHeight;
-	vec3                     ozoneAbsorptionBase;
-	float                    mieScaleHeight;
-	vec3                     hazeColor;
-	float                    mieScatteringBase;
-	float                    mieExtinctionBase;
-	float                    rayleighScale;
-	float                    mieScale;
-	float                    mieAnisotropy;
-	float                    atmosphereHeight;
-	float                    hazeDensity;
-	float                    hazeHeight;
-	float                    waterLevel;
-	float                    padding1;
-	vec3                     waterScatteringBase;
-	float                    waterScale;
-	vec3                     waterExtinctionBase;
-	float                    padding2;
-	layout(offset = 128) uint outIndex;
-	uint                     transmittanceIndex;
+	uint outIndex;
+	uint transmittanceIndex;
 }
-
-u_atmosphere;
+push;
 
 #include "atmosphere/common.glsl"
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
-	return SAMPLE_LINEAR(u_atmosphere.transmittanceIndex, uv).rgb;
+	return SAMPLE_LINEAR(push.transmittanceIndex, uv).rgb;
 }
 
 void main() {
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-	vec2  size = vec2(imageSize(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)]));
+	vec2  size = vec2(imageSize(uImagesRGBA32F[nonuniformEXT(push.outIndex)]));
 	if (any(greaterThanEqual(texel, ivec2(size))))
 		return;
 
@@ -57,8 +37,19 @@ void main() {
 		if (intersectSphere(vec3(0, r, 0), rd, kTopRadius, t0, t1)) {
 			float t_max = t1;
 			float p0, p1;
-			if (intersectSphere(vec3(0, r, 0), rd, kEarthRadius, p0, p1) && p0 > 0.0)
-				t_max = p0;
+			// Epsilon tolerance, not > 0.0: at texel row y=0, r is exactly kEarthRadius, so the ray
+			// origin sits exactly ON the ground sphere. intersectSphere's near root p0 works out to
+			// -b-sqrt(b*b-c) with c=(len(ro)-radius)*(len(ro)+radius) -- mathematically 0 here, but
+			// len(ro) (itself a sqrt) subtracting a ~600-magnitude radius is exactly the setup for
+			// floating-point cancellation error, so p0 lands at a tiny *nonzero* value of either
+			// sign, not a clean 0.0. A strict "> 0.0" (or even ">= 0.0") check then unpredictably
+			// misses the "ray points into the ground" case, and t_max silently falls back to the
+			// full top-of-atmosphere distance (~100km) instead of ~0. Confirmed by hand: this was
+			// inflating the multi-scattering estimate ~10,000x at ground level -- the altitude
+			// every camera normally sits at.
+			const float kGroundEpsilonKM = 0.001;
+			if (intersectSphere(vec3(0, r, 0), rd, kEarthRadius, p0, p1) && p0 > -kGroundEpsilonKM)
+				t_max = max(0.0, p0);
 
 			const int kInnerSteps = 8;
 			float     dt = t_max / float(kInnerSteps);
@@ -89,5 +80,5 @@ void main() {
 	vec3 f_avg = totalF / float(nSamples);
 
 	vec3 multiScat = L_avg / max(vec3(0.1), vec3(1.0) - min(f_avg, vec3(0.9)));
-	imageStore(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)], texel, vec4(multiScat, 1.0));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.outIndex)], texel, vec4(multiScat, 1.0));
 }

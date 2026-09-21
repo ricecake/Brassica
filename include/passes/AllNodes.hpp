@@ -10,8 +10,9 @@
 // everywhere), which is what keeps every node's registration reachable. Adding a new node means
 // adding one #include line here -- nothing else in Engine.hpp/.cpp needs to change.
 
-#include "passes/AtmosphereLUTNode.hpp"
 #include "passes/AtmosphereCompositeNode.hpp"
+#include "passes/AtmosphereLUTNode.hpp"
+#include "passes/SkyBackgroundNode.hpp"
 #include "passes/BallNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"

@@ -4,29 +4,9 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(push_constant) uniform TransmittancePushConstants {
-	vec3                     rayleighScatteringBase;
-	float                    rayleighScaleHeight;
-	vec3                     ozoneAbsorptionBase;
-	float                    mieScaleHeight;
-	vec3                     hazeColor;
-	float                    mieScatteringBase;
-	float                    mieExtinctionBase;
-	float                    rayleighScale;
-	float                    mieScale;
-	float                    mieAnisotropy;
-	float                    atmosphereHeight;
-	float                    hazeDensity;
-	float                    hazeHeight;
-	float                    waterLevel;
-	float                    padding1;
-	vec3                     waterScatteringBase;
-	float                    waterScale;
-	vec3                     waterExtinctionBase;
-	float                    padding2;
-	layout(offset = 128) uint outIndex;
+	uint outIndex;
 }
-
-u_atmosphere;
+push;
 
 #include "atmosphere/common.glsl"
 
@@ -41,10 +21,17 @@ vec3 calculateTransmittance(float r, float mu) {
 
 	float t_max = t1;
 
-	float p0, p1;
+	// Epsilon tolerance on p0, not a strict > 0.0: at texel row y=0, r is exactly kEarthRadius (see
+	// multiscattering_lut.comp's identical fix for the full derivation) -- length(ro) subtracting
+	// a ~600-magnitude radius is exactly the setup for floating-point cancellation, so the near
+	// root can land on either side of 0 for a ray that should read as "the ground is right here."
+	// Left as a strict "> 0.0" here, a downward-looking ray at ground level could fall through to
+	// the p1 (far side of the earth) branch instead, giving a wrong, if less catastrophic, t_max.
+	const float kGroundEpsilonKM = 0.001;
+	float       p0, p1;
 	if (intersectSphere(ro, rd, kEarthRadius, p0, p1)) {
-		if (p0 > 0.0 || p1 > 0.0) {
-			float t_earth = p0 > 0.0 ? p0 : p1;
+		if (p0 > -kGroundEpsilonKM || p1 > 0.0) {
+			float t_earth = p0 > -kGroundEpsilonKM ? max(0.0, p0) : p1;
 			if (t_earth > 0.0)
 				t_max = min(t_max, t_earth);
 
@@ -67,7 +54,7 @@ vec3 calculateTransmittance(float r, float mu) {
 
 void main() {
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-	vec2  size = vec2(imageSize(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)]));
+	vec2  size = vec2(imageSize(uImagesRGBA32F[nonuniformEXT(push.outIndex)]));
 	if (any(greaterThanEqual(texel, ivec2(size))))
 		return;
 
@@ -76,5 +63,5 @@ void main() {
 	UVToTransmittance(uv, r, mu);
 
 	vec3 transmittance = calculateTransmittance(r, mu);
-	imageStore(uImagesRGBA32F[nonuniformEXT(u_atmosphere.outIndex)], texel, vec4(transmittance, 1.0));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.outIndex)], texel, vec4(transmittance, 1.0));
 }

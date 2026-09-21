@@ -1037,6 +1037,11 @@ namespace brassica {
 			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));
 		}
 
+		if (atmosphereUboMapped[activeFrame]) {
+			std::memcpy(atmosphereUboMapped[activeFrame], &atmosphere, sizeof(AtmospherePushConstants));
+			vmaFlushAllocation(allocator, atmosphereUboAllocations[activeFrame], 0, sizeof(AtmospherePushConstants));
+		}
+
 		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
 		if (lightsSSBOMapped[activeFrame]) {
 			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
@@ -1137,6 +1142,7 @@ namespace brassica {
 			.multiScatScale = 1.0f,
 			.cloudShadowIntensity = 0.5f,
 			.skyExposure = lightManager.GetSkyExposure(),
+			.atmosphere = atmosphere,
 		};
 		auto& nodeRegistry = render::EngineNodeRegistry::Instance();
 		nodeRegistry.SetFrameParamsAll(frameParams);
@@ -1289,7 +1295,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1314,13 +1320,19 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 4: AtmosphereUBO
+		bindings[4]
+			.setBinding(4)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 2 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 3 * FRAME_OVERLAP},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
@@ -1395,14 +1407,22 @@ namespace brassica {
 				clusterGridAllocations[i],
 				nullptr
 			);
+			createBufferHelper(
+				sizeof(AtmospherePushConstants),
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				atmosphereUboBuffers[i],
+				atmosphereUboAllocations[i],
+				&atmosphereUboMapped[i]
+			);
 
-			std::array<vk::DescriptorBufferInfo, 4> bufferDescs{};
+			std::array<vk::DescriptorBufferInfo, 5> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
 			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
+			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
 
-			std::array<vk::WriteDescriptorSet, 4> writes{};
+			std::array<vk::WriteDescriptorSet, 5> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -1423,6 +1443,11 @@ namespace brassica {
 				.setDstBinding(3)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[3]);
+			writes[4]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(4)
+				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+				.setBufferInfo(bufferDescs[4]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -1441,6 +1466,12 @@ namespace brassica {
 				lightingUboBuffers[i] = nullptr;
 				lightingUboAllocations[i] = nullptr;
 				lightingUboMapped[i] = nullptr;
+			}
+			if (atmosphereUboBuffers[i] && atmosphereUboAllocations[i]) {
+				vmaDestroyBuffer(allocator, atmosphereUboBuffers[i], atmosphereUboAllocations[i]);
+				atmosphereUboBuffers[i] = nullptr;
+				atmosphereUboAllocations[i] = nullptr;
+				atmosphereUboMapped[i] = nullptr;
 			}
 			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
 				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);

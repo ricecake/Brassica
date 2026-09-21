@@ -67,3 +67,13 @@ TEST_CASE("water.task/water.mesh/water.frag compile to valid SPIR-V against the 
 TEST_CASE("WaterPushConstants is exactly as large as water.task/water.mesh/water.frag's shared push_constant block") {
 	CHECK(sizeof(WaterPushConstants) == 48);
 }
+
+TEST_CASE("atmosphere/composite.frag compiles to valid SPIR-V against the real AtmosphereUBO/bindless.glsl substitution") {
+	RegisterBindlessSamplerConstants();
+
+	FragmentShader frag;
+	CHECK(frag.CompileFragmentFromFile(vk::Device{}, "shaders/atmosphere/composite.frag"));
+	CHECK(!frag.GetSPIRV().empty());
+
+	Shader::ClearConstants();
+}

@@ -5,32 +5,44 @@
 
 const float kEarthRadius = FAKE_PLANET_RADIUS / 1000.0; // 600.0 km
 
-#ifdef ATMOSPHERE_NO_PUSH_CONSTANTS
-const vec3 kRayleighScattering = vec3(5.802e-3, 13.558e-3, 33.100e-3);
-const float kRayleighScaleHeight = 8.0;
-const vec3 kOzoneAbsorption = vec3(0.650e-3, 1.881e-3, 0.085e-3);
-const float kMieScaleHeight = 1.2;
-const vec3 hazeColor = vec3(0.6, 0.7, 0.8);
-const vec3 kMieScattering = vec3(3.996e-3);
-const vec3 kMieExtinction = vec3(4.440e-3);
-const float u_rayleighScale = 1.1;
-const float u_mieScale = 0.35;
-const float u_mieAnisotropy = 0.8;
-const float kAtmosphereHeight = 100.0;
-const float u_hazeDensity = 0.015;
-const float u_hazeHeight = 20.0;
-const float u_waterLevel = 0.0;
-const vec3 kWaterScattering = vec3(0.003, 0.007, 0.012);
-const float u_waterScale = 1.0;
-const vec3 kWaterExtinction = vec3(0.12, 0.04, 0.02);
-#else
+// Real, globally-bound tuning data -- not a per-node push constant, so any shader that includes
+// this file gets it for free, and it's the hook for editing these values via an interface later
+// without touching a single call site. Mirrors AtmospherePushConstants (types/AtmospherePushConstants.hpp)
+// field-for-field; keep the two in sync by hand, same convention as every other *PushConstants
+// mirror in this codebase.
+layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
+	vec3  rayleighScatteringBase;
+	float rayleighScaleHeight;
+	vec3  ozoneAbsorptionBase;
+	float mieScaleHeight;
+	vec3  hazeColor;
+	float mieScatteringBase;
+	float mieExtinctionBase;
+	float rayleighScale;
+	float mieScale;
+	float mieAnisotropy;
+	float atmosphereHeight;
+	float hazeDensity;
+	float hazeHeight;
+	float waterLevel;
+	float waterBlendDepth;
+	vec3  waterScatteringBase;
+	float waterScale;
+	vec3  waterExtinctionBase;
+	float padding2;
+}
+u_atmosphere;
+
 #define kRayleighScattering u_atmosphere.rayleighScatteringBase
 #define kRayleighScaleHeight u_atmosphere.rayleighScaleHeight
 #define kOzoneAbsorption u_atmosphere.ozoneAbsorptionBase
 #define kMieScaleHeight u_atmosphere.mieScaleHeight
 #define hazeColor u_atmosphere.hazeColor
-#define kMieScattering u_atmosphere.mieScatteringBase
-#define kMieExtinction u_atmosphere.mieExtinctionBase
+// mieScatteringBase/mieExtinctionBase are scalars (uniform across wavelengths) on the C++ side;
+// every consumer here wants a vec3, so broadcast explicitly at the alias site rather than at every
+// use site.
+#define kMieScattering vec3(u_atmosphere.mieScatteringBase)
+#define kMieExtinction vec3(u_atmosphere.mieExtinctionBase)
 #define u_rayleighScale u_atmosphere.rayleighScale
 #define u_mieScale u_atmosphere.mieScale
 #define u_mieAnisotropy u_atmosphere.mieAnisotropy
@@ -38,10 +50,10 @@ const vec3 kWaterExtinction = vec3(0.12, 0.04, 0.02);
 #define u_hazeDensity u_atmosphere.hazeDensity
 #define u_hazeHeight u_atmosphere.hazeHeight
 #define u_waterLevel u_atmosphere.waterLevel
+#define u_waterBlendDepth u_atmosphere.waterBlendDepth
 #define kWaterScattering u_atmosphere.waterScatteringBase
 #define u_waterScale u_atmosphere.waterScale
 #define kWaterExtinction u_atmosphere.waterExtinctionBase
-#endif
 #define kTopRadius (kEarthRadius + kAtmosphereHeight)
 
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {
@@ -74,10 +86,15 @@ float getExponentialFogDensity(float h) {
 }
 
 struct Sampling {
-	vec3 rayleigh;
-	vec3 mie;
-	vec3 extinction;
-	vec3 fogScattering;
+	vec3  rayleigh;
+	vec3  mie;
+	vec3  extinction;
+	vec3  fogScattering;
+	// 0 = pure air, 1 = fully water. Exposed so a multi-scattering LUT precomputed for air's
+	// (three-orders-of-magnitude smaller) scattering coefficients can fade its own contribution
+	// out rather than being reused unchanged against water's -- see aerial_perspective.glsl's
+	// marchAtmosphereSegment.
+	float waterBlend;
 };
 
 Sampling getAtmosphereProperties(float h) {
@@ -92,22 +109,29 @@ Sampling getAtmosphereProperties(float h) {
 	s.fogScattering = hazeColor * fd;
 	vec3 airExtinction = s.rayleigh + hazeColor * (kMieExtinction * md * u_mieScale) + kOzoneAbsorption * od + s.fogScattering;
 
-	// Underwater scattering check: if h is below sea level / water level
+	// Underwater: if h is below sea level, transition smoothly to water scattering/extinction.
+	// wFactor's width (u_waterBlendDepth, metres) used to be a hardcoded depth*10.0, saturating at
+	// 100m -- a camera 2m underwater got ~98% air optics regardless of the coefficients below.
 	float waterLevelKM = u_waterLevel / 1000.0;
 	if (h < waterLevelKM) {
 		float depth = waterLevelKM - h;
-		// Transition smoothly to water scattering & extinction coefficients
-		vec3 wScat = kWaterScattering * u_waterScale;
-		vec3 wExt = kWaterExtinction * u_waterScale;
+		float blendKM = max(1e-6, u_waterBlendDepth / 1000.0);
+		float wFactor = clamp(depth / blendKM, 0.0, 1.0);
+		vec3  wScat = kWaterScattering * u_waterScale;
+		vec3  wExt = kWaterExtinction * u_waterScale;
 
-		// Combine or override with water optical properties
-		float wFactor = clamp(depth * 10.0, 0.0, 1.0); // smooth step transition across surface boundary
-		s.rayleigh = mix(s.rayleigh, wScat, wFactor);
-		s.mie = mix(s.mie, wScat * 0.5, wFactor);
-		s.fogScattering = mix(s.fogScattering, wScat * 0.2, wFactor);
+		// All water scattering routed through the single forward (Mie-phase) lobe, total exactly
+		// wScat -- summing scattering across rayleigh+mie+fog terms independently would break the
+		// scattering/extinction == shallowWaterTint identity waterScatteringBase's default is
+		// derived from (see AtmospherePushConstants.hpp).
+		s.rayleigh = mix(s.rayleigh, vec3(0.0), wFactor);
+		s.mie = mix(s.mie, wScat, wFactor);
+		s.fogScattering = mix(s.fogScattering, vec3(0.0), wFactor);
 		s.extinction = mix(airExtinction, wExt, wFactor);
+		s.waterBlend = wFactor;
 	} else {
 		s.extinction = airExtinction;
+		s.waterBlend = 0.0;
 	}
 
 	return s;
@@ -135,29 +159,6 @@ void UVToTransmittance(vec2 uv, out float r, out float mu) {
 }
 
 /**
- * Scaffolding / Hook: Volumetric Lighting & Light Shafts
- *
- * Integration Point for Volumetric Light Shafts:
- * Future passes will evaluate cascaded shadow maps / shadow ray queries along view rays
- * to compute volumetric shadows, crepuscular rays, and localized light shafts.
- *
- * @param rayOrigin     - Start position of ray (world space, km or meters relative to camera)
- * @param rayDir        - Normalized ray direction
- * @param rayLength     - Length of ray segment
- * @param lightDir      - Sun/moon light direction vector
- * @param lightRadiance - Directional light radiance
- * @return In-scattered volumetric light contribution
- */
-vec3 evaluateVolumetricLighting(vec3 rayOrigin, vec3 rayDir, float rayLength, vec3 lightDir, vec3 lightRadiance) {
-	// SCAFFOLD: Currently evaluates unobstructed directional light in-scattering.
-	// When volumetric shadow maps / ray queries are bound, sample visibility along the ray step.
-	float cosTheta = dot(rayDir, lightDir);
-	float phase = miePhase(cosTheta);
-	float approxVisibility = 1.0; // Hook: replace with shadow map / ray query visibility
-	return lightRadiance * phase * approxVisibility;
-}
-
-/**
  * Scaffolding / Hook: Raymarched Volumetric Clouds
  *
  * Integration Point for Raymarched Clouds:
@@ -177,49 +178,6 @@ vec4 evaluateRaymarchedClouds(vec3 rayOrigin, vec3 rayDir, float maxDistance, ve
 	// Future implementation will march between cloud bottom (~1.5km) and cloud top (~4.0km)
 	// sampling weather textures, calculating powder effect & Henyey-Greenstein phase scattering.
 	return vec4(0.0, 0.0, 0.0, 0.0);
-}
-
-/**
- * Computes atmospheric and exponential fog aerial perspective for rendered surfaces over distance.
- * Takes camera position, ray direction, surface distance (km), light direction, and light radiance.
- * Returns in-scattered radiance and outputs transmittance.
- */
-vec3 evaluateAerialPerspective(
-	vec3 rayOrigin,
-	vec3 rayDir,
-	float distanceKM,
-	vec3 sunDir,
-	vec3 sunRadiance,
-	out vec3 outTransmittance
-) {
-	const int kSteps = 16;
-	float dt = distanceKM / float(kSteps);
-	vec3 L = vec3(0.0);
-	vec3 T = vec3(1.0);
-
-	float cosTheta = dot(rayDir, sunDir);
-	float pRayleigh = rayleighPhase(cosTheta);
-	float pMie = miePhase(cosTheta);
-
-	for (int i = 0; i < kSteps; ++i) {
-		float t = (float(i) + 0.5) * dt;
-		vec3 p = rayOrigin + rayDir * t;
-		float h = p.y; // altitude in km relative to Y=0 sea level
-
-		Sampling s = getAtmosphereProperties(h);
-
-		// Volumetric lighting shadow hook (defaults to 1.0)
-		vec3 vLight = evaluateVolumetricLighting(p, rayDir, dt, sunDir, sunRadiance);
-
-		vec3 scatter = (s.rayleigh * pRayleigh + (s.mie + s.fogScattering) * pMie);
-		vec3 inScattered = scatter * vLight * dt;
-
-		L += T * inScattered;
-		T *= exp(-s.extinction * dt);
-	}
-
-	outTransmittance = T;
-	return L;
 }
 
 #endif
