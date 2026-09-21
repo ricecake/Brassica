@@ -280,21 +280,32 @@ namespace brassica {
 			int deltaX = static_cast<int>(std::round(diff.x / texelSize));
 			int deltaZ = static_cast<int>(std::round(diff.y / texelSize));
 
-			if (deltaX == 0 && deltaZ == 0) {
+			if (m_forceRegenerate) {
+				info.delta = glm::ivec2(TERRAIN_MAP_DIM, TERRAIN_MAP_DIM);
+				info.centerWorldPos = newCenter;
+				info.gridOffset.x = (info.gridOffset.x + deltaX) % static_cast<int>(TERRAIN_MAP_DIM);
+				if (info.gridOffset.x < 0)
+					info.gridOffset.x += static_cast<int>(TERRAIN_MAP_DIM);
+
+				info.gridOffset.y = (info.gridOffset.y + deltaZ) % static_cast<int>(TERRAIN_MAP_DIM);
+				if (info.gridOffset.y < 0)
+					info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
+			} else if (deltaX == 0 && deltaZ == 0) {
 				info.delta = glm::ivec2(0, 0);
 				continue;
+			} else {
+				info.delta = glm::ivec2(deltaX, deltaZ);
+				info.centerWorldPos = newCenter;
+				info.gridOffset.x = (info.gridOffset.x + deltaX) % static_cast<int>(TERRAIN_MAP_DIM);
+				if (info.gridOffset.x < 0)
+					info.gridOffset.x += static_cast<int>(TERRAIN_MAP_DIM);
+
+				info.gridOffset.y = (info.gridOffset.y + deltaZ) % static_cast<int>(TERRAIN_MAP_DIM);
+				if (info.gridOffset.y < 0)
+					info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
 			}
-
-			info.delta = glm::ivec2(deltaX, deltaZ);
-			info.centerWorldPos = newCenter;
-			info.gridOffset.x = (info.gridOffset.x + deltaX) % static_cast<int>(TERRAIN_MAP_DIM);
-			if (info.gridOffset.x < 0)
-				info.gridOffset.x += static_cast<int>(TERRAIN_MAP_DIM);
-
-			info.gridOffset.y = (info.gridOffset.y + deltaZ) % static_cast<int>(TERRAIN_MAP_DIM);
-			if (info.gridOffset.y < 0)
-				info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
 		}
+		m_forceRegenerate = false;
 	}
 
 	void TerrainClipmap::Cleanup() {

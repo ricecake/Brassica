@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
+#include "terrain/ITerrainClipmap.hpp"
 #include "types/TonemapPushConstants.hpp"
 
 namespace brassica::ui {
@@ -121,6 +122,12 @@ namespace brassica::ui {
 			if (ImGui::Checkbox("Render Terrain##Quick", &m_renderTerrain)) {
 				if (cfg) {
 					cfg->SetAppSetting("render_terrain", m_renderTerrain);
+				}
+			}
+			if (ImGui::Button("Regenerate Terrain##Quick")) {
+				if (ServiceLocator::Instance().Has<ITerrainClipmap>()) {
+					auto terrainClipmap = ServiceLocator::Instance().Get<ITerrainClipmap>();
+					terrainClipmap->Regenerate();
 				}
 			}
 

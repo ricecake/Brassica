@@ -476,6 +476,9 @@ namespace brassica {
 		serviceLocator.Provide<AsyncTerrainUploader>(
 			std::shared_ptr<AsyncTerrainUploader>(&terrainUploader, [](AsyncTerrainUploader*) {})
 		);
+		serviceLocator.Provide<ITerrainClipmap>(
+			std::shared_ptr<ITerrainClipmap>(&terrainClipmap, [](ITerrainClipmap*) {})
+		);
 		serviceLocator.Provide<TerrainClipmap>(std::shared_ptr<TerrainClipmap>(&terrainClipmap, [](TerrainClipmap*) {
 		}));
 		serviceLocator.Provide<TerrainAccelerationStructure>(

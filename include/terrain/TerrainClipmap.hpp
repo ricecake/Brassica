@@ -7,7 +7,7 @@
 #include <glm/glm.hpp>
 
 #include "graph/Execution.hpp"
-#include "IManager.hpp"
+#include "terrain/ITerrainClipmap.hpp"
 #include "vk_mem_alloc.h"
 
 namespace brassica {
@@ -35,7 +35,7 @@ namespace brassica {
 
 	class AsyncTerrainUploader;
 
-	class TerrainClipmap: public IManager {
+	class TerrainClipmap: public ITerrainClipmap {
 	public:
 		TerrainClipmap() = default;
 		~TerrainClipmap() override;
@@ -58,6 +58,8 @@ namespace brassica {
 		void Cleanup();
 
 		void UpdateCameraPosition(const glm::vec3& cameraPos);
+
+		void Regenerate() override { m_forceRegenerate = true; }
 
 		// Unified CPU Terrain Generator
 		static glm::vec4 SampleTerrain(float worldX, float worldZ, float texelSize);
@@ -128,6 +130,7 @@ namespace brassica {
 		vk::Sampler sampler{nullptr};
 
 		std::vector<ClipmapLevelInfo> levelInfos;
+		bool                          m_forceRegenerate{false};
 
 		void CreateTextureArrays();
 		void CreateSampler();
