@@ -49,7 +49,7 @@ clean:
 # (tests/test_physical_backend.cpp) -- not here.
 graph-test:
 	@mkdir -p $(BUILD_DIR)/bin
-	@$(CXX) $(GRAPH_CXXFLAGS) -o $(BUILD_DIR)/bin/test_graph tests/graph/test_graph.cpp src/lighting/LightManager.cpp src/lighting/LightningManager.cpp src/ArgparseManager.cpp src/ConfigManager.cpp src/ui/QuickSettingsWidget.cpp tests/test_ui_manager.cpp external/imgui/imgui.cpp external/imgui/imgui_draw.cpp external/imgui/imgui_widgets.cpp external/imgui/imgui_tables.cpp
+	@$(CXX) $(GRAPH_CXXFLAGS) -o $(BUILD_DIR)/bin/test_graph tests/graph/test_graph.cpp src/lighting/LightManager.cpp src/lighting/LightningManager.cpp src/ArgparseManager.cpp src/ConfigManager.cpp src/ui/QuickSettingsWidget.cpp src/ui/ManagerSettingsWidget.cpp tests/test_ui_manager.cpp external/imgui/imgui.cpp external/imgui/imgui_draw.cpp external/imgui/imgui_widgets.cpp external/imgui/imgui_tables.cpp
 	@$(BUILD_DIR)/bin/test_graph
 
 # Compile-time assertions only, no link/run step. Fastest inner loop while iterating on the

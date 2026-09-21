@@ -6,6 +6,7 @@
 #include "terrain/ITerrainClipmap.hpp"
 #include "types/TonemapPushConstants.hpp"
 #include "ui/IWidget.hpp"
+#include "ui/ManagerSettingsWidget.hpp"
 #include "ui/QuickSettingsWidget.hpp"
 
 namespace brassica {
@@ -109,6 +110,72 @@ namespace brassica {
 		// Directional Moon reflected radiance
 		CHECK(lights[1].type == DIRECTIONAL_LIGHT);
 		CHECK(lights[1].baseIntensity >= 0.0f);
+	}
+
+	TEST_CASE("Manager Active State Return, Accept, and Reflection") {
+		LightManager lightMgr;
+		lightMgr.Initialize();
+
+		// Check manager name
+		CHECK(lightMgr.GetManagerName() == "LightManager");
+
+		// Get active state struct
+		LightManager::State state = lightMgr.GetState();
+		CHECK(state.cycleTime == constants::Class::Lighting::DefaultCycleTime);
+		CHECK(state.skyExposure == constants::Class::Lighting::DefaultSkyExposure);
+
+		// Modify state struct
+		state.cycleTime = 18.5f;
+		state.skyExposure = 3.2f;
+		state.ambientLight = glm::vec3(0.5f, 0.4f, 0.3f);
+		state.cyclePaused = true;
+
+		// Accept state struct
+		lightMgr.SetState(state);
+
+		// Verify manager updated
+		LightManager::State newState = lightMgr.GetState();
+		CHECK(newState.cycleTime == 18.5f);
+		CHECK(newState.skyExposure == 3.2f);
+		CHECK(newState.ambientLight == glm::vec3(0.5f, 0.4f, 0.3f));
+		CHECK(newState.cyclePaused == true);
+	}
+
+	TEST_CASE("Automatic Manager State Serialization with ConfigManager") {
+		ConfigManager config("TestApp");
+		config.Initialize();
+
+		LightManager lightMgr;
+		lightMgr.Initialize();
+
+		auto state = lightMgr.GetState();
+		state.cycleTime = 14.0f;
+		state.skyExposure = 2.5f;
+		lightMgr.SetState(state);
+
+		// Save state automatically
+		lightMgr.SaveState(config);
+
+		// Verify settings exist under Application.TestApp.LightManager or Manager.LightManager
+		CHECK(config.HasValue("Application.TestApp.LightManager", "cycleTime"));
+		CHECK(config.GetManagerSetting<float>("LightManager", "cycleTime", 0.0f) == 14.0f);
+		CHECK(config.GetManagerSetting<float>("LightManager", "skyExposure", 0.0f) == 2.5f);
+
+		// Instantiate new manager and load state automatically
+		LightManager newLightMgr;
+		newLightMgr.Initialize();
+		newLightMgr.LoadState(config);
+
+		auto loadedState = newLightMgr.GetState();
+		CHECK(loadedState.cycleTime == 14.0f);
+		CHECK(loadedState.skyExposure == 2.5f);
+	}
+
+	TEST_CASE("ManagerSettingsWidget Creation and Drawing") {
+		ui::ManagerSettingsWidget widget;
+		CHECK(widget.GetTitle() == "Manager Settings");
+		CHECK(widget.GetCategory() == "Settings");
+		CHECK_FALSE(widget.IsVisible());
 	}
 
 } // namespace brassica

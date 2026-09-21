@@ -10,6 +10,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
+#include "ui/ManagerSettingsWidget.hpp"
 #include "ui/QuickSettingsWidget.hpp"
 
 namespace brassica {
@@ -34,8 +35,9 @@ namespace brassica {
 
 		m_initialized = true;
 
-		// Add default Quick Settings widget
+		// Add default Quick Settings and Manager Settings widgets
 		AddWidget(std::make_shared<ui::QuickSettingsWidget>());
+		AddWidget(std::make_shared<ui::ManagerSettingsWidget>());
 	}
 
 	void ImGuiManager::InitVulkanAndGlfw(
