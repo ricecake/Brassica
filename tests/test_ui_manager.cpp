@@ -171,7 +171,7 @@ namespace brassica {
 		CHECK(loadedState.skyExposure == 2.5f);
 	}
 
-	TEST_CASE("ManagerSettingsWidget Creation and Drawing") {
+	TEST_CASE("ManagerSettingsWidget Creation") {
 		ui::ManagerSettingsWidget widget;
 		CHECK(widget.GetTitle() == "Manager Settings");
 		CHECK(widget.GetCategory() == "Settings");
