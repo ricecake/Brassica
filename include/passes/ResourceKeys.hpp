@@ -60,6 +60,8 @@ namespace brassica {
 
 	struct ParticleIndirectBuffer {};
 
-	struct BallIndirectBuffer {};
+	struct EntityIndirectBuffer {};
+
+	using BallIndirectBuffer = EntityIndirectBuffer;
 
 } // namespace brassica

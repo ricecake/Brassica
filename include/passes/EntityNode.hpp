@@ -3,27 +3,41 @@
 #include <array>
 #include <cstdint>
 
-#include "vulkan/vulkan.hpp"
+#include "VulkanCompat.hpp"
+
+#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
+#define BRASSICA_HAS_VULKAN 1
+#include "graph/PhysicalRegistry.hpp"
+#include "graph/PhysicalResource.hpp"
+#include "render/PipelineLibrary.hpp"
+#include "Shader.hpp"
+#include "ShaderWatcher.hpp"
+#else
+namespace brassica {
+	class ShaderWatcher {};
+	namespace render {
+		class PipelineLibrary {};
+	} // namespace render
+} // namespace brassica
+#endif
+
 #include <glm/glm.hpp>
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
-#include "graph/PhysicalRegistry.hpp"
-#include "graph/PhysicalResource.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
-#include "render/PipelineLibrary.hpp"
-#include "Shader.hpp"
-#include "ShaderWatcher.hpp"
 
 namespace brassica {
 
-	struct BallPushConstants {
+	struct EntityPushConstants {
 		glm::vec4  positionAndScale{0.0f, 15.0f, 0.0f, 3.0f};
 		glm::vec4  color{0.0f, 0.4f, 1.0f, 1.0f}; // Bright blue
 		glm::uvec4 params{8, 12, 0, 0};           // rings, pointsPerRing
 	};
+
+	using BallPushConstants = EntityPushConstants;
 
 	struct MeshTasksIndirectCommand {
 		std::uint32_t groupCountX{1};
@@ -31,9 +45,10 @@ namespace brassica {
 		std::uint32_t groupCountZ{1};
 	};
 
-	struct BallNode: render::NodeRegistrar<BallNode> {
-		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Create<BallIndirectBuffer>>;
+	struct EntityNode {
+		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Modify<EntityIndirectBuffer>>;
 
+#if BRASSICA_HAS_VULKAN
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
@@ -42,17 +57,22 @@ namespace brassica {
 			.enableShadingRate = false,
 		};
 
-		render::PipelineLibrary*     pipelineLibrary = nullptr;
-		TaskShader                   taskShader;
-		MeshShader                   meshShader;
-		FragmentShader               fragShader;
-		const DispatchLoaderDynamic* dls = nullptr;
-		BallPushConstants            push{};
+		TaskShader     taskShader;
+		MeshShader     meshShader;
+		FragmentShader fragShader;
+#endif
 
-		static BallPushConstants        s_currentPush;
-		static MeshTasksIndirectCommand s_indirectCmd;
+		render::PipelineLibrary*     pipelineLibrary = nullptr;
+		const DispatchLoaderDynamic* dls = nullptr;
+		EntityPushConstants          push{};
+		MeshTasksIndirectCommand     indirectCmd{0, 0, 0};
+
+		void SetPushConstants(const EntityPushConstants& p) { push = p; }
+
+		void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) { indirectCmd = cmd; }
 
 		void Init(const render::NodeServices& services) {
+#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			dls = services.dispatchLoader;
 			taskShader.CompileTaskFromFile(services.device, "shaders/ball.task");
@@ -61,22 +81,36 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+#else
+			(void)services;
+#endif
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
+#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&taskShader);
 			watcher.RegisterShader(&meshShader);
 			watcher.RegisterShader(&fragShader);
+#else
+			(void)watcher;
+#endif
 		}
 
 		void Destroy(vk::Device device) {
+#if BRASSICA_HAS_VULKAN
 			taskShader.Destroy(device);
 			meshShader.Destroy(device);
 			fragShader.Destroy(device);
+#else
+			(void)device;
+#endif
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+			r.isActive = (indirectCmd.groupCountX > 0 || indirectCmd.groupCountY > 0 || indirectCmd.groupCountZ > 0);
+
+#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferPosition>(),
@@ -110,19 +144,21 @@ namespace brassica {
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<BallIndirectBuffer>(),
+					.key = graph::IdOf<EntityIndirectBuffer>(),
 					.access = graph::AccessKind::Write,
 					.desc = indirectDesc,
 				}
 			);
+#else
+			(void)ctx;
+#endif
 
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			push = s_currentPush;
-
-			ctx.WriteSpan<BallIndirectBuffer>(std::span<const MeshTasksIndirectCommand>(&s_indirectCmd, 1));
+#if BRASSICA_HAS_VULKAN
+			ctx.WriteSpan<EntityIndirectBuffer>(std::span<const MeshTasksIndirectCommand>(&indirectCmd, 1));
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
@@ -137,7 +173,7 @@ namespace brassica {
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
 				0,
-				sizeof(BallPushConstants)
+				sizeof(EntityPushConstants)
 			}};
 			render::GraphicsPipelineRequest      request{
 				.stages = stages,
@@ -172,7 +208,7 @@ namespace brassica {
 				resolved.layout,
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
 				0,
-				sizeof(BallPushConstants),
+				sizeof(EntityPushConstants),
 				&push
 			);
 
@@ -180,7 +216,7 @@ namespace brassica {
 			std::uint64_t offset = 0;
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					if (auto physBuf = registry->GetBuffer<BallIndirectBuffer>()) {
+					if (auto physBuf = registry->GetBuffer<EntityIndirectBuffer>()) {
 						indirectBuf = physBuf->GetBuffer();
 						offset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
 					}
@@ -196,12 +232,15 @@ namespace brassica {
 					sizeof(MeshTasksIndirectCommand)
 				);
 			} else if (dls && dls->vkCmdDrawMeshTasksEXT) {
-				std::uint32_t groups = s_indirectCmd.groupCountX > 0 ? s_indirectCmd.groupCountX : 1;
+				std::uint32_t groups = indirectCmd.groupCountX > 0 ? indirectCmd.groupCountX : 1;
 				vkCmd.drawMeshTasksEXT(groups, 1, 1, *dls);
 			}
+#else
+			(void)ctx;
+#endif
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(BallNode);
+	using BallNode = EntityNode;
 
 } // namespace brassica
