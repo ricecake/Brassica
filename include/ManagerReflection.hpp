@@ -83,13 +83,8 @@ namespace brassica {
 		StateStruct&                state,
 		const FieldReflect<Class, T>& field
 	) {
-		if (config.HasValue(section, field.name) ||
-			config.HasValue("Manager." + section, field.name) ||
-			config.HasValue("Application." + config.GetApplicationName() + "." + section, field.name)) {
-			state.*field.member = config.template GetManagerSetting<T>(section, field.name, state.*field.member);
-			return true;
-		}
-		return false;
+		state.*field.member = config.template GetManagerSetting<T>(section, field.name, state.*field.member);
+		return true;
 	}
 
 	template <typename StateStruct, typename Class, typename T>

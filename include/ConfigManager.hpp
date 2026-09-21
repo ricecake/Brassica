@@ -176,12 +176,12 @@ namespace brassica {
 	};
 
 	template <typename Derived, typename StateType>
-	void ManagerBase<Derived, StateType>::SaveState(ConfigManager& config) const {
+	inline void ManagerBase<Derived, StateType>::SaveState(ConfigManager& config) const {
 		SaveStateToConfig(config, GetManagerName(), GetState());
 	}
 
 	template <typename Derived, typename StateType>
-	void ManagerBase<Derived, StateType>::LoadState(const ConfigManager& config) {
+	inline void ManagerBase<Derived, StateType>::LoadState(const ConfigManager& config) {
 		State state = GetState();
 		if (LoadStateToConfig(config, GetManagerName(), state)) {
 			SetState(state);
@@ -189,7 +189,7 @@ namespace brassica {
 	}
 
 	template <typename Derived, typename StateType>
-	bool ManagerBase<Derived, StateType>::DrawUI() {
+	inline bool ManagerBase<Derived, StateType>::DrawUI() {
 		State state = GetState();
 		if (DrawReflectedStateUI(GetManagerName(), state)) {
 			SetState(state);

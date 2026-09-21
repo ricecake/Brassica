@@ -39,6 +39,9 @@ namespace brassica::ui {
 			if (ServiceLocator::Instance().Has<ArgparseManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ArgparseManager>().get());
 			}
+			if (ServiceLocator::Instance().Has<ConfigManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<ConfigManager>().get());
+			}
 
 			for (auto* mgr : managers) {
 				if (!mgr)

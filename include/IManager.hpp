@@ -89,3 +89,5 @@ namespace brassica {
 	};
 
 } // namespace brassica
+
+#include "ConfigManager.hpp"
