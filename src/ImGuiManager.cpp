@@ -140,7 +140,7 @@ namespace brassica {
 		}
 	}
 
-	void ImGuiManager::NewFrame(const glm::vec3& cameraPosition) {
+	void ImGuiManager::NewFrame(const CameraData& camera) {
 		if (!m_initialized)
 			return;
 
@@ -185,7 +185,7 @@ namespace brassica {
 				ImGui::EndMainMenuBar();
 			}
 
-			// Render bottom HUD overlay (Location and FPS status)
+			// Render bottom HUD overlay (Location, Speed, Orientation, and FPS status)
 			ImGuiIO&       io = ImGui::GetIO();
 			ImGuiViewport* viewport = ImGui::GetMainViewport();
 
@@ -205,11 +205,19 @@ namespace brassica {
 			if (ImGui::Begin("Brassica Minimal Overlay", nullptr, flags)) {
 				float fps = io.Framerate;
 				float frameTime = fps > 0.0f ? (1000.0f / fps) : 0.0f;
+				float pitchDeg = glm::degrees(camera.pitch);
+				float yawDeg = glm::degrees(camera.yaw);
+				float rollDeg = glm::degrees(camera.roll);
+
 				ImGui::Text(
-					"Location: (%.2f, %.2f, %.2f) | %.1f FPS (%.2f ms)",
-					cameraPosition.x,
-					cameraPosition.y,
-					cameraPosition.z,
+					"Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | %.1f FPS (%.2f ms)",
+					camera.position.x,
+					camera.position.y,
+					camera.position.z,
+					camera.speed,
+					pitchDeg,
+					yawDeg,
+					rollDeg,
 					fps,
 					frameTime
 				);
@@ -227,6 +235,12 @@ namespace brassica {
 		if (m_visible) {
 			PositionMinimizedWindows();
 		}
+	}
+
+	void ImGuiManager::NewFrame(const glm::vec3& cameraPosition) {
+		CameraData dummyCam{};
+		dummyCam.position = cameraPosition;
+		NewFrame(dummyCam);
 	}
 
 	void ImGuiManager::PositionMinimizedWindows() {
