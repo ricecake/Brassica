@@ -33,18 +33,28 @@ namespace brassica {
 		std::uint32_t visibilityStorageIdx{0};
 	};
 
+	struct TerrainChunkGenPushConstants {
+		glm::vec2     minWorldPos{0.0f, 0.0f};
+		std::uint32_t chunkSlot{0};
+		std::uint32_t chunkStorageIdx{0};
+		float         texelSize{TERRAIN_CHUNK_TEXEL_SIZE};
+	};
+
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {
 		using Resources = graph::Declares<
 			graph::Modify<TerrainClipmapTexture>,
 			graph::Modify<TerrainMinMaxTexture>,
 			graph::Modify<TerrainBiomeTexture>,
 			graph::Modify<TerrainTileVisibilityTexture>,
+			graph::Modify<TerrainChunkTexture>,
 			graph::Modify<TerrainTLAS>>;
 
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
 		graph::PhysicalResourceRegistry* physicalRegistry = nullptr;
+		TerrainClipmap*                  terrainClipmap = nullptr;
 		ComputeShader                    genShader;
 		ComputeShader                    aabbShader;
+		ComputeShader                    chunkGenShader;
 		TerrainAccelerationStructure*    terrainAS = nullptr;
 		TerrainGenPushConstants          push{};
 		glm::vec3                        cameraPos{0.0f};
@@ -53,9 +63,11 @@ namespace brassica {
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			terrainAS = services.terrainAS;
+			terrainClipmap = services.terrainClipmap;
 			physicalRegistry = services.physicalRegistry;
 			genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp");
 			aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp");
+			chunkGenShader.CompileComputeFromFile(services.device, "shaders/terrain_chunk_gen.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
@@ -64,11 +76,13 @@ namespace brassica {
 		void RegisterShaders(ShaderWatcher& watcher) {
 			watcher.RegisterShader(&genShader);
 			watcher.RegisterShader(&aabbShader);
+			watcher.RegisterShader(&chunkGenShader);
 		}
 
 		void Destroy(vk::Device device) {
 			genShader.Destroy(device);
 			aabbShader.Destroy(device);
+			chunkGenShader.Destroy(device);
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
@@ -86,7 +100,7 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(5);
+			r.realizations.reserve(6);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainClipmapTexture>(),
@@ -113,6 +127,13 @@ namespace brassica {
 					.key = graph::IdOf<TerrainTileVisibilityTexture>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = TerrainTileVisibilityDesc(push.gridParams.x),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainChunkTexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = TerrainChunkDesc(),
 				}
 			);
 			r.realizations.push_back(
@@ -173,6 +194,52 @@ namespace brassica {
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
 				vkCmd.dispatch(groupX, groupY, groupZ);
+			}
+
+			if (terrainClipmap) {
+				uint32_t chunkStorageIdx = ctx.StorageIndex<TerrainChunkTexture>();
+				const auto& chunks = terrainClipmap->GetChunkInfos();
+
+				std::array<vk::PushConstantRange, 1> pushConstantRanges{
+					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainChunkGenPushConstants)}
+				};
+
+				render::ComputePipelineRequest request{
+					.shader = &chunkGenShader,
+					.setLayouts = setLayouts,
+					.pushConstantRanges = pushConstantRanges,
+				};
+				render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+
+				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+				if (resolved.pipeline) {
+					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
+				}
+
+				if (boundSets[0] && boundSets[1]) {
+					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
+				}
+
+				for (const auto& chunk : chunks) {
+					if (chunk.isDirty) {
+						TerrainChunkGenPushConstants chunkPush{
+							.minWorldPos = chunk.minWorldPos,
+							.chunkSlot = chunk.slot,
+							.chunkStorageIdx = chunkStorageIdx,
+							.texelSize = TERRAIN_CHUNK_TEXEL_SIZE
+						};
+
+						vkCmd.pushConstants(
+							resolved.layout,
+							vk::ShaderStageFlagBits::eCompute,
+							0,
+							sizeof(TerrainChunkGenPushConstants),
+							&chunkPush
+						);
+
+						vkCmd.dispatch((TERRAIN_CHUNK_DIM + 15) / 16, (TERRAIN_CHUNK_DIM + 15) / 16, 1);
+					}
+				}
 			}
 
 			if (terrainAS) {
