@@ -11,6 +11,13 @@ float getLODScale(float lod) {
 	}
 }
 
+float texelSize(
+	uint  level
+) {
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+	return baseTexelSize * getLODScale(float(level));
+}
+
 // Toroidal UV mapping helper for terrain clipmap textures
 vec2 sampleToroidalUV(
 	vec2  worldXZ,

@@ -80,14 +80,14 @@ void main() {
 		baseNormal = isAboveWater ? vec3(0.0, 1.0, 0.0) : vec3(0.0, -1.0, 0.0);
 	}
 
-	vec2 waveXZ = inWorldPos.xz;
-	float t = uTime * smoothstep(800.0, 1800.0, distToCamWater) * max(1.0, 1000.0/distToCamWater);
+	// vec2 waveXZ = inWorldPos.xz;
+	// float t = uTime * smoothstep(800.0, 1800.0, distToCamWater) * max(1.0, 1000.0/distToCamWater);
 
-	vec2 sinGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.004 + abs(dot_noise(inWorldPos * 0.0025, t * 0.5)), 4, t * 0.25).xz;
-	sinGrad *= smoothstep(1000.0, 2000.0, distToCamWater) * (1.0 - smoothstep(3000.0, 20000.0, distToCamWater));
+	// vec2 sinGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.004 + abs(dot_noise(inWorldPos * 0.0025, t * 0.5)), 4, t * 0.25).xz;
+	// sinGrad *= smoothstep(1000.0, 2000.0, distToCamWater) * (1.0 - smoothstep(3000.0, 20000.0, distToCamWater));
 
 	// Ensure wave perturbation follows the flipped backface normal
-	vec3 waveNormal = normalize(baseNormal + vec3(-sinGrad.x, 0.0, -sinGrad.y));
+	vec3 waveNormal = baseNormal;//normalize(baseNormal + vec3(-sinGrad.x, 0.0, -sinGrad.y));
 
 	float distToCam = distToCamWater;
 	float closeThreshold = 800.0;
