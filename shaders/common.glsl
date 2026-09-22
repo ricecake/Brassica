@@ -1,5 +1,6 @@
 
 const float FAKE_PLANET_RADIUS = 600000.0; // 600km radius (1/10th scale planet)
+const float WORLD_WRAP_EXTENT = 65536.0;   // 65.536km world wrapping period
 const float PI = 3.14159265359;
 const float PHI = 1.618033988749894848204586834;
 const float TAU = 2.0 * PI;
@@ -32,6 +33,19 @@ const int bayer4x4[16] = int[](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13
 
 float safeDiv(float a, float b) {
 	return (b != 0.0) ? (a / b) : 0.0;
+}
+
+// Wraps a scalar coordinate into [-WORLD_WRAP_EXTENT/2, WORLD_WRAP_EXTENT/2]
+float wrapWorldCoord(float x) {
+	float halfL = WORLD_WRAP_EXTENT * 0.5;
+	float modX = mod(x + halfL, WORLD_WRAP_EXTENT);
+	if (modX < 0.0) modX += WORLD_WRAP_EXTENT;
+	return modX - halfL;
+}
+
+// Wraps 2D world coordinates into [-WORLD_WRAP_EXTENT/2, WORLD_WRAP_EXTENT/2]
+vec2 wrapWorldXZ(vec2 xz) {
+	return vec2(wrapWorldCoord(xz.x), wrapWorldCoord(xz.y));
 }
 
 float luminance(vec3 c) {
@@ -585,7 +599,7 @@ struct TerrainConfig {
 	float biome_bleed;
 };
 
-float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask) {
+float evaluate_terrain_raw(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask) {
 	p *= config.spatial_scale;
     mat3 J_flow;
     vec3 unused_grad; // Placeholder for when you implement full analytical normals
@@ -653,6 +667,43 @@ float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig c
 	out_mask = continent_mask;
 
 	return remap(finalHeight, 0.0, 1.0, config.min_height, config.max_height);
+}
+
+float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask) {
+	// Wrap x and z coordinates into [-WORLD_WRAP_EXTENT/2, WORLD_WRAP_EXTENT/2]
+	vec2 wrappedXZ = wrapWorldXZ(p.xz);
+	vec3 pWrapped = vec3(wrappedXZ.x, p.y, wrappedXZ.y);
+
+	// Blend width near the boundary (|x|,|z| ~ WORLD_WRAP_EXTENT/2) on the opposite side of the origin
+	float halfL = WORLD_WRAP_EXTENT * 0.5;
+	float blendRegion = 4096.0; // 4km transition zone
+	float distEdgeX = halfL - abs(wrappedXZ.x);
+	float distEdgeZ = halfL - abs(wrappedXZ.y);
+	float weightX = mix(0.5, 1.0, smoothstep(0.0, blendRegion, distEdgeX));
+	float weightZ = mix(0.5, 1.0, smoothstep(0.0, blendRegion, distEdgeZ));
+	float totalWeight = weightX * weightZ;
+
+	if (totalWeight >= 1.0) {
+		return evaluate_terrain_raw(pWrapped, phase, warp_strength, config, out_biome, out_mask);
+	}
+
+	float b0, m0, b1, m1;
+	float h0 = evaluate_terrain_raw(pWrapped, phase, warp_strength, config, b0, m0);
+
+	// Opposite side offset
+	vec2 offsetXZ = wrappedXZ;
+	if (distEdgeX < blendRegion) {
+		offsetXZ.x += (wrappedXZ.x > 0.0) ? -WORLD_WRAP_EXTENT : WORLD_WRAP_EXTENT;
+	}
+	if (distEdgeZ < blendRegion) {
+		offsetXZ.y += (wrappedXZ.y > 0.0) ? -WORLD_WRAP_EXTENT : WORLD_WRAP_EXTENT;
+	}
+	vec3 pOpposite = vec3(offsetXZ.x, p.y, offsetXZ.y);
+	float h1 = evaluate_terrain_raw(pOpposite, phase, warp_strength, config, b1, m1);
+
+	out_biome = mix(b1, b0, totalWeight);
+	out_mask = mix(m1, m0, totalWeight);
+	return mix(h1, h0, totalWeight);
 }
 
 

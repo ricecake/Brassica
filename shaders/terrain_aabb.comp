@@ -90,10 +90,11 @@ float evalHeightFromComponents(float baseVal, float detailVal, float maskVal, fl
 }
 
 float evalTerrainHeight(vec2 worldXZ, out float outBiome, out float outMask) {
-	outBiome = snoise(worldXZ * 0.0003) * 0.5 + 0.5;
-	outMask = snoise(worldXZ * 0.0008);
-	float baseVal = fbm(worldXZ * 0.0015, 4);
-	float detailVal = fbm(worldXZ * 0.006, 4);
+	vec2 wrappedXZ = wrapWorldXZ(worldXZ);
+	outBiome = snoise(wrappedXZ * 0.0003) * 0.5 + 0.5;
+	outMask = snoise(wrappedXZ * 0.0008);
+	float baseVal = fbm(wrappedXZ * 0.0015, 4);
+	float detailVal = fbm(wrappedXZ * 0.006, 4);
 
 	return evalHeightFromComponents(baseVal, detailVal, outMask, outBiome);
 }

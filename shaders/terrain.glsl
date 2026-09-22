@@ -36,7 +36,7 @@ vec2 sampleToroidalUV(
 	ivec2 gridOffset = ivec2(int(packed & 0xFFFFu), int((packed >> 16u) & 0xFFFFu));
 
 	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
-	vec2 deltaWorld = worldXZ - centerWorldPos;
+	vec2 deltaWorld = wrapWorldXZ(worldXZ - centerWorldPos);
 	vec2 texelCoord = deltaWorld / texelSize + vec2(float(dim) * 0.5) + vec2(gridOffset);
 
 	return fract(texelCoord / float(dim));

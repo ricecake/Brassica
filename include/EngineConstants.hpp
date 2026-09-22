@@ -13,4 +13,7 @@ namespace brassica {
 	// Scale planet radius: 600km = 600,000 units (1/10th scale planet)
 	inline constexpr float FAKE_PLANET_RADIUS = constants::Engine::FakePlanetRadius;
 
+	// Global world wrapping period in meters (toroidal wrapping extent)
+	inline constexpr float WORLD_WRAP_EXTENT = 65536.0f;
+
 } // namespace brassica
