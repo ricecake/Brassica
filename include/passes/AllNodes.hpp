@@ -12,12 +12,12 @@
 
 #include "passes/AtmosphereCompositeNode.hpp"
 #include "passes/AtmosphereLUTNode.hpp"
-#include "passes/SkyBackgroundNode.hpp"
 #include "passes/BallNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
+#include "passes/SkyBackgroundNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
 #include "passes/TonemapNode.hpp"

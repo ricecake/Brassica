@@ -1114,10 +1114,12 @@ namespace brassica {
 		// skipped, so Engine builds exactly one NodeFrameParams and hands it to every registered
 		// node uniformly, the same shape as InitAll/DestroyAll/RegisterAllInto.
 		const auto& lights = lightManager.GetLights();
-		glm::vec3   sunDirGlobal = (lights.size() > 0) ? glm::normalize(-lights[0].direction) : glm::vec3(0.0f, 1.0f, 0.0f);
+		glm::vec3   sunDirGlobal = (lights.size() > 0) ? glm::normalize(-lights[0].direction)
+													   : glm::vec3(0.0f, 1.0f, 0.0f);
 		glm::vec3   sunRadiance = (lights.size() > 0) ? (lights[0].color * lights[0].intensity)
 													  : glm::vec3(3.0f, 2.94f, 2.76f);
-		glm::vec3   moonDirGlobal = (lights.size() > 1) ? glm::normalize(-lights[1].direction) : glm::vec3(0.0f, -1.0f, 0.0f);
+		glm::vec3   moonDirGlobal = (lights.size() > 1) ? glm::normalize(-lights[1].direction)
+														: glm::vec3(0.0f, -1.0f, 0.0f);
 		glm::vec3   moonRadiance = (lights.size() > 1) ? (lights[1].color * lights[1].intensity)
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
@@ -1125,15 +1127,15 @@ namespace brassica {
 		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
 		glm::vec3 camNormal = glm::normalize(camera.position - planetCenter);
 
-		float cosTheta = glm::dot(upRef, camNormal);
+		float     cosTheta = glm::dot(upRef, camNormal);
 		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
 		if (cosTheta < 0.99999f) {
 			if (cosTheta < -0.99999f) {
 				rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
 			} else {
 				glm::vec3 rotAxis = glm::cross(upRef, camNormal);
-				float s = std::sqrt((1.0f + cosTheta) * 2.0f);
-				float invs = 1.0f / s;
+				float     s = std::sqrt((1.0f + cosTheta) * 2.0f);
+				float     invs = 1.0f / s;
 				rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
 			}
 		}

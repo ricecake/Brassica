@@ -31,8 +31,11 @@ namespace brassica {
 	// draws afterward -- water.frag calling evaluateAtmosphere on its own distToCamWater is the
 	// documented follow-up.
 	struct AtmosphereCompositeNode: render::NodeRegistrar<AtmosphereCompositeNode> {
-		using Resources = graph::
-			Declares<GBuffer<graph::Read>, graph::Read<TransmittanceLUT>, graph::Read<MultiScatteringLUT>, graph::Modify<HdrColor>>;
+		using Resources = graph::Declares<
+			GBuffer<graph::Read>,
+			graph::Read<TransmittanceLUT>,
+			graph::Read<MultiScatteringLUT>,
+			graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
@@ -113,15 +116,13 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
-			std::array<vk::DescriptorSetLayout, 2>  setLayouts{
+			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
-				vk::ShaderStageFlagBits::eFragment,
-				0,
-				sizeof(AtmosphereCompositePushConstants)
-			}};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(AtmosphereCompositePushConstants)}
+			};
 
 			render::GraphicsPipelineRequest request{
 				.stages = stages,

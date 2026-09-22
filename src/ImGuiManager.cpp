@@ -210,7 +210,8 @@ namespace brassica {
 				float rollDeg = glm::degrees(camera.roll);
 
 				ImGui::Text(
-					"Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | %.1f FPS (%.2f ms)",
+					"Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | "
+					"%.1f FPS (%.2f ms)",
 					camera.position.x,
 					camera.position.y,
 					camera.position.z,
