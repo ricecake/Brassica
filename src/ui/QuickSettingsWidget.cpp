@@ -5,6 +5,7 @@
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
 #include "terrain/ITerrainClipmap.hpp"
+#include "types/CameraData.hpp"
 #include "types/TonemapPushConstants.hpp"
 
 namespace brassica::ui {
@@ -38,6 +39,34 @@ namespace brassica::ui {
 			ConfigManager* cfg = ServiceLocator::Instance().Has<ConfigManager>()
 				? ServiceLocator::Instance().Get<ConfigManager>().get()
 				: nullptr;
+
+			// Camera
+			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Camera:");
+			if (ServiceLocator::Instance().Has<CameraData>()) {
+				auto cam = ServiceLocator::Instance().Get<CameraData>();
+				const char* camModes[] = {"Instant", "Accelerated"};
+				int currentCamMode = static_cast<int>(cam->mode);
+				if (ImGui::Combo("Mode##Cam", &currentCamMode, camModes, IM_ARRAYSIZE(camModes))) {
+					cam->mode = static_cast<CameraMode>(currentCamMode);
+				}
+				ImGui::TextDisabled("(Press '=' key to cycle mode)");
+
+				ImGui::SliderFloat("Max Speed##Cam", &cam->speed, cam->minSpeed, cam->maxSpeed, "%.1f m/s");
+
+				float baseFovDeg = glm::degrees(cam->baseFov);
+				if (ImGui::SliderFloat("Base FOV##Cam", &baseFovDeg, 30.0f, 120.0f, "%.1f deg")) {
+					cam->baseFov = glm::radians(baseFovDeg);
+					if (cam->mode == CameraMode::Instant) {
+						cam->fov = cam->baseFov;
+					}
+				}
+
+				if (cam->mode == CameraMode::Accelerated) {
+					ImGui::Text("Current Speed: %.1f m/s", cam->currentSpeed);
+				}
+			}
+
+			ImGui::Separator();
 
 			// Day/Night cycle
 			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Day/Night Cycle:");

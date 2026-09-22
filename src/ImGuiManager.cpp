@@ -217,7 +217,7 @@ namespace brassica {
 					camera.position.x,
 					camera.position.y,
 					camera.position.z,
-					camera.speed,
+					camera.GetDisplayedSpeed(),
 					pitchDeg,
 					yawDeg,
 					rollDeg,
