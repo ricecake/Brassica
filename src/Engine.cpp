@@ -478,6 +478,7 @@ namespace brassica {
 			configManager.LoadFromFile(options.configFile);
 		}
 		serviceLocator.Provide<ConfigManager>(std::shared_ptr<ConfigManager>(&configManager, [](ConfigManager*) {}));
+		serviceLocator.Provide<CameraData>(std::shared_ptr<CameraData>(&camera, [](CameraData*) {}));
 
 		lightManager.Initialize();
 		serviceLocator.Provide<ILightManager>(std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {}));
@@ -543,6 +544,14 @@ namespace brassica {
 				firstMouse = true;
 			}
 
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_EQUAL)) {
+				camera.CycleMode();
+				spdlog::info(
+					"Camera mode switched to: {}",
+					camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant"
+				);
+			}
+
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_PAGE_UP)) {
 				camera.speed = std::min(camera.maxSpeed, camera.speed + camera.speedStep);
 			}
@@ -556,6 +565,8 @@ namespace brassica {
 				camera.speed = camera.maxSpeed;
 			}
 		}
+
+		glm::vec3 moveDir{0.0f};
 
 		if (camera.isCaptured && defaultHandler) {
 			auto [mx, my] = defaultHandler->GetCursorPos();
@@ -582,7 +593,6 @@ namespace brassica {
 				camera.roll -= rollSpeed * deltaTime;
 			}
 
-			glm::vec3 moveDir{0.0f};
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_W)) {
 				moveDir += camera.GetForward();
 			}
@@ -603,14 +613,54 @@ namespace brassica {
 			    defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT)) {
 				moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
 			}
-
-			if (glm::length(moveDir) > 0.0001f) {
-				camera.position += glm::normalize(moveDir) * camera.speed * deltaTime;
-			}
 		} else if (defaultHandler) {
 			auto [mx, my] = defaultHandler->GetCursorPos();
 			lastMouseX = mx;
 			lastMouseY = my;
+		}
+
+		if (camera.mode == CameraMode::Accelerated) {
+			glm::vec3 targetVelocity{0.0f};
+			if (glm::length(moveDir) > 0.0001f) {
+				targetVelocity = glm::normalize(moveDir) * camera.speed;
+			}
+
+			if (glm::length(targetVelocity) > 0.0001f) {
+				float blend = 1.0f - std::exp(-camera.accelerationRate * deltaTime);
+				camera.velocity = glm::mix(camera.velocity, targetVelocity, blend);
+			} else {
+				float blend = 1.0f - std::exp(-camera.decelerationRate * deltaTime);
+				camera.velocity = glm::mix(camera.velocity, glm::vec3(0.0f), blend);
+			}
+
+			float speedLen = glm::length(camera.velocity);
+			if (speedLen > camera.speed) {
+				camera.velocity = (camera.velocity / speedLen) * camera.speed;
+				speedLen = camera.speed;
+			}
+			if (speedLen < 0.01f) {
+				camera.velocity = glm::vec3(0.0f);
+				speedLen = 0.0f;
+			}
+
+			camera.currentSpeed = speedLen;
+			camera.position += camera.velocity * deltaTime;
+
+			float speedRatio = (camera.speed > 0.001f)
+				? std::clamp(camera.currentSpeed / camera.speed, 0.0f, 1.0f)
+				: 0.0f;
+			camera.fov = camera.baseFov + speedRatio * camera.maxFovBoost;
+		} else { // Instant mode
+			camera.velocity = glm::vec3(0.0f);
+			camera.fov = camera.baseFov;
+
+			if (glm::length(moveDir) > 0.0001f) {
+				glm::vec3 dir = glm::normalize(moveDir);
+				camera.position += dir * camera.speed * deltaTime;
+				camera.currentSpeed = camera.speed;
+			} else {
+				camera.currentSpeed = 0.0f;
+			}
 		}
 	}
 
@@ -906,10 +956,7 @@ namespace brassica {
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
 			for (uint32_t i = 0; i < targetFrames; ++i) {
-				enki::TaskSet frameTask(1, [this](enki::TaskSetPartition range, uint32_t threadnum) { DrawFrame(); });
-
-				taskScheduler.AddTaskSetToPipe(&frameTask);
-				taskScheduler.WaitforTask(&frameTask);
+				DrawFrame();
 			}
 			spdlog::info("Completed {} frames.", targetFrames);
 			return;

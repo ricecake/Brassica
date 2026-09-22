@@ -86,6 +86,24 @@ TEST_CASE("Camera Controls: Capture Toggle with 0 Key") {
 	CHECK(!engine.GetCamera().isCaptured);
 }
 
+TEST_CASE("Camera Controls: Mode Cycle with Equal Key") {
+	brassica::Engine engine;
+	auto handler = std::make_shared<brassica::DefaultInputHandler>();
+	engine.SetInputHandler(handler);
+
+	CHECK(engine.GetCamera().mode == brassica::CameraMode::Instant);
+
+	// Press '=' key to cycle to Accelerated mode
+	handler->OnKey(nullptr, GLFW_KEY_EQUAL, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+	CHECK(engine.GetCamera().mode == brassica::CameraMode::Accelerated);
+
+	// Press '=' key again to cycle back to Instant mode
+	handler->OnKey(nullptr, GLFW_KEY_EQUAL, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+	CHECK(engine.GetCamera().mode == brassica::CameraMode::Instant);
+}
+
 TEST_CASE("Camera Controls: Speed Adjustment (PageUp, PageDown, Home, End)") {
 	brassica::Engine engine;
 	auto handler = std::make_shared<brassica::DefaultInputHandler>();

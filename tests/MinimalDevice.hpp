@@ -77,11 +77,18 @@ namespace brassica::testing {
 			features1.shaderInt64 = VK_TRUE;
 			features1.fragmentStoresAndAtomics = VK_TRUE;
 
+			VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+			meshFeatures.meshShader = VK_TRUE;
+			meshFeatures.taskShader = VK_TRUE;
+			meshFeatures.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
 			selector.set_minimum_version(1, 3)
 				.set_required_features(features1)
 				.set_required_features_13(features13)
 				.set_required_features_12(features12)
+				.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
+				.add_required_extension_features(meshFeatures)
 				.defer_surface_initialization();
 
 			auto physRes = selector.select();
