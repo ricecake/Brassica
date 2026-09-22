@@ -2,11 +2,8 @@
 #extension GL_EXT_mesh_shader : require
 #extension GL_KHR_shader_subgroup_ballot : require
 
-layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// Matches TerrainNode's push_constant block layout exactly (this stage just doesn't need the
-// trailing clipmapIndex field terrain.mesh reads, which is fine -- each stage only needs to
-// declare the prefix it actually uses, not the whole shared range).
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
@@ -20,25 +17,29 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
-}
-
-params;
+	ivec2 centerChunkCoord;
+	uint  chunkIndex;
+	uint  pad0;
+} params;
 
 struct TaskPayload {
-	uint meshletIDs[32];
-	uint lodLevels[32];
+	vec2  macroMinXZ;
+	float macroSize;
+	uint  subdiv;
+	uint  chunkSlot;
+	float maxVariance;
 };
 
 taskPayloadSharedEXT TaskPayload payload;
 
-// Check AABB against frustum plane
+// Check AABB against frustum planes
 bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 	vec4 planes[6];
 	planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]); // Left
 	planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]); // Right
 	planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]); // Bottom
 	planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]); // Top
-	planes[4] = vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]); // Near (Vulkan 0 <= z <= w)
+	planes[4] = vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]); // Near
 	planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]); // Far
 
 	for (int i = 0; i < 6; i++) {
@@ -53,7 +54,6 @@ bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 		float len = length(planes[i].xyz);
 		vec4  normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
 
-		// Conservative view buffer: 100 world units safety margin
 		if (dot(normPlane.xyz, pVertex) + normPlane.w < -100.0) {
 			return false;
 		}
@@ -61,85 +61,95 @@ bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 	return true;
 }
 
-shared uint meshletCount;
+shared float s_minH[64];
+shared float s_maxH[64];
+shared float s_maxVar[64];
+shared float s_maxResFactor[64];
 
 void main() {
-	uint threadID = gl_LocalInvocationID.x;
+	uint lx = gl_LocalInvocationID.x;
+	uint ly = gl_LocalInvocationID.y;
+	uint threadIdx = ly * 8u + lx;
 
-	if (threadID == 0) {
-		meshletCount = 0;
+	uint slot = gl_WorkGroupID.z;
+	int  cx = params.centerChunkCoord.x + ((int(slot % 3u) - (params.centerChunkCoord.x % 3) + 4) % 3 - 1);
+	int  cy = params.centerChunkCoord.y + ((int(slot / 3u) - (params.centerChunkCoord.y % 3) + 4) % 3 - 1);
+	vec2 chunkMinWorldPos = vec2(cx, cy) * 8192.0 - vec2(4096.0);
+
+	vec2 macroMinXZ = chunkMinWorldPos + vec2(gl_WorkGroupID.x, gl_WorkGroupID.y) * 256.0;
+
+	uvec2 texelCoord = uvec2(gl_WorkGroupID.x * 8u + lx, gl_WorkGroupID.y * 8u + ly);
+
+	float h = 0.0;
+	float variance = 0.0;
+	float errorEst = 0.0;
+	float resFactor = 1.0;
+
+	if (params.chunkIndex > 0u) {
+		vec4 chunkData = SAMPLE_ARRAY_WRAP(params.chunkIndex, vec3((vec2(texelCoord) + vec2(0.5)) / 256.0, float(slot)));
+		h = chunkData.r;
+		variance = chunkData.g;
+		errorEst = chunkData.b;
+		resFactor = chunkData.a;
 	}
+
+	s_minH[threadIdx] = h;
+	s_maxH[threadIdx] = h;
+	s_maxVar[threadIdx] = variance;
+	s_maxResFactor[threadIdx] = resFactor;
 	barrier();
 
-	uint meshletID = gl_WorkGroupID.x * 32 + threadID;
-
-	bool visible = false;
-	uint lodLevel = 0;
-
-	if (meshletID < params.gridParams.z) {
-		uint meshletsPerRow = params.gridParams.y;
-		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-		lodLevel = min(meshletID / totalPerLOD, params.gridParams.x - 1);
-		uint localID = meshletID % totalPerLOD;
-
-		uint row = localID / meshletsPerRow;
-		uint col = localID % meshletsPerRow;
-
-		float baseMeshletSize = 32.0;
-		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
-
-		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
-		vec3 minB = vec3(
-			cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-			-500.0,
-			cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
-		);
-		vec3 maxB = minB + vec3(meshletSize, 2000.0, meshletSize);
-
-		if (params.minMaxIndex > 0u) {
-			vec2 centerXZ = vec2(minB.x + meshletSize * 0.5, minB.z + meshletSize * 0.5);
-			vec2 minMax = sampleTerrainMinMax(
-				params.minMaxIndex,
-				centerXZ,
-				lodLevel,
-				params.gridParams.w,
-				params.lodOffsets0_3,
-				params.lodOffsets4_7,
-				params.lodOffsets8_11
-			);
-			minB.y = minMax.x - 10.0;
-			maxB.y = minMax.y + 10.0;
+	for (uint s = 32u; s > 0u; s >>= 1u) {
+		if (threadIdx < s) {
+			s_minH[threadIdx] = min(s_minH[threadIdx], s_minH[threadIdx + s]);
+			s_maxH[threadIdx] = max(s_maxH[threadIdx], s_maxH[threadIdx + s]);
+			s_maxVar[threadIdx] = max(s_maxVar[threadIdx], s_maxVar[threadIdx + s]);
+			s_maxResFactor[threadIdx] = max(s_maxResFactor[threadIdx], s_maxResFactor[threadIdx + s]);
 		}
+		barrier();
+	}
+
+	if (threadIdx == 0u) {
+		float blockMinH = s_minH[0];
+		float blockMaxH = s_maxH[0];
+		float blockMaxVar = s_maxVar[0];
+		float blockMaxRes = s_maxResFactor[0];
+
+		vec3 minB = vec3(macroMinXZ.x, blockMinH - 10.0, macroMinXZ.y);
+		vec3 maxB = vec3(macroMinXZ.x + 256.0, blockMaxH + 10.0, macroMinXZ.y + 256.0);
 
 		vec2  maxRel = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
 		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
 		minB.y -= maxDropOff;
 
-		visible = isAABBVisible(minB, maxB, uViewProjMatrix);
+		bool visible = isAABBVisible(minB, maxB, uViewProjMatrix);
 
-		if (visible && lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
-			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
+		if (!visible) {
+			EmitMeshTasksEXT(0, 0, 0);
+		} else {
+			vec2  blockCenter = macroMinXZ + vec2(128.0);
+			float distToCam = length(blockCenter - uCameraPosition.xz);
 
-			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
-			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
+			float detailNeed = max(1.0, blockMaxVar * blockMaxRes);
+			float distFactor = clamp(1500.0 / max(1.0, distToCam), 0.2, 8.0);
+			float score = detailNeed * distFactor;
 
-			// Cull the meshlet ONLY if its entire bounding box is inside the previous LOD's extent
-			if (insideX && insideZ) {
-				visible = false;
+			uint subdiv = 1u;
+			if (score > 12.0) {
+				subdiv = 8u;
+			} else if (score > 6.0) {
+				subdiv = 4u;
+			} else if (score > 2.5) {
+				subdiv = 2u;
 			}
+
+			payload.macroMinXZ = macroMinXZ;
+			payload.macroSize = 256.0;
+			payload.subdiv = subdiv;
+			payload.chunkSlot = slot;
+			payload.maxVariance = blockMaxVar;
+
+			EmitMeshTasksEXT(subdiv, subdiv, 1);
 		}
-	}
-
-	if (visible) {
-		uint index = atomicAdd(meshletCount, 1u);
-		payload.meshletIDs[index] = meshletID;
-		payload.lodLevels[index] = lodLevel;
-	}
-	barrier();
-
-	if (threadID == 0) {
-		EmitMeshTasksEXT(meshletCount, 1, 1);
 	}
 }
