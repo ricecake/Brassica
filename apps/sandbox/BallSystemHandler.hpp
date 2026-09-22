@@ -13,9 +13,7 @@ namespace brassica {
 
 	class BallSystemHandler: public SystemHandler {
 	public:
-		BallSystemHandler() {
-			CreateEntityNode<BallSystemHandler>();
-		}
+		BallSystemHandler() { CreateEntityNode<BallSystemHandler>(); }
 
 		void Setup(Engine& engine, const FrameDetails& frameDetails) override {
 			float targetX = 0.0f;

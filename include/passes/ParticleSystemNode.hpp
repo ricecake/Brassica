@@ -28,7 +28,7 @@ namespace brassica {
 		// Crude, camera-relative depth sort: a particle's own position vs. this decides which
 		// alive-list it lands in for this frame (see particle_liveness.comp), not a fixed
 		// bird=above/fish=below assumption -- see ParticleLivenessNode::SetFrameParams.
-		float         waterLevel{0.0f};
+		float waterLevel{0.0f};
 	};
 
 	struct ParticleBehaviorPushConstants {
@@ -122,7 +122,8 @@ namespace brassica {
 			layoutInfo.setBindings(bindings);
 			result.layout = device.createDescriptorSetLayout(layoutInfo);
 
-			std::array<vk::DescriptorPoolSize, 1> poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 6}
+			std::array<vk::DescriptorPoolSize, 1> poolSizes{
+				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 6}
 			};
 			vk::DescriptorPoolCreateInfo poolInfo{};
 			poolInfo.setPoolSizes(poolSizes);
@@ -226,9 +227,8 @@ namespace brassica {
 		// own Modify<...> of the same keys made it the same thing from the other side -- a genuine
 		// mutual dependency the graph correctly rejected as circular. Create<K> instead has an empty
 		// Consumes, breaking the cycle: Liveness's Modify<K> now depends on this Create<K> alone.
-		using Resources = graph::Declares<
-			graph::Create<AboveWaterParticleIndirectBuffer>,
-			graph::Create<UnderwaterParticleIndirectBuffer>>;
+		using Resources = graph::
+			Declares<graph::Create<AboveWaterParticleIndirectBuffer>, graph::Create<UnderwaterParticleIndirectBuffer>>;
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary*        pipelineLibrary = nullptr;
@@ -369,11 +369,12 @@ namespace brassica {
 						// eTransferSrc: general-purpose GPU-readback capability (numeric test probes
 						// copying the live alive-index list to a host-visible buffer), same reasoning
 						// as the indirect buffers' own eTransferSrc above.
-						.desc = [&] {
-							graph::ResourceDesc d = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t));
-							d.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
-							return d;
-						}(),
+						.desc =
+							[&] {
+								graph::ResourceDesc d = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t));
+								d.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
+								return d;
+							}(),
 					},
 					graph::ResourceRealization{
 						.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
@@ -383,11 +384,12 @@ namespace brassica {
 					graph::ResourceRealization{
 						.key = graph::IdOf<UnderwaterParticleAliveBuffer>(),
 						.access = graph::AccessKind::Write,
-						.desc = [&] {
-							graph::ResourceDesc d = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t));
-							d.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
-							return d;
-						}(),
+						.desc =
+							[&] {
+								graph::ResourceDesc d = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t));
+								d.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
+								return d;
+							}(),
 					},
 					graph::ResourceRealization{
 						.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
@@ -674,7 +676,12 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), descriptorSet.set, registry);
+					detail::RefreshParticleDescriptorSet(
+						descriptorCache,
+						registry->GetDevice(),
+						descriptorSet.set,
+						registry
+					);
 				}
 			}
 
@@ -848,7 +855,12 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), descriptorSet.set, registry);
+					detail::RefreshParticleDescriptorSet(
+						descriptorCache,
+						registry->GetDevice(),
+						descriptorSet.set,
+						registry
+					);
 				}
 			}
 
@@ -947,15 +959,23 @@ namespace brassica {
 		vk::DescriptorPool      particleDescriptorPool{nullptr};
 		vk::DescriptorSet       particleSet{nullptr};
 
-		ParticleTypeBufferNode typeBufferNode{
-			std::vector<ParticleType>{
-				ParticleType{.color = glm::vec4(1.0f, 0.95f, 0.7f, 0.95f), .size = 3.0f, .gravityScale = 0.0f, .drag = 0.1f},
-				ParticleType{.color = glm::vec4(0.1f, 0.95f, 0.85f, 0.95f), .size = 2.0f, .gravityScale = 0.0f, .drag = 0.1f},
-			}
-		};
-		ParticleResetNode            resetNode;
-		ParticleLivenessNode         livenessNode;
-		ParticleBehaviorNode         behaviorNode;
+		ParticleTypeBufferNode typeBufferNode{std::vector<ParticleType>{
+			ParticleType{
+				.color = glm::vec4(1.0f, 0.95f, 0.7f, 0.95f),
+				.size = 3.0f,
+				.gravityScale = 0.0f,
+				.drag = 0.1f
+			},
+			ParticleType{
+				.color = glm::vec4(0.1f, 0.95f, 0.85f, 0.95f),
+				.size = 2.0f,
+				.gravityScale = 0.0f,
+				.drag = 0.1f
+			},
+		}};
+		ParticleResetNode      resetNode;
+		ParticleLivenessNode   livenessNode;
+		ParticleBehaviorNode   behaviorNode;
 
 		// EngineNodeRegistry::SetFrameParamsAll only ever calls SetFrameParams on top-level
 		// registered types (this one), never on a Subgraph's inner nodes directly -- so this

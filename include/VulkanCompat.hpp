@@ -1,7 +1,7 @@
 #pragma once
 
 #if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
-#include "vulkan/vulkan.hpp"
+	#include "vulkan/vulkan.hpp"
 
 // Vulkan-Hpp portability shim for the dispatcher-related classes that
 // KhronosGroup/Vulkan-Hpp#1983 ("Move all the dispatcher related classes into namespace
@@ -14,11 +14,11 @@
 // this codebase builds against Vulkan-Hpp on either side of that break.
 namespace brassica {
 
-#if VK_HEADER_VERSION >= 301
+	#if VK_HEADER_VERSION >= 301
 	using DispatchLoaderDynamic = vk::detail::DispatchLoaderDynamic;
-#else
+	#else
 	using DispatchLoaderDynamic = vk::DispatchLoaderDynamic;
-#endif
+	#endif
 
 } // namespace brassica
 
@@ -26,6 +26,7 @@ namespace brassica {
 
 namespace vk {
 	enum class Format { eUndefined = 0 };
+
 	class Device {};
 } // namespace vk
 
