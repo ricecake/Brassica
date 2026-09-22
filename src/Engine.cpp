@@ -956,10 +956,7 @@ namespace brassica {
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
 			for (uint32_t i = 0; i < targetFrames; ++i) {
-				enki::TaskSet frameTask(1, [this](enki::TaskSetPartition range, uint32_t threadnum) { DrawFrame(); });
-
-				taskScheduler.AddTaskSetToPipe(&frameTask);
-				taskScheduler.WaitforTask(&frameTask);
+				DrawFrame();
 			}
 			spdlog::info("Completed {} frames.", targetFrames);
 			return;
