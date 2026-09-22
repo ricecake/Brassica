@@ -29,7 +29,7 @@ params;
 
 // Calculate the LOD level based on the sample's Chebyshev distance
 uint calculateRayLOD(vec2 sampleXZ) {
-	vec2  dists = abs(sampleXZ - uCameraPosition.xz);
+	vec2  dists = abs(wrapWorldXZ(sampleXZ - uCameraPosition.xz));
 	float maxDist = max(dists.x, dists.y);
 
 	float baseRadius = 272.0;

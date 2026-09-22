@@ -6,6 +6,7 @@
 #include "spdlog/spdlog.h"
 #include <FastNoise/FastNoise.h>
 
+#include "EngineConstants.hpp"
 #include "terrain/AsyncTerrainUploader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -55,13 +56,58 @@ namespace brassica {
 		constexpr int seed = 1337;
 		float         eps = std::max(0.25f, texelSize);
 
-		auto evalHeight = [&](float x, float z) {
+		float halfL = WORLD_WRAP_EXTENT * 0.5f;
+		auto wrapCoord = [halfL](float v) {
+			float modV = std::fmod(v + halfL, WORLD_WRAP_EXTENT);
+			if (modV < 0.0f) modV += WORLD_WRAP_EXTENT;
+			return modV - halfL;
+		};
+
+		worldX = wrapCoord(worldX);
+		worldZ = wrapCoord(worldZ);
+
+		auto evalRawHeight = [&](float x, float z) {
 			float maskVal = gens.maskScale ? gens.maskScale->GenSingle2D(x, z, seed) : 0.0f;
 			float baseVal = gens.baseScale ? gens.baseScale->GenSingle2D(x, z, seed) : 0.0f;
 			float detailVal = gens.detailScale ? gens.detailScale->GenSingle2D(x, z, seed) : 0.0f;
 			float biomeVal = gens.biomeScale ? gens.biomeScale->GenSingle2D(x, z, seed) : 0.0f;
 
 			return EvalHeightFromComponents(baseVal, detailVal, maskVal, biomeVal);
+		};
+
+		constexpr float blendRegion = 4096.0f;
+		auto evalHeight = [&](float x, float z) {
+			float wx = wrapCoord(x);
+			float wz = wrapCoord(z);
+
+			float distEdgeX = halfL - std::abs(wx);
+			float distEdgeZ = halfL - std::abs(wz);
+
+			float smoothX = std::clamp(distEdgeX / blendRegion, 0.0f, 1.0f);
+			smoothX = smoothX * smoothX * (3.0f - 2.0f * smoothX);
+			float weightX = std::lerp(0.5f, 1.0f, smoothX);
+
+			float smoothZ = std::clamp(distEdgeZ / blendRegion, 0.0f, 1.0f);
+			smoothZ = smoothZ * smoothZ * (3.0f - 2.0f * smoothZ);
+			float weightZ = std::lerp(0.5f, 1.0f, smoothZ);
+
+			float totalWeight = weightX * weightZ;
+			float h0 = evalRawHeight(wx, wz);
+
+			if (totalWeight >= 1.0f) {
+				return h0;
+			}
+
+			float oppX = wx;
+			float oppZ = wz;
+			if (distEdgeX < blendRegion) {
+				oppX += (wx > 0.0f) ? -WORLD_WRAP_EXTENT : WORLD_WRAP_EXTENT;
+			}
+			if (distEdgeZ < blendRegion) {
+				oppZ += (wz > 0.0f) ? -WORLD_WRAP_EXTENT : WORLD_WRAP_EXTENT;
+			}
+			float h1 = evalRawHeight(oppX, oppZ);
+			return std::lerp(h1, h0, totalWeight);
 		};
 
 		float h = evalHeight(worldX, worldZ);

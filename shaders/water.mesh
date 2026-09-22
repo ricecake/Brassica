@@ -40,7 +40,8 @@ float getWaterRingScale(float ring) {
 }
 
 float estTerrainHeight(vec2 worldXZ) {
-	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
+	vec2 wrappedXZ = wrapWorldXZ(worldXZ);
+	vec3 pos = vec3(wrappedXZ.x, 0.0, wrappedXZ.y);
 	vec3 warp = cross_noise_fbm(pos * 0.005, 3, 0.0);
 	pos += 50.0 * warp;
 	float b = dot_noise(pos * 0.0003, 0.0);
@@ -62,7 +63,8 @@ float estTerrainHeight(vec2 worldXZ) {
 
 // Add this above calculateGerstnerOffsetAndNormal
 float estSmoothTerrainHeight(vec2 worldXZ) {
-	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
+	vec2 wrappedXZ = wrapWorldXZ(worldXZ);
+	vec3 pos = vec3(wrappedXZ.x, 0.0, wrappedXZ.y);
 
 	// Only evaluate the lowest frequency noise. Skip FBM and detail noise.
 	float b = dot_noise(pos * 0.0003, 0.0);
