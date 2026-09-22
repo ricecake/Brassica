@@ -15,6 +15,18 @@ namespace brassica {
 	constexpr uint32_t TERRAIN_MAP_DIM = 1088; // 1024 + 64 (1 grid cell padding for seamless off-screen streaming)
 	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 10;
 
+	constexpr float TERRAIN_CHUNK_SIZE = 8192.0f;
+	constexpr uint32_t TERRAIN_CHUNK_DIM = 256;
+	constexpr float TERRAIN_CHUNK_TEXEL_SIZE = 32.0f;
+	constexpr uint32_t TERRAIN_CHUNK_COUNT = 9;
+
+	struct TerrainChunkInfo {
+		uint32_t   slot{0};
+		glm::ivec2 chunkCoord{0, 0};
+		glm::vec2  minWorldPos{0.0f, 0.0f};
+		bool       isDirty{true};
+	};
+
 	inline float GetLODScale(float lod) {
 		if (lod <= 3.0f) {
 			return std::pow(2.0f, lod);
@@ -104,6 +116,14 @@ namespace brassica {
 
 		vk::ImageView GetVisibilityImageView() const { return visibilityImageView; }
 
+		vk::Image GetChunkImage() const { return chunkImage; }
+
+		vk::ImageView GetChunkImageView() const { return chunkImageView; }
+
+		const std::vector<TerrainChunkInfo>& GetChunkInfos() const { return chunkInfos; }
+
+		const TerrainChunkInfo& GetChunkInfo(uint32_t slot) const { return chunkInfos[slot]; }
+
 		vk::Sampler GetSampler() const { return sampler; }
 
 		uint32_t GetNumLODs() const { return numLODs; }
@@ -134,9 +154,14 @@ namespace brassica {
 		vk::ImageView visibilityImageView{nullptr};
 		VmaAllocation visibilityAllocation{VK_NULL_HANDLE};
 
+		vk::Image     chunkImage{nullptr};
+		vk::ImageView chunkImageView{nullptr};
+		VmaAllocation chunkAllocation{VK_NULL_HANDLE};
+
 		vk::Sampler sampler{nullptr};
 
 		std::vector<ClipmapLevelInfo> levelInfos;
+		std::vector<TerrainChunkInfo> chunkInfos;
 		bool                          m_forceRegenerate{false};
 
 		void CreateTextureArrays();
@@ -166,6 +191,19 @@ namespace brassica {
 
 	inline graph::ResourceDesc TerrainTileVisibilityDesc(std::uint32_t numLODs) {
 		return TerrainClipmapDesc(numLODs);
+	}
+
+	inline graph::ResourceDesc TerrainChunkDesc() {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = TERRAIN_CHUNK_DIM,
+			.height = TERRAIN_CHUNK_DIM,
+			.layers = TERRAIN_CHUNK_COUNT,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
+			),
+		};
 	}
 
 } // namespace brassica

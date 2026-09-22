@@ -373,6 +373,7 @@ namespace brassica {
 			.pipelineLibrary = &pipelineLibrary,
 			.shaderWatcher = &shaderWatcher,
 			.terrainAS = &terrainAS,
+			.terrainClipmap = &terrainClipmap,
 			.dispatchLoader = &terrainAS.GetDls(),
 			.swapchainFormat = GetSwapchainFormat(),
 		};
@@ -400,6 +401,13 @@ namespace brassica {
 			terrainClipmap.GetImage(),
 			terrainClipmap.GetImageView(),
 			TerrainClipmapDesc(terrainClipmap.GetNumLODs()),
+			vk::ImageLayout::eUndefined,
+			/*hasDefinedContents=*/false
+		);
+		physicalRegistry.RegisterImportedTexture<TerrainChunkTexture>(
+			terrainClipmap.GetChunkImage(),
+			terrainClipmap.GetChunkImageView(),
+			TerrainChunkDesc(),
 			vk::ImageLayout::eUndefined,
 			/*hasDefinedContents=*/false
 		);
@@ -1184,6 +1192,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+		frameGraph.Register<graph::Import<TerrainChunkTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		nodeRegistry.RegisterAllInto(frameGraph);
 

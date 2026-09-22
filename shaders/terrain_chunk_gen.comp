@@ -1,0 +1,78 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+	vec2  minWorldPos;      // Corner XZ position of the chunk in meters
+	uint  chunkSlot;        // Chunk layer index in 2D array (0..8)
+	uint  chunkStorageIdx;  // Storage image array index for TerrainChunkTexture
+	float texelSize;       // Texel size in meters (32.0)
+} push;
+
+void main() {
+	uvec2 texelIndex = gl_GlobalInvocationID.xy;
+	if (texelIndex.x >= 256u || texelIndex.y >= 256u) {
+		return;
+	}
+
+	vec2 worldXZ = push.minWorldPos + (vec2(texelIndex) + 0.5) * push.texelSize;
+	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
+
+	TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14, 0.5);
+	float dummyBiome = 0.0;
+	float dummyMask = 0.0;
+
+	// Center height
+	float h = evaluate_terrain(p, 0.0, 0.75, con, dummyBiome, dummyMask);
+
+	// Neighboring heights at 32m texel spacing
+	vec3 pL = vec3(p.x - push.texelSize, 0.0, p.z);
+	vec3 pR = vec3(p.x + push.texelSize, 0.0, p.z);
+	vec3 pD = vec3(p.x, 0.0, p.z - push.texelSize);
+	vec3 pU = vec3(p.x, 0.0, p.z + push.texelSize);
+
+	float hL = evaluate_terrain(pL, 0.0, 0.75, con, dummyBiome, dummyMask);
+	float hR = evaluate_terrain(pR, 0.0, 0.75, con, dummyBiome, dummyMask);
+	float hD = evaluate_terrain(pD, 0.0, 0.75, con, dummyBiome, dummyMask);
+	float hU = evaluate_terrain(pU, 0.0, 0.75, con, dummyBiome, dummyMask);
+
+	// 1. Local Height Variance across 5-point neighborhood
+	float meanH = (h + hL + hR + hD + hU) * 0.2;
+	float diffH = h - meanH;
+	float diffL = hL - meanH;
+	float diffR = hR - meanH;
+	float diffD = hD - meanH;
+	float diffU = hU - meanH;
+	float variance = (diffH * diffH + diffL * diffL + diffR * diffR + diffD * diffD + diffU * diffU) * 0.2;
+
+	// 2. High-frequency noise gradient vs discrete neighborhood gradient
+	vec3 fineNormal = evaluate_terrain_normal(p, 0.0, 0.75, 0.5, con);
+	vec2 fineGradient = -fineNormal.xz / max(0.001, fineNormal.y);
+	vec2 discreteGradient = vec2(hR - hL, hU - hD) / (2.0 * push.texelSize);
+
+	// 3. Discrete second derivatives (curvature)
+	float d2h_dx2 = (hR - 2.0 * h + hL) / (push.texelSize * push.texelSize);
+	float d2h_dz2 = (hU - 2.0 * h + hD) / (push.texelSize * push.texelSize);
+	float curvature = abs(d2h_dx2) + abs(d2h_dz2);
+
+	// 4. Height error estimation & estimated required resolution change factor
+	float gradMismatch = length(fineGradient - discreteGradient);
+	float errorEst = 0.125 * (push.texelSize * push.texelSize) * curvature + push.texelSize * gradMismatch;
+
+	// Estimated required resolution scaling factor (e.g. 1.0 = 32m is sufficient, >1.0 = finer resolution needed)
+	float targetTolerance = 2.0; // 2 meters target error
+	float resolutionFactor = max(1.0, sqrt(errorEst / targetTolerance));
+
+	ivec3 storeCoord = ivec3(texelIndex, push.chunkSlot);
+	imageStore(
+		uImageArraysRGBA32F[nonuniformEXT(push.chunkStorageIdx)],
+		storeCoord,
+		vec4(h, variance, errorEst, resolutionFactor)
+	);
+}

@@ -265,11 +265,36 @@ namespace brassica {
 			levelInfos[i].delta = glm::ivec2(TERRAIN_MAP_DIM, TERRAIN_MAP_DIM);
 		}
 
+		chunkInfos.resize(TERRAIN_CHUNK_COUNT);
+		for (uint32_t i = 0; i < TERRAIN_CHUNK_COUNT; ++i) {
+			chunkInfos[i].slot = i;
+			chunkInfos[i].isDirty = true;
+		}
+
 		CreateTextureArrays();
 		CreateSampler();
 	}
 
 	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos) {
+		glm::ivec2 centerChunkCoord = glm::ivec2(
+			glm::floor((glm::vec2(cameraPos.x, cameraPos.z) + 0.5f * TERRAIN_CHUNK_SIZE) / TERRAIN_CHUNK_SIZE)
+		);
+		for (int dz = -1; dz <= 1; ++dz) {
+			for (int dx = -1; dx <= 1; ++dx) {
+				glm::ivec2 coord = centerChunkCoord + glm::ivec2(dx, dz);
+				uint32_t slot = static_cast<uint32_t>(((coord.y % 3 + 3) % 3) * 3 + ((coord.x % 3 + 3) % 3));
+				auto& info = chunkInfos[slot];
+				info.slot = slot;
+				if (m_forceRegenerate || info.chunkCoord != coord) {
+					info.chunkCoord = coord;
+					info.minWorldPos = glm::vec2(coord) * TERRAIN_CHUNK_SIZE - glm::vec2(0.5f * TERRAIN_CHUNK_SIZE);
+					info.isDirty = true;
+				} else {
+					info.isDirty = false;
+				}
+			}
+		}
+
 		for (uint32_t l = 0; l < numLODs; ++l) {
 			auto& info = levelInfos[l];
 			float texelSize = info.texelSize;
@@ -329,6 +354,7 @@ namespace brassica {
 			destroyArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 			destroyArrayImage(biomeImage, biomeImageView, biomeAllocation);
 			destroyArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+			destroyArrayImage(chunkImage, chunkImageView, chunkAllocation);
 		}
 	}
 
@@ -368,6 +394,41 @@ namespace brassica {
 		createArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 		createArrayImage(biomeImage, biomeImageView, biomeAllocation);
 		createArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+
+		auto createChunkArrayImage = [&](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc) {
+			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			imageInfo.imageType = VK_IMAGE_TYPE_2D;
+			imageInfo.extent = VkExtent3D{TERRAIN_CHUNK_DIM, TERRAIN_CHUNK_DIM, 1};
+			imageInfo.mipLevels = 1;
+			imageInfo.arrayLayers = TERRAIN_CHUNK_COUNT;
+			imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+			VmaAllocationCreateInfo allocInfo{};
+			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+			VkImage vkImg = VK_NULL_HANDLE;
+			if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &vkImg, &alloc, nullptr) != VK_SUCCESS) {
+				spdlog::error("Failed to create TerrainClipmap chunk texture array image!");
+				return;
+			}
+			img = vkImg;
+
+			vk::ImageViewCreateInfo viewInfo{};
+			viewInfo.setImage(img);
+			viewInfo.setViewType(vk::ImageViewType::e2DArray);
+			viewInfo.setFormat(vk::Format::eR32G32B32A32Sfloat);
+			viewInfo.setSubresourceRange(
+				vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, TERRAIN_CHUNK_COUNT)
+			);
+			view = device.createImageView(viewInfo);
+		};
+
+		createChunkArrayImage(chunkImage, chunkImageView, chunkAllocation);
 	}
 
 	void TerrainClipmap::CreateSampler() {

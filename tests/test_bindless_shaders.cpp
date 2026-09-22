@@ -31,6 +31,16 @@ TEST_CASE("deferred.vert/deferred.frag compile to valid SPIR-V against the real 
 	Shader::ClearConstants();
 }
 
+TEST_CASE("terrain_chunk_gen.comp compiles to valid SPIR-V against the real bindless.glsl substitution") {
+	RegisterBindlessSamplerConstants();
+
+	ComputeShader comp;
+	CHECK(comp.CompileComputeFromFile(vk::Device{}, "shaders/terrain_chunk_gen.comp"));
+	CHECK(!comp.GetSPIRV().empty());
+
+	Shader::ClearConstants();
+}
+
 TEST_CASE("terrain.task/terrain.mesh compile to valid SPIR-V against the real bindless.glsl substitution") {
 	RegisterBindlessSamplerConstants();
 

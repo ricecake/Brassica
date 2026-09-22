@@ -30,6 +30,7 @@ TEST_CASE("Real TerrainGenNode/SkyBackgroundNode/TerrainNode/DeferredNode compos
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+		frameGraph.Register<graph::Import<TerrainChunkTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		frameGraph.Register<graph::Import<Swapchain>>();
 

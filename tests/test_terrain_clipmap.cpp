@@ -164,6 +164,34 @@ TEST_CASE("Terrain Attribute Maps Generation") {
 	CHECK(visVal.x == 1.0f);
 }
 
+TEST_CASE("Terrain Chunk Low-Res 8192m Grid Mapping") {
+	brassica::TerrainClipmap clipmap;
+	clipmap.Init(vk::Device{}, VK_NULL_HANDLE, 10, 0.5f, 0.0f, glm::vec3(0.0f));
+
+	const auto& chunks = clipmap.GetChunkInfos();
+	CHECK(chunks.size() == 9);
+
+	// Initial center chunk coord is (0,0); all 9 dirty
+	for (const auto& chunk : chunks) {
+		CHECK(chunk.isDirty == true);
+	}
+
+	// Move camera within same chunk (< 4096m offset)
+	clipmap.UpdateCameraPosition(glm::vec3(100.0f, 0.0f, 200.0f));
+	for (const auto& chunk : clipmap.GetChunkInfos()) {
+		CHECK(chunk.isDirty == false);
+	}
+
+	// Move camera across 8192m chunk boundary
+	clipmap.UpdateCameraPosition(glm::vec3(8500.0f, 0.0f, 0.0f));
+	uint32_t dirtyCount = 0;
+	for (const auto& chunk : clipmap.GetChunkInfos()) {
+		if (chunk.isDirty) dirtyCount++;
+	}
+	// 3 new leading edge chunks become dirty
+	CHECK(dirtyCount == 3);
+}
+
 TEST_CASE("Initial Camera Height and Raytrace AABB Bounds") {
 	float baseTexel = 0.5f;
 	glm::vec3 camPos(100.0f, 0.0f, -200.0f);
