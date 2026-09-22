@@ -35,20 +35,32 @@ layout(std430, set = 2, binding = 1) readonly buffer ParticleTypes {
 	ParticleType uParticleTypes[];
 };
 
-layout(std430, set = 2, binding = 2) buffer AliveIndices {
-	uint uAliveIndices[];
+layout(std430, set = 2, binding = 2) buffer AboveWaterAliveIndices {
+	uint uAboveWaterAliveIndices[];
 };
 
-layout(std430, set = 2, binding = 3) buffer IndirectCommandBuffer {
-	IndirectCommand uIndirectCommand;
+layout(std430, set = 2, binding = 3) buffer AboveWaterIndirectCommandBuffer {
+	IndirectCommand uAboveWaterIndirectCommand;
+};
+
+layout(std430, set = 2, binding = 4) buffer UnderwaterAliveIndices {
+	uint uUnderwaterAliveIndices[];
+};
+
+layout(std430, set = 2, binding = 5) buffer UnderwaterIndirectCommandBuffer {
+	IndirectCommand uUnderwaterIndirectCommand;
 };
 
 layout(push_constant) uniform ParticleLivenessPushConstants {
 	uint  maxParticles;
 	float deltaTime;
-}
+	float waterLevel;
+} uPush;
 
-uPush;
+float hash1(uint n) {
+	n = (n << 13U) ^ n;
+	return float((n * (n * n * 15731U + 789221U) + 1376312589U) & 0x7fffffffU) / 2147483648.0;
+}
 
 void main() {
 	uint idx = gl_GlobalInvocationID.x;
@@ -57,22 +69,67 @@ void main() {
 		return;
 	}
 
-	if (uParticles[idx].lifetime <= 0.0) {
-		uParticles[idx].lifetime = 5.0;
-		uParticles[idx].maxLifetime = 5.0;
+	vec3 camPos = uCameraPosition.xyz;
+	vec3 camFwd = normalize(-uInvViewMatrix[2].xyz);
+	vec3 camRight = normalize(uInvViewMatrix[0].xyz);
+	vec3 camUp = normalize(uInvViewMatrix[1].xyz);
 
-		float xOffset = float((idx * 17u) % 200u) - 100.0;
-		float zOffset = float((idx * 31u) % 200u) - 100.0;
-		float yOffset = 50.0 + float((idx * 13u) % 50u);
+	// Even indices are birds (type 0), odd indices are fish (type 1)
+	uint pType = (idx % 2u == 0u) ? 0u : 1u;
+	uParticles[idx].type = pType;
 
-		uParticles[idx].position = vec4(xOffset, yOffset, zOffset, 1.0);
-		uParticles[idx].velocity = vec4(sin(float(idx)) * 2.0, 1.0, cos(float(idx)) * 2.0, 0.0);
+	float distToCam = length(uParticles[idx].position.xyz - camPos);
+	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 250.0;
+
+	if (expired) {
+		uParticles[idx].lifetime = 8.0 + hash1(idx * 7u + uFrameIndex) * 8.0;
+		uParticles[idx].maxLifetime = uParticles[idx].lifetime;
+
+		float rFwd   = 15.0 + hash1(idx * 13u + uFrameIndex) * 70.0;
+		float rRight = (hash1(idx * 17u + uFrameIndex) - 0.5) * 80.0;
+		float rUp    = (hash1(idx * 23u + uFrameIndex) - 0.5) * 40.0;
+
+		vec3 spawnCenter = camPos + camFwd * rFwd + camRight * rRight + camUp * rUp;
+
+		if (pType == 0u) { // Birds (Above water)
+			spawnCenter.y = max(spawnCenter.y, max(camPos.y + 2.0, 5.0));
+			vec3 flyDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5));
+			uParticles[idx].velocity = vec4(flyDir * (12.0 + hash1(idx * 41u) * 8.0), 0.0);
+			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0);
+		} else { // Fish (Underwater)
+			spawnCenter.y = min(spawnCenter.y, min(camPos.y - 2.0, -1.0));
+			vec3 swimDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5));
+			uParticles[idx].velocity = vec4(swimDir * (5.0 + hash1(idx * 41u) * 5.0), 0.0);
+			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0);
+		}
+
+		uParticles[idx].position = vec4(spawnCenter, 1.0);
 	}
 
 	uParticles[idx].lifetime -= uPush.deltaTime;
 
 	if (uParticles[idx].lifetime > 0.0) {
-		uint aliveSlot = atomicAdd(uIndirectCommand.groupCountX, 1);
-		uAliveIndices[aliveSlot] = idx;
+		// Crude depth sort, not a fixed bird=after/fish=before assumption: these two buffers are
+		// really "renders after water" and "renders before water" (AboveWaterParticleRenderNode
+		// runs at SubPhase::ParticleRender, after WaterNode; UnderwaterParticleRenderNode runs at
+		// SubPhase::UnderwaterParticleRender, before it -- see ParticleSystemNode.hpp). Whichever
+		// side of the water plane the particle is actually on relative to the CAMERA'S side is what
+		// decides that, not the particle's fixed bird/fish type: same side as the camera means no
+		// water surface is between them, so it should render crisp and unoccluded -- after water,
+		// so water's own blend does not cover it. Opposite side means the camera is looking at it
+		// through the water surface, so it needs to render before water, letting water's blend
+		// tint/dim it. This swaps which physical buffer a bird vs a fish lands in when the camera
+		// crosses the water plane -- exactly the point.
+		bool particleAboveWater = uParticles[idx].position.y > uPush.waterLevel;
+		bool cameraAboveWater = camPos.y > uPush.waterLevel;
+		bool rendersAfterWater = particleAboveWater == cameraAboveWater;
+
+		if (rendersAfterWater) {
+			uint aliveSlot = atomicAdd(uAboveWaterIndirectCommand.groupCountX, 1);
+			uAboveWaterAliveIndices[aliveSlot] = idx;
+		} else {
+			uint aliveSlot = atomicAdd(uUnderwaterIndirectCommand.groupCountX, 1);
+			uUnderwaterAliveIndices[aliveSlot] = idx;
+		}
 	}
 }

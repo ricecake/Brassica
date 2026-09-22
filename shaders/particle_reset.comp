@@ -9,12 +9,20 @@ struct IndirectCommand {
 	uint groupCountZ;
 };
 
-layout(std430, set = 2, binding = 3) buffer IndirectCommandBuffer {
-	IndirectCommand uIndirectCommand;
+layout(std430, set = 2, binding = 3) buffer AboveWaterIndirectCommandBuffer {
+	IndirectCommand uAboveWaterIndirectCommand;
+};
+
+layout(std430, set = 2, binding = 5) buffer UnderwaterIndirectCommandBuffer {
+	IndirectCommand uUnderwaterIndirectCommand;
 };
 
 void main() {
-	uIndirectCommand.groupCountX = 0;
-	uIndirectCommand.groupCountY = 1;
-	uIndirectCommand.groupCountZ = 1;
+	uAboveWaterIndirectCommand.groupCountX = 0;
+	uAboveWaterIndirectCommand.groupCountY = 1;
+	uAboveWaterIndirectCommand.groupCountZ = 1;
+
+	uUnderwaterIndirectCommand.groupCountX = 0;
+	uUnderwaterIndirectCommand.groupCountY = 1;
+	uUnderwaterIndirectCommand.groupCountZ = 1;
 }

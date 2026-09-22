@@ -18,18 +18,6 @@ layout(push_constant) uniform SkyPushConstants {
 #include "common.glsl"
 #include "helpers/astral.glsl"
 
-vec3 sampleSkyView(vec3 rd) {
-	float elevation = asin(clamp(rd.y, -1.0, 1.0));
-	float azimuth = atan(rd.x, -rd.z);
-	if (azimuth < 0.0)
-		azimuth += 2.0 * PI;
-
-	float v = (elevation < 0.0) ? (0.5 - 0.5 * sqrt(-elevation / (PI * 0.5)))
-								: (0.5 + 0.5 * sqrt(elevation / (PI * 0.5)));
-	vec2 uv = vec2(azimuth / (2.0 * PI), v);
-	return SAMPLE_LINEAR(push.skyViewIndex, uv).rgb;
-}
-
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
 	return SAMPLE_LINEAR(push.transmittanceIndex, uv).rgb;
@@ -44,7 +32,7 @@ void main() {
 	float r = kEarthRadius + max(0.0, uCameraPosition.y / (1000.0 * worldScale));
 
 	// 1. Sky Radiance from SkyViewLUT
-	vec3 skyRadiance = sampleSkyView(worldRay);
+	vec3 skyRadiance = sampleSkyView(push.skyViewIndex, worldRay);
 
 	// 2. Sun Disc with Aureole
 	vec3  sunDir = normalize(push.sunDirAndAureole.xyz);

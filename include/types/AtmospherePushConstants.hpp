@@ -32,7 +32,10 @@ namespace brassica {
 		alignas(16) glm::vec3 waterScatteringBase{33.6f, 43.4f, 15.6f};
 		alignas(4) float waterScale{1.0f};
 		alignas(16) glm::vec3 waterExtinctionBase{280.0f, 70.0f, 20.0f};
-		alignas(4) float padding2{0.0f};
+		// 0..1. How strongly the aerial-perspective composite pulls distant fogged geometry toward
+		// the real SkyViewLUT radiance for that view direction (shaders/atmosphere/composite.frag),
+		// weighted by fog opacity. 1.0 = fully physically motivated blend.
+		alignas(4) float skyConvergenceStrength{1.0f};
 	};
 
 } // namespace brassica

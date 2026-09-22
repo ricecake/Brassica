@@ -243,9 +243,16 @@ namespace brassica::graph {
 	// carried a vk::ImageLayout targetLayout) -- EndHostWrite's real Staged-texture path always
 	// transitions through whatever layout the barrier machinery already derived for this
 	// resource's next access, so nothing here needs to name or track a target layout itself.
-	template <ResourceRef Key, typename T = std::uint8_t>
+	// Phase defaults to Phase::Default (0), same as ever -- but a caller whose early-phase reader
+	// needs this data upfront (e.g. a SubPhase::Prepare node Read<>-ing a predefined lookup table)
+	// can now say so directly instead of writing a one-off subclass just to add a kPhase member.
+	// This node produces its data unconditionally on the first frame (or every frame, or on
+	// SetData) regardless of P -- P only affects *when in the frame* that write is scheduled
+	// relative to other nodes, never whether it happens.
+	template <ResourceRef Key, typename T = std::uint8_t, Phase P = Phase::Default>
 	struct HostWriteNode {
 		using Resources = Declares<Create<Key>>;
+		static constexpr Phase kPhase = P;
 
 		std::vector<T> data;
 		ResourceDesc   desc{};
@@ -286,8 +293,8 @@ namespace brassica::graph {
 		void Reset() { dirty = true; }
 	};
 
-	template <ResourceRef Key, typename T>
-	struct NodeKindOfT<HostWriteNode<Key, T>> {
+	template <ResourceRef Key, typename T, Phase P>
+	struct NodeKindOfT<HostWriteNode<Key, T, P>> {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 
@@ -295,9 +302,9 @@ namespace brassica::graph {
 	// supply one, the convenience the bare HostWriteNode deliberately doesn't have (a byteSize of
 	// 0 is also a legitimate image desc's steady state, so that inference can't live there
 	// without risking silently overwriting a caller's real Image2D/3D desc).
-	template <ResourceRef Key, typename T = std::uint8_t>
-	struct PredefinedBufferNode: HostWriteNode<Key, T> {
-		using Base = HostWriteNode<Key, T>;
+	template <ResourceRef Key, typename T = std::uint8_t, Phase P = Phase::Default>
+	struct PredefinedBufferNode: HostWriteNode<Key, T, P> {
+		using Base = HostWriteNode<Key, T, P>;
 
 		PredefinedBufferNode() = default;
 
@@ -312,8 +319,8 @@ namespace brassica::graph {
 		}
 	};
 
-	template <ResourceRef Key, typename T>
-	struct NodeKindOfT<PredefinedBufferNode<Key, T>> {
+	template <ResourceRef Key, typename T, Phase P>
+	struct NodeKindOfT<PredefinedBufferNode<Key, T, P>> {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 
@@ -321,9 +328,9 @@ namespace brassica::graph {
 	// needs real width/height from the caller, so there is no default-desc inference to add here;
 	// this exists purely to spell out "this HostWriteNode<Key, uint8_t> is pixel data" at the call
 	// site.
-	template <ResourceRef Key>
-	struct PredefinedTextureNode: HostWriteNode<Key, std::uint8_t> {
-		using Base = HostWriteNode<Key, std::uint8_t>;
+	template <ResourceRef Key, Phase P = Phase::Default>
+	struct PredefinedTextureNode: HostWriteNode<Key, std::uint8_t, P> {
+		using Base = HostWriteNode<Key, std::uint8_t, P>;
 
 		PredefinedTextureNode() = default;
 
@@ -331,8 +338,8 @@ namespace brassica::graph {
 			Base(pixelData, imageDesc) {}
 	};
 
-	template <ResourceRef Key>
-	struct NodeKindOfT<PredefinedTextureNode<Key>> {
+	template <ResourceRef Key, Phase P>
+	struct NodeKindOfT<PredefinedTextureNode<Key, P>> {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 

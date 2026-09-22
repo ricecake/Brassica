@@ -1,6 +1,7 @@
 #version 460 core
 #extension GL_EXT_mesh_shader : require
 
+#include "common.glsl"
 #include "bindless.glsl"
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
@@ -38,33 +39,71 @@ layout(std430, set = 2, binding = 1) readonly buffer ParticleTypes {
 	ParticleType uParticleTypes[];
 };
 
-layout(std430, set = 2, binding = 2) readonly buffer AliveIndices {
-	uint uAliveIndices[];
+layout(std430, set = 2, binding = 2) readonly buffer AboveWaterAliveIndices {
+	uint uAboveWaterAliveIndices[];
 };
 
-layout(std430, set = 2, binding = 3) readonly buffer IndirectCommandBuffer {
-	IndirectCommand uIndirectCommand;
+layout(std430, set = 2, binding = 3) readonly buffer AboveWaterIndirectCommandBuffer {
+	IndirectCommand uAboveWaterIndirectCommand;
 };
 
+layout(std430, set = 2, binding = 4) readonly buffer UnderwaterAliveIndices {
+	uint uUnderwaterAliveIndices[];
+};
+
+layout(std430, set = 2, binding = 5) readonly buffer UnderwaterIndirectCommandBuffer {
+	IndirectCommand uUnderwaterIndirectCommand;
+};
+
+layout(push_constant) uniform ParticleRenderPushConstants {
+	uint isUnderwater;
+} uPush;
+
+// particleType (uint) must be flat -- integer interface variables cannot be smoothly
+// interpolated in GLSL/Vulkan -- but it was previously bundled into the same block as uv/
+// worldPos/color, and a single `flat` qualifier on an interface block applies to every member:
+// that froze uv (and worldPos) to the provoking vertex's value across each whole triangle
+// instead of varying per-pixel, which is what particle.frag's shape functions actually need to
+// draw anything -- the practical effect was shapeAlpha evaluating near-constant and below the
+// 0.02 discard threshold almost everywhere, i.e. particles rendering as invisible. Split into its
+// own flat output so the rest of the block gets real (default smooth) interpolation.
 layout(location = 0) out struct ParticleVertexOutput {
 	vec4 color;
 	vec2 uv;
 	vec4 misc;
+	vec3 worldPos;
 } OUT[];
+
+layout(location = 4) flat out uint outParticleType[];
 
 void main() {
 	uint liveIdx = gl_WorkGroupID.x;
-	if (liveIdx >= uIndirectCommand.groupCountX) {
+	uint liveCount = (uPush.isUnderwater != 0u) ? uUnderwaterIndirectCommand.groupCountX : uAboveWaterIndirectCommand.groupCountX;
+
+	if (liveIdx >= liveCount) {
 		SetMeshOutputsEXT(0, 0);
 		return;
 	}
 
-	uint         particleIdx = uAliveIndices[liveIdx];
-	Particle     p = uParticles[particleIdx];
+	uint particleIdx = (uPush.isUnderwater != 0u) ? uUnderwaterAliveIndices[liveIdx] : uAboveWaterAliveIndices[liveIdx];
+	Particle p = uParticles[particleIdx];
 	ParticleType pType = uParticleTypes[p.type];
 
 	vec3 camPos = uCameraPosition.xyz;
 	vec3 pos = p.position.xyz;
+
+	// Planet-curvature drop-off: every other real-geometry mesh shader (terrain.mesh, water.mesh,
+	// ball.mesh) bends world Y down by distSq/(2*FAKE_PLANET_RADIUS) as horizontal distance from
+	// the camera grows, simulating a curved planet surface -- this shader omitted it entirely, so
+	// at any real distance a particle's uncorrected height increasingly diverged from the
+	// correctly-bent water/terrain surface beneath it, which is exactly what put particles behind
+	// (and therefore depth-tested away by) water/terrain right where they visually overlapped it.
+	// Applied to the particle's center once, before deriving orientation/offsets from it, since a
+	// billboard-sized offset changes distSq by a negligible amount relative to FAKE_PLANET_RADIUS.
+	vec2  flatXZ = pos.xz - camPos.xz;
+	float distSq = dot(flatXZ, flatXZ);
+	pos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
+
 	vec3 forward = normalize(camPos - pos);
 	vec3 up = vec3(0.0, 1.0, 0.0);
 	if (abs(dot(forward, up)) > 0.99) {
@@ -73,10 +112,7 @@ void main() {
 	vec3 right = normalize(cross(up, forward));
 	up = cross(forward, right);
 
-	float size = pType.size;
-	if (size < 1.0) {
-		size = 10.0;
-	}
+	float size = (pType.size > 0.0) ? pType.size : ((p.type == 0u) ? 3.0 : 2.0);
 	float halfSize = size * 0.5;
 
 	vec3 offsets[4] = vec3[4](
@@ -90,22 +126,27 @@ void main() {
 
 	SetMeshOutputsEXT(4, 2);
 
-	vec4 particleColor = pType.color;
-	if (length(particleColor.rgb) < 0.1) {
-		particleColor = vec4(1.0, 0.9, 0.1, 1.0);
+	vec4 baseColor;
+	if (pType.color.a > 0.0) {
+		baseColor = pType.color;
+	} else if (p.type == 0u) {
+		baseColor = vec4(1.0, 0.95, 0.7, 0.95); // Warm golden/white luminous bird plumage
+	} else {
+		baseColor = vec4(0.1, 0.95, 0.85, 0.95); // Vibrant cyan/seafoam underwater fish sheen
 	}
 
+	float lifeRatio = clamp(p.lifetime / max(p.maxLifetime, 0.0001), 0.0, 1.0);
+	baseColor.a *= min(1.0, lifeRatio * 2.0);
+
 	for (uint i = 0u; i < 4u; ++i) {
-		vec4 worldPos = vec4(pos + offsets[i], 1.0);
-		gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * worldPos;
+		vec3 vWorldPos = pos + offsets[i];
+		gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(vWorldPos, 1.0);
 
-		float lifeRatio = clamp(p.lifetime / max(p.maxLifetime, 0.0001), 0.0, 1.0);
-		vec4  finalColor = particleColor;
-		finalColor.a *= lifeRatio;
-
-		OUT[i].color = finalColor;
+		OUT[i].color = baseColor;
 		OUT[i].uv = uvs[i];
 		OUT[i].misc = p.misc;
+		OUT[i].worldPos = vWorldPos;
+		outParticleType[i] = p.type;
 	}
 
 	gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);

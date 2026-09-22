@@ -17,6 +17,7 @@ layout(push_constant) uniform AtmosphereCompositePushConstants {
 	uint  hdrColorIndex;
 	uint  transmittanceIndex;
 	uint  multiScatteringIndex;
+	uint  skyViewIndex;
 }
 push;
 
@@ -77,5 +78,22 @@ void main() {
 	AtmosphereSample atmos = evaluateAtmosphere(ray);
 
 	vec3 sceneRadiance = SAMPLE_NEAREST(push.hdrColorIndex, inUV).rgb;
-	outColor = vec4(applyAtmosphere(atmos, sceneRadiance), 1.0);
+	vec3 fogged = applyAtmosphere(atmos, sceneRadiance);
+
+	// Converge distant fog toward the real SkyViewLUT radiance for this exact ray direction --
+	// the standard aerial-perspective trick, and the fix for this march's color balance being
+	// backwards (red fading least, not most) at long range: real multi-scattering makes distant
+	// haze converge on the sky's own hue, but this per-pixel march's single-scattering term alone
+	// doesn't reproduce that. Weighted by fog opacity (1 - transmittance luminance) so it has no
+	// effect on close, unfogged geometry and only takes over once the surface is essentially lost
+	// in haze. Only for real surface geometry seen from above water -- SkyViewLUT is computed as
+	// if the camera sits at or above the ground (sky_view_lut.comp clamps camAltKM >= 0), so it's
+	// not a valid convergence target for an underwater ray's own water-fog color.
+	if (hasSurface && camAltKM >= waterLevelKM) {
+		float fogOpacity = 1.0 - clamp(dot(atmos.transmittance, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+		vec3  skyColor = sampleSkyView(push.skyViewIndex, rayDir);
+		fogged = mix(fogged, skyColor, fogOpacity * u_skyConvergence);
+	}
+
+	outColor = vec4(fogged, 1.0);
 }

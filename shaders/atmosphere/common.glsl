@@ -29,7 +29,11 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	vec3  waterScatteringBase;
 	float waterScale;
 	vec3  waterExtinctionBase;
-	float padding2;
+	// 0..1. How strongly aerial_perspective.glsl's sky-color convergence pulls distant fogged
+	// geometry toward the real SkyViewLUT radiance for that view direction, weighted by fog
+	// opacity -- see marchAtmosphereSegment's caller in composite.frag. 1.0 = fully physically
+	// motivated blend; 0.0 = old behavior (pure single/multi-scatter march, no convergence).
+	float skyConvergenceStrength;
 }
 u_atmosphere;
 
@@ -54,6 +58,7 @@ u_atmosphere;
 #define kWaterScattering u_atmosphere.waterScatteringBase
 #define u_waterScale u_atmosphere.waterScale
 #define kWaterExtinction u_atmosphere.waterExtinctionBase
+#define u_skyConvergence u_atmosphere.skyConvergenceStrength
 #define kTopRadius (kEarthRadius + kAtmosphereHeight)
 
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {
@@ -156,6 +161,22 @@ vec2 transmittanceToUV(float r, float mu) {
 void UVToTransmittance(vec2 uv, out float r, out float mu) {
 	mu = uv.x * 2.0 - 1.0;
 	r = kEarthRadius + uv.y * kAtmosphereHeight;
+}
+
+// Inverts sky_view_lut.comp's own elevation/azimuth parameterization of its output texture.
+// Shared by SkyBackgroundNode's full-screen sky draw and aerial_perspective.glsl's sky-color
+// convergence -- both need "what does the sky look like along this world-space ray," just for
+// different pixels (empty-background vs. real fogged geometry).
+vec3 sampleSkyView(uint index, vec3 rd) {
+	float elevation = asin(clamp(rd.y, -1.0, 1.0));
+	float azimuth = atan(rd.x, -rd.z);
+	if (azimuth < 0.0)
+		azimuth += 2.0 * PI;
+
+	float v = (elevation < 0.0) ? (0.5 - 0.5 * sqrt(-elevation / (PI * 0.5)))
+								: (0.5 + 0.5 * sqrt(elevation / (PI * 0.5)));
+	vec2 uv = vec2(azimuth / (2.0 * PI), v);
+	return SAMPLE_LINEAR(index, uv).rgb;
 }
 
 /**

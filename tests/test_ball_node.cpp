@@ -7,7 +7,7 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "passes/BallNode.hpp"
+#include "passes/EntityNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -16,6 +16,8 @@
 using namespace brassica;
 
 namespace {
+
+	struct TestBallTag {};
 
 	struct FakeSceneProducer {
 		using Resources = graph::Declares<
@@ -174,7 +176,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("BallNode shader compilation and host-mapped indirect buffer execution") {
+TEST_CASE("EntityNode shader compilation and host-mapped indirect buffer execution") {
 	Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
 	Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
 	Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
@@ -195,7 +197,7 @@ TEST_CASE("BallNode shader compilation and host-mapped indirect buffer execution
 	Shader::ClearConstants();
 }
 
-TEST_CASE("BallNode executes in frame graph writing host-mapped indirect command buffer") {
+TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect command buffer") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
@@ -234,8 +236,9 @@ TEST_CASE("BallNode executes in frame graph writing host-mapped indirect command
 		dls.vkCmdDrawMeshTasksEXT = nullptr;
 		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
 
-		BallNode ballNode;
-		ballNode.Init(
+		EntityNode<TestBallTag> entityNode;
+		entityNode.SetIndirectCommand(MeshTasksIndirectCommand{1, 1, 1});
+		entityNode.Init(
 			render::NodeServices{
 				.device = vkDevice,
 				.pipelineLibrary = &pipelineLibrary,
@@ -246,7 +249,7 @@ TEST_CASE("BallNode executes in frame graph writing host-mapped indirect command
 
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>();
-		graph.RegisterRef(ballNode);
+		graph.RegisterRef(entityNode);
 
 		graph::FrameContext ctx{.width = 256, .height = 256};
 
@@ -255,8 +258,8 @@ TEST_CASE("BallNode executes in frame graph writing host-mapped indirect command
 		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
 		vkCmd.end();
 
-		// Verify BallIndirectBuffer was provisioned as host-mapped
-		auto physBuf = registry.GetBuffer<BallIndirectBuffer>();
+		// Verify EntityIndirectBuffer was provisioned as host-mapped
+		auto physBuf = registry.GetBuffer<EntityIndirectBuffer<TestBallTag>>();
 		REQUIRE(physBuf != nullptr);
 		CHECK(physBuf->IsHostMapped());
 
@@ -272,7 +275,7 @@ TEST_CASE("BallNode executes in frame graph writing host-mapped indirect command
 		device.GetQueue().waitIdle();
 
 		pipelineLibrary.Reset();
-		ballNode.Destroy(vkDevice);
+		entityNode.Destroy(vkDevice);
 		DestroyBallBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);
 		vkDevice.destroyCommandPool(pool);
 	}

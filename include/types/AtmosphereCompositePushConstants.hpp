@@ -27,6 +27,7 @@ namespace brassica {
 		alignas(4) std::uint32_t hdrColorIndex{0};
 		alignas(4) std::uint32_t transmittanceIndex{0};
 		alignas(4) std::uint32_t multiScatteringIndex{0};
+		alignas(4) std::uint32_t skyViewIndex{0};
 	};
 
 } // namespace brassica

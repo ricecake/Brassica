@@ -105,6 +105,7 @@ namespace {
 		void*                   frameUboMapped{nullptr}; // lets a caller update cameraPosition between "frames"
 		vk::Buffer              atmosphereUboBuffer{};
 		VmaAllocation           atmosphereUboAllocation{};
+		void*                   atmosphereUboMapped{nullptr}; // lets a caller update tuning values (e.g. skyConvergenceStrength) between "frames"
 
 		vk::DescriptorSetLayout                           layout{};
 		vk::DescriptorPool                                pool{};
@@ -187,10 +188,10 @@ namespace {
 		}
 
 		AtmospherePushConstants atmosphere{};
-		void*                    atmosphereMapped =
+		result.atmosphereUboMapped =
 			createUboBuffer(sizeof(AtmospherePushConstants), result.atmosphereUboBuffer, result.atmosphereUboAllocation);
-		if (atmosphereMapped) {
-			std::memcpy(atmosphereMapped, &atmosphere, sizeof(AtmospherePushConstants));
+		if (result.atmosphereUboMapped) {
+			std::memcpy(result.atmosphereUboMapped, &atmosphere, sizeof(AtmospherePushConstants));
 		}
 
 		std::array<vk::DescriptorBufferInfo, 2> bufferDescs{
@@ -379,6 +380,8 @@ TEST_CASE(
 		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 		MultiScatteringLUTNode multiNode;
 		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		SkyViewLUTNode skyNode;
+		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 
 		AtmosphereCompositeNode compositeNode;
 		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
@@ -388,6 +391,7 @@ TEST_CASE(
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{});
 		graph.RegisterRef(transNode);
 		graph.RegisterRef(multiNode);
+		graph.RegisterRef(skyNode);
 		graph.RegisterRef(compositeNode);
 
 		graph::FrameContext ctx{.width = 64, .height = 64};
@@ -397,12 +401,11 @@ TEST_CASE(
 		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
 		vkCmd.end();
 
-		// FakeSceneProducer (Default) -> Transmittance/MultiScattering (Compute, no ordering
-		// constraint against Default here since nothing in this graph reads their output except
-		// AtmosphereCompositeNode) -> AtmosphereCompositeNode (SubPhase::Atmosphere, strictly
-		// after Default). Exact stage count depends on how the two independent compute nodes
-		// schedule relative to the producer; what matters is the composite node lands in a later
-		// stage than the producer.
+		// FakeSceneProducer (Default) -> Transmittance -> MultiScattering -> SkyView (Compute, no
+		// ordering constraint against Default here since nothing in this graph reads their output
+		// except AtmosphereCompositeNode) -> AtmosphereCompositeNode (SubPhase::Atmosphere, strictly
+		// after Default). Exact stage count depends on how the LUT chain schedules relative to the
+		// producer; what matters is the composite node lands in a later stage than the producer.
 		const auto& schedule = graph.GetSchedule();
 		REQUIRE(schedule.stages.size() >= 2);
 		CHECK(schedule.stages.back().nodes.size() == 1);
@@ -414,6 +417,7 @@ TEST_CASE(
 
 		pipelineLibrary.Reset();
 		compositeNode.Destroy(vkDevice);
+		skyNode.Destroy(vkDevice);
 		multiNode.Destroy(vkDevice);
 		transNode.Destroy(vkDevice);
 		DestroyAtmosphereBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);
@@ -464,6 +468,8 @@ TEST_CASE("AtmosphereCompositeNode produces a real wavelength-dependent color sh
 		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 		MultiScatteringLUTNode multiNode;
 		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		SkyViewLUTNode skyNode;
+		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 
 		AtmosphereCompositeNode compositeNode;
 		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
@@ -515,6 +521,7 @@ TEST_CASE("AtmosphereCompositeNode produces a real wavelength-dependent color sh
 			graph.Register<FakeSceneProducer>(FakeSceneProducer{});
 			graph.RegisterRef(transNode);
 			graph.RegisterRef(multiNode);
+			graph.RegisterRef(skyNode);
 			graph.RegisterRef(compositeNode);
 
 			graph::FrameContext ctx{.width = kWidth, .height = kHeight};
@@ -617,6 +624,7 @@ TEST_CASE("AtmosphereCompositeNode produces a real wavelength-dependent color sh
 		vmaDestroyBuffer(device.GetAllocator(), readbackBuffer, readbackAllocation);
 		pipelineLibrary.Reset();
 		compositeNode.Destroy(vkDevice);
+		skyNode.Destroy(vkDevice);
 		multiNode.Destroy(vkDevice);
 		transNode.Destroy(vkDevice);
 		DestroyAtmosphereBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);
@@ -668,6 +676,8 @@ TEST_CASE("AtmosphereCompositeNode fogging real terrain above water stays finite
 		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 		MultiScatteringLUTNode multiNode;
 		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		SkyViewLUTNode skyNode;
+		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
 
 		AtmosphereCompositeNode compositeNode;
 		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
@@ -722,6 +732,7 @@ TEST_CASE("AtmosphereCompositeNode fogging real terrain above water stays finite
 			);
 			graph.RegisterRef(transNode);
 			graph.RegisterRef(multiNode);
+			graph.RegisterRef(skyNode);
 			graph.RegisterRef(compositeNode);
 
 			graph::FrameContext ctx{.width = kWidth, .height = kHeight};
@@ -809,9 +820,37 @@ TEST_CASE("AtmosphereCompositeNode fogging real terrain above water stays finite
 			CHECK(p->b < 50.0f);
 		}
 
+		// Sky-color convergence check: `far` above was rendered with the default
+		// skyConvergenceStrength=1.0 (AtmospherePushConstants' real default). Re-rendering the same
+		// 25km case with it forced to 0.0 isolates exactly this blend's contribution -- if the
+		// SkyViewLUT wiring were dead (e.g. a descriptor never actually bound, or skyViewIndex never
+		// set), these two would come out identical. The direction matters too, not just "differs":
+		// convergence is supposed to fix the reported-backwards color balance by pulling distant fog
+		// toward the sky's own (bluer) hue, so far's blue fraction of total radiance should come out
+		// higher than farNoConvergence's.
+		AtmospherePushConstants noConvergence{};
+		noConvergence.skyConvergenceStrength = 0.0f;
+		std::memcpy(bindlessSet.atmosphereUboMapped, &noConvergence, sizeof(AtmospherePushConstants));
+		vmaFlushAllocation(device.GetAllocator(), bindlessSet.atmosphereUboAllocation, 0, sizeof(AtmospherePushConstants));
+		glm::vec4 farNoConvergence = renderAndReadBack(25000.0f);
+		MESSAGE(
+			"far, no convergence (25km): r=",
+			farNoConvergence.r,
+			" g=",
+			farNoConvergence.g,
+			" b=",
+			farNoConvergence.b
+		);
+
+		float farBlueFraction = far.b / std::max(1e-4f, far.r + far.g + far.b);
+		float noConvergenceBlueFraction =
+			farNoConvergence.b / std::max(1e-4f, farNoConvergence.r + farNoConvergence.g + farNoConvergence.b);
+		CHECK(farBlueFraction > noConvergenceBlueFraction);
+
 		vmaDestroyBuffer(device.GetAllocator(), readbackBuffer, readbackAllocation);
 		pipelineLibrary.Reset();
 		compositeNode.Destroy(vkDevice);
+		skyNode.Destroy(vkDevice);
 		multiNode.Destroy(vkDevice);
 		transNode.Destroy(vkDevice);
 		DestroyAtmosphereBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);

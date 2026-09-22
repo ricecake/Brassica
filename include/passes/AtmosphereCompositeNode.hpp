@@ -35,6 +35,7 @@ namespace brassica {
 			GBuffer<graph::Read>,
 			graph::Read<TransmittanceLUT>,
 			graph::Read<MultiScatteringLUT>,
+			graph::Read<SkyViewLUT>,
 			graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
@@ -104,6 +105,13 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(32, 32, vk::Format::eR32G32B32A32Sfloat),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
 			return r;
 		}
 
@@ -113,6 +121,7 @@ namespace brassica {
 			push.hdrColorIndex = ctx.Index<HdrColor>();
 			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
 			push.multiScatteringIndex = ctx.Index<MultiScatteringLUT>();
+			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

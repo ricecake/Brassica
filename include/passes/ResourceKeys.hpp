@@ -56,10 +56,21 @@ namespace brassica {
 
 	struct ParticleTypeBuffer {};
 
-	struct ParticleAliveBuffer {};
+	struct UnderwaterParticleAliveBuffer {};
 
-	struct ParticleIndirectBuffer {};
+	struct UnderwaterParticleIndirectBuffer {};
 
-	struct BallIndirectBuffer {};
+	struct AboveWaterParticleAliveBuffer {};
+
+	struct AboveWaterParticleIndirectBuffer {};
+
+	using ParticleAliveBuffer = AboveWaterParticleAliveBuffer;
+
+	using ParticleIndirectBuffer = AboveWaterParticleIndirectBuffer;
+
+	template <typename Tag = struct DefaultEntityTag>
+	struct EntityIndirectBuffer {};
+
+	using BallIndirectBuffer = EntityIndirectBuffer<struct BallSystemHandlerTag>;
 
 } // namespace brassica

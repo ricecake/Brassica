@@ -9,6 +9,7 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -45,7 +46,15 @@ namespace brassica {
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
 		using Resources = graph::Declares<GBuffer<graph::Read>, graph::Modify<HdrColor>>;
 
-		static constexpr graph::Phase kPhase = graph::Phase::Late;
+		// Was graph::Phase::Late (1000) -- the exact same numeric value ParticleSystemNode's outer
+		// wrapper also declared, which is what let the whole particle system (including the two
+		// render nodes, despite their own carefully-chosen SubPhase::UnderwaterParticleRender/
+		// ParticleRender) schedule as one same-phase peer of this node instead of strictly
+		// interleaved with it. This is the named phase RenderPhases.hpp already reserves
+		// specifically for this node's role; adopting it is half of the real fix (the other half is
+		// promoting the two particle render nodes out of their Subgraph so their own phases reach
+		// the outer scheduler at all -- see ParticleSystemNode.hpp).
+		static constexpr graph::Phase kPhase = SubPhase::WaterRender;
 
 		// enableShadingRate=false is a real design choice, not just test convenience: this
 		// fragment shader is a couple of texture reads and arithmetic, not the kind of expensive
