@@ -123,7 +123,7 @@ void main() {
 		uint numDirectionalCheck = min(uLightCount, 16u);
 		for (uint i = 0u; i < numDirectionalCheck; ++i) {
 			if (uLights[i].type == LIGHT_TYPE_DIRECTIONAL) {
-				sunDir = normalize(uLights[i].direction);
+				sunDir = normalize(-uLights[i].direction);
 				sunRadiance = uLights[i].color * uLights[i].intensity;
 				break;
 			}

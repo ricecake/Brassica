@@ -7,6 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-Wno-stringop-overflow -Wno-stringop-overread)
+endif()
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -129,9 +133,6 @@ add_library(brassica ${BRASSICA_LIB_TYPE} ${LIB_SOURCES})
 
 target_compile_definitions(brassica PUBLIC GLM_ENABLE_EXPERIMENTAL BRASSICA_BUILD_DIR="${CMAKE_BINARY_DIR}")
 target_compile_options(brassica PRIVATE -march=native -ffast-math)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(brassica PRIVATE -Wno-stringop-overflow)
-endif()
 
 target_include_directories(brassica
     PUBLIC
