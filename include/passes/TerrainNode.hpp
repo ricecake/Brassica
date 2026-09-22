@@ -32,9 +32,9 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
-		glm::ivec2    centerChunkCoord{0, 0};      // Center chunk coordinate (x, z) around camera (8-byte aligned at offset 80)
-		std::uint32_t chunkIndex{0};               // Bindless storage/sampled index for TerrainChunkTexture (offset 88)
-		std::uint32_t pad0{0};                     // Alignment padding to 96 bytes
+		glm::vec2     chunkMinWorldPos{0.0f, 0.0f}; // Corner XZ position of chunk in meters (8-byte aligned at offset 80)
+		std::uint32_t chunkSlot{0};                 // Chunk layer index in 2D array (0..8) (offset 88)
+		std::uint32_t chunkIndex{0};                // Bindless storage/sampled index for TerrainChunkTexture (offset 92)
 	};
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
@@ -71,6 +71,7 @@ namespace brassica {
 		};
 
 		render::PipelineLibrary*      pipelineLibrary = nullptr;
+		TerrainClipmap*               terrainClipmap = nullptr;
 		TaskShader                    taskShader;
 		MeshShader                    meshShader;
 		FragmentShader                fragShader;
@@ -81,6 +82,7 @@ namespace brassica {
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			terrainAS = services.terrainAS;
+			terrainClipmap = services.terrainClipmap;
 			taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task");
 			meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh");
 			fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag");
@@ -156,9 +158,6 @@ namespace brassica {
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
 			push.chunkIndex = ctx.Index<TerrainChunkTexture>();
-			push.centerChunkCoord = glm::ivec2(
-				glm::floor((glm::vec2(cameraPos.x, cameraPos.z) + 0.5f * TERRAIN_CHUNK_SIZE) / TERRAIN_CHUNK_SIZE)
-			);
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
@@ -213,8 +212,23 @@ namespace brassica {
 			);
 
 			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
-				// Dispatch 32x32 macro blocks (8x8 texels each) per chunk layer across 9 chunk layers
-				vkCmd.drawMeshTasksEXT(32, 32, 9, terrainAS->GetDls());
+				if (terrainClipmap) {
+					const auto& chunks = terrainClipmap->GetChunkInfos();
+					for (const auto& chunk : chunks) {
+						push.chunkSlot = chunk.slot;
+						push.chunkMinWorldPos = chunk.minWorldPos;
+						vkCmd.pushConstants(
+							resolved.layout,
+							vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+							0,
+							sizeof(TerrainPushConstants),
+							&push
+						);
+						vkCmd.drawMeshTasksEXT(32, 32, 1, terrainAS->GetDls());
+					}
+				} else {
+					vkCmd.drawMeshTasksEXT(32, 32, 1, terrainAS->GetDls());
+				}
 			}
 		}
 	};

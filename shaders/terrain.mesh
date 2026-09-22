@@ -19,9 +19,9 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
-	ivec2 centerChunkCoord;
+	vec2  chunkMinWorldPos;
+	uint  chunkSlot;
 	uint  chunkIndex;
-	uint  pad0;
 } params;
 
 struct TaskPayload {
@@ -38,6 +38,16 @@ layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec4 outAlbedo[];
 
+uint selectClipmapLOD(float distToCam, uint maxLODs) {
+	for (uint l = 0u; l < maxLODs; l++) {
+		float halfExtent = 500.0 * getLODScale(float(l));
+		if (distToCam <= halfExtent) {
+			return l;
+		}
+	}
+	return maxLODs > 0u ? maxLODs - 1u : 0u;
+}
+
 void main() {
 	SetMeshOutputsEXT(141, 240);
 
@@ -52,15 +62,19 @@ void main() {
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * subMeshletSize;
 	vec2 baseWorldXZ = subMinXZ + localPos;
 
+	vec2  camDiff = abs(baseWorldXZ - uCameraPosition.xz);
+	float distToCam = max(camDiff.x, camDiff.y);
+
 	// Evaluate terrain generation functions for vertex placement and normal generation
 	float height = 0.0;
 	vec3  normal = vec3(0.0, 1.0, 0.0);
 
 	if (params.clipmapIndex > 0u) {
+		uint sampleLOD = selectClipmapLOD(distToCam, params.gridParams.x);
 		vec4 texSample = sampleTerrainClipmap(
 			params.clipmapIndex,
 			baseWorldXZ,
-			0u,
+			sampleLOD,
 			params.gridParams.w,
 			params.lodOffsets0_3,
 			params.lodOffsets4_7,
