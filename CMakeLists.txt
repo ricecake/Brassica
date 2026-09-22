@@ -70,6 +70,7 @@ set(USE_SSE4_2 ON CACHE BOOL "Enable SSE4.2 for Jolt" FORCE)
 set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 
 # Shaderc & FastGLTF & efsw & FastNoise2
 set(SHADERC_SKIP_TESTS ON CACHE BOOL "" FORCE)
@@ -101,6 +102,12 @@ add_subdirectory(external/VulkanMemoryAllocator)
 add_subdirectory(external/doctest)
 add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
+
+# Prevent submodules (such as Jolt) from injecting global -Werror into CMAKE_CXX_FLAGS
+string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-stringop-overread")
+endif()
 
 # ImGui & ImGuizmo
 set(IMGUI_DIR external/imgui)
