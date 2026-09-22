@@ -12,6 +12,7 @@
 #include "GLFW/glfw3.h"
 #include "IManager.hpp"
 #include "imgui.h"
+#include "types/CameraData.hpp"
 #include "ui/IWidget.hpp"
 
 namespace brassica {
@@ -43,6 +44,7 @@ namespace brassica {
 
 		void OnKey(int key, int action);
 
+		void NewFrame(const CameraData& camera);
 		void NewFrame(const glm::vec3& cameraPosition);
 		void Render(vk::CommandBuffer cmd);
 

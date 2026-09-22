@@ -15,7 +15,6 @@ layout(push_constant) uniform SkyPushConstants {
 	float padding;
 } push;
 
-#define ATMOSPHERE_NO_PUSH_CONSTANTS
 #include "common.glsl"
 #include "helpers/astral.glsl"
 
@@ -140,14 +139,9 @@ void main() {
 
 	vec3 finalColor = skyWithClouds + sunDisc + moonDisc + spaceBackground;
 
-	// 6. Underwater Submersion Adaptation
-	if (uCameraPosition.y < u_waterLevel) {
-		float depthBelowWater = (u_waterLevel - uCameraPosition.y);
-		float rayWaterLength = depthBelowWater / max(0.01, abs(worldRay.y));
-		vec3 waterTransmittance = exp(-kWaterExtinction * u_waterScale * (rayWaterLength / 1000.0));
-		vec3 waterFogColor = kWaterScattering * u_waterScale * vec3(0.12, 0.62, 0.78);
-		finalColor = mix(waterFogColor, finalColor * waterTransmittance, clamp(exp(-rayWaterLength * 0.01), 0.0, 1.0));
-	}
-
+	// Underwater fog used to be applied here too, redundantly and inconsistently with
+	// deferred.frag's own (broken) copy. Now handled uniformly for every pixel -- this
+	// background included, once DeferredNode copies it into HdrColor for empty G-buffer pixels --
+	// by AtmosphereCompositeNode, which runs after both nodes.
 	outColor = vec4(finalColor, 1.0);
 }

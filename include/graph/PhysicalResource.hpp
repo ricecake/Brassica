@@ -821,9 +821,13 @@ namespace brassica::graph {
 			// ends up allocated with -- ZeroInitializeUndefinedReads (PhysicalExecutionBackend.hpp)
 			// clears an undefined History slot's first frame via clearColorImage, which requires
 			// this bit on the destination image regardless of what else it's used for.
+			// eTransferSrc: general-purpose readback capability (GPU numeric test probes copying a
+			// rendered target to a host-visible buffer via vkCmdCopyImageToBuffer), same reasoning
+			// as eTransferDst above -- cheap to carry on every color target, not worth a separate
+			// preset.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
-				vk::ImageUsageFlagBits::eTransferDst
+				vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc
 			),
 		};
 	}

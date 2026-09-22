@@ -45,29 +45,23 @@ namespace brassica {
 		}
 	};
 
-	// Mirrors transmittance_lut.comp's push_constant block exactly. outIndex is declared at an
-	// explicit layout(offset=80) on the GLSL side rather than relying on implicit packing to
-	// agree with this: AtmospherePushConstants's last named field (hazeHeight) ends at byte 76,
-	// but alignas(16) on its vec3 members pulls sizeof(AtmospherePushConstants) up to 80 -- a gap
-	// GLSL's own natural packing has no reason to reproduce on its own. The static_asserts below
-	// pin both sides so a future change to AtmospherePushConstants's layout fails to compile here
-	// instead of silently drifting (this is exactly the class of bug Terrain shipped with once
-	// already this migration).
+	// Mirrors transmittance_lut.comp's push_constant block exactly. Tuning data no longer travels
+	// through here -- both shaders read it directly from the global AtmosphereUBO
+	// (atmosphere/common.glsl, set 0 binding 4) -- so this is just the one index the shader needs
+	// per dispatch.
 	struct TransmittanceLUTPushConstants {
-		AtmospherePushConstants atmosphere;
-		std::uint32_t           outIndex{0};
+		std::uint32_t outIndex{0};
 	};
 
-	static_assert(offsetof(TransmittanceLUTPushConstants, outIndex) == 128);
+	static_assert(offsetof(TransmittanceLUTPushConstants, outIndex) == 0);
 
 	struct MultiScatteringLUTPushConstants {
-		AtmospherePushConstants atmosphere;
-		std::uint32_t           outIndex{0};
-		std::uint32_t           transmittanceIndex{0};
+		std::uint32_t outIndex{0};
+		std::uint32_t transmittanceIndex{0};
 	};
 
-	static_assert(offsetof(MultiScatteringLUTPushConstants, outIndex) == 128);
-	static_assert(offsetof(MultiScatteringLUTPushConstants, transmittanceIndex) == 132);
+	static_assert(offsetof(MultiScatteringLUTPushConstants, outIndex) == 0);
+	static_assert(offsetof(MultiScatteringLUTPushConstants, transmittanceIndex) == 4);
 
 	// Replaces AtmosphereLUTPass's transmittance half: no per-node descriptor set, no per-frame
 	// descriptor writes -- the output LUT is a bindless storage index
@@ -95,6 +89,8 @@ namespace brassica {
 
 		void Destroy(vk::Device device) { shader.Destroy(device); }
 
+		void SetFrameParams(const render::NodeFrameParams& p) { atmosphere = p.atmosphere; }
+
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::Recipe r{
 				.domain = graph::ExecutionDomain::Compute,
@@ -112,7 +108,6 @@ namespace brassica {
 
 		void Execute(graph::NodeContext& ctx) {
 			TransmittanceLUTPushConstants push{
-				.atmosphere = atmosphere,
 				.outIndex = ctx.StorageIndex<TransmittanceLUT>(),
 			};
 
@@ -181,6 +176,8 @@ namespace brassica {
 
 		void Destroy(vk::Device device) { shader.Destroy(device); }
 
+		void SetFrameParams(const render::NodeFrameParams& p) { atmosphere = p.atmosphere; }
+
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::Recipe r{
 				.domain = graph::ExecutionDomain::Compute,
@@ -205,7 +202,6 @@ namespace brassica {
 
 		void Execute(graph::NodeContext& ctx) {
 			MultiScatteringLUTPushConstants push{
-				.atmosphere = atmosphere,
 				.outIndex = ctx.StorageIndex<MultiScatteringLUT>(),
 				.transmittanceIndex = ctx.Index<TransmittanceLUT>(),
 			};

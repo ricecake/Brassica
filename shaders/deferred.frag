@@ -5,9 +5,6 @@
 #include "terrain.glsl"
 #include "clustered_lighting.glsl"
 
-#define ATMOSPHERE_NO_PUSH_CONSTANTS
-#include "atmosphere/common.glsl"
-
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
@@ -113,39 +110,10 @@ void main() {
 		float roughness = normalSample.a > 0.0 ? normalSample.a : 0.7;
 		Material material = Material(albedo.rgb, roughness, 0.0, 1.0);
 
-		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, material).color;
-
-		// Extract primary directional light for aerial perspective / atmosphere scattering
-		vec3 sunDir = normalize(vec3(0.4, 0.8, 0.4));
-		vec3 sunRadiance = vec3(10.0, 9.5, 8.5);
-
-		uint numDirectionalCheck = min(uLightCount, 16u);
-		for (uint i = 0u; i < numDirectionalCheck; ++i) {
-			if (uLights[i].type == LIGHT_TYPE_DIRECTIONAL) {
-				sunDir = normalize(uLights[i].direction);
-				sunRadiance = uLights[i].color * uLights[i].intensity;
-				break;
-			}
-		}
-
-		float distMeters = length(relPos);
-		float distKM = distMeters / 1000.0;
-		vec3  rayDir = relPos / max(0.001, distMeters);
-
-		vec3 transmittance = vec3(1.0);
-		vec3 rayCamOriginKM = uCameraPosition.xyz / 1000.0;
-		vec3 inScattered = evaluateAerialPerspective(rayCamOriginKM, rayDir, distKM, sunDir, sunRadiance, transmittance);
-
-		vec3 vLight = evaluateVolumetricLighting(rayCamOriginKM, rayDir, distKM, sunDir, sunRadiance);
-
-		hdrColor = (litSurface * vLight) * transmittance + inScattered;
-
-		if (uCameraPosition.y < u_waterLevel) {
-			float pathLength = pos.y + distMeters;
-			vec3  waterTransmittance = exp(-kWaterExtinction * u_waterScale * (pathLength / 1000.0));
-			vec3  waterFogColor = kWaterScattering * u_waterScale * vec3(0.12, 0.62, 0.78);
-			hdrColor = mix(waterFogColor, hdrColor * waterTransmittance, clamp(exp(-pathLength * 0.01), 0.0, 1.0));
-		}
+		// Aerial perspective / underwater extinction is no longer applied here: it happens
+		// uniformly for every pixel (this one included) in AtmosphereCompositeNode, which runs
+		// after this pass at SubPhase::Atmosphere -- see shaders/atmosphere/composite.frag.
+		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material).color;
 	}
 
 	outColor = vec4(hdrColor, 1.0);

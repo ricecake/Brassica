@@ -18,7 +18,6 @@ layout(push_constant) uniform SkyViewPushConstants {
 	uint  padding2;
 } u_skyView;
 
-#define ATMOSPHERE_NO_PUSH_CONSTANTS
 #include "atmosphere/common.glsl"
 
 vec3 getTransmittance(float r, float mu) {

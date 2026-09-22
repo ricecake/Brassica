@@ -5,8 +5,12 @@
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
 #include "terrain/ITerrainClipmap.hpp"
+#include "EngineConstants.hpp"
+#include "types/CameraData.hpp"
 #include "types/TonemapPushConstants.hpp"
 #include "ui/IWidget.hpp"
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/constants.hpp>
 #include "ui/QuickSettingsWidget.hpp"
 
 namespace brassica {
@@ -110,6 +114,49 @@ namespace brassica {
 		// Directional Moon reflected radiance
 		CHECK(lights[1].type == DIRECTIONAL_LIGHT);
 		CHECK(lights[1].baseIntensity >= 0.0f);
+	}
+
+	TEST_CASE("CameraData Speed and Orientation in Degrees") {
+		CameraData cam{};
+		cam.speed = 42.5f;
+		cam.pitch = -0.5f;
+		cam.yaw = 1.0f;
+		cam.roll = 0.0f;
+
+		CHECK(cam.speed == 42.5f);
+		CHECK(doctest::Approx(glm::degrees(cam.pitch)).epsilon(0.01) == -28.6479);
+		CHECK(doctest::Approx(glm::degrees(cam.yaw)).epsilon(0.01) == 57.2958);
+		CHECK(doctest::Approx(glm::degrees(cam.roll)).epsilon(0.01) == 0.0);
+	}
+
+	TEST_CASE("Local Camera Sky Frame Direction Transformation") {
+		glm::vec3 sunDirGlobal(0.0f, 1.0f, 0.0f); // Zenith at origin
+
+		// Position on top of planet: (0, 100, 0)
+		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
+		glm::vec3 camPosTop(0.0f, 100.0f, 0.0f);
+		glm::vec3 camNormalTop = glm::normalize(camPosTop - planetCenter);
+
+		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
+		float cosThetaTop = glm::dot(upRef, camNormalTop);
+		CHECK(doctest::Approx(cosThetaTop).epsilon(0.0001) == 1.0f);
+
+		// Position moved around planet curvature (chasing sun / moving over horizon)
+		// e.g., 90 deg around X axis
+		glm::vec3 camPos90(0.0f, -FAKE_PLANET_RADIUS, FAKE_PLANET_RADIUS + 100.0f);
+		glm::vec3 camNormal90 = glm::normalize(camPos90 - planetCenter); // Should be (0, 0, 1)
+
+		float cosTheta90 = glm::dot(upRef, camNormal90);
+		glm::vec3 rotAxis = glm::cross(upRef, camNormal90);
+		float s = std::sqrt((1.0f + cosTheta90) * 2.0f);
+		float invs = 1.0f / s;
+		glm::quat rotToCam(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
+
+		glm::vec3 sunDirLocal = glm::inverse(rotToCam) * sunDirGlobal;
+		// Since camera moved 90 deg, sun in local sky frame should now be pointing along -Z (horizon)
+		CHECK(doctest::Approx(sunDirLocal.x).epsilon(0.001) == 0.0f);
+		CHECK(doctest::Approx(sunDirLocal.y).epsilon(0.001) == 0.0f);
+		CHECK(doctest::Approx(sunDirLocal.z).epsilon(0.001) == -1.0f);
 	}
 
 } // namespace brassica

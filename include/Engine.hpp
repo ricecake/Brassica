@@ -27,6 +27,7 @@
 #include "terrain/AsyncTerrainUploader.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
 #include "terrain/TerrainClipmap.hpp"
+#include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
@@ -222,6 +223,11 @@ namespace brassica {
 		LightManager     lightManager;
 		LightningManager lightningManager;
 
+		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
+		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'
+		// AtmosphereRegenerationState throttle (NodeFrameParams::atmosphere).
+		AtmospherePushConstants atmosphere{};
+
 		TerrainAccelerationStructure terrainAS;
 
 		TerrainClipmap       terrainClipmap;
@@ -244,6 +250,10 @@ namespace brassica {
 		vk::Buffer    lightingUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation lightingUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*         lightingUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
+		vk::Buffer    atmosphereUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation atmosphereUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         atmosphereUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
 
 		vk::Buffer    lightsSSBOBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation lightsSSBOAllocations[FRAME_OVERLAP]{nullptr, nullptr};

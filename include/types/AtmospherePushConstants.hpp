@@ -19,10 +19,19 @@ namespace brassica {
 		alignas(4) float hazeDensity{0.015f};
 		alignas(4) float hazeHeight{20.0f};
 		alignas(4) float waterLevel{0.0f};
-		alignas(4) float padding1{0.0f};
-		alignas(16) glm::vec3 waterScatteringBase{0.003f, 0.007f, 0.012f};
+		// Metres. The air<->water optical transition width (atmosphere/common.glsl's
+		// getAtmosphereProperties): replaces a hardcoded `depth * 10.0` that saturated at 100m,
+		// making shallow submersion (1-2m) read as ~98% air optics regardless of the coefficients
+		// below.
+		alignas(4) float waterBlendDepth{2.0f};
+		// Per kilometre (matches the km-based aerial-perspective raymarch integration, NOT
+		// water.frag's own per-metre extinctionCoeff -- converting between the two is exactly
+		// {280,70,20} vs {0.28,0.07,0.02}). Derived so scattering/extinction (the single-scatter
+		// albedo) equals water.frag's shallowWaterTint = {0.12, 0.62, 0.78}, so this and water.frag's
+		// already-correct surface math agree on what water looks like.
+		alignas(16) glm::vec3 waterScatteringBase{33.6f, 43.4f, 15.6f};
 		alignas(4) float waterScale{1.0f};
-		alignas(16) glm::vec3 waterExtinctionBase{0.12f, 0.04f, 0.02f};
+		alignas(16) glm::vec3 waterExtinctionBase{280.0f, 70.0f, 20.0f};
 		alignas(4) float padding2{0.0f};
 	};
 

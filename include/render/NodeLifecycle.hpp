@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 #include "graph/Graph.hpp"
+#include "types/AtmospherePushConstants.hpp"
 #include "VulkanCompat.hpp"
 
 namespace brassica {
@@ -55,6 +56,11 @@ namespace brassica::render {
 		float      multiScatScale{1.0f};
 		float      cloudShadowIntensity{0.5f};
 		float      skyExposure{1.0f};
+		// Not for shader delivery -- shaders read the real values from the global AtmosphereUBO
+		// (atmosphere/common.glsl, set 0 binding 4). This is here purely so
+		// AtmosphereRegenerationState::ShouldRegenerate (the 3 LUT nodes) has a current value to
+		// byte-compare against each frame.
+		AtmospherePushConstants atmosphere{};
 	};
 
 	template <typename T>
