@@ -1,11 +1,12 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
-//#extension GL_EXT_fragment_shading_rate : require
+
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 #include "lygia/color/hueShift.glsl";
+
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
@@ -18,13 +19,17 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
-}
-
-params;
+	vec2  chunkMinWorldPos;
+	uint  chunkSlot;
+	uint  chunkIndex;
+} params;
 
 struct TaskPayload {
-	uint meshletIDs[32];
-	uint lodLevels[32];
+	vec2  macroMinXZ;
+	float macroSize;
+	uint  subdiv;
+	uint  chunkSlot;
+	float maxVariance;
 };
 
 taskPayloadSharedEXT TaskPayload payload;
@@ -33,95 +38,61 @@ layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec4 outAlbedo[];
 
-vec3 pal(in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d) {
-	return a + b * cos(6.28318 * (c * t + d));
+uint selectClipmapLOD(float distToCam, uint maxLODs) {
+	for (uint l = 0u; l < maxLODs; l++) {
+		float halfExtent = 500.0 * getLODScale(float(l));
+		if (distToCam <= halfExtent) {
+			return l;
+		}
+	}
+	return maxLODs > 0u ? maxLODs - 1u : 0u;
 }
 
 void main() {
-	uint taskIndex = gl_WorkGroupID.x;
-	uint meshletID = payload.meshletIDs[taskIndex];
-	uint lodLevel = payload.lodLevels[taskIndex];
-
 	SetMeshOutputsEXT(141, 240);
 
 	uint lx = gl_LocalInvocationID.x;
 	uint ly = gl_LocalInvocationID.y;
 	uint vertexIndex = ly * 11 + lx;
 
-	uint meshletsPerRow = params.gridParams.y;
-	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-	uint localID = meshletID % totalPerLOD;
+	uvec2 subIdx = uvec2(gl_WorkGroupID.x, gl_WorkGroupID.y);
+	float subMeshletSize = payload.macroSize / float(max(1u, payload.subdiv));
+	vec2  subMinXZ = payload.macroMinXZ + vec2(subIdx) * subMeshletSize;
 
-	uint row = localID / meshletsPerRow;
-	uint col = localID % meshletsPerRow;
+	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * subMeshletSize;
+	vec2 baseWorldXZ = subMinXZ + localPos;
 
-	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
+	vec2  camDiff = abs(baseWorldXZ - uCameraPosition.xz);
+	float distToCam = max(camDiff.x, camDiff.y);
 
-	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
-	vec3 meshletMin = vec3(
-		cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-		0.0,
-		cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
-	);
+	// Evaluate terrain generation functions for vertex placement and normal generation
+	float height = 0.0;
+	vec3  normal = vec3(0.0, 1.0, 0.0);
 
-	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-	// vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
-	vec2 baseWorldXZ = meshletMin.xz + localPos;
-
-	vec2 offsetDist = abs(baseWorldXZ - cameraSnap);
-	float distToCam = max(offsetDist.x, offsetDist.y);
-	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
-
-	float alpha = 0.0;
-	vec2 morphedXZ = baseWorldXZ;
-
-	if (lodLevel < params.gridParams.x - 1 && outerDist > 0.0) {
-		float morphWidth = 2.5 * meshletSize;
-		float morphStart = max(0.0, outerDist - morphWidth);
-
-		if (distToCam > morphStart) {
-			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
-			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
-
-			// Collapse odd vertices to even vertices on the XZ plane
-			vec2 targetLocalPos = vec2(floor(float(lx) / 2.0) * 2.0, floor(float(ly) / 2.0) * 2.0) * (meshletSize / 10.0);
-			vec2 targetXZ = meshletMin.xz + targetLocalPos;
-			morphedXZ = mix(baseWorldXZ, targetXZ, alpha);
-		}
-	}
-
-	// Sample the clipmap using the morphed XZ position
-	vec4 texSample = sampleTerrainClipmap(
-		params.clipmapIndex,
-		morphedXZ,
-		lodLevel,
-		params.gridParams.w,
-		params.lodOffsets0_3,
-		params.lodOffsets4_7,
-		params.lodOffsets8_11
-	);
-	float height = texSample.r;
-	vec3 normal = texSample.gba;
-
-	if (alpha > 0.0) {
-		vec4 texNext = sampleTerrainClipmap(
+	if (params.clipmapIndex > 0u) {
+		uint sampleLOD = selectClipmapLOD(distToCam, params.gridParams.x);
+		vec4 texSample = sampleTerrainClipmap(
 			params.clipmapIndex,
-			morphedXZ,
-			lodLevel + 1,
+			baseWorldXZ,
+			sampleLOD,
 			params.gridParams.w,
 			params.lodOffsets0_3,
 			params.lodOffsets4_7,
 			params.lodOffsets8_11
 		);
-		height = mix(height, texNext.r, alpha);
-		if (length(texNext.gba) >= 0.1) {
-			normal = normalize(mix(normal, texNext.gba, alpha));
-		}
+		height = texSample.r;
+		normal = texSample.gba;
 	}
 
-	vec3 worldPos = vec3(morphedXZ.x, height, morphedXZ.y);
+	if (params.clipmapIndex == 0u || length(normal) < 0.1) {
+		TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14, 0.5);
+		float dummyB = 0.0;
+		float dummyM = 0.0;
+		height = evaluate_terrain(vec3(baseWorldXZ.x, 0.0, baseWorldXZ.y), 0.0, 0.75, con, dummyB, dummyM);
+		normal = evaluate_terrain_normal(vec3(baseWorldXZ.x, 0.0, baseWorldXZ.y), 0.0, 0.75, 0.5, con);
+	}
 
+	vec3  worldPos = vec3(baseWorldXZ.x, height, baseWorldXZ.y);
 	vec2  flatXZ = worldPos.xz - uCameraPosition.xz;
 	float distSq = dot(flatXZ, flatXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
@@ -142,7 +113,6 @@ void main() {
 	lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
 	lodColor = mix(lodColor, snow, smoothstep(900.0, 1000.0, height));
 
-	// Underwater seafloor terrain coloring with depth and slope variations
 	if (height < 0.0) {
 		float depth = -height;
 		vec3  wetSand = vec3(0.75, 0.70, 0.52);
@@ -157,15 +127,13 @@ void main() {
 		lodColor = seafloorColor;
 	}
 
-	vec3 flatWorldPos = vec3(baseWorldXZ.x, 0.0, baseWorldXZ.y);
-	// lodColor *= 1.0-(0.25*pow(dot_noise(flatWorldPos * 0.10/abs(dot_noise(flatWorldPos*0.125, 1.0)), 0.0),2));
-	float warp = psrdnoise(baseWorldXZ / texelSize(lodLevel));
-	float shift =  psrdnoise((texelSize(lodLevel)*warp+baseWorldXZ)/texelSize(lodLevel));
+	float warp = psrdnoise(baseWorldXZ / texelSize(0u));
+	float shift = psrdnoise((texelSize(0u) * warp + baseWorldXZ) / texelSize(0u));
 	lodColor = hueShift(lodColor, shift);
 
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
-	// Generate skirt vertex for boundary vertices (sampled every 2 units to fit within Vulkan 256 primitive limit)
+	// Generate boundary skirt vertex for edge sampling
 	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
 	if (isBoundarySample) {
 		uint skirtID;
@@ -180,7 +148,7 @@ void main() {
 		}
 		uint skirtIdx = 121 + skirtID;
 
-		float skirtDepth = max(10.0, meshletSize * 0.1);
+		float skirtDepth = max(10.0, subMeshletSize * 0.1);
 		vec3  skirtPos = worldPos - vec3(0.0, skirtDepth, 0.0);
 
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uViewProjMatrix * vec4(skirtPos, 1.0);
@@ -188,9 +156,6 @@ void main() {
 		outNormal[skirtIdx] = normal;
 		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
 	}
-
-	// Determine shading rate based on clipmap LOD
-	int shadingRate = 0; // Default 1x1
 
 	// Generate 10x10 quad primitives (200 triangles)
 	if (lx < 10 && ly < 10) {
@@ -203,33 +168,11 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
 
-		// gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_PrimitiveShadingRateEXT = shadingRate;
-
-		// Fine-grained overlap culling
-		bool cullQuad = false;
-		if (lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
-			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
-
-			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
-			vec2 quadCenterWorld = meshletMin.xz + quadCenterLocal;
-
-			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
-
-			// Cull if the quad center is strictly inside the previous LOD's active area.
-			// The -0.01 margin prevents floating point inaccuracies from culling edge quads.
-			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
-				cullQuad = true;
-			}
-		}
-
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = false;
 	}
 
-	// Generate skirt primitives along outer boundary edges (5 segments per edge, total 40 triangles)
+	// Generate skirt primitives along outer boundary edges (40 triangles)
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
 		uint s = lx / 2;
 		uint v0 = lx;
@@ -241,8 +184,6 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
@@ -258,8 +199,6 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
@@ -268,15 +207,13 @@ void main() {
 		uint s = ly / 2;
 		uint v0 = ly * 11;
 		uint v1 = (ly + 2) * 11;
-		uint k0 = (s == 0) ? 121 : (121 + 12 + (s - 1));
-		uint k1 = (s + 1 == 5) ? 127 : (121 + 12 + s);
+		uint k0 = (s == 0) ? 121 : (133 + s - 1);
+		uint k1 = (s == 4) ? 127 : (133 + s);
 		uint primIdx = 220 + s * 2;
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
@@ -285,15 +222,13 @@ void main() {
 		uint s = ly / 2;
 		uint v0 = ly * 11 + 10;
 		uint v1 = (ly + 2) * 11 + 10;
-		uint k0 = (s == 0) ? 126 : (121 + 16 + (s - 1));
-		uint k1 = (s + 1 == 5) ? 132 : (121 + 16 + s);
+		uint k0 = (s == 0) ? 126 : (137 + s - 1);
+		uint k1 = (s == 4) ? 132 : (137 + s);
 		uint primIdx = 230 + s * 2;
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}

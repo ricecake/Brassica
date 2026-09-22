@@ -16,18 +16,13 @@
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
+#include "terrain/TerrainClipmap.hpp"
 
 namespace brassica {
 
 	class ShaderWatcher;
 
-	// Mirrors terrain.task/terrain.mesh's shared push_constant block exactly. clipmapIndex is the
-	// only field the old TerrainPushConstants didn't have -- the terrain clipmap moved from
-	// TerrainPass's own set-1 combined-image-sampler binding to a bindless index here, same
-	// change DeferredNode already made. terrain.task doesn't read clipmapIndex (it doesn't sample
-	// the clipmap at all), but still shares this struct: a stage only needs to declare the
-	// prefix of a push-constant block it actually uses, and every existing field's offset is
-	// unchanged since clipmapIndex is strictly appended at the end.
+	// Shared push_constant block between C++ and terrain.task / terrain.mesh GLSL shaders.
 	struct TerrainPushConstants {
 		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::uvec4 lodOffsets0_3{0u};              // Toroidal offsets for LOD 0-3
@@ -37,6 +32,9 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
+		glm::vec2     chunkMinWorldPos{0.0f, 0.0f}; // Corner XZ position of chunk in meters (8-byte aligned at offset 80)
+		std::uint32_t chunkSlot{0};                 // Chunk layer index in 2D array (0..8) (offset 88)
+		std::uint32_t chunkIndex{0};                // Bindless storage/sampled index for TerrainChunkTexture (offset 92)
 	};
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
@@ -55,7 +53,8 @@ namespace brassica {
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>>;
+			graph::Read<TerrainTileVisibilityTexture>,
+			graph::Read<TerrainChunkTexture>>;
 
 		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
 		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
@@ -72,15 +71,18 @@ namespace brassica {
 		};
 
 		render::PipelineLibrary*      pipelineLibrary = nullptr;
+		TerrainClipmap*               terrainClipmap = nullptr;
 		TaskShader                    taskShader;
 		MeshShader                    meshShader;
 		FragmentShader                fragShader;
 		TerrainAccelerationStructure* terrainAS = nullptr;
 		TerrainPushConstants          push{};
+		glm::vec3                     cameraPos{0.0f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			terrainAS = services.terrainAS;
+			terrainClipmap = services.terrainClipmap;
 			taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task");
 			meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh");
 			fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag");
@@ -102,6 +104,7 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
+			cameraPos = p.cameraPosition;
 			push.gridParams = p.terrainGridParams;
 			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
 			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
@@ -154,6 +157,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+			push.chunkIndex = ctx.Index<TerrainChunkTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{
@@ -207,9 +211,24 @@ namespace brassica {
 				&push
 			);
 
-			uint32_t taskGroupCount = (push.gridParams.z + 31) / 32;
 			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
-				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
+				if (terrainClipmap) {
+					const auto& chunks = terrainClipmap->GetChunkInfos();
+					for (const auto& chunk : chunks) {
+						push.chunkSlot = chunk.slot;
+						push.chunkMinWorldPos = chunk.minWorldPos;
+						vkCmd.pushConstants(
+							resolved.layout,
+							vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+							0,
+							sizeof(TerrainPushConstants),
+							&push
+						);
+						vkCmd.drawMeshTasksEXT(32, 32, 1, terrainAS->GetDls());
+					}
+				} else {
+					vkCmd.drawMeshTasksEXT(32, 32, 1, terrainAS->GetDls());
+				}
 			}
 		}
 	};
