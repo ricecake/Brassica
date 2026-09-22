@@ -17,6 +17,42 @@ namespace brassica {
 
 		void Shutdown() override { m_initialized = false; }
 
+		State GetState() const override {
+			State state;
+			state.ambientLight = _ambientLight;
+			state.skyExposure = _skyExposure;
+			state.starExposure = _starExposure;
+			state.terrainExposure = _terrainExposure;
+
+			state.cycleEnabled = _cycle.enabled;
+			state.cycleTime = _cycle.time;
+			state.cycleSpeed = _cycle.speed;
+			state.cyclePaused = _cycle.paused;
+			state.moonOffset = _cycle.moonOffset;
+			state.moonAzimuth = _cycle.moonAzimuth;
+			state.lunarAlbedo = _cycle.lunarAlbedo;
+			state.lunarMonth = _cycle.lunarMonth;
+			state.moonTint = _cycle.moonTint;
+			return state;
+		}
+
+		void SetState(const State& state) override {
+			_ambientLight = state.ambientLight;
+			_skyExposure = state.skyExposure;
+			_starExposure = state.starExposure;
+			_terrainExposure = state.terrainExposure;
+
+			_cycle.enabled = state.cycleEnabled;
+			_cycle.time = state.cycleTime;
+			_cycle.speed = state.cycleSpeed;
+			_cycle.paused = state.cyclePaused;
+			_cycle.moonOffset = state.moonOffset;
+			_cycle.moonAzimuth = state.moonAzimuth;
+			_cycle.lunarAlbedo = state.lunarAlbedo;
+			_cycle.lunarMonth = state.lunarMonth;
+			_cycle.moonTint = state.moonTint;
+		}
+
 		int                       AddLight(const Light& light) override;
 		void                      RemoveLight(int id) override;
 		Light*                    GetLight(int id) override;

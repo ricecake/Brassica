@@ -17,8 +17,23 @@ namespace brassica {
 		class PipelineLibrary;
 	}
 
-	class TerrainAccelerationStructure: public IManager {
+	struct TerrainAccelerationStructureState {
+		bool enabled{true};
+
+		auto GetReflection() const {
+			return std::make_tuple(MakeField(
+				"enabled",
+				"Enable Terrain Acceleration Structure",
+				&TerrainAccelerationStructureState::enabled
+			));
+		}
+	};
+
+	class TerrainAccelerationStructure
+	    : public ManagerBase<TerrainAccelerationStructure, TerrainAccelerationStructureState> {
 	public:
+		using State = TerrainAccelerationStructureState;
+
 		TerrainAccelerationStructure() = default;
 
 		~TerrainAccelerationStructure() override {
@@ -35,6 +50,12 @@ namespace brassica {
 			DestroyAccelerationStructures();
 			m_initialized = false;
 		}
+
+		std::string GetManagerName() const override { return "TerrainAccelerationStructure"; }
+
+		State GetState() const override { return State{m_enabled}; }
+
+		void SetState(const State& state) override { m_enabled = state.enabled; }
 
 		TerrainAccelerationStructure(const TerrainAccelerationStructure&) = delete;
 		TerrainAccelerationStructure& operator=(const TerrainAccelerationStructure&) = delete;
@@ -99,6 +120,7 @@ namespace brassica {
 		vk::AccelerationStructureKHR tlas{nullptr};
 		BufferResource               scratchBuffer;
 		glm::vec3                    lastASCameraPos{1e9f, 1e9f, 1e9f};
+		bool                         m_enabled{true};
 	};
 
 } // namespace brassica

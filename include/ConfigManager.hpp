@@ -12,8 +12,22 @@
 
 namespace brassica {
 
-	class ConfigManager: public IManager {
+	struct ConfigManagerState {
+		std::string appName{"Sandbox"};
+		std::string filepath{"config.ini"};
+
+		auto GetReflection() const {
+			return std::make_tuple(
+				MakeField("appName", "Application Name", &ConfigManagerState::appName),
+				MakeField("filepath", "Config Filepath", &ConfigManagerState::filepath)
+			);
+		}
+	};
+
+	class ConfigManager: public ManagerBase<ConfigManager, ConfigManagerState> {
 	public:
+		using State = ConfigManagerState;
+
 		ConfigManager();
 		explicit ConfigManager(std::string appName);
 		~ConfigManager() override = default;
@@ -21,12 +35,31 @@ namespace brassica {
 		void Initialize() override;
 		void Shutdown() override;
 
+		std::string GetManagerName() const override { return "ConfigManager"; }
+
+		State GetState() const override { return State{m_appName, m_filepath}; }
+
+		void SetState(const State& state) override {
+			m_appName = state.appName;
+			m_filepath = state.filepath;
+		}
+
 		void SetApplicationName(const std::string& appName) { m_appName = appName; }
 
 		[[nodiscard]] const std::string& GetApplicationName() const { return m_appName; }
 
 		bool LoadFromFile(const std::string& filepath);
 		bool SaveToFile(const std::string& filepath) const;
+
+		template <typename StateStruct>
+		void SaveManagerState(const std::string& managerName, const StateStruct& state) {
+			SaveStateToConfig(*this, managerName, state);
+		}
+
+		template <typename StateStruct>
+		bool LoadManagerState(const std::string& managerName, StateStruct& state) const {
+			return LoadStateToConfig(*this, managerName, state);
+		}
 
 		// Application-level configuration
 		template <typename T>
@@ -141,5 +174,28 @@ namespace brassica {
 		std::string                                               m_filepath{"config.ini"};
 		std::map<std::string, std::map<std::string, std::string>> m_sections;
 	};
+
+	template <typename Derived, typename StateType>
+	inline void ManagerBase<Derived, StateType>::SaveState(ConfigManager& config) const {
+		SaveStateToConfig(config, GetManagerName(), GetState());
+	}
+
+	template <typename Derived, typename StateType>
+	inline void ManagerBase<Derived, StateType>::LoadState(const ConfigManager& config) {
+		State state = GetState();
+		if (LoadStateToConfig(config, GetManagerName(), state)) {
+			SetState(state);
+		}
+	}
+
+	template <typename Derived, typename StateType>
+	inline bool ManagerBase<Derived, StateType>::DrawUI() {
+		State state = GetState();
+		if (DrawReflectedStateUI(GetManagerName(), state)) {
+			SetState(state);
+			return true;
+		}
+		return false;
+	}
 
 } // namespace brassica

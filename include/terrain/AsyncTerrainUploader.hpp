@@ -22,8 +22,25 @@ namespace brassica {
 		uint64_t          targetTimelineValue = 0;
 	};
 
-	class AsyncTerrainUploader: public IManager {
+	struct AsyncTerrainUploaderState {
+		uint32_t maxConcurrentUploads{constants::Class::AsyncTerrain::MaxUploadSlots};
+
+		auto GetReflection() const {
+			return std::make_tuple(MakeField(
+				"maxConcurrentUploads",
+				"Max Concurrent Uploads",
+				&AsyncTerrainUploaderState::maxConcurrentUploads,
+				1u,
+				64u,
+				UIHint::Slider
+			));
+		}
+	};
+
+	class AsyncTerrainUploader: public ManagerBase<AsyncTerrainUploader, AsyncTerrainUploaderState> {
 	public:
+		using State = AsyncTerrainUploaderState;
+
 		AsyncTerrainUploader() = default;
 		~AsyncTerrainUploader() override;
 
@@ -33,6 +50,12 @@ namespace brassica {
 			Cleanup();
 			m_initialized = false;
 		}
+
+		std::string GetManagerName() const override { return "AsyncTerrainUploader"; }
+
+		State GetState() const override { return State{m_maxConcurrentUploads}; }
+
+		void SetState(const State& state) override { m_maxConcurrentUploads = state.maxConcurrentUploads; }
 
 		void Init(
 			vk::Device   dev,
@@ -75,6 +98,7 @@ namespace brassica {
 		vk::CommandPool commandPool{nullptr};
 		vk::Semaphore   timelineSemaphore;
 		uint64_t        currentTimelineCounter = 0;
+		uint32_t        m_maxConcurrentUploads{constants::Class::AsyncTerrain::MaxUploadSlots};
 
 		std::vector<PendingUploadRequest> requests;
 	};

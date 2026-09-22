@@ -488,6 +488,15 @@ namespace brassica {
 		);
 		serviceLocator.Provide<ImGuiManager>(std::shared_ptr<ImGuiManager>(&imguiManager, [](ImGuiManager*) {}));
 
+		lightManager.LoadState(configManager);
+		terrainClipmap.LoadState(configManager);
+		terrainAS.LoadState(configManager);
+		terrainUploader.LoadState(configManager);
+		shaderWatcher.LoadState(configManager);
+		pipelineLibrary.LoadState(configManager);
+		physicalRegistry.LoadState(configManager);
+		imguiManager.LoadState(configManager);
+
 		FrameDetails initialDetails{
 			.deltaTime = 0.0f,
 			.totalTime = glfwGetTime(),

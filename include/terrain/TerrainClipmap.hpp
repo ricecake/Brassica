@@ -47,6 +47,13 @@ namespace brassica {
 			m_initialized = false;
 		}
 
+		State GetState() const override { return State{numLODs, baseTexelSize}; }
+
+		void SetState(const State& state) override {
+			numLODs = state.numLODs;
+			baseTexelSize = state.baseTexelSize;
+		}
+
 		void Init(
 			vk::Device       device,
 			VmaAllocator     allocator,

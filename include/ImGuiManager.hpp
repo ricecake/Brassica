@@ -23,13 +23,29 @@ namespace brassica {
 		bool   was_collapsed{false};
 	};
 
-	class ImGuiManager: public IManager {
+	struct ImGuiManagerState {
+		bool visible{false};
+
+		auto GetReflection() const {
+			return std::make_tuple(MakeField("visible", "UI Visible", &ImGuiManagerState::visible));
+		}
+	};
+
+	class ImGuiManager: public ManagerBase<ImGuiManager, ImGuiManagerState> {
 	public:
+		using State = ImGuiManagerState;
+
 		ImGuiManager() = default;
 		~ImGuiManager() override;
 
 		void Initialize() override;
 		void Shutdown() override;
+
+		std::string GetManagerName() const override { return "ImGuiManager"; }
+
+		State GetState() const override { return State{m_visible}; }
+
+		void SetState(const State& state) override { m_visible = state.visible; }
 
 		void InitVulkanAndGlfw(
 			GLFWwindow*        window,
