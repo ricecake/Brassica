@@ -6,6 +6,9 @@
 #include "spdlog/spdlog.h"
 #include <FastNoise/FastNoise.h>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #include "terrain/AsyncTerrainUploader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -267,6 +270,26 @@ namespace brassica {
 
 		CreateTextureArrays();
 		CreateSampler();
+
+		if (allocator != VK_NULL_HANDLE) {
+			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = TERRAIN_MAP_DIM * TERRAIN_MAP_DIM * sizeof(glm::vec4);
+			bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+			VmaAllocationCreateInfo allocInfo{};
+			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+			VkBuffer vkBuf = VK_NULL_HANDLE;
+			VmaAllocationInfo allocResultInfo{};
+			if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &vkBuf, &m_readbackAllocation, &allocResultInfo) == VK_SUCCESS) {
+				m_readbackBuffer = vkBuf;
+				m_readbackMappedPtr = allocResultInfo.pMappedData;
+				m_cpuPhysicsLODHeightmap.resize(TERRAIN_MAP_DIM * TERRAIN_MAP_DIM, glm::vec4(0.0f));
+			} else {
+				spdlog::error("Failed to create TerrainClipmap readback buffer!");
+			}
+		}
 	}
 
 	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos) {
@@ -329,6 +352,217 @@ namespace brassica {
 			destroyArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 			destroyArrayImage(biomeImage, biomeImageView, biomeAllocation);
 			destroyArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+
+			if (m_readbackBuffer && m_readbackAllocation && allocator != VK_NULL_HANDLE) {
+				vmaDestroyBuffer(allocator, m_readbackBuffer, m_readbackAllocation);
+				m_readbackBuffer = nullptr;
+				m_readbackAllocation = VK_NULL_HANDLE;
+				m_readbackMappedPtr = nullptr;
+			}
+		}
+	}
+
+	void TerrainClipmap::RecordReadbackCommand(vk::CommandBuffer cmd) {
+		if (!image || !m_readbackBuffer) {
+			return;
+		}
+
+		vk::ImageMemoryBarrier2 barrierToSrc{};
+		barrierToSrc.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader);
+		barrierToSrc.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite);
+		barrierToSrc.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrierToSrc.setDstAccessMask(vk::AccessFlagBits2::eTransferRead);
+		barrierToSrc.setOldLayout(vk::ImageLayout::eGeneral);
+		barrierToSrc.setNewLayout(vk::ImageLayout::eTransferSrcOptimal);
+		barrierToSrc.setImage(image);
+		barrierToSrc.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+
+		vk::DependencyInfo depToSrc{};
+		depToSrc.setImageMemoryBarriers(barrierToSrc);
+		cmd.pipelineBarrier2(depToSrc);
+
+		vk::BufferImageCopy copyRegion{};
+		copyRegion.setBufferOffset(0);
+		copyRegion.setBufferRowLength(TERRAIN_MAP_DIM);
+		copyRegion.setBufferImageHeight(TERRAIN_MAP_DIM);
+		copyRegion.setSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1));
+		copyRegion.setImageOffset(vk::Offset3D{0, 0, 0});
+		copyRegion.setImageExtent(vk::Extent3D{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 1});
+
+		cmd.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, m_readbackBuffer, copyRegion);
+
+		vk::ImageMemoryBarrier2 barrierBack{};
+		barrierBack.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrierBack.setSrcAccessMask(vk::AccessFlagBits2::eTransferRead);
+		barrierBack.setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+		barrierBack.setDstAccessMask(
+			vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite |
+			vk::AccessFlagBits2::eShaderSampledRead
+		);
+		barrierBack.setOldLayout(vk::ImageLayout::eTransferSrcOptimal);
+		barrierBack.setNewLayout(vk::ImageLayout::eGeneral);
+		barrierBack.setImage(image);
+		barrierBack.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+
+		vk::DependencyInfo depBack{};
+		depBack.setImageMemoryBarriers(barrierBack);
+		cmd.pipelineBarrier2(depBack);
+
+		if (!levelInfos.empty()) {
+			m_cpuPhysicsLODInfo = levelInfos[0];
+		}
+	}
+
+	void TerrainClipmap::SyncCPUHeightmap() {
+		if (!m_readbackMappedPtr || m_cpuPhysicsLODHeightmap.empty()) {
+			return;
+		}
+		if (allocator != VK_NULL_HANDLE && m_readbackAllocation != VK_NULL_HANDLE) {
+			vmaInvalidateAllocation(allocator, m_readbackAllocation, 0, VK_WHOLE_SIZE);
+		}
+		std::memcpy(
+			m_cpuPhysicsLODHeightmap.data(),
+			m_readbackMappedPtr,
+			TERRAIN_MAP_DIM * TERRAIN_MAP_DIM * sizeof(glm::vec4)
+		);
+		m_hasValidCpuReadback = true;
+	}
+
+	bool TerrainClipmap::GetHeightAtWorldPos(float worldX, float worldZ, float& outHeight) const {
+		if (!m_hasValidCpuReadback || m_cpuPhysicsLODHeightmap.empty()) {
+			return false;
+		}
+
+		const auto& info = m_cpuPhysicsLODInfo;
+		float       texelSize = info.texelSize > 0.0f ? info.texelSize : 0.5f;
+		float       halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
+
+		float minWorldX = info.centerWorldPos.x - halfExtent;
+		float minWorldZ = info.centerWorldPos.y - halfExtent;
+
+		float localX = (worldX - minWorldX) / texelSize;
+		float localZ = (worldZ - minWorldZ) / texelSize;
+
+		if (localX < 0.0f || localX >= static_cast<float>(TERRAIN_MAP_DIM - 1) || localZ < 0.0f ||
+		    localZ >= static_cast<float>(TERRAIN_MAP_DIM - 1)) {
+			return false;
+		}
+
+		int x0 = static_cast<int>(std::floor(localX));
+		int z0 = static_cast<int>(std::floor(localZ));
+		int x1 = std::min(x0 + 1, static_cast<int>(TERRAIN_MAP_DIM - 1));
+		int z1 = std::min(z0 + 1, static_cast<int>(TERRAIN_MAP_DIM - 1));
+
+		float fx = localX - static_cast<float>(x0);
+		float fz = localZ - static_cast<float>(z0);
+
+		auto getTexelHeight = [&](int col, int row) -> float {
+			int destX = (col + info.gridOffset.x) % static_cast<int>(TERRAIN_MAP_DIM);
+			if (destX < 0)
+				destX += static_cast<int>(TERRAIN_MAP_DIM);
+			int destZ = (row + info.gridOffset.y) % static_cast<int>(TERRAIN_MAP_DIM);
+			if (destZ < 0)
+				destZ += static_cast<int>(TERRAIN_MAP_DIM);
+			size_t idx = static_cast<size_t>(destZ) * TERRAIN_MAP_DIM + static_cast<size_t>(destX);
+			return m_cpuPhysicsLODHeightmap[idx].r;
+		};
+
+		float h00 = getTexelHeight(x0, z0);
+		float h10 = getTexelHeight(x1, z0);
+		float h01 = getTexelHeight(x0, z1);
+		float h11 = getTexelHeight(x1, z1);
+
+		outHeight = std::lerp(std::lerp(h00, h10, fx), std::lerp(h01, h11, fx), fz);
+		return true;
+	}
+
+	float TerrainClipmap::SampleHeight(float worldX, float worldZ) const {
+		float h = 0.0f;
+		if (GetHeightAtWorldPos(worldX, worldZ, h)) {
+			return h;
+		}
+		float texelSize = levelInfos.empty() ? 0.5f : levelInfos[0].texelSize;
+		return TerrainClipmap::SampleTerrain(worldX, worldZ, texelSize).r;
+	}
+
+	bool TerrainClipmap::ExportTerrainMapPNG(
+		const std::string& filepath,
+		glm::vec2          centerWorldPos,
+		float              chunkExtent,
+		uint32_t           resolution
+	) const {
+		if (resolution == 0 || chunkExtent <= 0.0f) {
+			spdlog::error("Invalid resolution or chunk extent for terrain map PNG export.");
+			return false;
+		}
+
+		std::vector<uint8_t> pixels(static_cast<size_t>(resolution) * resolution * 4);
+		float                texelSize = chunkExtent / static_cast<float>(resolution);
+		float                halfExtent = 0.5f * chunkExtent;
+
+		auto sampleColor = [](float h, const glm::vec3& N) -> glm::u8vec3 {
+			glm::vec3 col(0.0f);
+			if (h < 0.0f) {
+				float t = std::clamp((h + 50.0f) / 50.0f, 0.0f, 1.0f);
+				col = glm::mix(glm::vec3(15.0f, 23.0f, 42.0f), glm::vec3(14.0f, 165.0f, 233.0f), t) / 255.0f;
+			} else if (h < 4.0f) {
+				float t = h / 4.0f;
+				col = glm::mix(glm::vec3(254.0f, 240.0f, 138.0f), glm::vec3(234.0f, 179.0f, 8.0f), t) / 255.0f;
+			} else if (h < 40.0f) {
+				float t = (h - 4.0f) / 36.0f;
+				col = glm::mix(glm::vec3(34.0f, 197.0f, 94.0f), glm::vec3(21.0f, 128.0f, 61.0f), t) / 255.0f;
+			} else if (h < 120.0f) {
+				float t = (h - 40.0f) / 80.0f;
+				col = glm::mix(glm::vec3(22.0f, 101.0f, 52.0f), glm::vec3(133.0f, 77.0f, 14.0f), t) / 255.0f;
+			} else if (h < 220.0f) {
+				float t = (h - 120.0f) / 100.0f;
+				col = glm::mix(glm::vec3(100.0f, 116.0f, 139.0f), glm::vec3(51.0f, 65.0f, 85.0f), t) / 255.0f;
+			} else {
+				float t = std::clamp((h - 220.0f) / 100.0f, 0.0f, 1.0f);
+				col = glm::mix(glm::vec3(226.0f, 232.0f, 240.0f), glm::vec3(255.0f, 255.0f, 255.0f), t) / 255.0f;
+			}
+
+			glm::vec3 lightDir = glm::normalize(glm::vec3(-0.5f, 0.8f, -0.5f));
+			float     hillshade = std::clamp(glm::dot(N, lightDir), 0.35f, 1.25f);
+			col *= hillshade;
+
+			col = glm::clamp(col * 255.0f, glm::vec3(0.0f), glm::vec3(255.0f));
+			return glm::u8vec3(col.r, col.g, col.b);
+		};
+
+		for (uint32_t y = 0; y < resolution; ++y) {
+			float worldZ = centerWorldPos.y - halfExtent + (static_cast<float>(y) + 0.5f) * texelSize;
+			for (uint32_t x = 0; x < resolution; ++x) {
+				float worldX = centerWorldPos.x - halfExtent + (static_cast<float>(x) + 0.5f) * texelSize;
+
+				glm::vec4 sample = SampleTerrain(worldX, worldZ, texelSize);
+				float     h = sample.r;
+				glm::vec3 N(sample.g, sample.b, sample.a);
+
+				glm::u8vec3 rgb = sampleColor(h, N);
+
+				size_t idx = (static_cast<size_t>(y) * resolution + x) * 4;
+				pixels[idx + 0] = rgb.r;
+				pixels[idx + 1] = rgb.g;
+				pixels[idx + 2] = rgb.b;
+				pixels[idx + 3] = 255;
+			}
+		}
+
+		int resInt = static_cast<int>(resolution);
+		int success = stbi_write_png(filepath.c_str(), resInt, resInt, 4, pixels.data(), resInt * 4);
+		if (success) {
+			spdlog::info(
+				"Exported terrain map PNG to '{}' ({}x{} @ {}m extent)",
+				filepath,
+				resolution,
+				resolution,
+				chunkExtent
+			);
+			return true;
+		} else {
+			spdlog::error("Failed to write terrain map PNG to '{}'", filepath);
+			return false;
 		}
 	}
 
