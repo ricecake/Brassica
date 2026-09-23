@@ -37,6 +37,8 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
+		std::uint64_t pageTableAddr{0};
+		std::uint64_t vertexPagePoolAddr{0};
 	};
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
@@ -156,6 +158,15 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+
+			if (auto* physicalRegistry = ctx.PhysicalRegistry()) {
+				if (auto buf = physicalRegistry->GetBuffer<TerrainPageTableBuffer>()) {
+					push.pageTableAddr = static_cast<std::uint64_t>(buf->GetDeviceAddress());
+				}
+				if (auto buf = physicalRegistry->GetBuffer<TerrainVertexPageBuffer>()) {
+					push.vertexPagePoolAddr = static_cast<std::uint64_t>(buf->GetDeviceAddress());
+				}
+			}
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

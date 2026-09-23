@@ -1,5 +1,8 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_ARB_gpu_shader_int64 : require
 
 #include "bindless.glsl"
 #include "common.glsl"
@@ -17,6 +20,8 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint64_t pageTableAddr;
+	uint64_t vertexPagePoolAddr;
 } params;
 
 struct TaskPayload {
@@ -27,15 +32,29 @@ struct TaskPayload {
 
 taskPayloadSharedEXT TaskPayload payload;
 
+struct PageTableEntry {
+	vec4 bounds;
+	uint lod;
+	uint pageIndex;
+	uint isVisible;
+	uint padding;
+};
+
+layout(buffer_reference, scalar) buffer PageTableBuffer {
+	uint pageTableCount;
+	uint padding[3];
+	PageTableEntry entries[];
+};
+
 struct TerrainPageVertex {
 	vec4 position; // xyz = worldPos, w = lod
 	vec4 normal;   // xyz = normal, w = variance
 	vec4 color;    // rgb = albedo, a = 1.0
 };
 
-layout(std430, set = 0, binding = 6) readonly buffer VertexPagePoolBuffer {
+layout(buffer_reference, scalar) buffer VertexPagePoolBuffer {
 	TerrainPageVertex vertices[];
-} uVertexPages;
+};
 
 layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
@@ -64,8 +83,8 @@ void main() {
 	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 	uint meshletsPerRow = params.gridParams.y;
 
-	if (pageIndex != 0xFFFFFFFFu) {
-		// Read directly from pre-computed SSBO page area
+	if (pageIndex != 0xFFFFFFFFu && params.vertexPagePoolAddr != 0UL) {
+		VertexPagePoolBuffer uVertexPages = VertexPagePoolBuffer(params.vertexPagePoolAddr);
 		uint pageVertIdx = pageIndex * 121u + vertexIndex;
 		TerrainPageVertex pageVert = uVertexPages.vertices[pageVertIdx];
 		worldPos = pageVert.position.xyz;
@@ -73,8 +92,31 @@ void main() {
 		lodColor = pageVert.color.rgb;
 		height = worldPos.y;
 		baseWorldXZ = worldPos.xz;
+	} else if (params.pageTableAddr != 0UL && meshletID < PageTableBuffer(params.pageTableAddr).pageTableCount) {
+		PageTableBuffer uPageTable = PageTableBuffer(params.pageTableAddr);
+		PageTableEntry entry = uPageTable.entries[meshletID];
+
+		vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * entry.bounds.zw;
+		baseWorldXZ = entry.bounds.xy + localPos;
+
+		TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
+		vec3 p = vec3(baseWorldXZ.x, 0.0, baseWorldXZ.y);
+		vec3 grad = vec3(0.0);
+		eval_terrain(p, con, height, normal, grad);
+
+		vec2 flatXZ = baseWorldXZ - uCameraPosition.xz;
+		float distSq = dot(flatXZ, flatXZ);
+		float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+		worldPos = vec3(baseWorldXZ.x, height - dropOff, baseWorldXZ.y);
+
+		vec3 sand = vec3(0.9, 0.8, 0.5);
+		vec3 snow = vec3(0.9, 0.95, 1.0);
+		vec3 rock = vec3(0.3, 0.22, 0.2);
+
+		lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
+		lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
+		lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
 	} else {
-		// Clipmap fallback evaluation
 		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
 		uint localID = meshletID % totalPerLOD;
 
@@ -162,7 +204,6 @@ void main() {
 	outPosition[vertexIndex] = worldPos - uCameraPosition.xyz;
 	outNormal[vertexIndex] = normal;
 
-	// Underwater seafloor terrain coloring with depth and slope variations
 	if (height < 0.0) {
 		float depth = -height;
 		vec3  wetSand = vec3(0.75, 0.70, 0.52);
@@ -179,7 +220,6 @@ void main() {
 
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
-	// Generate skirt vertex for boundary vertices (sampled every 2 units to fit within Vulkan 256 primitive limit)
 	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
 	if (isBoundarySample) {
 		uint skirtID;
@@ -203,7 +243,6 @@ void main() {
 		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
 	}
 
-	// Generate 10x10 quad primitives (200 triangles)
 	if (lx < 10 && ly < 10) {
 		uint quadIdx = ly * 10 + lx;
 		uint v0 = ly * 11 + lx;
@@ -214,9 +253,8 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
 
-		// Fine-grained overlap culling
 		bool cullQuad = false;
-		if (lodLevel > 0) {
+		if (pageIndex == 0xFFFFFFFFu && lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
@@ -235,8 +273,7 @@ void main() {
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
-	// Generate skirt primitives along outer boundary edges
-	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
+	if (ly == 0 && lx < 10 && lx % 2 == 0) {
 		uint s = lx / 2;
 		uint v0 = lx;
 		uint v1 = lx + 2;
@@ -251,7 +288,7 @@ void main() {
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
-	if (ly == 10 && lx < 10 && lx % 2 == 0) { // Bottom edge
+	if (ly == 10 && lx < 10 && lx % 2 == 0) {
 		uint s = lx / 2;
 		uint v0 = 110 + lx;
 		uint v1 = 110 + lx + 2;
@@ -266,7 +303,7 @@ void main() {
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
-	if (lx == 0 && ly < 10 && ly % 2 == 0) { // Left edge
+	if (lx == 0 && ly < 10 && ly % 2 == 0) {
 		uint s = ly / 2;
 		uint v0 = ly * 11;
 		uint v1 = (ly + 2) * 11;
@@ -281,7 +318,7 @@ void main() {
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
-	if (lx == 10 && ly < 10 && ly % 2 == 0) { // Right edge
+	if (lx == 10 && ly < 10 && ly % 2 == 0) {
 		uint s = ly / 2;
 		uint v0 = ly * 11 + 10;
 		uint v1 = (ly + 2) * 11 + 10;

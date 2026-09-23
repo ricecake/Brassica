@@ -2,6 +2,7 @@
 #define BRASSICA_TERRAIN_GLSL
 
 #include "bindless.glsl"
+#include "common.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 
 void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal, out vec3 out_grad) {
@@ -150,6 +151,10 @@ vec4 sampleTerrainBiome(
 	uvec4 lodOffsets4_7
 ) {
 	return sampleTerrainBiome(biomeIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, uvec4(0u));
+}
+
+vec4 sampleTerrainBiome(uint biomeIndex, vec2 worldXZ, uint level) {
+	return sampleTerrainBiome(biomeIndex, worldXZ, level, 1088u, uvec4(0u), uvec4(0u), uvec4(0u));
 }
 
 // Sample terrain tile visibility map (r = visibility flag / occlusion factor)

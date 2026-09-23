@@ -1,5 +1,8 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_ARB_gpu_shader_int64 : require
 
 #include "bindless.glsl"
 #include "common.glsl"
@@ -21,19 +24,21 @@ struct TerrainPageVertex {
 	vec4 color;    // rgb = albedo, a = 1.0
 };
 
-layout(std430, set = 0, binding = 4) readonly buffer CreateTaskBuffer {
+layout(buffer_reference, scalar) buffer CreateTaskBuffer {
 	uint dispatchX;
 	uint dispatchY;
 	uint dispatchZ;
 	uint taskCount;
 	NodeCreateTask tasks[];
-} uCreateTasks;
+};
 
-layout(std430, set = 0, binding = 6) buffer VertexPagePoolBuffer {
+layout(buffer_reference, scalar) buffer VertexPagePoolBuffer {
 	TerrainPageVertex vertices[];
-} uVertexPages;
+};
 
 layout(push_constant) uniform MeshletGenPushConstants {
+	uint64_t createTasksAddr;
+	uint64_t vertexPagePoolAddr;
 	uint clipmapIndex;
 	uint biomeIndex;
 	uint minMaxIndex;
@@ -41,6 +46,9 @@ layout(push_constant) uniform MeshletGenPushConstants {
 } push;
 
 void main() {
+	CreateTaskBuffer uCreateTasks = CreateTaskBuffer(push.createTasksAddr);
+	VertexPagePoolBuffer uVertexPages = VertexPagePoolBuffer(push.vertexPagePoolAddr);
+
 	uint taskIdx = gl_WorkGroupID.x;
 	if (taskIdx >= uCreateTasks.taskCount) {
 		return;
