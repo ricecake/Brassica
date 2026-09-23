@@ -30,7 +30,10 @@
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "ServiceLocator.hpp"
+#include "types/CameraData.hpp"
 #include "types/ubo/LightingUBO.hpp"
+#include "ui/QuickSettingsWidget.hpp"
 
 using namespace brassica::graph;
 
@@ -1081,4 +1084,118 @@ TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") 
 
 	handler.Cleanup(*enginePtr);
 	CHECK(handler.cleanupCalled == true);
+}
+
+TEST_CASE("CameraData default state and mode cycling") {
+	brassica::CameraData cam;
+
+	CHECK(cam.mode == brassica::CameraMode::Instant);
+	CHECK(cam.speed == doctest::Approx(10.0f));
+	CHECK(cam.baseFov == doctest::Approx(1.2f));
+	CHECK(cam.fov == doctest::Approx(1.2f));
+	CHECK(cam.currentSpeed == doctest::Approx(0.0f));
+	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(10.0f));
+
+	cam.CycleMode();
+	CHECK(cam.mode == brassica::CameraMode::Accelerated);
+	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(0.0f));
+
+	cam.CycleMode();
+	CHECK(cam.mode == brassica::CameraMode::Instant);
+}
+
+TEST_CASE("Camera Accelerated mode acceleration, coasting down, FOV adaptation, and speed capping") {
+	brassica::CameraData cam;
+	cam.mode = brassica::CameraMode::Accelerated;
+	cam.speed = 20.0f; // Configured max speed
+	cam.baseFov = 1.2f;
+	cam.maxFovBoost = 0.3f;
+	cam.accelerationRate = 5.0f;
+	cam.decelerationRate = 4.0f;
+
+	glm::vec3 moveDir{0.0f, 0.0f, -1.0f}; // Moving forward
+	float     deltaTime = 0.1f;
+
+	// Accelerate step 1
+	glm::vec3 targetVelocity = glm::normalize(moveDir) * cam.speed;
+	float     blend = 1.0f - std::exp(-cam.accelerationRate * deltaTime);
+	cam.velocity = glm::mix(cam.velocity, targetVelocity, blend);
+	cam.currentSpeed = glm::length(cam.velocity);
+
+	float speedRatio = std::clamp(cam.currentSpeed / cam.speed, 0.0f, 1.0f);
+	cam.fov = cam.baseFov + speedRatio * cam.maxFovBoost;
+
+	CHECK(cam.currentSpeed > 0.0f);
+	CHECK(cam.currentSpeed < cam.speed);
+	CHECK(cam.fov > cam.baseFov);
+	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(cam.currentSpeed));
+
+	// Accelerate for several steps until reaching top speed
+	for (int i = 0; i < 25; ++i) {
+		float b = 1.0f - std::exp(-cam.accelerationRate * deltaTime);
+		cam.velocity = glm::mix(cam.velocity, targetVelocity, b);
+		float speedLen = glm::length(cam.velocity);
+		if (speedLen > cam.speed) {
+			cam.velocity = (cam.velocity / speedLen) * cam.speed;
+			speedLen = cam.speed;
+		}
+		cam.currentSpeed = speedLen;
+		float sRatio = std::clamp(cam.currentSpeed / cam.speed, 0.0f, 1.0f);
+		cam.fov = cam.baseFov + sRatio * cam.maxFovBoost;
+	}
+
+	CHECK(cam.currentSpeed == doctest::Approx(20.0f).epsilon(0.001));
+	CHECK(cam.fov == doctest::Approx(1.2f + 0.3f).epsilon(0.001));
+
+	// Coast down (release move keys)
+	moveDir = glm::vec3(0.0f);
+	targetVelocity = glm::vec3(0.0f);
+
+	float highSpeed = cam.currentSpeed;
+	float highFov = cam.fov;
+
+	// Coast down step 1
+	float decelBlend = 1.0f - std::exp(-cam.decelerationRate * deltaTime);
+	cam.velocity = glm::mix(cam.velocity, targetVelocity, decelBlend);
+	cam.currentSpeed = glm::length(cam.velocity);
+	float decelRatio = std::clamp(cam.currentSpeed / cam.speed, 0.0f, 1.0f);
+	cam.fov = cam.baseFov + decelRatio * cam.maxFovBoost;
+
+	CHECK(cam.currentSpeed < highSpeed);
+	CHECK(cam.fov < highFov);
+	CHECK(cam.fov > cam.baseFov);
+
+	// Coast down until full stop
+	for (int i = 0; i < 25; ++i) {
+		float db = 1.0f - std::exp(-cam.decelerationRate * deltaTime);
+		cam.velocity = glm::mix(cam.velocity, targetVelocity, db);
+		float speedLen = glm::length(cam.velocity);
+		if (speedLen < 0.01f) {
+			cam.velocity = glm::vec3(0.0f);
+			speedLen = 0.0f;
+		}
+		cam.currentSpeed = speedLen;
+		float sr = std::clamp(cam.currentSpeed / cam.speed, 0.0f, 1.0f);
+		cam.fov = cam.baseFov + sr * cam.maxFovBoost;
+	}
+
+	CHECK(cam.currentSpeed == doctest::Approx(0.0f));
+	CHECK(cam.fov == doctest::Approx(cam.baseFov));
+}
+
+TEST_CASE("QuickSettingsWidget camera mode UI integration via ServiceLocator") {
+	brassica::ServiceLocator locator;
+	brassica::ServiceLocator::SetInstance(&locator);
+
+	auto camData = std::make_shared<brassica::CameraData>();
+	locator.Provide<brassica::CameraData>(camData);
+
+	CHECK(locator.Has<brassica::CameraData>());
+	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Instant);
+
+	brassica::ui::QuickSettingsWidget widget;
+	CHECK(widget.GetTitle() == "Quick Controls");
+
+	camData->mode = brassica::CameraMode::Accelerated;
+	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Accelerated);
 }

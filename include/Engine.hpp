@@ -119,9 +119,14 @@ namespace brassica {
 			return serviceLocator.Get<T>();
 		}
 
-		void SetFov(float fov) { camera.fov = fov; }
+		void SetFov(float fov) {
+			camera.baseFov = fov;
+			if (camera.mode == CameraMode::Instant) {
+				camera.fov = fov;
+			}
+		}
 
-		float GetFov() const { return camera.fov; }
+		float GetFov() const { return camera.baseFov; }
 
 		CameraData& GetCamera() { return camera; }
 
