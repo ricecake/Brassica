@@ -44,6 +44,7 @@ namespace brassica {
 		std::uint32_t lowResChunkTextureIndex{0};
 		float         planetRadius{600000.0f};
 		std::uint32_t maxTreeDepth{10};
+		std::uint32_t passStage{0};
 	};
 
 	struct MeshletGenPushConstants {
@@ -329,6 +330,7 @@ namespace brassica {
 					.lowResChunkTextureIndex = push.lowResChunkStorageIdx,
 					.planetRadius = 600000.0f,
 					.maxTreeDepth = push.gridParams.x,
+					.passStage = 0,
 				};
 				std::array<vk::PushConstantRange, 1> qtPushRanges{
 					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(QuadtreePushConstants)}
@@ -344,6 +346,31 @@ namespace brassica {
 					if (boundSets[0] && boundSets[1]) {
 						vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, qtResolved.layout, 0, boundSets, nullptr);
 					}
+
+					// Stage 0: Topology refinement (4 iterations for multi-level subdivision per frame)
+					for (int iter = 0; iter < 4; ++iter) {
+						qtPush.passStage = 0;
+						vkCmd.pushConstants(
+							qtResolved.layout,
+							vk::ShaderStageFlagBits::eCompute,
+							0,
+							sizeof(QuadtreePushConstants),
+							&qtPush
+						);
+						vkCmd.dispatch(64, 1, 1);
+
+						vk::MemoryBarrier2 iterBarrier{};
+						iterBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader);
+						iterBarrier.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite);
+						iterBarrier.setDstStageMask(vk::PipelineStageFlagBits2::eComputeShader);
+						iterBarrier.setDstAccessMask(vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+						vk::DependencyInfo iterDepInfo{};
+						iterDepInfo.setMemoryBarriers(iterBarrier);
+						vkCmd.pipelineBarrier2(iterDepInfo);
+					}
+
+					// Stage 1: Active leaf gather & page table population
+					qtPush.passStage = 1;
 					vkCmd.pushConstants(
 						qtResolved.layout,
 						vk::ShaderStageFlagBits::eCompute,
