@@ -217,8 +217,8 @@ namespace brassica {
 					IndirectInit initCmd{};
 					vkCmd.updateBuffer(createBuf->GetBuffer(), 0, sizeof(IndirectInit), &initCmd);
 				}
-				if (auto poolBuf = physicalRegistry->GetBuffer<TerrainFreePagePoolBuffer>()) {
-					if (!freePoolInitialized) {
+				if (!freePoolInitialized) {
+					if (auto poolBuf = physicalRegistry->GetBuffer<TerrainFreePagePoolBuffer>()) {
 						struct PagePoolHeader { std::uint32_t freeCount{2048}; std::uint32_t capacity{2048}; std::uint32_t allocatedCount{0}; std::uint32_t padding{0}; };
 						PagePoolHeader hdr{};
 						vkCmd.updateBuffer(poolBuf->GetBuffer(), 0, sizeof(PagePoolHeader), &hdr);
@@ -226,27 +226,26 @@ namespace brassica {
 						for (std::uint32_t i = 0; i < 2048; ++i) initialPages[i] = i;
 						vkCmd.updateBuffer(poolBuf->GetBuffer(), sizeof(PagePoolHeader), initialPages.size() * sizeof(std::uint32_t), initialPages.data());
 						freePoolInitialized = true;
-					} else {
-						struct PagePoolHeader { std::uint32_t freeCount{2048}; std::uint32_t capacity{2048}; std::uint32_t allocatedCount{0}; std::uint32_t padding{0}; };
-						PagePoolHeader hdr{};
-						vkCmd.updateBuffer(poolBuf->GetBuffer(), 0, sizeof(PagePoolHeader), &hdr);
 					}
 				}
-				if (auto qtBuf = physicalRegistry->GetBuffer<TerrainQuadtreeBuffer>()) {
-					struct QuadtreeHeader { std::uint32_t nodeCount{1}; std::uint32_t maxNodes{4096}; std::uint32_t leafCount{1}; std::uint32_t padding{0}; };
-					QuadtreeHeader hdr{};
-					vkCmd.updateBuffer(qtBuf->GetBuffer(), 0, sizeof(QuadtreeHeader), &hdr);
+				if (!quadtreeInitialized) {
+					if (auto qtBuf = physicalRegistry->GetBuffer<TerrainQuadtreeBuffer>()) {
+						struct QuadtreeHeader { std::uint32_t nodeCount{1}; std::uint32_t maxNodes{4096}; std::uint32_t leafCount{1}; std::uint32_t padding{0}; };
+						QuadtreeHeader hdr{};
+						vkCmd.updateBuffer(qtBuf->GetBuffer(), 0, sizeof(QuadtreeHeader), &hdr);
 
-					struct QuadtreeNode {
-						glm::vec4 bounds{-65536.0f, -65536.0f, 131072.0f, 131072.0f};
-						std::uint32_t lod{10};
-						std::uint32_t pageIndex{0xFFFFFFFFu};
-						std::uint32_t flags{3u};
-						std::uint32_t padding{0};
-						glm::uvec4 children{0u};
-					};
-					QuadtreeNode rootNode{};
-					vkCmd.updateBuffer(qtBuf->GetBuffer(), sizeof(QuadtreeHeader), sizeof(QuadtreeNode), &rootNode);
+						struct QuadtreeNode {
+							glm::vec4 bounds{-65536.0f, -65536.0f, 131072.0f, 131072.0f};
+							std::uint32_t lod{10};
+							std::uint32_t pageIndex{0xFFFFFFFFu};
+							std::uint32_t flags{3u};
+							std::uint32_t padding{0};
+							glm::uvec4 children{0u};
+						};
+						QuadtreeNode rootNode{};
+						vkCmd.updateBuffer(qtBuf->GetBuffer(), sizeof(QuadtreeHeader), sizeof(QuadtreeNode), &rootNode);
+						quadtreeInitialized = true;
+					}
 				}
 
 				vk::MemoryBarrier2 transferBarrier{};

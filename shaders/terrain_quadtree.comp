@@ -86,9 +86,9 @@ layout(push_constant) uniform QuadtreePushConstants {
 } push;
 
 uint allocatePage(FreePoolBuffer uFreePool) {
-	uint oldVal = atomicAdd(uFreePool.header.freeCount, 0xFFFFFFFFu);
-	if (oldVal > 0u && oldVal <= uFreePool.header.capacity) {
-		return uFreePool.freePages[oldVal - 1u];
+	uint count = atomicAdd(uFreePool.header.freeCount, 0xFFFFFFFFu);
+	if (count > 0u && count <= uFreePool.header.capacity) {
+		return uFreePool.freePages[count - 1u];
 	} else {
 		atomicAdd(uFreePool.header.freeCount, 1u);
 		return 0xFFFFFFFFu;
@@ -101,6 +101,8 @@ void freePage(FreePoolBuffer uFreePool, uint pageIdx) {
 		if (slot < uFreePool.header.capacity) {
 			uFreePool.freePages[slot] = pageIdx;
 			memoryBarrierBuffer();
+		} else {
+			atomicAdd(uFreePool.header.freeCount, 0xFFFFFFFFu);
 		}
 	}
 }
@@ -161,8 +163,7 @@ void main() {
 		resChangeMeasure = biomeSample.b;
 	}
 
-	float targetLODLimit = max(0.0, float(push.maxTreeDepth) - 3.0);
-	float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), targetLODLimit, float(push.maxTreeDepth));
+	float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), 0.0, float(push.maxTreeDepth));
 
 	bool shouldSplit = (float(node.lod) > desiredLOD) && (node.lod > 0u);
 	bool shouldMerge = (float(node.lod) <= desiredLOD);
