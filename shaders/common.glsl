@@ -572,6 +572,76 @@ vec3 cross_noise_fbm(vec3 p, int oct, float phase, out mat3 out_jacobian) {
     return val / max_amp;
 }
 
+float dot_noise(vec3 p, float phase, out vec3 grad, out mat3 hessian) {
+    vec3 u = GOLD * p + vec3(phase, phase * 1.3, phase * 1.7);
+    vec3 v = PHI * p * GOLD + vec3(phase * 1.1, phase * 0.7, phase * 1.5);
+
+    vec3 sin_u = sin(u); vec3 cos_u = cos(u);
+    vec3 sin_v = sin(v); vec3 cos_v = cos(v);
+
+    // M1 = GOLD
+    mat3 M1 = GOLD;
+    // M2 = PHI * transpose(GOLD)
+    mat3 M2 = PHI * transpose(GOLD);
+
+    // 1. First Derivative (Gradient)
+    // Refactored slightly to explicit matrix multiplication for consistency with the Hessian
+    grad = transpose(M1) * (-sin_u * sin_v) + transpose(M2) * (cos_u * cos_v);
+
+    // 2. Second Derivative (Hessian)
+    vec3 C1 = -cos_u * sin_v;
+    vec3 C2 = -sin_u * cos_v;
+
+    // diag() is the helper function you already defined
+    mat3 grad_A = diag(C1) * M1 + diag(C2) * M2;
+    mat3 grad_B = diag(C2) * M1 + diag(C1) * M2;
+
+    hessian = transpose(M1) * grad_A + transpose(M2) * grad_B;
+
+    return dot(cos_u, sin_v);
+}
+
+float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad, out mat3 out_hessian) {
+    float val = 0.0;
+    vec3 grad = vec3(0.0);
+    mat3 hessian = mat3(0.0);
+
+    float amp = 1.0;
+    float freq = 1.0;
+    float max_amp = 0.0;
+
+    for (int i = 0; i < max(0, oct); i++) {
+        vec3 g_noise;
+        mat3 h_noise;
+
+        vec3 p_warp = p * freq + val;
+        float n = dot_noise(p_warp, phase * freq, g_noise, h_noise);
+
+        // Jacobian of the domain warp: (p * freq + val)
+        // outerProduct(vec3(1.0), grad) creates a 3x3 matrix where each row is the accumulated gradient
+        mat3 J_warp = mat3(freq) + outerProduct(vec3(1.0), grad);
+
+        // Accumulate Hessian via Chain Rule
+        mat3 H_chain = transpose(J_warp) * h_noise * J_warp;
+
+        // The term dot(g_noise, vec3(1.0)) * hessian accounts for the second derivative of the warp path
+        hessian += amp * (H_chain + dot(g_noise, vec3(1.0)) * hessian);
+
+        // Accumulate Gradient
+        grad += amp * (freq * g_noise + dot(g_noise, vec3(1.0)) * grad);
+
+        val += amp * n;
+        max_amp += amp;
+
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+
+    out_grad = grad / max_amp;
+    out_hessian = hessian / max_amp;
+    return val / max_amp;
+}
+
 float biome_map(float temperature, float moisture, float rocky) {
 	return dot(vec3(temperature, moisture, rocky), vec3(0.2126, 0.7152, 0.0722));
 }
@@ -674,4 +744,279 @@ vec3 evaluate_terrain_normal(vec3 p, float phase, float warp_strength, float eps
     // -dHeight/dx, -dHeight/dz (from Tx x Tz for a surface (x, H(x,z), z)), hence the negation.
     // The exact scaling of grad.y vs grad.xz depends on your world-space scale.
     return normalize(vec3(-grad.x, 2.0 * eps, -grad.z));
+}
+
+// Derivative of smoothstep(edge0, edge1, x)
+float d_smoothstep(float edge0, float edge1, float x) {
+    float t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return 6.0 * t * (1.0 - t) / (edge1 - edge0);
+}
+
+float evaluate_terrain_analytical(vec3 p, float phase, float warp_strength, TerrainConfig config, out vec3 out_normal, out float out_biome, out float out_mask) {
+    p *= config.spatial_scale;
+
+    // 1. Continent Mask (Macro Structure)
+    // Replaces divergence (I1). We use the base value of a low-frequency scalar noise.
+    vec3 g_mask;
+    float v_mask = dot_noise_fbm(p, 2, phase, g_mask);
+
+    float continent_mask = 1.0 - smoothstep(-0.5, 0.2, v_mask);
+
+    // Chain rule: d(mask)/dp = d(smoothstep)/dv * d(noise)/dp
+    float d_mask_dv = -d_smoothstep(-0.5, 0.2, v_mask);
+    vec3 grad_continent_mask = d_mask_dv * g_mask;
+
+    // 2. Domain Warping (Deformation)
+    // Replaces the strain tensor. We warp using the gradient of a noise field.
+    vec3 g_warp;
+    mat3 h_warp;
+    // Evaluate noise and extract both its gradient and its Hessian (2nd derivative)
+    float v_warp = dot_noise_fbm(p, 2, phase + 13.37, g_warp, h_warp);
+
+    vec3 p_warped = p + g_warp * warp_strength;
+
+    // Jacobian matrix of the domain warp: J = I + Hessian * strength
+    mat3 J_warp = mat3(1.0) + h_warp * warp_strength;
+
+    // 3. Base Terrain Elevation
+    vec3 g_base;
+    float v_base = dot_noise_fbm(p, 4, phase, g_base);
+
+    // 4. Ridge Terrain (Evaluated in warped space)
+    vec3 g_raw_ridge;
+    float v_raw_ridge = dot_noise_fbm(p_warped, 6, phase + 42.0, g_raw_ridge);
+
+    // Chain rule for warped domain: grad(Ridge(p_warped)) = J_warp^T * grad(Ridge)
+    vec3 g_ridge_warped = transpose(J_warp) * g_raw_ridge;
+
+    // Ridged multifractal mapping: height = 1.0 - abs(v)
+    // The mathematical derivative of abs(x) is sign(x).
+    // *Note*: If you are using your `filtered_abs` anti-aliasing logic here,
+    // replace `sign()` with the analytical derivative of your smoothed absolute function.
+    float ridge_height = 1.0 - abs(v_raw_ridge);
+    vec3 g_ridge_final = -sign(v_raw_ridge) * g_ridge_warped;
+
+    // 5. Composition (Product Rule)
+    // Combined Height = (Base + Ridge * 0.5) * Mask
+    float combined_height = v_base + (ridge_height * 0.5);
+    vec3 grad_combined = g_base + (g_ridge_final * 0.5);
+
+    // Apply the product rule: d(u*v) = u'*v + u*v'
+    float final_height = combined_height * continent_mask;
+    vec3 grad_final = grad_combined * continent_mask + combined_height * grad_continent_mask;
+
+    // 6. Biomes
+    // Use the gradient magnitude of the warp field as a stand-in for shear stress (I2)
+    float base_rocky = smoothstep(0.0, 0.8, length(g_warp));
+    vec3 dominant_axis = normalize(g_warp + vec3(0.0001)); // Prevent division by zero
+
+    vec3 biome_coords = vec3(1.0 - final_height, v_mask * 0.5 + 0.5, base_rocky);
+    float biome_dither = v_raw_ridge * config.biome_bleed;
+    biome_coords += dominant_axis * biome_dither;
+
+    out_biome = biome_map(clamp(biome_coords.x, 0.0, 1.0), clamp(biome_coords.y, 0.0, 1.0), clamp(biome_coords.z, 0.0, 1.0));
+    out_mask = continent_mask;
+
+    // 7. Resolve Final Elevation & Normal
+    float true_height = remap(final_height, 0.0, 1.0, config.min_height, config.max_height);
+
+    // Scale the gradient by the spatial scale and the remap height amplitude
+    float height_amplitude = config.max_height - config.min_height;
+    vec3 scaled_grad = grad_final * height_amplitude * config.spatial_scale;
+
+    // Assuming a planar/tangent-space projection mapping where Y is up
+    out_normal = normalize(vec3(-scaled_grad.x, 1.0, -scaled_grad.z));
+
+    return true_height;
+}
+
+struct TectonicPlate {
+    vec3 seed_dir; // Normalized direction of the plate center
+    float height;  // Base continent elevation (e.g., 1.0 for land, 0.0 for ocean)
+	float k;
+    // You could also store vec3 drift_velocity here for tectonic flow
+};
+
+// // SSBO containing your continent seeds
+// layout(std430, binding = 0) readonly buffer PlateBuffer {
+//     TectonicPlate plates[];
+// };
+
+const TectonicPlate plates[] = TectonicPlate[](
+	TectonicPlate(normalize(vec3(5.0, 2, 1)), 140.0, 1.0),
+	TectonicPlate(normalize(vec3(4.0, 3, 3)), -42.0, 1.0),
+	TectonicPlate(normalize(vec3(4.0, 3, 3)), 0.0, 1.0),
+	TectonicPlate(normalize(vec3(4.0, 3, 3)), -10.0, 1.0),
+	TectonicPlate(normalize(vec3(3.0, 4, 5)), 1000.0, 1.0),
+	TectonicPlate(normalize(vec3(2.0, 5, 4)), 60.0, 1.0),
+	TectonicPlate(normalize(vec3(1.0, 6, 2)), 320.0, 1.0)
+);
+
+// k = Sharpness of the plate boundaries.
+// Higher k = sharper tectonic faults. Lower k = smoother transitions.
+void evaluate_soft_voronoi(vec3 p, float k, int num_plates, out float out_height, out vec3 out_grad) {
+    vec3 P_norm = normalize(p);
+
+    // Pass 1: Find the maximum dot product to prevent exp() overflow (Log-Sum-Exp trick)
+    float max_dot = -1.0;
+    for(int i = 0; i < num_plates; i++) {
+        float d = dot(P_norm, plates[i].seed_dir);
+        max_dot = max(max_dot, d);
+    }
+
+    // Pass 2: Accumulate the Softmax values and exact derivatives
+    float sum_weight = 0.0;
+    float sum_height = 0.0;
+
+    vec3 grad_weight = vec3(0.0);
+    vec3 grad_height = vec3(0.0);
+
+    for(int i = 0; i < num_plates; i++) {
+        vec3 S = plates[i].seed_dir;
+        float V = plates[i].height;
+
+        // The proximity metric
+        float d = dot(P_norm, S);
+
+        // Stabilized exponential weight
+        float w = exp(k * (d - max_dot));
+
+        // Accumulate denominators (weights) and numerators (weighted values)
+        sum_weight += w;
+        sum_height += w * V;
+
+        // Accumulate derivatives
+        // Derivative of exp(k * d) with respect to P is k * S * exp(k * d)
+        vec3 dw = k * w * S;
+
+        grad_weight += dw;
+        grad_height += V * dw;
+    }
+
+    // Final Value: Weighted average
+    out_height = sum_height / sum_weight;
+
+    // Final Gradient: Quotient Rule -> d(N/D) = (D*dN - N*dD) / D^2
+    // Which algebraically simplifies to -> (dN - Height * dD) / D
+    out_grad = (grad_height - out_height * grad_weight) / sum_weight;
+}
+
+
+// Ensure FAKE_PLANET_RADIUS is in scope
+void evaluate_soft_voronoi_pseudosphere(vec3 p, float k, int num_plates, out float out_height, out vec3 out_grad_local) {
+    // 1. Map local XZ distances to radians (Longitude/Latitude)
+    float theta = p.x / FAKE_PLANET_RADIUS; // Longitude
+    float phi   = p.z / FAKE_PLANET_RADIUS; // Latitude
+
+    float sin_theta = sin(theta); float cos_theta = cos(theta);
+    float sin_phi   = sin(phi);   float cos_phi   = cos(phi);
+
+    // 2. Construct the geocentric unit vector
+    vec3 P_geo = vec3(
+        cos_phi * sin_theta,
+        sin_phi,
+        cos_phi * cos_theta
+    );
+
+    // 3. Evaluate the Softmax Voronoi (identical log-sum-exp logic)
+    float max_dot = -1.0;
+    for(int i = 0; i < num_plates; i++) {
+        max_dot = max(max_dot, dot(P_geo, plates[i].seed_dir));
+    }
+
+    float sum_weight = 0.0;
+    float sum_height = 0.0;
+    vec3 grad_weight = vec3(0.0);
+    vec3 grad_height = vec3(0.0);
+
+    for(int i = 0; i < num_plates; i++) {
+        vec3 S = plates[i].seed_dir;
+        float V = plates[i].height;
+
+        float d = dot(P_geo, S);
+        float w = exp(k * (d - max_dot));
+
+        sum_weight += w;
+        sum_height += w * V;
+
+        vec3 dw = k * w * S;
+        grad_weight += dw;
+        grad_height += V * dw;
+    }
+
+    out_height = sum_height / sum_weight;
+    vec3 grad_geo = (grad_height - out_height * grad_weight) / sum_weight;
+
+    // 4. Translate the gradient back to the flat pseudo-sphere domain
+    // Partial derivative of P_geo with respect to surface distance X
+    vec3 dP_dx = vec3(
+         cos_phi * cos_theta,
+         0.0,
+        -cos_phi * sin_theta
+    ) / FAKE_PLANET_RADIUS;
+
+    // Partial derivative of P_geo with respect to surface distance Z
+    vec3 dP_dz = vec3(
+        -sin_phi * sin_theta,
+         cos_phi,
+        -sin_phi * cos_theta
+    ) / FAKE_PLANET_RADIUS;
+
+    // Dot the geocentric gradient with the Jacobian basis vectors
+    out_grad_local = vec3(
+        dot(grad_geo, dP_dx),
+        0.0, // Elevation (Y) does not influence the macro continent layout
+        dot(grad_geo, dP_dz)
+    );
+}
+
+void evaluate_soft_voronoi_pseudosphere2(vec3 p, int num_plates, out float out_height, out vec3 out_grad_local) {
+    float theta = p.x / FAKE_PLANET_RADIUS;
+    float phi   = p.z / FAKE_PLANET_RADIUS;
+
+    float sin_theta = sin(theta); float cos_theta = cos(theta);
+    float sin_phi   = sin(phi);   float cos_phi   = cos(phi);
+
+    vec3 P_geo = vec3(cos_phi * sin_theta, sin_phi, cos_phi * cos_theta);
+
+    // Pass 1: Log-Sum-Exp Trick adapted for per-plate 'k'
+    float max_kd = -1e20; // Must be very low, as (k * dot) can be highly negative
+    for(int i = 0; i < num_plates; i++) {
+        float kd = plates[i].k * dot(P_geo, plates[i].seed_dir);
+        max_kd = max(max_kd, kd);
+    }
+
+    float sum_weight = 0.0;
+    float sum_height = 0.0;
+    vec3 grad_weight = vec3(0.0);
+    vec3 grad_height = vec3(0.0);
+
+    // Pass 2: Accumulation
+    for(int i = 0; i < num_plates; i++) {
+        vec3 S = plates[i].seed_dir;
+        float V = plates[i].height;
+        float k_i = plates[i].k;
+
+        // Calculate the exponent with the specific plate's 'k'
+        float kd = k_i * dot(P_geo, S);
+        float w = exp(kd - max_kd);
+
+        sum_weight += w;
+        sum_height += w * V;
+
+        // The chain rule pulls k_i out of the exponent
+        vec3 dw = k_i * w * S;
+
+        grad_weight += dw;
+        grad_height += V * dw;
+    }
+
+    out_height = sum_height / sum_weight;
+    vec3 grad_geo = (grad_height - out_height * grad_weight) / sum_weight;
+
+    // Pass 3: Project back to pseudo-sphere Jacobian
+    vec3 dP_dx = vec3( cos_phi * cos_theta, 0.0, -cos_phi * sin_theta) / FAKE_PLANET_RADIUS;
+    vec3 dP_dz = vec3(-sin_phi * sin_theta, cos_phi, -sin_phi * cos_theta) / FAKE_PLANET_RADIUS;
+
+    out_grad_local = vec3(dot(grad_geo, dP_dx), 0.0, dot(grad_geo, dP_dz));
 }

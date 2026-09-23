@@ -87,18 +87,23 @@ void main() {
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;
 	vec2 worldXZ = centerWorldPos + deltaWorld;
 
-	TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14, 0.5);
+	TerrainConfig con = TerrainConfig(0.000075, -100.0, 5000.0, 0.14, 0.5);
 	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
 
 	// Evaluate height ONCE per thread
 	float biome = 0.0;
 	float land_mask = 0.0;
-	float h = evaluate_terrain(p, 0.0, 0.75, con, biome, land_mask);
+	vec3 normal = vec3(0.0, 1.0, 0.0);
+	// float h = evaluate_terrain(p, 0.0, 0.75, con, biome, land_mask);
+	// float h = evaluate_terrain_analytical(p, 0.0, 0.75, con, normal, biome, land_mask);
+	float h = 0.0;
+	// evaluate_soft_voronoi(p, 10.0, 5, h, normal);
+	evaluate_soft_voronoi_pseudosphere(p, 100.0, 7, h, normal);
 
 // Calculate the normal using the hybrid swap/evaluation function
     float eps = max(0.25, texelSize);
     // vec3 normal = evaluate_hybrid_normal(p, h, eps, 0.0, 0.75, con);
-	vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con);
+	// vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con);
 
 	// 3. Quad Swap Differencing
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
