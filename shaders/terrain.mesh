@@ -1,11 +1,10 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
-//#extension GL_EXT_fragment_shading_rate : require
+
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
-#include "lygia/generative/psrdnoise.glsl"
-#include "lygia/color/hueShift.glsl";
+
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
@@ -18,9 +17,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
-}
-
-params;
+} params;
 
 struct TaskPayload {
 	uint meshletIDs[32];
@@ -44,10 +41,6 @@ layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec4 outAlbedo[];
 
-vec3 pal(in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d) {
-	return a + b * cos(6.28318 * (c * t + d));
-}
-
 void main() {
 	uint taskIndex = gl_WorkGroupID.x;
 	uint meshletID = payload.meshletIDs[taskIndex];
@@ -60,12 +53,16 @@ void main() {
 	uint ly = gl_LocalInvocationID.y;
 	uint vertexIndex = ly * 11 + lx;
 
-	vec3 worldPos;
-	vec3 normal;
-	vec3 lodColor;
+	vec3 worldPos = vec3(0.0);
+	vec3 normal = vec3(0.0, 1.0, 0.0);
+	vec3 lodColor = vec3(0.2, 0.6, 0.2);
+	float height = 0.0;
+	vec2 baseWorldXZ = vec2(0.0);
+	vec3 meshletMin = vec3(0.0);
 
 	float baseMeshletSize = 32.0;
 	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
+	uint meshletsPerRow = params.gridParams.y;
 
 	if (pageIndex != 0xFFFFFFFFu) {
 		// Read directly from pre-computed SSBO page area
@@ -74,9 +71,10 @@ void main() {
 		worldPos = pageVert.position.xyz;
 		normal = pageVert.normal.xyz;
 		lodColor = pageVert.color.rgb;
+		height = worldPos.y;
+		baseWorldXZ = worldPos.xz;
 	} else {
 		// Clipmap fallback evaluation
-		uint meshletsPerRow = params.gridParams.y;
 		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
 		uint localID = meshletID % totalPerLOD;
 
@@ -84,14 +82,14 @@ void main() {
 		uint col = localID % meshletsPerRow;
 
 		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
-		vec3 meshletMin = vec3(
+		meshletMin = vec3(
 			cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
 			0.0,
 			cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
 		);
 
 		vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-		vec2 baseWorldXZ = meshletMin.xz + localPos;
+		baseWorldXZ = meshletMin.xz + localPos;
 
 		vec2 offsetDist = abs(baseWorldXZ - cameraSnap);
 		float distToCam = max(offsetDist.x, offsetDist.y);
@@ -123,7 +121,7 @@ void main() {
 			params.lodOffsets4_7,
 			params.lodOffsets8_11
 		);
-		float height = texSample.r;
+		height = texSample.r;
 		normal = texSample.gba;
 
 		if (alpha > 0.0) {
@@ -149,7 +147,6 @@ void main() {
 		float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 		worldPos.y = height - dropOff;
 
-		lodColor = vec3(0.2, 0.6, 0.2);
 		vec3 sand = vec3(0.9, 0.8, 0.5);
 		vec3 snow = vec3(0.9, 0.95, 1.0);
 		vec3 rock = vec3(0.3, 0.22, 0.2);
@@ -165,15 +162,6 @@ void main() {
 	outPosition[vertexIndex] = worldPos - uCameraPosition.xyz;
 	outNormal[vertexIndex] = normal;
 
-	vec3 lodColor = vec3(0.2, 0.6, 0.2);
-	vec3 sand = vec3(0.9, 0.8, 0.5);
-	vec3 snow = vec3(0.9, 0.95, 1.0);
-	vec3 rock = vec3(0.3, 0.22, 0.2);
-
-	lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
-	lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
-	lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
-
 	// Underwater seafloor terrain coloring with depth and slope variations
 	if (height < 0.0) {
 		float depth = -height;
@@ -188,12 +176,6 @@ void main() {
 
 		lodColor = seafloorColor;
 	}
-
-	vec3 flatWorldPos = vec3(baseWorldXZ.x, 0.0, baseWorldXZ.y);
-	// lodColor *= 1.0-(0.25*pow(dot_noise(flatWorldPos * 0.10/abs(dot_noise(flatWorldPos*0.125, 1.0)), 0.0),2));
-	float warp = psrdnoise(baseWorldXZ / texelSize(lodLevel));
-	float shift =  psrdnoise((texelSize(lodLevel)*warp+baseWorldXZ)/texelSize(lodLevel));
-	lodColor = hueShift(lodColor, shift);
 
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
@@ -221,9 +203,6 @@ void main() {
 		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
 	}
 
-	// Determine shading rate based on clipmap LOD
-	int shadingRate = 0; // Default 1x1
-
 	// Generate 10x10 quad primitives (200 triangles)
 	if (lx < 10 && ly < 10) {
 		uint quadIdx = ly * 10 + lx;
@@ -234,9 +213,6 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
-
-		// gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 
 		// Fine-grained overlap culling
 		bool cullQuad = false;
@@ -250,8 +226,6 @@ void main() {
 
 			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
 
-			// Cull if the quad center is strictly inside the previous LOD's active area.
-			// The -0.01 margin prevents floating point inaccuracies from culling edge quads.
 			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
 				cullQuad = true;
 			}
@@ -261,7 +235,7 @@ void main() {
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
-	// Generate skirt primitives along outer boundary edges (5 segments per edge, total 40 triangles)
+	// Generate skirt primitives along outer boundary edges
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
 		uint s = lx / 2;
 		uint v0 = lx;
@@ -273,8 +247,6 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
@@ -290,8 +262,6 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
@@ -307,8 +277,6 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
@@ -324,8 +292,6 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
 
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
 		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
 		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
