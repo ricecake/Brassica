@@ -47,9 +47,33 @@ uint hash(uint x) {
 	return x;
 }
 
+float clamp01(float t) {
+	return clamp(t, 0.0, 1.0);
+}
+
 vec2 hash(vec2 p) {
 	p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
 	return fract(sin(p) * 43758.5453123) * 2.0 - 1.0;
+}
+
+float pow_inv(float t, float power) {
+	return 1.0 - pow(1.0 - clamp01(t), power);
+}
+
+float ease_out(float t) {
+	float v = 1.0 - clamp01(t);
+	return 1.0 - v * v;
+}
+
+float smooth_start(float t, float smoothing) {
+	if (t >= smoothing)
+		return t - 0.5 * smoothing;
+	return 0.5 * t * t / smoothing;
+}
+
+vec2 safe_normalize(vec2 n) {
+	float l = length(n);
+	return (abs(l) > 1e-10) ? (n / l) : n;
 }
 
 float pcg_hash(uint seed) {
