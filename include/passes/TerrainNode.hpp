@@ -75,15 +75,17 @@ namespace brassica {
 			.enableShadingRate = false,
 		};
 
-		render::PipelineLibrary*      pipelineLibrary = nullptr;
-		TaskShader                    taskShader;
-		MeshShader                    meshShader;
-		FragmentShader                fragShader;
-		TerrainAccelerationStructure* terrainAS = nullptr;
-		TerrainPushConstants          push{};
+		render::PipelineLibrary*         pipelineLibrary = nullptr;
+		graph::PhysicalResourceRegistry* physicalRegistry = nullptr;
+		TaskShader                       taskShader;
+		MeshShader                       meshShader;
+		FragmentShader                   fragShader;
+		TerrainAccelerationStructure*    terrainAS = nullptr;
+		TerrainPushConstants             push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
+			physicalRegistry = services.physicalRegistry;
 			terrainAS = services.terrainAS;
 			taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task");
 			meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh");
@@ -159,7 +161,7 @@ namespace brassica {
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
 
-			if (auto* physicalRegistry = ctx.PhysicalRegistry()) {
+			if (physicalRegistry) {
 				if (auto buf = physicalRegistry->GetBuffer<TerrainPageTableBuffer>()) {
 					push.pageTableAddr = static_cast<std::uint64_t>(buf->GetDeviceAddress());
 				}
@@ -220,7 +222,7 @@ namespace brassica {
 				&push
 			);
 
-			uint32_t taskGroupCount = (push.gridParams.z + 31) / 32;
+			uint32_t taskGroupCount = (push.pageTableAddr != 0) ? 4 : (push.gridParams.z + 31) / 32;
 			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
 			}

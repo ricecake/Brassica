@@ -161,7 +161,8 @@ void main() {
 		resChangeMeasure = biomeSample.b;
 	}
 
-	float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), 0.0, float(push.maxTreeDepth));
+	float targetLODLimit = max(0.0, float(push.maxTreeDepth) - 3.0);
+	float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), targetLODLimit, float(push.maxTreeDepth));
 
 	bool shouldSplit = (float(node.lod) > desiredLOD) && (node.lod > 0u);
 	bool shouldMerge = (float(node.lod) <= desiredLOD);

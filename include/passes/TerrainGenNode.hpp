@@ -226,34 +226,34 @@ namespace brassica {
 						for (std::uint32_t i = 0; i < 2048; ++i) initialPages[i] = i;
 						vkCmd.updateBuffer(poolBuf->GetBuffer(), sizeof(PagePoolHeader), initialPages.size() * sizeof(std::uint32_t), initialPages.data());
 						freePoolInitialized = true;
+					} else {
+						struct PagePoolHeader { std::uint32_t freeCount{2048}; std::uint32_t capacity{2048}; std::uint32_t allocatedCount{0}; std::uint32_t padding{0}; };
+						PagePoolHeader hdr{};
+						vkCmd.updateBuffer(poolBuf->GetBuffer(), 0, sizeof(PagePoolHeader), &hdr);
 					}
 				}
 				if (auto qtBuf = physicalRegistry->GetBuffer<TerrainQuadtreeBuffer>()) {
-					if (!quadtreeInitialized) {
-						struct QuadtreeHeader { std::uint32_t nodeCount{1}; std::uint32_t maxNodes{1024}; std::uint32_t leafCount{1}; std::uint32_t padding{0}; };
-						QuadtreeHeader hdr{};
-						vkCmd.updateBuffer(qtBuf->GetBuffer(), 0, sizeof(QuadtreeHeader), &hdr);
+					struct QuadtreeHeader { std::uint32_t nodeCount{1}; std::uint32_t maxNodes{4096}; std::uint32_t leafCount{1}; std::uint32_t padding{0}; };
+					QuadtreeHeader hdr{};
+					vkCmd.updateBuffer(qtBuf->GetBuffer(), 0, sizeof(QuadtreeHeader), &hdr);
 
-						struct QuadtreeNode {
-							glm::vec4 bounds{-65536.0f, -65536.0f, 131072.0f, 131072.0f};
-							std::uint32_t lod{10};
-							std::uint32_t pageIndex{0xFFFFFFFFu};
-							std::uint32_t flags{3u};
-							std::uint32_t padding{0};
-							glm::uvec4 children{0u};
-						};
-						QuadtreeNode rootNode{};
-						vkCmd.updateBuffer(qtBuf->GetBuffer(), sizeof(QuadtreeHeader), sizeof(QuadtreeNode), &rootNode);
-						quadtreeInitialized = true;
-					}
+					struct QuadtreeNode {
+						glm::vec4 bounds{-65536.0f, -65536.0f, 131072.0f, 131072.0f};
+						std::uint32_t lod{10};
+						std::uint32_t pageIndex{0xFFFFFFFFu};
+						std::uint32_t flags{3u};
+						std::uint32_t padding{0};
+						glm::uvec4 children{0u};
+					};
+					QuadtreeNode rootNode{};
+					vkCmd.updateBuffer(qtBuf->GetBuffer(), sizeof(QuadtreeHeader), sizeof(QuadtreeNode), &rootNode);
 				}
 
-				vk::MemoryBarrier2 transferBarrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-					.srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-				};
+				vk::MemoryBarrier2 transferBarrier{};
+				transferBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
+				transferBarrier.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
+				transferBarrier.setDstStageMask(vk::PipelineStageFlagBits2::eComputeShader);
+				transferBarrier.setDstAccessMask(vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
 				vk::DependencyInfo transferDepInfo{};
 				transferDepInfo.setMemoryBarriers(transferBarrier);
 				vkCmd.pipelineBarrier2(transferDepInfo);
@@ -286,7 +286,6 @@ namespace brassica {
 				};
 				render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
-				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 				if (resolved.pipeline) {
 					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 				}
@@ -306,6 +305,8 @@ namespace brassica {
 				uint32_t groupX = (push.gridParams.w + 15) / 16;
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
+				if (groupX > 16) groupX = 16;
+				if (groupY > 16) groupY = 16;
 				vkCmd.dispatch(groupX, groupY, groupZ);
 			}
 
@@ -339,7 +340,6 @@ namespace brassica {
 					.pushConstantRanges = qtPushRanges,
 				};
 				render::ResolvedPipeline qtResolved = pipelineLibrary->ResolveCached(qtRequest);
-				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 				if (qtResolved.pipeline) {
 					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, qtResolved.pipeline);
 					if (boundSets[0] && boundSets[1]) {
@@ -352,18 +352,17 @@ namespace brassica {
 						sizeof(QuadtreePushConstants),
 						&qtPush
 					);
-					vkCmd.dispatch(16, 1, 1);
+					vkCmd.dispatch(64, 1, 1);
 				}
 			}
 
 			// Compute Memory Barrier between Quadtree Traversal and Indirect Vertex Generation
 			{
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eDrawIndirect,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eIndirectCommandRead,
-				};
+				vk::MemoryBarrier2 barrier{};
+				barrier.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader);
+				barrier.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite);
+				barrier.setDstStageMask(vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eDrawIndirect);
+				barrier.setDstAccessMask(vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eIndirectCommandRead);
 				vk::DependencyInfo depInfo{};
 				depInfo.setMemoryBarriers(barrier);
 				vkCmd.pipelineBarrier2(depInfo);
@@ -394,7 +393,6 @@ namespace brassica {
 					.pushConstantRanges = mgPushRanges,
 				};
 				render::ResolvedPipeline mgResolved = pipelineLibrary->ResolveCached(mgRequest);
-				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 				if (mgResolved.pipeline) {
 					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, mgResolved.pipeline);
 					if (boundSets[0] && boundSets[1]) {
@@ -420,7 +418,6 @@ namespace brassica {
 			}
 
 			if (terrainAS) {
-				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 				terrainAS->BuildOrUpdate(
 					vkCmd,
 					cameraPos,
