@@ -222,7 +222,7 @@ namespace brassica {
 				&push
 			);
 
-			uint32_t taskGroupCount = (push.pageTableAddr != 0) ? 4 : (push.gridParams.z + 31) / 32;
+			uint32_t taskGroupCount = (push.pageTableAddr != 0) ? 128 : (push.gridParams.z + 31) / 32;
 			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
 			}

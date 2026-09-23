@@ -76,11 +76,7 @@ void main() {
 	vec3 grad = vec3(0.0);
 	eval_terrain(p, con, height, normal, grad);
 
-	vec2 flatXZ = worldXZ - uCameraPosition.xz;
-	float distSq = dot(flatXZ, flatXZ);
-	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-
-	vec3 finalWorldPos = vec3(worldXZ.x, height - dropOff, worldXZ.y);
+	vec3 uncurvedWorldPos = vec3(worldXZ.x, height, worldXZ.y);
 
 	vec3 lodColor = vec3(0.2, 0.6, 0.2);
 	vec3 sand = vec3(0.9, 0.8, 0.5);
@@ -91,7 +87,7 @@ void main() {
 	lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
 	lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
 
-	uVertexPages.vertices[globalVertIdx].position = vec4(finalWorldPos, float(task.targetLOD));
+	uVertexPages.vertices[globalVertIdx].position = vec4(uncurvedWorldPos, float(task.targetLOD));
 	uVertexPages.vertices[globalVertIdx].normal = vec4(normal, 0.0);
 	uVertexPages.vertices[globalVertIdx].color = vec4(lodColor, 1.0);
 }

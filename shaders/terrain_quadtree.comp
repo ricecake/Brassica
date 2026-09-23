@@ -83,12 +83,13 @@ layout(push_constant) uniform QuadtreePushConstants {
 	uint lowResChunkTextureIndex;
 	float planetRadius;
 	uint maxTreeDepth;
+	uint passStage; // 0 = topology update (split/merge), 1 = active leaf gather & page allocation
 } push;
 
 uint allocatePage(FreePoolBuffer uFreePool) {
-	uint oldVal = atomicAdd(uFreePool.header.freeCount, 0xFFFFFFFFu);
-	if (oldVal > 0u && oldVal <= uFreePool.header.capacity) {
-		return uFreePool.freePages[oldVal - 1u];
+	uint count = atomicAdd(uFreePool.header.freeCount, 0xFFFFFFFFu);
+	if (count > 0u && count <= uFreePool.header.capacity) {
+		return uFreePool.freePages[count - 1u];
 	} else {
 		atomicAdd(uFreePool.header.freeCount, 1u);
 		return 0xFFFFFFFFu;
@@ -101,6 +102,8 @@ void freePage(FreePoolBuffer uFreePool, uint pageIdx) {
 		if (slot < uFreePool.header.capacity) {
 			uFreePool.freePages[slot] = pageIdx;
 			memoryBarrierBuffer();
+		} else {
+			atomicAdd(uFreePool.header.freeCount, 0xFFFFFFFFu);
 		}
 	}
 }
@@ -149,115 +152,95 @@ void main() {
 		return; // Inactive node
 	}
 
-	vec2 centerXZ = node.bounds.xy + node.bounds.zw * 0.5;
-	float distToCam = length(centerXZ - uCameraPosition.xz);
+	if (push.passStage == 0u) {
+		// Stage 0: Topology updates (Splitting and Merging only)
+		vec2 centerXZ = node.bounds.xy + node.bounds.zw * 0.5;
+		float distToCam = length(centerXZ - uCameraPosition.xz);
 
-	float resChangeMeasure = 0.0;
-	if (push.lowResChunkTextureIndex > 0u) {
-		vec4 chunkSample = sampleTerrainBiome(push.lowResChunkTextureIndex, centerXZ, node.lod);
-		resChangeMeasure = chunkSample.b;
-	} else {
-		vec4 biomeSample = sampleTerrainBiome(push.biomeTextureIndex, centerXZ, node.lod);
-		resChangeMeasure = biomeSample.b;
-	}
+		float resChangeMeasure = 0.0;
+		if (push.lowResChunkTextureIndex > 0u) {
+			vec4 chunkSample = sampleTerrainBiome(push.lowResChunkTextureIndex, centerXZ, node.lod);
+			resChangeMeasure = chunkSample.b;
+		} else {
+			vec4 biomeSample = sampleTerrainBiome(push.biomeTextureIndex, centerXZ, node.lod);
+			resChangeMeasure = biomeSample.b;
+		}
 
-	float targetLODLimit = max(0.0, float(push.maxTreeDepth) - 3.0);
-	float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), targetLODLimit, float(push.maxTreeDepth));
+		float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), 0.0, float(push.maxTreeDepth));
 
-	bool shouldSplit = (float(node.lod) > desiredLOD) && (node.lod > 0u);
-	bool shouldMerge = (float(node.lod) <= desiredLOD);
-	bool isLeaf = ((node.flags & 2u) != 0u);
+		bool shouldSplit = (float(node.lod) > desiredLOD) && (node.lod > 0u);
+		bool shouldMerge = (float(node.lod) <= desiredLOD);
+		bool isLeaf = ((node.flags & 2u) != 0u);
 
-	if (isLeaf && shouldSplit) {
-		freePage(uFreePool, node.pageIndex);
-		node.pageIndex = 0xFFFFFFFFu;
-		node.flags &= ~2u;
+		if (isLeaf && shouldSplit) {
+			freePage(uFreePool, node.pageIndex);
+			node.pageIndex = 0xFFFFFFFFu;
+			node.flags &= ~2u; // Clear leaf flag
 
-		uint baseChildIdx = atomicAdd(uQuadtree.nodeCount, 4u);
-		for (uint i = 0u; i < 4u; ++i) {
-			uint childIdx = baseChildIdx + i;
-			node.children[i] = childIdx;
+			uint baseChildIdx = atomicAdd(uQuadtree.nodeCount, 4u);
+			for (uint i = 0u; i < 4u; ++i) {
+				uint childIdx = baseChildIdx + i;
+				node.children[i] = childIdx;
 
-			vec2 childSize = node.bounds.zw * 0.5;
-			vec2 childMin = node.bounds.xy + vec2(float(i & 1u), float(i >> 1u)) * childSize;
+				vec2 childSize = node.bounds.zw * 0.5;
+				vec2 childMin = node.bounds.xy + vec2(float(i & 1u), float(i >> 1u)) * childSize;
 
-			if (childIdx < uQuadtree.maxNodes) {
-				QuadtreeNode childNode;
-				childNode.bounds = vec4(childMin, childSize);
-				childNode.lod = node.lod - 1u;
-				childNode.pageIndex = 0xFFFFFFFFu;
-				childNode.flags = 3u;
-				childNode.padding = 0u;
-				childNode.children = uvec4(0u);
+				if (childIdx < uQuadtree.maxNodes) {
+					QuadtreeNode childNode;
+					childNode.bounds = vec4(childMin, childSize);
+					childNode.lod = node.lod - 1u;
+					childNode.pageIndex = 0xFFFFFFFFu;
+					childNode.flags = 3u; // active, leaf
+					childNode.padding = 0u;
+					childNode.children = uvec4(0u);
+					uQuadtree.nodes[childIdx] = childNode;
+				}
+			}
+		} else if (!isLeaf && shouldMerge) {
+			for (uint i = 0u; i < 4u; ++i) {
+				uint childIdx = node.children[i];
+				if (childIdx > 0u && childIdx < uQuadtree.nodeCount) {
+					freeNodeAndChildrenIterative(uQuadtree, uFreePool, childIdx);
+				}
+				node.children[i] = 0u;
+			}
+			node.flags |= 2u; // Mark as leaf
+		}
 
+		uQuadtree.nodes[gID] = node;
+	} else if (push.passStage == 1u) {
+		// Stage 1: Active Leaf Gather & Page Allocation / Task Emission
+		bool isLeaf = ((node.flags & 2u) != 0u);
+		if (isLeaf) {
+			if (node.pageIndex == 0xFFFFFFFFu) {
 				uint pageIdx = allocatePage(uFreePool);
 				if (pageIdx != 0xFFFFFFFFu) {
-					childNode.pageIndex = pageIdx;
+					node.pageIndex = pageIdx;
+					uQuadtree.nodes[gID].pageIndex = pageIdx;
+
 					uint taskIdx = atomicAdd(uCreateTasks.taskCount, 1u);
 					if (taskIdx < 2048u) {
-						uCreateTasks.tasks[taskIdx].bounds = childNode.bounds;
-						uCreateTasks.tasks[taskIdx].nodeIndex = childIdx;
-						uCreateTasks.tasks[taskIdx].targetLOD = childNode.lod;
+						uCreateTasks.tasks[taskIdx].bounds = node.bounds;
+						uCreateTasks.tasks[taskIdx].nodeIndex = gID;
+						uCreateTasks.tasks[taskIdx].targetLOD = node.lod;
 						uCreateTasks.tasks[taskIdx].pageIndex = pageIdx;
 					}
-
-					uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
-					if (ptIdx < 4096u) {
-						uPageTable.entries[ptIdx].bounds = childNode.bounds;
-						uPageTable.entries[ptIdx].lod = childNode.lod;
-						uPageTable.entries[ptIdx].pageIndex = pageIdx;
-						uPageTable.entries[ptIdx].isVisible = 1u;
-					}
 				}
-				uQuadtree.nodes[childIdx] = childNode;
-			}
-		}
-
-		atomicMax(uCreateTasks.dispatchCmd.x, uCreateTasks.taskCount);
-		uCreateTasks.dispatchCmd.y = 1u;
-		uCreateTasks.dispatchCmd.z = 1u;
-	} else if (!isLeaf && shouldMerge) {
-		for (uint i = 0u; i < 4u; ++i) {
-			uint childIdx = node.children[i];
-			if (childIdx > 0u && childIdx < uQuadtree.nodeCount) {
-				freeNodeAndChildrenIterative(uQuadtree, uFreePool, childIdx);
-			}
-			node.children[i] = 0u;
-		}
-
-		node.flags |= 2u;
-		uint pageIdx = allocatePage(uFreePool);
-		if (pageIdx != 0xFFFFFFFFu) {
-			node.pageIndex = pageIdx;
-			uint taskIdx = atomicAdd(uCreateTasks.taskCount, 1u);
-			if (taskIdx < 2048u) {
-				uCreateTasks.tasks[taskIdx].bounds = node.bounds;
-				uCreateTasks.tasks[taskIdx].nodeIndex = gID;
-				uCreateTasks.tasks[taskIdx].targetLOD = node.lod;
-				uCreateTasks.tasks[taskIdx].pageIndex = pageIdx;
 			}
 
-			uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
-			if (ptIdx < 4096u) {
-				uPageTable.entries[ptIdx].bounds = node.bounds;
-				uPageTable.entries[ptIdx].lod = node.lod;
-				uPageTable.entries[ptIdx].pageIndex = pageIdx;
-				uPageTable.entries[ptIdx].isVisible = 1u;
+			if (node.pageIndex != 0xFFFFFFFFu) {
+				uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
+				if (ptIdx < 4096u) {
+					uPageTable.entries[ptIdx].bounds = node.bounds;
+					uPageTable.entries[ptIdx].lod = node.lod;
+					uPageTable.entries[ptIdx].pageIndex = node.pageIndex;
+					uPageTable.entries[ptIdx].isVisible = 1u;
+				}
 			}
-		}
 
-		atomicMax(uCreateTasks.dispatchCmd.x, uCreateTasks.taskCount);
-		uCreateTasks.dispatchCmd.y = 1u;
-		uCreateTasks.dispatchCmd.z = 1u;
-	} else if (isLeaf) {
-		uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
-		if (ptIdx < 4096u) {
-			uPageTable.entries[ptIdx].bounds = node.bounds;
-			uPageTable.entries[ptIdx].lod = node.lod;
-			uPageTable.entries[ptIdx].pageIndex = node.pageIndex;
-			uPageTable.entries[ptIdx].isVisible = 1u;
+			atomicMax(uCreateTasks.dispatchCmd.x, uCreateTasks.taskCount);
+			uCreateTasks.dispatchCmd.y = 1u;
+			uCreateTasks.dispatchCmd.z = 1u;
 		}
 	}
-
-	uQuadtree.nodes[gID] = node;
 }

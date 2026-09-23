@@ -88,9 +88,13 @@ void main() {
 		uint pageVertIdx = pageIndex * 121u + vertexIndex;
 		TerrainPageVertex pageVert = uVertexPages.vertices[pageVertIdx];
 		worldPos = pageVert.position.xyz;
+		height = worldPos.y;
+		vec2 flatXZ = worldPos.xz - uCameraPosition.xz;
+		float distSq = dot(flatXZ, flatXZ);
+		float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+		worldPos.y = height - dropOff;
 		normal = pageVert.normal.xyz;
 		lodColor = pageVert.color.rgb;
-		height = worldPos.y;
 		baseWorldXZ = worldPos.xz;
 	} else if (params.pageTableAddr != 0UL && meshletID < PageTableBuffer(params.pageTableAddr).pageTableCount) {
 		PageTableBuffer uPageTable = PageTableBuffer(params.pageTableAddr);
