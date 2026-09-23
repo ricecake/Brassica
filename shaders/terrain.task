@@ -1,12 +1,12 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
 #extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_ARB_gpu_shader_int64 : require
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
-// Matches TerrainNode's push_constant block layout exactly (this stage just doesn't need the
-// trailing clipmapIndex field terrain.mesh reads, which is fine -- each stage only needs to
-// declare the prefix it actually uses, not the whole shared range).
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
@@ -20,16 +20,31 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
-}
-
-params;
+	uint64_t pageTableAddr;
+	uint64_t vertexPagePoolAddr;
+} params;
 
 struct TaskPayload {
 	uint meshletIDs[32];
 	uint lodLevels[32];
+	uint pageIndices[32];
 };
 
 taskPayloadSharedEXT TaskPayload payload;
+
+struct PageTableEntry {
+	vec4 bounds;
+	uint lod;
+	uint pageIndex;
+	uint isVisible;
+	uint padding;
+};
+
+layout(buffer_reference, scalar) buffer PageTableBuffer {
+	uint pageTableCount;
+	uint padding[3];
+	PageTableEntry entries[];
+};
 
 // Check AABB against frustum plane
 bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
@@ -53,7 +68,6 @@ bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
 		float len = length(planes[i].xyz);
 		vec4  normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
 
-		// Conservative view buffer: 100 world units safety margin
 		if (dot(normPlane.xyz, pVertex) + normPlane.w < -100.0) {
 			return false;
 		}
@@ -75,8 +89,19 @@ void main() {
 
 	bool visible = false;
 	uint lodLevel = 0;
+	uint pageIndex = 0xFFFFFFFFu;
 
-	if (meshletID < params.gridParams.z) {
+	if (params.pageTableAddr != 0UL) {
+		PageTableBuffer uPageTable = PageTableBuffer(params.pageTableAddr);
+		if (meshletID < uPageTable.pageTableCount) {
+			PageTableEntry entry = uPageTable.entries[meshletID];
+			pageIndex = entry.pageIndex;
+			lodLevel = entry.lod;
+			vec3 minB = vec3(entry.bounds.x, -500.0, entry.bounds.y);
+			vec3 maxB = minB + vec3(entry.bounds.z, 2500.0, entry.bounds.w);
+			visible = (entry.isVisible != 0u) && isAABBVisible(minB, maxB, uViewProjMatrix);
+		}
+	} else if (meshletID < params.gridParams.z) {
 		uint meshletsPerRow = params.gridParams.y;
 		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
 		lodLevel = min(meshletID / totalPerLOD, params.gridParams.x - 1);
@@ -125,7 +150,6 @@ void main() {
 			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
 			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
 
-			// Cull the meshlet ONLY if its entire bounding box is inside the previous LOD's extent
 			if (insideX && insideZ) {
 				visible = false;
 			}
@@ -136,6 +160,7 @@ void main() {
 		uint index = atomicAdd(meshletCount, 1u);
 		payload.meshletIDs[index] = meshletID;
 		payload.lodLevels[index] = lodLevel;
+		payload.pageIndices[index] = pageIndex;
 	}
 	barrier();
 

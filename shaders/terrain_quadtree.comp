@@ -1,0 +1,263 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_ARB_gpu_shader_int64 : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct QuadtreeNode {
+	vec4 bounds;       // minX, minZ, sizeX, sizeZ
+	uint lod;
+	uint pageIndex;    // Page index in vertex SSBO (0xFFFFFFFF = invalid)
+	uint flags;        // bit 0: active, bit 1: leaf, bit 2: split
+	uint padding;
+	uvec4 children;    // Child node indices
+};
+
+struct PagePoolHeader {
+	uint freeCount;
+	uint capacity;
+	uint allocatedCount;
+	uint padding;
+};
+
+struct IndirectDispatch {
+	uint x;
+	uint y;
+	uint z;
+};
+
+struct NodeCreateTask {
+	vec4 bounds;
+	uint nodeIndex;
+	uint targetLOD;
+	uint pageIndex;
+	uint padding;
+};
+
+struct PageTableEntry {
+	vec4 bounds;
+	uint lod;
+	uint pageIndex;
+	uint isVisible;
+	uint padding;
+};
+
+layout(buffer_reference, scalar) buffer QuadtreeBuffer {
+	uint nodeCount;
+	uint maxNodes;
+	uint leafCount;
+	uint padding;
+	QuadtreeNode nodes[];
+};
+
+layout(buffer_reference, scalar) buffer FreePoolBuffer {
+	PagePoolHeader header;
+	uint freePages[];
+};
+
+layout(buffer_reference, scalar) buffer CreateTaskBuffer {
+	IndirectDispatch dispatchCmd;
+	uint taskCount;
+	NodeCreateTask tasks[];
+};
+
+layout(buffer_reference, scalar) buffer PageTableBuffer {
+	uint pageTableCount;
+	uint padding[3];
+	PageTableEntry entries[];
+};
+
+layout(push_constant) uniform QuadtreePushConstants {
+	uint64_t quadtreeAddr;
+	uint64_t freePoolAddr;
+	uint64_t createTasksAddr;
+	uint64_t pageTableAddr;
+	uint biomeTextureIndex;
+	uint minMaxTextureIndex;
+	uint lowResChunkTextureIndex;
+	float planetRadius;
+	uint maxTreeDepth;
+} push;
+
+uint allocatePage(FreePoolBuffer uFreePool) {
+	uint oldVal = atomicAdd(uFreePool.header.freeCount, 0xFFFFFFFFu);
+	if (oldVal > 0u && oldVal <= uFreePool.header.capacity) {
+		return uFreePool.freePages[oldVal - 1u];
+	} else {
+		atomicAdd(uFreePool.header.freeCount, 1u);
+		return 0xFFFFFFFFu;
+	}
+}
+
+void freePage(FreePoolBuffer uFreePool, uint pageIdx) {
+	if (pageIdx != 0xFFFFFFFFu) {
+		uint slot = atomicAdd(uFreePool.header.freeCount, 1u);
+		if (slot < uFreePool.header.capacity) {
+			uFreePool.freePages[slot] = pageIdx;
+			memoryBarrierBuffer();
+		}
+	}
+}
+
+void freeNodeAndChildrenIterative(QuadtreeBuffer uQuadtree, FreePoolBuffer uFreePool, uint startChildIdx) {
+	uint stack[64];
+	int stackPtr = 0;
+	stack[stackPtr++] = startChildIdx;
+
+	while (stackPtr > 0) {
+		uint nodeIdx = stack[--stackPtr];
+		if (nodeIdx == 0u || nodeIdx >= uQuadtree.nodeCount) continue;
+
+		uint oldFlags = atomicAnd(uQuadtree.nodes[nodeIdx].flags, ~1u);
+		if ((oldFlags & 1u) != 0u) {
+			uint pageIdx = uQuadtree.nodes[nodeIdx].pageIndex;
+			uQuadtree.nodes[nodeIdx].pageIndex = 0xFFFFFFFFu;
+			freePage(uFreePool, pageIdx);
+
+			if ((oldFlags & 2u) == 0u) {
+				for (uint i = 0u; i < 4u; ++i) {
+					uint childIdx = uQuadtree.nodes[nodeIdx].children[i];
+					if (childIdx > 0u && stackPtr < 64) {
+						stack[stackPtr++] = childIdx;
+					}
+				}
+			}
+		}
+	}
+}
+
+void main() {
+	uint gID = gl_GlobalInvocationID.x;
+
+	QuadtreeBuffer uQuadtree = QuadtreeBuffer(push.quadtreeAddr);
+	FreePoolBuffer uFreePool = FreePoolBuffer(push.freePoolAddr);
+	CreateTaskBuffer uCreateTasks = CreateTaskBuffer(push.createTasksAddr);
+	PageTableBuffer uPageTable = PageTableBuffer(push.pageTableAddr);
+
+	if (gID >= uQuadtree.nodeCount) {
+		return;
+	}
+
+	QuadtreeNode node = uQuadtree.nodes[gID];
+	if ((node.flags & 1u) == 0u) {
+		return; // Inactive node
+	}
+
+	vec2 centerXZ = node.bounds.xy + node.bounds.zw * 0.5;
+	float distToCam = length(centerXZ - uCameraPosition.xz);
+
+	float resChangeMeasure = 0.0;
+	if (push.lowResChunkTextureIndex > 0u) {
+		vec4 chunkSample = sampleTerrainBiome(push.lowResChunkTextureIndex, centerXZ, node.lod);
+		resChangeMeasure = chunkSample.b;
+	} else {
+		vec4 biomeSample = sampleTerrainBiome(push.biomeTextureIndex, centerXZ, node.lod);
+		resChangeMeasure = biomeSample.b;
+	}
+
+	float targetLODLimit = max(0.0, float(push.maxTreeDepth) - 3.0);
+	float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), targetLODLimit, float(push.maxTreeDepth));
+
+	bool shouldSplit = (float(node.lod) > desiredLOD) && (node.lod > 0u);
+	bool shouldMerge = (float(node.lod) <= desiredLOD);
+	bool isLeaf = ((node.flags & 2u) != 0u);
+
+	if (isLeaf && shouldSplit) {
+		freePage(uFreePool, node.pageIndex);
+		node.pageIndex = 0xFFFFFFFFu;
+		node.flags &= ~2u;
+
+		uint baseChildIdx = atomicAdd(uQuadtree.nodeCount, 4u);
+		for (uint i = 0u; i < 4u; ++i) {
+			uint childIdx = baseChildIdx + i;
+			node.children[i] = childIdx;
+
+			vec2 childSize = node.bounds.zw * 0.5;
+			vec2 childMin = node.bounds.xy + vec2(float(i & 1u), float(i >> 1u)) * childSize;
+
+			if (childIdx < uQuadtree.maxNodes) {
+				QuadtreeNode childNode;
+				childNode.bounds = vec4(childMin, childSize);
+				childNode.lod = node.lod - 1u;
+				childNode.pageIndex = 0xFFFFFFFFu;
+				childNode.flags = 3u;
+				childNode.padding = 0u;
+				childNode.children = uvec4(0u);
+
+				uint pageIdx = allocatePage(uFreePool);
+				if (pageIdx != 0xFFFFFFFFu) {
+					childNode.pageIndex = pageIdx;
+					uint taskIdx = atomicAdd(uCreateTasks.taskCount, 1u);
+					if (taskIdx < 2048u) {
+						uCreateTasks.tasks[taskIdx].bounds = childNode.bounds;
+						uCreateTasks.tasks[taskIdx].nodeIndex = childIdx;
+						uCreateTasks.tasks[taskIdx].targetLOD = childNode.lod;
+						uCreateTasks.tasks[taskIdx].pageIndex = pageIdx;
+					}
+
+					uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
+					if (ptIdx < 4096u) {
+						uPageTable.entries[ptIdx].bounds = childNode.bounds;
+						uPageTable.entries[ptIdx].lod = childNode.lod;
+						uPageTable.entries[ptIdx].pageIndex = pageIdx;
+						uPageTable.entries[ptIdx].isVisible = 1u;
+					}
+				}
+				uQuadtree.nodes[childIdx] = childNode;
+			}
+		}
+
+		atomicMax(uCreateTasks.dispatchCmd.x, uCreateTasks.taskCount);
+		uCreateTasks.dispatchCmd.y = 1u;
+		uCreateTasks.dispatchCmd.z = 1u;
+	} else if (!isLeaf && shouldMerge) {
+		for (uint i = 0u; i < 4u; ++i) {
+			uint childIdx = node.children[i];
+			if (childIdx > 0u && childIdx < uQuadtree.nodeCount) {
+				freeNodeAndChildrenIterative(uQuadtree, uFreePool, childIdx);
+			}
+			node.children[i] = 0u;
+		}
+
+		node.flags |= 2u;
+		uint pageIdx = allocatePage(uFreePool);
+		if (pageIdx != 0xFFFFFFFFu) {
+			node.pageIndex = pageIdx;
+			uint taskIdx = atomicAdd(uCreateTasks.taskCount, 1u);
+			if (taskIdx < 2048u) {
+				uCreateTasks.tasks[taskIdx].bounds = node.bounds;
+				uCreateTasks.tasks[taskIdx].nodeIndex = gID;
+				uCreateTasks.tasks[taskIdx].targetLOD = node.lod;
+				uCreateTasks.tasks[taskIdx].pageIndex = pageIdx;
+			}
+
+			uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
+			if (ptIdx < 4096u) {
+				uPageTable.entries[ptIdx].bounds = node.bounds;
+				uPageTable.entries[ptIdx].lod = node.lod;
+				uPageTable.entries[ptIdx].pageIndex = pageIdx;
+				uPageTable.entries[ptIdx].isVisible = 1u;
+			}
+		}
+
+		atomicMax(uCreateTasks.dispatchCmd.x, uCreateTasks.taskCount);
+		uCreateTasks.dispatchCmd.y = 1u;
+		uCreateTasks.dispatchCmd.z = 1u;
+	} else if (isLeaf) {
+		uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
+		if (ptIdx < 4096u) {
+			uPageTable.entries[ptIdx].bounds = node.bounds;
+			uPageTable.entries[ptIdx].lod = node.lod;
+			uPageTable.entries[ptIdx].pageIndex = node.pageIndex;
+			uPageTable.entries[ptIdx].isVisible = 1u;
+		}
+	}
+
+	uQuadtree.nodes[gID] = node;
+}
