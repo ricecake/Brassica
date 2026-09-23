@@ -68,7 +68,6 @@ shared uint meshletCount;
 
 void main() {
 	uint threadID = gl_LocalInvocationID.x;
-
 	if (threadID == 0) {
 		meshletCount = 0;
 	}

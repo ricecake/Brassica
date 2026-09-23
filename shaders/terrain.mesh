@@ -140,7 +140,7 @@ void main() {
 
 	lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
 	lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
-	lodColor = mix(lodColor, snow, smoothstep(900.0, 1000.0, height));
+	lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
 
 	// Underwater seafloor terrain coloring with depth and slope variations
 	if (height < 0.0) {

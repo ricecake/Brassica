@@ -63,6 +63,7 @@ float hash1(uint n) {
 }
 
 void main() {
+	return;
 	uint idx = gl_GlobalInvocationID.x;
 
 	if (idx >= uPush.maxParticles) {

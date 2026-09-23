@@ -7,6 +7,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "lygia/generative/psrdnoise.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
@@ -24,6 +25,36 @@ layout(push_constant) uniform PushConstants {
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
 } push;
+
+void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
+	p *= config.spatial_scale;
+
+	float continent_mask;
+	vec3 grad_continent_mask;
+	evaluate_soft_voronoi_pseudosphere2(p, 32, continent_mask, grad_continent_mask);
+
+// float psrdnoise(vec3 x, vec3 period, float alpha, out vec3 gradient)
+	vec3 grad_noise;
+	float warp = psrdnoise(p*continent_mask, vec3(0), 0.0);
+
+	float noise_height = dot_noise_fbm(p+warp, 4, 0.0, grad_noise);
+
+	vec3 grad_noise2;
+	float warp2 = psrdnoise(p/continent_mask, vec3(0), 10.0);
+	float noise_height2 = dot_noise_fbm(p*warp2, 4, 3.0, grad_noise2);
+
+	grad_noise += grad_noise2;
+	noise_height += noise_height2;
+
+	float final_height = noise_height * continent_mask;
+	vec3 final_grad = (grad_noise * continent_mask) + (noise_height * grad_continent_mask);
+
+	float height_amplitude = config.max_height - config.min_height;
+	vec3 scaled_grad = final_grad * height_amplitude * config.spatial_scale;
+
+	out_normal = normalize(vec3(-scaled_grad.x, 1.0, -scaled_grad.z));
+	out_height = remap(final_height, 0.0, 1.0, config.min_height, config.max_height);
+}
 
 void main() {
 	// 1. Remap the 16x16 local workgroup into 2x2 spatial quads
@@ -87,7 +118,7 @@ void main() {
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;
 	vec2 worldXZ = centerWorldPos + deltaWorld;
 
-	TerrainConfig con = TerrainConfig(0.000075, -100.0, 5000.0, 0.14, 0.5);
+	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
 	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
 
 	// Evaluate height ONCE per thread
@@ -98,8 +129,8 @@ void main() {
 	// float h = evaluate_terrain_analytical(p, 0.0, 0.75, con, normal, biome, land_mask);
 	float h = 0.0;
 	// evaluate_soft_voronoi(p, 10.0, 5, h, normal);
-	evaluate_soft_voronoi_pseudosphere(p, 100.0, 7, h, normal);
-
+	// evaluate_soft_voronoi_pseudosphere2(p, 32, h, normal);
+	eval_terrain(p, con, h, normal);
 // Calculate the normal using the hybrid swap/evaluation function
     float eps = max(0.25, texelSize);
     // vec3 normal = evaluate_hybrid_normal(p, h, eps, 0.0, 0.75, con);
