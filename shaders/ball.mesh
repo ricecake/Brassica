@@ -19,8 +19,6 @@ layout(location = 0) out vec3 vWorldPos[];
 layout(location = 1) out vec3 vNormal[];
 layout(location = 2) out vec4 vColor[];
 
-const float GOLDEN_ANGLE = 2.39996322972865332; // Golden angle in radians
-
 void main() {
     vec3 center = IN.positionAndScale.xyz;
     float radius = IN.positionAndScale.w;
@@ -37,7 +35,9 @@ void main() {
 
     uint tid = gl_LocalInvocationIndex;
 
-    // 1. Fibonacci sphere vertices
+    TerrainConfig con = TerrainConfig(0.0001, -50.0, 1000.0, 0.14, 0.5);
+
+    // 1. Sphere vertices with height displacement derived from terrain function
     for (uint i = tid; i < numVertices; i += 32u) {
         vec3 norm;
         if (i == 0u) {
@@ -50,7 +50,7 @@ void main() {
             uint k = idx % pointsPerRing;
 
             float phi = PI * float(r + 1u) / float(rings + 1u);
-            float theta = float(k) * (2.0 * PI / float(pointsPerRing)) + float(r) * GOLDEN_ANGLE;
+            float theta = float(k) * (2.0 * PI / float(pointsPerRing));
 
             float y = cos(phi);
             float rCyl = sin(phi);
@@ -60,15 +60,64 @@ void main() {
             norm = normalize(vec3(x, y, z));
         }
 
-        vec3 worldPos = center + norm * radius;
+        // Sample terrain height function for direction norm
+        vec3 p = norm * (1.0 / con.spatial_scale);
+        float biome = 0.0;
+        float landMask = 0.0;
+        float h = evaluate_terrain(p, 0.0, 0.75, con, biome, landMask);
+
+        float heightOffset = h * (radius * 0.0003);
+        vec3 worldPos = center + norm * (radius + heightOffset);
+
+        // Perturbed normal calculation using finite differences in tangent space
+        vec3 up = abs(norm.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
+        vec3 T = normalize(cross(up, norm));
+        vec3 B = cross(norm, T);
+
+        float deltaAngle = 0.01;
+        vec3 normT = normalize(norm + T * deltaAngle);
+        vec3 normB = normalize(norm + B * deltaAngle);
+
+        float unusedB, unusedM;
+        float hT = evaluate_terrain(normT * (1.0 / con.spatial_scale), 0.0, 0.75, con, unusedB, unusedM);
+        float hB = evaluate_terrain(normB * (1.0 / con.spatial_scale), 0.0, 0.75, con, unusedB, unusedM);
+
+        vec3 pos0 = norm * (radius + heightOffset);
+        vec3 posT = normT * (radius + hT * (radius * 0.0003));
+        vec3 posB = normB * (radius + hB * (radius * 0.0003));
+
+        vec3 outNormal = normalize(cross(posT - pos0, posB - pos0));
+
+        // Globe color palette derived from height/biome
+        vec3 globeColor;
+        if (h < 0.0) {
+            float t = clamp((h + 50.0) / 50.0, 0.0, 1.0);
+            vec3 deepOcean = vec3(0.02, 0.12, 0.40);
+            vec3 shallowOcean = vec3(0.08, 0.35, 0.55);
+            globeColor = mix(deepOcean, shallowOcean, t);
+        } else {
+            float t = clamp(h / 1000.0, 0.0, 1.0);
+            vec3 coast = vec3(0.76, 0.70, 0.50);
+            vec3 lowland = vec3(0.18, 0.48, 0.18);
+            vec3 highland = vec3(0.45, 0.38, 0.28);
+            vec3 snow = vec3(0.95, 0.95, 0.98);
+
+            if (t < 0.05) {
+                globeColor = mix(coast, lowland, t / 0.05);
+            } else if (t < 0.4) {
+                globeColor = mix(lowland, highland, (t - 0.05) / 0.35);
+            } else {
+                globeColor = mix(highland, snow, clamp((t - 0.4) / 0.5, 0.0, 1.0));
+            }
+        }
 
         float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
         worldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
 
         gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(worldPos, 1.0);
         vWorldPos[i] = worldPos;
-        vNormal[i] = norm;
-        vColor[i] = color;
+        vNormal[i] = outNormal;
+        vColor[i] = vec4(globeColor, color.a);
     }
 
     // 2. Triangles / Primitives
