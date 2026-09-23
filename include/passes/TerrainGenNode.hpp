@@ -12,6 +12,7 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
+#include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
@@ -173,6 +174,11 @@ namespace brassica {
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
 				vkCmd.dispatch(groupX, groupY, groupZ);
+
+				if (ServiceLocator::Instance().Has<TerrainClipmap>()) {
+					auto clipmap = ServiceLocator::Instance().Get<TerrainClipmap>();
+					clipmap->RecordReadbackCommand(vkCmd);
+				}
 			}
 
 			if (terrainAS) {

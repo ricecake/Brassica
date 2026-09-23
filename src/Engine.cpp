@@ -1269,6 +1269,7 @@ namespace brassica {
 			// live resource still occupies. See FRAME_GRAPH_MIGRATION_TODO.md for the full writeup;
 			// this was already the migration plan's own recommendation before shipping true.
 			backend.Execute(frameGraph, ctx, graphCmd, false);
+			terrainClipmap.SyncCPUHeightmap();
 		} catch (const std::exception& e) {
 			spdlog::error("Frame graph execution failed: {}", e.what());
 			frame.commandBuffer.end();

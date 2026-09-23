@@ -36,6 +36,32 @@ namespace brassica {
 		void SetState(const State& state) override { (void)state; }
 
 		virtual void Regenerate() = 0;
+
+		virtual bool GetHeightAtWorldPos(float worldX, float worldZ, float& outHeight) const {
+			(void)worldX;
+			(void)worldZ;
+			outHeight = 0.0f;
+			return false;
+		}
+
+		virtual float SampleHeight(float worldX, float worldZ) const {
+			(void)worldX;
+			(void)worldZ;
+			return 0.0f;
+		}
+
+		virtual bool ExportTerrainMapPNG(
+			const std::string& filepath,
+			glm::vec2          centerWorldPos,
+			float              chunkExtent,
+			uint32_t           resolution
+		) const {
+			(void)filepath;
+			(void)centerWorldPos;
+			(void)chunkExtent;
+			(void)resolution;
+			return false;
+		}
 	};
 
 } // namespace brassica

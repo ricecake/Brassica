@@ -160,6 +160,46 @@ namespace brassica::ui {
 				}
 			}
 
+			if (ImGui::TreeNode("Download Terrain Map")) {
+				ImGui::SliderFloat("Chunk Extent (m)##Map", &m_mapExtent, 256.0f, 8192.0f, "%.0f m");
+
+				const char* resOptions[] = {"512x512", "1024x1024", "2048x2048", "4096x4096"};
+				ImGui::Combo("Resolution##Map", &m_mapResolutionIndex, resOptions, IM_ARRAYSIZE(resOptions));
+
+				ImGui::InputText("Filename##Map", m_mapFilename, sizeof(m_mapFilename));
+
+				if (ImGui::Button("Download Terrain Map PNG##Map")) {
+					if (ServiceLocator::Instance().Has<ITerrainClipmap>()) {
+						auto      terrainClipmap = ServiceLocator::Instance().Get<ITerrainClipmap>();
+						glm::vec2 centerWorldPos(0.0f);
+						if (ServiceLocator::Instance().Has<CameraData>()) {
+							auto cam = ServiceLocator::Instance().Get<CameraData>();
+							centerWorldPos = glm::vec2(cam->position.x, cam->position.z);
+						}
+						constexpr uint32_t resolutions[] = {512, 1024, 2048, 4096};
+						uint32_t res = resolutions[std::clamp(m_mapResolutionIndex, 0, 3)];
+
+						bool ok = terrainClipmap->ExportTerrainMapPNG(
+							m_mapFilename,
+							centerWorldPos,
+							m_mapExtent,
+							res
+						);
+						if (ok) {
+							m_mapExportStatus = "Map saved to '" + std::string(m_mapFilename) + "'!";
+						} else {
+							m_mapExportStatus = "Failed to export terrain map PNG.";
+						}
+					}
+				}
+
+				if (!m_mapExportStatus.empty()) {
+					ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f), "%s", m_mapExportStatus.c_str());
+				}
+
+				ImGui::TreePop();
+			}
+
 			ImGui::Separator();
 
 			// Volumetric Lighting

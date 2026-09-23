@@ -197,3 +197,29 @@ TEST_CASE("Initial Camera Height and Raytrace AABB Bounds") {
 	CHECK(minB.y <= minH);
 	CHECK(maxBY >= maxH);
 }
+
+TEST_CASE("CPU Terrain SampleHeight and ExportTerrainMapPNG") {
+	brassica::TerrainClipmap clipmap;
+
+	// Query SampleHeight on CPU
+	float worldX = 120.0f;
+	float worldZ = -45.0f;
+	float h = clipmap.SampleHeight(worldX, worldZ);
+	float expectedH = brassica::TerrainClipmap::SampleTerrain(worldX, worldZ, 0.5f).r;
+	CHECK(doctest::Approx(h) == expectedH);
+
+	// Export Terrain Map PNG to temporary test file
+	std::string testPng = "test_terrain_map.png";
+	bool exported = clipmap.ExportTerrainMapPNG(testPng, glm::vec2(worldX, worldZ), 512.0f, 256);
+	CHECK(exported);
+
+	// Confirm file was created and is non-empty
+	std::ifstream file(testPng, std::ios::binary | std::ios::ate);
+	CHECK(file.is_open());
+	if (file.is_open()) {
+		std::streamsize fileSize = file.tellg();
+		CHECK(fileSize > 0);
+		file.close();
+		std::remove(testPng.c_str());
+	}
+}
