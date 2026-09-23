@@ -33,18 +33,40 @@ namespace brassica {
 		std::uint32_t visibilityStorageIdx{0};
 	};
 
+	struct QuadtreePushConstants {
+		std::uint32_t biomeTextureIndex{0};
+		std::uint32_t minMaxTextureIndex{0};
+		float         planetRadius{600000.0f};
+		std::uint32_t maxTreeDepth{10};
+	};
+
+	struct MeshletGenPushConstants {
+		std::uint32_t clipmapIndex{0};
+		std::uint32_t biomeIndex{0};
+		std::uint32_t minMaxIndex{0};
+		std::uint32_t visibilityIndex{0};
+	};
+
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {
 		using Resources = graph::Declares<
 			graph::Modify<TerrainClipmapTexture>,
 			graph::Modify<TerrainMinMaxTexture>,
 			graph::Modify<TerrainBiomeTexture>,
 			graph::Modify<TerrainTileVisibilityTexture>,
-			graph::Modify<TerrainTLAS>>;
+			graph::Modify<TerrainTLAS>,
+			graph::Create<TerrainLowResChunkTexture>,
+			graph::Create<TerrainQuadtreeBuffer>,
+			graph::Create<TerrainPageTableBuffer>,
+			graph::Create<TerrainVertexPageBuffer>,
+			graph::Create<TerrainNodeCreateBuffer>,
+			graph::Create<TerrainFreePagePoolBuffer>>;
 
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
 		graph::PhysicalResourceRegistry* physicalRegistry = nullptr;
 		ComputeShader                    genShader;
 		ComputeShader                    aabbShader;
+		ComputeShader                    quadtreeShader;
+		ComputeShader                    meshletGenShader;
 		TerrainAccelerationStructure*    terrainAS = nullptr;
 		TerrainGenPushConstants          push{};
 		glm::vec3                        cameraPos{0.0f};
@@ -56,6 +78,8 @@ namespace brassica {
 			physicalRegistry = services.physicalRegistry;
 			genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp");
 			aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp");
+			quadtreeShader.CompileComputeFromFile(services.device, "shaders/terrain_quadtree.comp");
+			meshletGenShader.CompileComputeFromFile(services.device, "shaders/terrain_meshlet_gen.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
@@ -64,11 +88,15 @@ namespace brassica {
 		void RegisterShaders(ShaderWatcher& watcher) {
 			watcher.RegisterShader(&genShader);
 			watcher.RegisterShader(&aabbShader);
+			watcher.RegisterShader(&quadtreeShader);
+			watcher.RegisterShader(&meshletGenShader);
 		}
 
 		void Destroy(vk::Device device) {
 			genShader.Destroy(device);
 			aabbShader.Destroy(device);
+			quadtreeShader.Destroy(device);
+			meshletGenShader.Destroy(device);
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
@@ -86,7 +114,7 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(5);
+			r.realizations.reserve(10);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainClipmapTexture>(),
@@ -120,6 +148,48 @@ namespace brassica {
 					.key = graph::IdOf<TerrainTLAS>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::AccelerationStructureDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainLowResChunkTexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = TerrainLowResChunkDesc(push.gridParams.x),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainQuadtreeBuffer>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::StorageBufferDesc(1024 * 64),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainPageTableBuffer>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::StorageBufferDesc(4096 * 32),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainVertexPageBuffer>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::StorageBufferDesc(2048 * 121 * 48),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainNodeCreateBuffer>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::StorageBufferDesc(2048 * 32),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainFreePagePoolBuffer>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::StorageBufferDesc(2048 * 4 + 16),
 				}
 			);
 			return r;
@@ -173,6 +243,82 @@ namespace brassica {
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
 				vkCmd.dispatch(groupX, groupY, groupZ);
+			}
+
+			// Quadtree Traversal & Leaf Splitting/Merging
+			{
+				QuadtreePushConstants qtPush{
+					.biomeTextureIndex = push.biomeStorageIdx,
+					.minMaxTextureIndex = push.minMaxStorageIdx,
+					.planetRadius = 600000.0f,
+					.maxTreeDepth = push.gridParams.x,
+				};
+				std::array<vk::PushConstantRange, 1> qtPushRanges{
+					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(QuadtreePushConstants)}
+				};
+				render::ComputePipelineRequest qtRequest{
+					.shader = &quadtreeShader,
+					.setLayouts = setLayouts,
+					.pushConstantRanges = qtPushRanges,
+				};
+				render::ResolvedPipeline qtResolved = pipelineLibrary->ResolveCached(qtRequest);
+				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+				if (qtResolved.pipeline) {
+					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, qtResolved.pipeline);
+					if (boundSets[0] && boundSets[1]) {
+						vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, qtResolved.layout, 0, boundSets, nullptr);
+					}
+					vkCmd.pushConstants(
+						qtResolved.layout,
+						vk::ShaderStageFlagBits::eCompute,
+						0,
+						sizeof(QuadtreePushConstants),
+						&qtPush
+					);
+					vkCmd.dispatch(16, 1, 1);
+				}
+			}
+
+			// Indirect Meshlet Vertex Generation
+			{
+				MeshletGenPushConstants mgPush{
+					.clipmapIndex = push.clipmapStorageIdx,
+					.biomeIndex = push.biomeStorageIdx,
+					.minMaxIndex = push.minMaxStorageIdx,
+					.visibilityIndex = push.visibilityStorageIdx,
+				};
+				std::array<vk::PushConstantRange, 1> mgPushRanges{
+					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(MeshletGenPushConstants)}
+				};
+				render::ComputePipelineRequest mgRequest{
+					.shader = &meshletGenShader,
+					.setLayouts = setLayouts,
+					.pushConstantRanges = mgPushRanges,
+				};
+				render::ResolvedPipeline mgResolved = pipelineLibrary->ResolveCached(mgRequest);
+				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+				if (mgResolved.pipeline) {
+					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, mgResolved.pipeline);
+					if (boundSets[0] && boundSets[1]) {
+						vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, mgResolved.layout, 0, boundSets, nullptr);
+					}
+					vkCmd.pushConstants(
+						mgResolved.layout,
+						vk::ShaderStageFlagBits::eCompute,
+						0,
+						sizeof(MeshletGenPushConstants),
+						&mgPush
+					);
+					if (physicalRegistry) {
+						if (auto createBuf = physicalRegistry->GetBuffer<TerrainNodeCreateBuffer>()) {
+							vkCmd.dispatchIndirect(createBuf->GetBuffer(), 0);
+						} else {
+							vkCmd.dispatch(1, 1, 1);
+						}
+					} else {
+						vkCmd.dispatch(1, 1, 1);
+					}
+				}
 			}
 
 			if (terrainAS) {

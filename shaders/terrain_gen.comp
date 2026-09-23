@@ -26,7 +26,7 @@ layout(push_constant) uniform PushConstants {
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
 } push;
 
-void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
+void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal, out vec3 out_grad) {
 	p *= config.spatial_scale;
 
 	float continent_mask;
@@ -54,6 +54,7 @@ void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 o
 
 	out_normal = normalize(vec3(-scaled_grad.x, 1.0, -scaled_grad.z));
 	out_height = remap(final_height, 0.0, 1.0, config.min_height, config.max_height);
+	out_grad = scaled_grad;
 }
 
 void main() {
@@ -130,16 +131,23 @@ void main() {
 	float h = 0.0;
 	// evaluate_soft_voronoi(p, 10.0, 5, h, normal);
 	// evaluate_soft_voronoi_pseudosphere2(p, 32, h, normal);
-	eval_terrain(p, con, h, normal);
-// Calculate the normal using the hybrid swap/evaluation function
-    float eps = max(0.25, texelSize);
-    // vec3 normal = evaluate_hybrid_normal(p, h, eps, 0.0, 0.75, con);
-	// vec3 normal = evaluate_terrain_normal(p, 0.0, 0.75, eps, con);
+	vec3 grad;
+	eval_terrain(p, con, h, normal, grad);
 
-	// 3. Quad Swap Differencing
+	// 3. Quad Swap Differencing & neighboring texel finite differences
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
 	float h_swap_y = subgroupQuadSwapVertical(h);
 	float h_swap_diag = subgroupQuadSwapDiagonal(h);
+
+	float dh_dx = abs(h - h_swap_x);
+	float dh_dz = abs(h - h_swap_y);
+	float local_finite_diff = max(dh_dx, dh_dz);
+
+	// Calculate required change in resolution measure using noise derivatives and neighboring texel finite differences
+	float noise_grad_magnitude = length(grad.xz);
+	float estimated_height_error = noise_grad_magnitude * texelSize * 0.5 + local_finite_diff;
+	float target_tolerance = 1.0; // 1 meter tolerance
+	float res_change_measure = log2(max(1.0, estimated_height_error / target_tolerance));
 
 	// Only run the store logic if this specific thread was actually dirty
 	if (is_dirty) {
@@ -163,12 +171,11 @@ void main() {
 		// True variance
 		float variance = max(0.0, mean_h2 - (mean_h * mean_h));
 
-
 		ivec3 storeCoord = ivec3(globalId.xy, lod);
 
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(cluster_min, cluster_max, quad_min, quad_max));
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, 1.0, land_mask));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, res_change_measure, land_mask));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
 	}
 }

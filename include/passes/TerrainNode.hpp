@@ -55,7 +55,9 @@ namespace brassica {
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>>;
+			graph::Read<TerrainTileVisibilityTexture>,
+			graph::Read<TerrainPageTableBuffer>,
+			graph::Read<TerrainVertexPageBuffer>>;
 
 		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
 		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing

@@ -1,0 +1,89 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
+
+struct NodeCreateTask {
+	vec4 bounds;    // minX, minZ, sizeX, sizeZ
+	uint nodeIndex;
+	uint targetLOD;
+	uint pageIndex; // Allocated page slot in SSBO
+	uint padding;
+};
+
+struct TerrainPageVertex {
+	vec4 position; // xyz = worldPos, w = lod
+	vec4 normal;   // xyz = normal, w = variance
+	vec4 color;    // rgb = albedo, a = 1.0
+};
+
+layout(std430, set = 0, binding = 4) readonly buffer CreateTaskBuffer {
+	uint dispatchX;
+	uint dispatchY;
+	uint dispatchZ;
+	uint taskCount;
+	NodeCreateTask tasks[];
+} uCreateTasks;
+
+layout(std430, set = 0, binding = 6) buffer VertexPagePoolBuffer {
+	TerrainPageVertex vertices[];
+} uVertexPages;
+
+layout(push_constant) uniform MeshletGenPushConstants {
+	uint clipmapIndex;
+	uint biomeIndex;
+	uint minMaxIndex;
+	uint visibilityIndex;
+} push;
+
+void main() {
+	uint taskIdx = gl_WorkGroupID.x;
+	if (taskIdx >= uCreateTasks.taskCount) {
+		return;
+	}
+
+	NodeCreateTask task = uCreateTasks.tasks[taskIdx];
+	uint pageIdx = task.pageIndex;
+	if (pageIdx == 0xFFFFFFFFu) {
+		return;
+	}
+
+	uint lx = gl_LocalInvocationID.x;
+	uint ly = gl_LocalInvocationID.y;
+	uint localVertIdx = ly * 11u + lx;
+	uint globalVertIdx = pageIdx * 121u + localVertIdx;
+
+	vec2 localNorm = vec2(float(lx) / 10.0, float(ly) / 10.0);
+	vec2 worldXZ = task.bounds.xy + localNorm * task.bounds.zw;
+
+	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
+	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
+
+	float height = 0.0;
+	vec3 normal = vec3(0.0, 1.0, 0.0);
+	vec3 grad = vec3(0.0);
+	eval_terrain(p, con, height, normal, grad);
+
+	vec2 flatXZ = worldXZ - uCameraPosition.xz;
+	float distSq = dot(flatXZ, flatXZ);
+	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+
+	vec3 finalWorldPos = vec3(worldXZ.x, height - dropOff, worldXZ.y);
+
+	vec3 lodColor = vec3(0.2, 0.6, 0.2);
+	vec3 sand = vec3(0.9, 0.8, 0.5);
+	vec3 snow = vec3(0.9, 0.95, 1.0);
+	vec3 rock = vec3(0.3, 0.22, 0.2);
+
+	lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
+	lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
+	lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
+
+	uVertexPages.vertices[globalVertIdx].position = vec4(finalWorldPos, float(task.targetLOD));
+	uVertexPages.vertices[globalVertIdx].normal = vec4(normal, 0.0);
+	uVertexPages.vertices[globalVertIdx].color = vec4(lodColor, 1.0);
+}

@@ -1,0 +1,198 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct QuadtreeNode {
+	vec4 bounds;       // minX, minZ, sizeX, sizeZ
+	uint lod;
+	uint pageIndex;    // Page index in vertex SSBO (0xFFFFFFFF = invalid)
+	uint flags;        // bit 0: active, bit 1: leaf, bit 2: split
+	uint children[4];  // Child node indices
+};
+
+struct PagePoolHeader {
+	uint freeCount;
+	uint capacity;
+	uint allocatedCount;
+	uint padding;
+};
+
+struct IndirectDispatch {
+	uint x;
+	uint y;
+	uint z;
+};
+
+struct NodeCreateTask {
+	vec4 bounds;
+	uint nodeIndex;
+	uint targetLOD;
+	uint pageIndex;
+	uint padding;
+};
+
+struct PageTableEntry {
+	vec4 bounds;
+	uint lod;
+	uint pageIndex;
+	uint isVisible;
+	uint padding;
+};
+
+layout(std430, set = 0, binding = 2) buffer QuadtreeBuffer {
+	uint nodeCount;
+	uint maxNodes;
+	uint leafCount;
+	uint padding;
+	QuadtreeNode nodes[];
+} uQuadtree;
+
+layout(std430, set = 0, binding = 3) buffer FreePoolBuffer {
+	PagePoolHeader header;
+	uint freePages[];
+} uFreePool;
+
+layout(std430, set = 0, binding = 4) buffer CreateTaskBuffer {
+	IndirectDispatch dispatchCmd;
+	uint taskCount;
+	NodeCreateTask tasks[];
+} uCreateTasks;
+
+layout(std430, set = 0, binding = 5) buffer PageTableBuffer {
+	uint pageTableCount;
+	uint padding[3];
+	PageTableEntry entries[];
+} uPageTable;
+
+layout(push_constant) uniform QuadtreePushConstants {
+	uint biomeTextureIndex;
+	uint minMaxTextureIndex;
+	float planetRadius;
+	uint maxTreeDepth;
+} push;
+
+uint allocatePage() {
+	int remaining = int(atomicSub(uFreePool.header.freeCount, 1u));
+	if (remaining > 0 && remaining <= int(uFreePool.header.capacity)) {
+		return uFreePool.freePages[remaining - 1];
+	} else {
+		atomicAdd(uFreePool.header.freeCount, 1u);
+		return 0xFFFFFFFFu;
+	}
+}
+
+void freePage(uint pageIdx) {
+	if (pageIdx != 0xFFFFFFFFu) {
+		uint slot = atomicAdd(uFreePool.header.freeCount, 1u);
+		if (slot < uFreePool.header.capacity) {
+			uFreePool.freePages[slot] = pageIdx;
+		}
+	}
+}
+
+void main() {
+	uint gID = gl_GlobalInvocationID.x;
+	if (gID >= uQuadtree.nodeCount) {
+		return;
+	}
+
+	QuadtreeNode node = uQuadtree.nodes[gID];
+	if ((node.flags & 1u) == 0u) {
+		return; // Inactive node
+	}
+
+	vec2 centerXZ = node.bounds.xy + node.bounds.zw * 0.5;
+	float distToCam = length(centerXZ - uCameraPosition.xz);
+
+	// Sample low-res terrain biome/variance/resolution change measure
+	vec4 biomeSample = sampleTerrainBiome(push.biomeTextureIndex, centerXZ, node.lod, 1088u, uvec4(0), uvec4(0));
+	float resChangeMeasure = biomeSample.b;
+
+	// Desired LOD calculation based on distance and intrinsic complexity
+	float desiredLOD = clamp(floor(log2(max(1.0, distToCam / 100.0)) - resChangeMeasure), 0.0, float(push.maxTreeDepth));
+
+	bool shouldSplit = (float(node.lod) > desiredLOD) && (node.lod > 0u);
+	bool shouldMerge = (float(node.lod) <= desiredLOD);
+	bool isLeaf = ((node.flags & 2u) != 0u);
+
+	if (isLeaf && shouldSplit) {
+		// Traverse down / split leaf node: free existing coarse page and allocate high-res pages for tasks
+		freePage(node.pageIndex);
+		node.pageIndex = 0xFFFFFFFFu;
+		node.flags &= ~2u; // Clear leaf flag
+
+		uint baseChildIdx = atomicAdd(uQuadtree.nodeCount, 4u);
+		for (uint i = 0u; i < 4u; ++i) {
+			uint childIdx = baseChildIdx + i;
+			node.children[i] = childIdx;
+
+			vec2 childSize = node.bounds.zw * 0.5;
+			vec2 childMin = node.bounds.xy + vec2(float(i & 1u), float(i >> 1u)) * childSize;
+
+			if (childIdx < uQuadtree.maxNodes) {
+				QuadtreeNode childNode;
+				childNode.bounds = vec4(childMin, childSize);
+				childNode.lod = node.lod - 1u;
+				childNode.pageIndex = 0xFFFFFFFFu;
+				childNode.flags = 3u; // active + leaf
+				childNode.children = uvec4(0u, 0u, 0u, 0u);
+
+				uint pageIdx = allocatePage();
+				if (pageIdx != 0xFFFFFFFFu) {
+					childNode.pageIndex = pageIdx;
+					uint taskIdx = atomicAdd(uCreateTasks.taskCount, 1u);
+					uCreateTasks.tasks[taskIdx].bounds = childNode.bounds;
+					uCreateTasks.tasks[taskIdx].nodeIndex = childIdx;
+					uCreateTasks.tasks[taskIdx].targetLOD = childNode.lod;
+					uCreateTasks.tasks[taskIdx].pageIndex = pageIdx;
+				}
+				uQuadtree.nodes[childIdx] = childNode;
+			}
+		}
+
+		// Update indirect compute dispatch command
+		atomicMax(uCreateTasks.dispatchCmd.x, (uCreateTasks.taskCount + 63u) / 64u);
+		uCreateTasks.dispatchCmd.y = 1u;
+		uCreateTasks.dispatchCmd.z = 1u;
+	} else if (!isLeaf && shouldMerge) {
+		// Merge child nodes back into parent leaf node: free child pages and reallocate parent page
+		for (uint i = 0u; i < 4u; ++i) {
+			uint childIdx = node.children[i];
+			if (childIdx > 0u && childIdx < uQuadtree.nodeCount) {
+				freePage(uQuadtree.nodes[childIdx].pageIndex);
+				uQuadtree.nodes[childIdx].pageIndex = 0xFFFFFFFFu;
+				uQuadtree.nodes[childIdx].flags &= ~1u; // Deactivate child
+			}
+			node.children[i] = 0u;
+		}
+
+		node.flags |= 2u; // Set leaf flag
+		uint pageIdx = allocatePage();
+		if (pageIdx != 0xFFFFFFFFu) {
+			node.pageIndex = pageIdx;
+			uint taskIdx = atomicAdd(uCreateTasks.taskCount, 1u);
+			uCreateTasks.tasks[taskIdx].bounds = node.bounds;
+			uCreateTasks.tasks[taskIdx].nodeIndex = gID;
+			uCreateTasks.tasks[taskIdx].targetLOD = node.lod;
+			uCreateTasks.tasks[taskIdx].pageIndex = pageIdx;
+		}
+
+		atomicMax(uCreateTasks.dispatchCmd.x, (uCreateTasks.taskCount + 63u) / 64u);
+		uCreateTasks.dispatchCmd.y = 1u;
+		uCreateTasks.dispatchCmd.z = 1u;
+	} else if (isLeaf) {
+		// Active leaf node: add to page table for rendering
+		uint ptIdx = atomicAdd(uPageTable.pageTableCount, 1u);
+		uPageTable.entries[ptIdx].bounds = node.bounds;
+		uPageTable.entries[ptIdx].lod = node.lod;
+		uPageTable.entries[ptIdx].pageIndex = node.pageIndex;
+		uPageTable.entries[ptIdx].isVisible = 1u;
+	}
+
+	uQuadtree.nodes[gID] = node;
+}
