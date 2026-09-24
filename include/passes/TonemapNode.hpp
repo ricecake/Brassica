@@ -1,22 +1,43 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
 #include <glm/glm.hpp>
 
+#include "VulkanCompat.hpp"
+
+#ifndef BRASSICA_HAS_VULKAN
+	#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
+		#define BRASSICA_HAS_VULKAN 1
+	#else
+		#define BRASSICA_HAS_VULKAN 0
+	#endif
+#endif
+
+#if BRASSICA_HAS_VULKAN
+	#include "graph/PhysicalResource.hpp"
+	#include "render/PipelineLibrary.hpp"
+	#include "Shader.hpp"
+	#include "ShaderWatcher.hpp"
+#else
+namespace brassica {
+	class ShaderWatcher;
+
+	namespace render {
+		class PipelineLibrary;
+	} // namespace render
+} // namespace brassica
+#endif
+
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
-#include "graph/PhysicalResource.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
-#include "render/PipelineLibrary.hpp"
-#include "Shader.hpp"
-#include "ShaderWatcher.hpp"
 #include "types/AutoExposureData.hpp"
 #include "types/TonemapPushConstants.hpp"
-#include "VulkanCompat.hpp"
 
 namespace brassica {
 
@@ -77,22 +98,26 @@ namespace brassica {
 
 		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
 
+#if BRASSICA_HAS_VULKAN
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 		};
 
+		ComputeShader  downsampleShader;
+		ComputeShader  ltmFuseShader;
+		VertexShader   vertShader;
+		FragmentShader fragShader;
+		vk::Format     swapchainFormat = vk::Format::eUndefined;
+#endif
+
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-		ComputeShader            downsampleShader;
-		ComputeShader            ltmFuseShader;
-		VertexShader             vertShader;
-		FragmentShader           fragShader;
-		vk::Format               swapchainFormat = vk::Format::eUndefined;
 		bool                     initializedBufferParams = false;
 		TonemapPushConstants     push{};
 		DownsamplePushConstants  downPush{};
 		LtmFusePushConstants     fusePush{};
 
 		void Init(const render::NodeServices& services) {
+#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			swapchainFormat = services.swapchainFormat;
 			downsampleShader.CompileComputeFromFile(services.device, "shaders/effects/bloom_downsample.comp");
@@ -102,28 +127,40 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+#else
+			(void)services;
+#endif
 
 			s_exposureData.layers[1].targetLuminance = 0.5f;
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
+#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&downsampleShader);
 			watcher.RegisterShader(&ltmFuseShader);
 			watcher.RegisterShader(&vertShader);
 			watcher.RegisterShader(&fragShader);
+#else
+			(void)watcher;
+#endif
 		}
 
 		void Destroy(vk::Device device) {
+#if BRASSICA_HAS_VULKAN
 			downsampleShader.Destroy(device);
 			ltmFuseShader.Destroy(device);
 			vertShader.Destroy(device);
 			fragShader.Destroy(device);
+#else
+			(void)device;
+#endif
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& /*p*/) { push = s_tonemapPush; }
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<HdrColor>(),
@@ -149,7 +186,7 @@ namespace brassica {
 				}
 			);
 
-			auto addStorageDesc = [&](graph::ResourceKeyId key, std::uint32_t w, std::uint32_t h) {
+			auto addStorageDesc = [&](graph::ResourceId key, std::uint32_t w, std::uint32_t h) {
 				r.realizations.push_back(
 					graph::ResourceRealization{
 						.key = key,
@@ -195,10 +232,97 @@ namespace brassica {
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
 				}
 			);
+#else
+			r.realizations.push_back(graph::ResourceRealization{
+				.key = graph::IdOf<HdrColor>(),
+				.access = graph::AccessKind::Read,
+				.desc = graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Image2D,
+					.width = ctx.width,
+					.height = ctx.height,
+					.formatCode = 97, // eR16G16B16A16Sfloat
+				},
+			});
+			r.realizations.push_back(graph::ResourceRealization{
+				.key = graph::IdOf<GBufferDepth>(),
+				.access = graph::AccessKind::Read,
+				.desc = graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Image2D,
+					.width = ctx.width,
+					.height = ctx.height,
+					.formatCode = 126, // eD32Sfloat
+				},
+			});
+			r.realizations.push_back(graph::ResourceRealization{
+				.key = graph::IdOf<AutoExposureBuffer>(),
+				.access = graph::AccessKind::ReadWrite,
+				.desc = graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Buffer,
+					.byteSize = sizeof(ExposureDataHost),
+				},
+			});
+
+			auto addStorageDesc = [&](graph::ResourceId key, std::uint32_t w, std::uint32_t h) {
+				r.realizations.push_back(graph::ResourceRealization{
+					.key = key,
+					.access = graph::AccessKind::Write,
+					.desc = graph::ResourceDesc{
+						.kind = graph::ResourceDesc::Kind::Image2D,
+						.width = w,
+						.height = h,
+						.formatCode = 97, // eR16G16B16A16Sfloat
+					},
+				});
+			};
+
+			std::uint32_t w = ctx.width / 2;
+			std::uint32_t h = ctx.height / 2;
+
+			addStorageDesc(graph::IdOf<BloomTextureMip0>(), std::max(1u, w), std::max(1u, h));
+			addStorageDesc(graph::IdOf<BloomTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
+			addStorageDesc(graph::IdOf<BloomTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
+			addStorageDesc(graph::IdOf<BloomTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
+			addStorageDesc(graph::IdOf<BloomTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
+
+			addStorageDesc(graph::IdOf<LtmExpTextureMip0>(), std::max(1u, w), std::max(1u, h));
+			addStorageDesc(graph::IdOf<LtmExpTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
+			addStorageDesc(graph::IdOf<LtmExpTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
+			addStorageDesc(graph::IdOf<LtmExpTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
+			addStorageDesc(graph::IdOf<LtmExpTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
+
+			addStorageDesc(graph::IdOf<LtmWgtTextureMip0>(), std::max(1u, w), std::max(1u, h));
+			addStorageDesc(graph::IdOf<LtmWgtTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
+			addStorageDesc(graph::IdOf<LtmWgtTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
+			addStorageDesc(graph::IdOf<LtmWgtTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
+			addStorageDesc(graph::IdOf<LtmWgtTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
+
+			r.realizations.push_back(graph::ResourceRealization{
+				.key = graph::IdOf<LtmFusedTexture>(),
+				.access = graph::AccessKind::Write,
+				.desc = graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Image2D,
+					.width = std::max(1u, w),
+					.height = std::max(1u, h),
+					.formatCode = 97, // eR16G16B16A16Sfloat
+				},
+			});
+
+			r.realizations.push_back(graph::ResourceRealization{
+				.key = graph::IdOf<Swapchain>(),
+				.access = graph::AccessKind::ReadWrite,
+				.desc = graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Image2D,
+					.width = ctx.width,
+					.height = ctx.height,
+					.formatCode = 44, // eB8G8R8A8Unorm
+				},
+			});
+#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+#if BRASSICA_HAS_VULKAN
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			auto aeBuffer = ctx.GetBuffer<AutoExposureBuffer>();
@@ -375,6 +499,9 @@ namespace brassica {
 			);
 
 			vkCmd.draw(3, 1, 0, 0);
+#else
+			(void)ctx;
+#endif
 		}
 	};
 

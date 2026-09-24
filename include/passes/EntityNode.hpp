@@ -21,10 +21,10 @@
 	#include "ShaderWatcher.hpp"
 #else
 namespace brassica {
-	class ShaderWatcher {};
+	class ShaderWatcher;
 
 	namespace render {
-		class PipelineLibrary {};
+		class PipelineLibrary;
 	} // namespace render
 } // namespace brassica
 #endif
