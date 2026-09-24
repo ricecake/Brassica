@@ -89,8 +89,14 @@ jobs:
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
           choco install vulkan-sdk -y
+          $vulkanDir = (Get-ChildItem "C:\VulkanSDK" -Directory | Select-Object -First 1).FullName
+          if ($vulkanDir) {
+            echo "VULKAN_SDK=$vulkanDir" >> $env:GITHUB_ENV
+            echo "$vulkanDir\Bin" >> $env:GITHUB_PATH
+          }
 
       - name: Sync shaderc dependencies
         shell: bash
@@ -142,7 +148,7 @@ jobs:
         run: |
           cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config ${{ matrix.build_type }} --parallel 2
 
-          if [[ "${{ steps.filter.outputs.core }}" == "true" || "${{ steps.filter.outputs.tests }}" == "true" \vert{}\vert{} "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ steps.filter.outputs.core }}" == "true" || "${{ steps.filter.outputs.tests }}" == "true" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "Building tests..."
             cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config ${{ matrix.build_type }} --target tests --parallel 2
           fi
@@ -185,11 +191,11 @@ jobs:
           $binDir = Join-Path$buildDir "bin"
 
           if (Test-Path $binDir) {
-            Get-ChildItem -Path $binDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } \vert{} Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+            Get-ChildItem -Path $binDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
           } elseif (Test-Path $releaseDir) {
-            Get-ChildItem -Path $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } \vert{} Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+            Get-ChildItem -Path $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
           } else {
-            Get-ChildItem -Path $buildDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } \vert{} Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+            Get-ChildItem -Path $buildDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
           }
 
           if (Test-Path "${{ steps.strings.outputs.workspace-dir }}/shaders") {
