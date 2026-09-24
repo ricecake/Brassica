@@ -1,0 +1,68 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+#include "common.glsl"
+#include "bindless.glsl"
+
+layout(push_constant) uniform PushConstants {
+    uint uStorageImageIdx;
+    uint uWidth;
+    uint uHeight;
+    float uPlanetRadius;
+};
+
+vec3 getTerrainMapColor(float h, vec3 normal) {
+    vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
+    float hillshade = clamp(dot(normal, lightDir), 0.2, 1.0);
+
+    vec3 col;
+    if (h < 0.0) {
+        float bathy = clamp(-h / 1000.0, 0.0, 1.0);
+        col = mix(vec3(0.12, 0.45, 0.85), vec3(0.02, 0.10, 0.35), bathy);
+    } else {
+        float alt = h / 2500.0;
+        if (alt < 0.1) {
+            col = mix(vec3(0.18, 0.52, 0.22), vec3(0.35, 0.65, 0.25), alt / 0.1);
+        } else if (alt < 0.4) {
+            col = mix(vec3(0.35, 0.65, 0.25), vec3(0.75, 0.70, 0.40), (alt - 0.1) / 0.3);
+        } else if (alt < 0.8) {
+            col = mix(vec3(0.75, 0.70, 0.40), vec3(0.55, 0.45, 0.35), (alt - 0.4) / 0.4);
+        } else {
+            col = mix(vec3(0.55, 0.45, 0.35), vec3(0.95, 0.95, 0.98), clamp((alt - 0.8) / 0.4, 0.0, 1.0));
+        }
+        col *= hillshade;
+    }
+    return col;
+}
+
+void main() {
+    uvec2 pixelPos = gl_GlobalInvocationID.xy;
+    if (pixelPos.x >= uWidth || pixelPos.y >= uHeight) {
+        return;
+    }
+
+    float pi = 3.14159265358979323846;
+    float u = (float(pixelPos.x) + 0.5) / float(uWidth);
+    float v = (float(pixelPos.y) + 0.5) / float(uHeight);
+
+    float worldX = (u - 0.5) * (2.0 * pi * uPlanetRadius);
+    float worldZ = (0.5 - v) * (pi * uPlanetRadius);
+
+    vec3 p = vec3(worldX, 0.0, worldZ);
+    float eps = 10.0; // 10m finite difference
+
+    TerrainConfig cfg = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
+    float b, m;
+
+    float h0 = evaluate_terrain(p, 0.0, 0.75, cfg, b, m);
+    float hX = evaluate_terrain(p + vec3(eps, 0.0, 0.0), 0.0, 0.75, cfg, b, m);
+    float hZ = evaluate_terrain(p + vec3(0.0, 0.0, eps), 0.0, 0.75, cfg, b, m);
+
+    vec3 normal = normalize(vec3(-(hX - h0) / eps, 1.0, -(hZ - h0) / eps));
+
+    vec3 color = getTerrainMapColor(h0, normal);
+
+    imageStore(uImagesRGBA32F[nonuniformEXT(uStorageImageIdx)], ivec2(pixelPos), vec4(color, 1.0));
+}

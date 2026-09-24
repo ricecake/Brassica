@@ -33,6 +33,18 @@ namespace brassica {
 			.default_value(std::vector<int>{})
 			.scan<'i', int>()
 			.nargs(0, 1);
+
+		m_parser.add_argument("--render-terrain-map")
+			.help("Generate an image of the terrain data and save to PNG file")
+			.default_value(std::string(""))
+			.implicit_value(std::string("terrain_map.png"))
+			.nargs(0, 1);
+
+		m_parser.add_argument("--export-terrain-map")
+			.help("Alias for --render-terrain-map")
+			.default_value(std::string(""))
+			.implicit_value(std::string("terrain_map.png"))
+			.nargs(0, 1);
 	}
 
 	void ArgparseManager::Initialize() {
@@ -108,6 +120,28 @@ namespace brassica {
 		if (!m_argsParsed)
 			return "Sandbox";
 		return m_parser.get<std::string>("--app");
+	}
+
+	bool ArgparseManager::GetRenderTerrainMap() const {
+		if (!m_argsParsed)
+			return false;
+		return m_parser.is_used("--render-terrain-map") || m_parser.is_used("--export-terrain-map");
+	}
+
+	std::string ArgparseManager::GetTerrainMapPath() const {
+		if (!m_argsParsed)
+			return "terrain_map.png";
+		if (m_parser.is_used("--render-terrain-map")) {
+			std::string path = m_parser.get<std::string>("--render-terrain-map");
+			if (!path.empty())
+				return path;
+		}
+		if (m_parser.is_used("--export-terrain-map")) {
+			std::string path = m_parser.get<std::string>("--export-terrain-map");
+			if (!path.empty())
+				return path;
+		}
+		return "terrain_map.png";
 	}
 
 } // namespace brassica

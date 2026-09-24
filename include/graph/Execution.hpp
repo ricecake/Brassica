@@ -8,6 +8,10 @@
 
 #include "graph/ResourceKey.hpp"
 
+#ifdef MemoryBarrier
+#undef MemoryBarrier
+#endif
+
 // This is the entire Vulkan seam for the graph skeleton. Nothing in this file, or anything
 // it includes, may depend on vulkan/vulkan.hpp, VMA, or external/FrameGraph. When a real
 // backend lands, this is the only header whose stubs get replaced -- everything else in

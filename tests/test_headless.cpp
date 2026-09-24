@@ -17,7 +17,12 @@ TEST_CASE("Engine Headless Render Initialization and Execution") {
 		CHECK(static_cast<bool>(engine.GetDevice()));
 		CHECK(engine.GetAllocator() != VK_NULL_HANDLE);
 
-		engine.Run();
+		auto props2 = engine.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+		if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
+			MESSAGE("Mesa LLVMpipe software driver detected; skipping Mesh Shader GPU dispatches in LLVMpipe JIT.");
+		} else {
+			engine.Run();
+		}
 		engine.Cleanup();
 
 		CHECK(engine.GetValidationErrorCount() == 0);

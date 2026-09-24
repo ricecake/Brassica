@@ -31,6 +31,7 @@
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "ServiceLocator.hpp"
+#include "terrain/TerrainMapExporter.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "ui/QuickSettingsWidget.hpp"
@@ -1089,19 +1090,19 @@ TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") 
 TEST_CASE("CameraData default state and mode cycling") {
 	brassica::CameraData cam;
 
-	CHECK(cam.mode == brassica::CameraMode::Instant);
+	CHECK(cam.mode == brassica::CameraMode::Accelerated);
 	CHECK(cam.speed == doctest::Approx(10.0f));
 	CHECK(cam.baseFov == doctest::Approx(1.2f));
 	CHECK(cam.fov == doctest::Approx(1.2f));
 	CHECK(cam.currentSpeed == doctest::Approx(0.0f));
-	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(10.0f));
-
-	cam.CycleMode();
-	CHECK(cam.mode == brassica::CameraMode::Accelerated);
 	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(0.0f));
 
 	cam.CycleMode();
 	CHECK(cam.mode == brassica::CameraMode::Instant);
+	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(10.0f));
+
+	cam.CycleMode();
+	CHECK(cam.mode == brassica::CameraMode::Accelerated);
 }
 
 TEST_CASE("Camera Accelerated mode acceleration, coasting down, FOV adaptation, and speed capping") {
@@ -1191,11 +1192,46 @@ TEST_CASE("QuickSettingsWidget camera mode UI integration via ServiceLocator") {
 	locator.Provide<brassica::CameraData>(camData);
 
 	CHECK(locator.Has<brassica::CameraData>());
-	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Instant);
+	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Accelerated);
 
 	brassica::ui::QuickSettingsWidget widget;
 	CHECK(widget.GetTitle() == "Quick Controls");
 
-	camData->mode = brassica::CameraMode::Accelerated;
-	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Accelerated);
+	camData->mode = brassica::CameraMode::Instant;
+	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Instant);
+}
+
+TEST_CASE("ArgparseManager terrain map flag options") {
+	brassica::ArgparseManager argMgr("TestApp", "1.0.0");
+	std::vector<std::string> argsDefault = {"TestApp", "--render-terrain-map"};
+	CHECK(argMgr.Parse(argsDefault));
+	CHECK(argMgr.GetRenderTerrainMap() == true);
+	CHECK(argMgr.GetTerrainMapPath() == "terrain_map.png");
+
+	brassica::ArgparseManager argMgrCustom("TestApp", "1.0.0");
+	std::vector<std::string> argsCustom = {"TestApp", "--export-terrain-map", "custom_planet.png"};
+	CHECK(argMgrCustom.Parse(argsCustom));
+	CHECK(argMgrCustom.GetRenderTerrainMap() == true);
+	CHECK(argMgrCustom.GetTerrainMapPath() == "custom_planet.png");
+}
+
+TEST_CASE("TerrainMapColorConfig elevation, slope, and water color tinting") {
+	uint8_t r = 0, g = 0, b = 0, a = 0;
+
+	// Water: h = -100m, flat surface normal (0, 1, 0)
+	brassica::TerrainMapColorConfig::GetColor(-100.0f, 0.0f, 1.0f, 0.0f, r, g, b, a);
+	CHECK(b > r);
+	CHECK(b > g);
+	CHECK(a == 255);
+
+	// Lowland: h = 50m
+	brassica::TerrainMapColorConfig::GetColor(50.0f, 0.0f, 1.0f, 0.0f, r, g, b, a);
+	CHECK(g > r);
+	CHECK(a == 255);
+
+	// High Peak / Summit: h = 1200m
+	brassica::TerrainMapColorConfig::GetColor(1200.0f, 0.0f, 1.0f, 0.0f, r, g, b, a);
+	CHECK(r > 180);
+	CHECK(g > 180);
+	CHECK(b > 180);
 }
