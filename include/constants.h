@@ -173,7 +173,7 @@ namespace brassica {
 				constexpr int   VerticesPerMeshlet = BaseMeshletDimension * BaseMeshletDimension; // 121
 				constexpr int   SkirtVertices = (BaseMeshletDimension - 1) * 4;                    // 40
 				constexpr int   TotalMeshletVertices = VerticesPerMeshlet + SkirtVertices;          // 161
-				constexpr int   DefaultMaxLODs = 10;
+				constexpr int   DefaultMaxLODs = 14;
 				constexpr int   MeshletGridSizePerLOD = 4;                                          // 4x4
 				constexpr int   MeshletCountPerLOD = MeshletGridSizePerLOD * MeshletGridSizePerLOD; // 16
 				constexpr float PathCorridorWidth = 0.15f;

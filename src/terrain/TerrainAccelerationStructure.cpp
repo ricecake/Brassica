@@ -14,9 +14,6 @@ namespace brassica {
 		glm::uvec2 aabbBufferAddr;
 		glm::uvec2 padding{0, 0};
 		glm::uvec4 gridParams;
-		glm::uvec4 lodOffsets0_3;
-		glm::uvec4 lodOffsets4_7;
-		glm::uvec4 lodOffsets8_11;
 	};
 
 	void TerrainAccelerationStructure::DestroyAccelerationStructures() {
@@ -214,10 +211,7 @@ namespace brassica {
 		vk::DescriptorSet        globalSet,
 		vk::DescriptorSetLayout  frameSetLayout,
 		vk::DescriptorSetLayout  globalSetLayout,
-		const glm::uvec4&        gridParams,
-		const glm::uvec4&        lodOffsets0_3,
-		const glm::uvec4&        lodOffsets4_7,
-		const glm::uvec4&        lodOffsets8_11
+		const glm::uvec4&        gridParams
 	) {
 		(void)baseTexelSize;
 		if (allocator == VK_NULL_HANDLE || !pipelineLibrary || !aabbShader)
@@ -280,10 +274,7 @@ namespace brassica {
 				static_cast<uint32_t>(aabbBuffer.deviceAddress >> 32u)
 			),
 			.padding = glm::uvec2(0),
-			.gridParams = gridParams,
-			.lodOffsets0_3 = lodOffsets0_3,
-			.lodOffsets4_7 = lodOffsets4_7,
-			.lodOffsets8_11 = lodOffsets8_11,
+			.gridParams = gridParams
 		};
 		cmd.pushConstants(
 			resolved.layout,

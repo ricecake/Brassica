@@ -14,12 +14,6 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
 	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim (1088)
-	uvec4 lodOffsets0_3;        // packed toroidal gridOffset for LOD 0-3
-	uvec4 lodOffsets4_7;        // packed toroidal gridOffset for LOD 4-7
-	uvec4 lodOffsets8_11;       // packed toroidal gridOffset for LOD 8-11
-	uvec4 lodDeltas0_3;         // packed toroidal delta for LOD 0-3
-	uvec4 lodDeltas4_7;         // packed toroidal delta for LOD 4-7
-	uvec4 lodDeltas8_11;        // packed toroidal delta for LOD 8-11
 	uint  clipmapStorageIdx;    // storage image index for TerrainClipmapTexture
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
@@ -77,26 +71,31 @@ void main() {
 		return;
 	}
 
-	uvec4 deltas = (lod < 4u) ? push.lodDeltas0_3 : ((lod < 8u) ? push.lodDeltas4_7 : push.lodDeltas8_11);
-	uint packedDelta = deltas[lod % 4u];
-	int deltaX = int(packedDelta & 0xFFFFu);
-	if (deltaX >= 0x8000) deltaX -= 0x10000;
-	int deltaZ = int((packedDelta >> 16u) & 0xFFFFu);
-	if (deltaZ >= 0x8000) deltaZ -= 0x10000;
+// Calculate standard sizes
+float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+float texelSize = baseTexelSize * getLODScale(float(lod));
+int dimInt = int(dim);
+
+// 1. Calculate Grid Offset directly from Camera
+vec2 camGrid = floor(uCameraPosition.xz / texelSize);
+ivec2 gridOffset = ivec2(mod(camGrid, vec2(dim)));
+
+// 2. Calculate Deltas directly from Previous Camera
+vec2 prevCamGrid = floor(uPreviousCameraPosition.xz / texelSize);
+ivec2 delta = ivec2(camGrid) - ivec2(prevCamGrid);
+int deltaX = delta.x;
+int deltaZ = delta.y;
+
+// (The rest of your is_dirty culling and worldXZ calculation remains identical)
 
 	if (uFrameIndex > 0 && deltaX == 0 && deltaZ == 0) {
 		return;
 	}
 
-	uvec4 offsets = (lod < 4u) ? push.lodOffsets0_3 : ((lod < 8u) ? push.lodOffsets4_7 : push.lodOffsets8_11);
-	uint packedOffset = offsets[lod % 4u];
-	ivec2 gridOffset = ivec2(int(packedOffset & 0xFFFFu), int((packedOffset >> 16u) & 0xFFFFu));
-
 	ivec2 texelIndex = ivec2(globalId.xy);
 	int colIdx = (texelIndex.x - gridOffset.x + int(dim)) % int(dim);
 	int rowIdx = (texelIndex.y - gridOffset.y + int(dim)) % int(dim);
 
-	int dimInt = int(dim);
 	bool is_dirty = true;
 
 	if (uFrameIndex > 0 && abs(deltaX) < dimInt && abs(deltaZ) < dimInt) {
@@ -110,9 +109,6 @@ void main() {
 	if (!subgroupAny(is_dirty)) {
 		return;
 	}
-
-	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
-	float texelSize = baseTexelSize * getLODScale(float(lod));
 
 	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;

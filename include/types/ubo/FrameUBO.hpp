@@ -15,7 +15,7 @@ namespace brassica {
 		glm::mat4 invViewProjMatrix{1.0f};
 
 		glm::vec4 cameraPosition{0.0f, 15.0f, 30.0f, 1.0f}; // xyz = position, w = baseTexelSize
-
+		glm::vec4 previousCameraPosition{-999.0f, -15.0f, -30.0f, 0.0f};
 		float time{0.0f};
 		float fov{1.2f};
 		float aspectRatio{16.0f / 9.0f};
@@ -27,6 +27,6 @@ namespace brassica {
 		uint32_t frameRandom{0};
 	};
 
-	static_assert(sizeof(FrameUBO) == 432, "FrameUBO struct size must be 432 bytes");
+	static_assert(sizeof(FrameUBO) == 448, "FrameUBO struct size must be 448 bytes");
 
 } // namespace brassica

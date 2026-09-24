@@ -13,9 +13,6 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-	uvec4 lodOffsets0_3;
-	uvec4 lodOffsets4_7;
-	uvec4 lodOffsets8_11;
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
@@ -102,10 +99,7 @@ void main() {
 				params.minMaxIndex,
 				centerXZ,
 				lodLevel,
-				params.gridParams.w,
-				params.lodOffsets0_3,
-				params.lodOffsets4_7,
-				params.lodOffsets8_11
+				params.gridParams.w
 			);
 			minB.y = minMax.x - 10.0;
 			maxB.y = minMax.y + 10.0;

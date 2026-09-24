@@ -29,9 +29,6 @@ layout(push_constant) uniform PushConstants {
 	uvec2 aabbBufferAddr;
 	uvec2 padding;
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow (16), z = totalMeshlets, w = textureDim (1088)
-	uvec4 lodOffsets0_3;
-	uvec4 lodOffsets4_7;
-	uvec4 lodOffsets8_11;
 }
 
 push;

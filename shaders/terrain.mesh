@@ -11,9 +11,6 @@ layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-	uvec4 lodOffsets0_3;
-	uvec4 lodOffsets4_7;
-	uvec4 lodOffsets8_11;
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
@@ -96,10 +93,7 @@ void main() {
 		params.clipmapIndex,
 		morphedXZ,
 		lodLevel,
-		params.gridParams.w,
-		params.lodOffsets0_3,
-		params.lodOffsets4_7,
-		params.lodOffsets8_11
+		params.gridParams.w
 	);
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
@@ -109,10 +103,7 @@ void main() {
 			params.clipmapIndex,
 			morphedXZ,
 			lodLevel + 1,
-			params.gridParams.w,
-			params.lodOffsets0_3,
-			params.lodOffsets4_7,
-			params.lodOffsets8_11
+			params.gridParams.w
 		);
 		height = mix(height, texNext.r, alpha);
 		if (length(texNext.gba) >= 0.1) {

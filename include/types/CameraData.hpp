@@ -41,7 +41,7 @@ namespace brassica {
 		float speedStep{10.0f};
 
 		// Dynamics & Control Mode
-		CameraMode mode{CameraMode::Instant};
+		CameraMode mode{CameraMode::Accelerated};
 		glm::vec3  velocity{0.0f};
 		float      accelerationRate{4.0f};
 		float      decelerationRate{3.0f};
