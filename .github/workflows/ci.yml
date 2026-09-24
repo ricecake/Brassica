@@ -87,12 +87,10 @@ jobs:
             wayland-protocols \
             libxkbcommon-dev
 
-      - name: Setup Vulkan SDK (Windows)
+      - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'
-        uses: hummed7/setup-vulkan-sdk@v1
-        with:
-          vulkan-query-version: 1.3.296.0
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
+        run: |
+          choco install vulkan-sdk -y
 
       - name: Sync shaderc dependencies
         shell: bash
