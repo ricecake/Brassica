@@ -4,11 +4,7 @@
 #include "bindless.glsl"
 
 float getLODScale(float lod) {
-	// if (lod <= 3.0) {
-		return pow(2.0, lod);
-	// } else {
-	// 	return 8.0 * pow(2.25, lod - 3.0);
-	// }
+	return pow(2.0, lod);
 }
 
 float texelSize(

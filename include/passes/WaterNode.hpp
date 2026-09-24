@@ -25,17 +25,19 @@ namespace brassica {
 
 	struct WaterPushConstants {
 		glm::uvec4    gridParams{
-			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::DefaultWindowLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,
 			0
-		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+		}; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
 		std::uint32_t sceneColor{0};
+		std::uint32_t baseLOD{0};
+		std::uint32_t maxLODs{constants::Class::Terrain::DefaultMaxLODs};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -118,6 +120,8 @@ namespace brassica {
 			);
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
+			push.baseLOD = p.terrainBaseLOD;
+			push.maxLODs = p.terrainMaxLODs;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {

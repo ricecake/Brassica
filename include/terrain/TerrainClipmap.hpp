@@ -17,11 +17,7 @@ namespace brassica {
 	constexpr uint32_t DEFAULT_CLIPMAP_LODS = constants::Class::Terrain::DefaultMaxLODs;
 
 	inline float GetLODScale(float lod) {
-		if (lod <= 3.0f) {
-			return std::pow(2.0f, lod);
-		} else {
-			return 8.0f * std::pow(2.25f, lod - 3.0f);
-		}
+		return std::pow(2.0f, lod);
 	}
 
 	struct ClipmapLevelInfo {
@@ -48,10 +44,11 @@ namespace brassica {
 			m_initialized = false;
 		}
 
-		State GetState() const override { return State{numLODs, baseTexelSize}; }
+		State GetState() const override { return State{numLODs, windowLODs, baseTexelSize}; }
 
 		void SetState(const State& state) override {
 			numLODs = state.numLODs;
+			windowLODs = state.windowLODs;
 			baseTexelSize = state.baseTexelSize;
 		}
 
@@ -109,7 +106,15 @@ namespace brassica {
 
 		uint32_t GetNumLODs() const { return numLODs; }
 
+		uint32_t GetWindowLODs() const { return windowLODs; }
+
+		uint32_t GetBaseLOD() const { return baseLOD; }
+
 		float GetBaseTexelSize() const { return baseTexelSize; }
+
+		static uint32_t CalculateBaseLOD(float height, uint32_t totalLODs, uint32_t activeWindow) {
+			return brassica::CalculateBaseLOD(height, totalLODs, activeWindow);
+		}
 
 		const ClipmapLevelInfo& GetLevelInfo(uint32_t lod) const { return levelInfos[lod]; }
 
@@ -117,6 +122,8 @@ namespace brassica {
 		vk::Device   device{nullptr};
 		VmaAllocator allocator{VK_NULL_HANDLE};
 		uint32_t     numLODs{DEFAULT_CLIPMAP_LODS};
+		uint32_t     windowLODs{constants::Class::Terrain::DefaultWindowLODs};
+		uint32_t     baseLOD{0};
 		float        baseTexelSize{0.5f};
 
 		vk::Image     image{nullptr};

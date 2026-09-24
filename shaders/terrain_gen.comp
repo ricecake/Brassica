@@ -13,11 +13,13 @@ layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[]
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
-	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim (1088)
+	uvec4 gridParams;           // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim (1088)
 	uint  clipmapStorageIdx;    // storage image index for TerrainClipmapTexture
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
+	uint  baseLOD;
+	uint  maxLODs;
 } push;
 
 void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
@@ -65,9 +67,14 @@ void main() {
 	uvec3 globalId = uvec3(gl_WorkGroupID.xy * 16 + tile_pos + quad_local_pos, gl_GlobalInvocationID.z);
 
 	uint dim = push.gridParams.w;
-	uint lod = globalId.z;
+	uint relLOD = globalId.z;
 
-	if (globalId.x >= dim || globalId.y >= dim || lod >= push.gridParams.x) {
+	if (globalId.x >= dim || globalId.y >= dim || relLOD >= push.gridParams.x) {
+		return;
+	}
+
+	uint lod = push.baseLOD + relLOD;
+	if (lod >= push.maxLODs) {
 		return;
 	}
 

@@ -265,11 +265,19 @@ namespace brassica {
 			levelInfos[i].delta = glm::ivec2(TERRAIN_MAP_DIM, TERRAIN_MAP_DIM);
 		}
 
+		baseLOD = CalculateBaseLOD(initialCameraPos.y, numLODs, windowLODs);
+
 		CreateTextureArrays();
 		CreateSampler();
 	}
 
 	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos) {
+		uint32_t newBaseLOD = CalculateBaseLOD(cameraPos.y, numLODs, windowLODs);
+		if (newBaseLOD != baseLOD) {
+			baseLOD = newBaseLOD;
+			m_forceRegenerate = true;
+		}
+
 		for (uint32_t l = 0; l < numLODs; ++l) {
 			auto& info = levelInfos[l];
 			float texelSize = info.texelSize;

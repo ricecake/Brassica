@@ -9,11 +9,13 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 #include "terrain.glsl"
 
 layout(push_constant) uniform TerrainPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 gridParams; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint  baseLOD;
+	uint  maxLODs;
 }
 params;
 
@@ -76,7 +78,8 @@ void main() {
 	if (meshletID < params.gridParams.z) {
 		uint meshletsPerRow = params.gridParams.y;
 		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-		lodLevel = min(meshletID / totalPerLOD, params.gridParams.x - 1);
+		uint relLOD = min(meshletID / totalPerLOD, params.gridParams.x - 1);
+		lodLevel = params.baseLOD + relLOD;
 		uint localID = meshletID % totalPerLOD;
 
 		uint row = localID / meshletsPerRow;
@@ -121,7 +124,7 @@ void main() {
 
 		visible = isAABBVisible(relMinB, relMaxB, viewProjRel);
 
-		if (visible && lodLevel > 0) {
+		if (visible && relLOD > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;

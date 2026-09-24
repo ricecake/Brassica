@@ -9,11 +9,13 @@ layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform TerrainPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 gridParams; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint  baseLOD;
+	uint  maxLODs;
 }
 params;
 
@@ -32,6 +34,7 @@ void main() {
 	uint taskIndex = gl_WorkGroupID.x;
 	uint meshletID = payload.meshletIDs[taskIndex];
 	uint lodLevel = payload.lodLevels[taskIndex];
+	uint relLOD = lodLevel - params.baseLOD;
 
 	SetMeshOutputsEXT(141, 240);
 
@@ -63,7 +66,7 @@ void main() {
 	float alpha = 0.0;
 	vec2 relMorphedXZ = relBaseXZ;
 
-	if (lodLevel < params.gridParams.x - 1 && outerDist > 0.0) {
+	if (relLOD < params.gridParams.x - 1 && outerDist > 0.0) {
 		float morphWidth = 2.5 * meshletSize;
 		float morphStart = max(0.0, outerDist - morphWidth);
 
@@ -88,7 +91,7 @@ void main() {
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
 
-	if (alpha > 0.0) {
+	if (alpha > 0.0 && lodLevel < params.maxLODs - 1) {
 		vec4 texNext = sampleTerrainClipmap(
 			params.clipmapIndex,
 			morphedWorldXZ,
@@ -175,7 +178,7 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
 
 		bool cullQuad = false;
-		if (lodLevel > 0) {
+		if (relLOD > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			vec2  prevRelSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;

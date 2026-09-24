@@ -9,7 +9,7 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform DeferredPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 gridParams; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uint  gPositionIndex;
 	uint  gNormalIndex;
 	uint  gAlbedoIndex;
@@ -20,6 +20,8 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint  baseLOD;
+	uint  maxLODs;
 }
 
 params;
@@ -32,11 +34,11 @@ uint calculateRayLOD(vec2 sampleXZ) {
 	float baseRadius = 272.0;
 
 	if (maxDist < baseRadius) {
-		return 0;
+		return params.baseLOD;
 	}
 
 	float lodFloat = ceil(log2(maxDist / baseRadius));
-	return uint(clamp(lodFloat, 0.0, 7.0));
+	return uint(clamp(float(params.baseLOD) + lodFloat, float(params.baseLOD), float(params.maxLODs - 1)));
 }
 
 // Update the intersection function to use dynamic LODs
