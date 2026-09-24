@@ -11,6 +11,10 @@
 #include "graph/ResourceState.hpp"
 #include "graph/VulkanSeam.hpp"
 
+#ifdef MemoryBarrier
+#undef MemoryBarrier
+#endif
+
 namespace brassica::graph {
 
 	// The attachment shape a Graphics-domain recipe implies, derived once from the registry's

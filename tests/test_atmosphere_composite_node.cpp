@@ -799,15 +799,15 @@ TEST_CASE("AtmosphereCompositeNode fogging real terrain above water stays finite
 			return centerPixel;
 		};
 
-		glm::vec4 close = renderAndReadBack(100.0f);
-		glm::vec4 medium = renderAndReadBack(5000.0f);
-		glm::vec4 far = renderAndReadBack(25000.0f);
+		glm::vec4 closeDist = renderAndReadBack(100.0f);
+		glm::vec4 mediumDist = renderAndReadBack(5000.0f);
+		glm::vec4 farDist = renderAndReadBack(25000.0f);
 
-		MESSAGE("close (100m):   r=", close.r, " g=", close.g, " b=", close.b);
-		MESSAGE("medium (5km):   r=", medium.r, " g=", medium.g, " b=", medium.b);
-		MESSAGE("far (25km):     r=", far.r, " g=", far.g, " b=", far.b);
+		MESSAGE("close (100m):   r=", closeDist.r, " g=", closeDist.g, " b=", closeDist.b);
+		MESSAGE("medium (5km):   r=", mediumDist.r, " g=", mediumDist.g, " b=", mediumDist.b);
+		MESSAGE("far (25km):     r=", farDist.r, " g=", farDist.g, " b=", farDist.b);
 
-		for (const glm::vec4* p : {&close, &medium, &far}) {
+		for (const glm::vec4* p : {&closeDist, &mediumDist, &farDist}) {
 			CHECK(std::isfinite(p->r));
 			CHECK(std::isfinite(p->g));
 			CHECK(std::isfinite(p->b));
@@ -820,7 +820,7 @@ TEST_CASE("AtmosphereCompositeNode fogging real terrain above water stays finite
 			CHECK(p->b < 50.0f);
 		}
 
-		// Sky-color convergence check: `far` above was rendered with the default
+		// Sky-color convergence check: `farDist` above was rendered with the default
 		// skyConvergenceStrength=1.0 (AtmospherePushConstants' real default). Re-rendering the same
 		// 25km case with it forced to 0.0 isolates exactly this blend's contribution -- if the
 		// SkyViewLUT wiring were dead (e.g. a descriptor never actually bound, or skyViewIndex never
@@ -842,7 +842,7 @@ TEST_CASE("AtmosphereCompositeNode fogging real terrain above water stays finite
 			farNoConvergence.b
 		);
 
-		float farBlueFraction = far.b / std::max(1e-4f, far.r + far.g + far.b);
+		float farBlueFraction = farDist.b / std::max(1e-4f, farDist.r + farDist.g + farDist.b);
 		float noConvergenceBlueFraction =
 			farNoConvergence.b / std::max(1e-4f, farNoConvergence.r + farNoConvergence.g + farNoConvergence.b);
 		CHECK(farBlueFraction > noConvergenceBlueFraction);

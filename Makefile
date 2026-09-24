@@ -2,7 +2,7 @@ BUILD_DIR = build
 CONFIG = RelWithDebInfo
 APP = sandbox
 
-GRAPH_CXXFLAGS = -std=c++23 -Wall -Wextra -Wpedantic -Iinclude -Isrc -Iexternal/doctest -Iexternal/entt/src -Iexternal/glm -Iexternal/argparse/include -Iexternal/spdlog/include -Iexternal/imgui -Iexternal/glfw/include
+GRAPH_CXXFLAGS = -std=c++23 -Wall -Wextra -Wpedantic -DBRASSICA_HAS_VULKAN=0 -Iinclude -Isrc -Iexternal/doctest -Iexternal/entt/src -Iexternal/glm -Iexternal/argparse/include -Iexternal/spdlog/include -Iexternal/imgui -Iexternal/glfw/include -Iexternal/VulkanMemoryAllocator/include -Iexternal/shaderc/libshaderc/include -Iexternal/efsw/include
 
 .PHONY: all clean format run clean-build test profile setup-deps graph-test graph-check
 
