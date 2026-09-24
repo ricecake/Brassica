@@ -32,7 +32,7 @@ namespace brassica {
 	};
 
 	struct BallNode: render::NodeRegistrar<BallNode> {
-		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Create<BallIndirectBuffer>>;
+		using Resources = graph::Declares<GBuffer<graph::ModifyOp>, graph::Create<BallIndirectBuffer>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
