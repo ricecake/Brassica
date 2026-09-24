@@ -1,0 +1,173 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba32f) uniform image2D uErrorMap;
+layout(binding = 1) uniform sampler2D uBoundingMap;
+
+uniform int uPass; // 0 = Spatial Pass, 1 = Priority Pass
+uniform float uPriorityErrorWeight;
+uniform float uPriorityGradWeight;
+uniform float uPriorityAgeWeight;
+uniform float uPriorityNeighborErrorWeight;
+uniform float uPriorityNeighborGradWeight;
+uniform float uPriorityThreshold;
+
+struct TileQueueHeader {
+	uint count;
+	uint maxTiles;
+	uint spatialUpdateFrames;
+	uint frameIndex;
+	float minRefreshRate;
+	float maxRefreshRate;
+	uint tileCols;
+	uint tileRows;
+	uint totalTiles;
+	uint padding;
+};
+
+layout(std430, binding = 0) buffer TileQueueSSBO {
+	TileQueueHeader uHeader;
+	uvec2 uTileQueue[];
+};
+
+layout(std430, binding = 1) buffer IndirectDispatchSSBO {
+	uint uDispatchCountX;
+	uint uDispatchCountY;
+	uint uDispatchCountZ;
+};
+
+const int bayer8x8[64] = int[64](
+	 0, 32,  8, 40,  2, 34, 10, 42,
+	48, 16, 56, 24, 50, 18, 58, 26,
+	12, 44,  4, 36, 14, 46,  6, 38,
+	60, 28, 52, 20, 62, 30, 54, 22,
+	 3, 35, 11, 43,  1, 33,  9, 41,
+	51, 19, 59, 27, 49, 17, 57, 25,
+	15, 47,  7, 39, 13, 45,  5, 37,
+	63, 31, 55, 23, 61, 29, 53, 21
+);
+
+uint mortonOwenScramble(uvec2 v, uint seed) {
+	uint x = v.x ^ seed;
+	uint y = v.y ^ seed;
+	x = (x | (x << 8)) & 0x00FF00FFu;
+	x = (x | (x << 4)) & 0x0F0F0F0Fu;
+	x = (x | (x << 2)) & 0x33333333u;
+	x = (x | (x << 1)) & 0x55555555u;
+	y = (y | (y << 8)) & 0x00FF00FFu;
+	y = (y | (y << 4)) & 0x0F0F0F0Fu;
+	y = (y | (y << 2)) & 0x33333333u;
+	y = (y | (y << 1)) & 0x55555555u;
+	return x | (y << 1);
+}
+
+void main() {
+	uint totalTiles = uHeader.totalTiles;
+	uint totalWorkgroups = gl_NumWorkGroups.x * gl_NumWorkGroups.y;
+	uint linearGroupIndex = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+
+	const uint prime[] = uint[](2713u, 2719u, 2729u, 2731u, 2741u, 2749u, 2753u, 7919u);
+	uint scrambledLinearGroup = (linearGroupIndex * prime[uHeader.frameIndex % prime.length()]) % totalWorkgroups;
+
+	uvec2 tileGroupCoords = uvec2(
+		scrambledLinearGroup % gl_NumWorkGroups.x,
+		scrambledLinearGroup / gl_NumWorkGroups.x
+	);
+
+	ivec2 tileCoord = ivec2(tileGroupCoords) * ivec2(gl_WorkGroupSize.xy) + ivec2(gl_LocalInvocationID.xy);
+
+	if (tileCoord.x >= uHeader.tileCols || tileCoord.y >= uHeader.tileRows || uHeader.totalTiles == 0u) {
+		return;
+	}
+
+	int tileCols = int(uHeader.tileCols);
+	int tileRows = int(uHeader.tileRows);
+
+	uint spatialFrames = max(1u, uHeader.spatialUpdateFrames);
+	uint scrambled = mortonOwenScramble(uvec2(tileCoord), 0u);
+	bool scheduledBySpatial = ((scrambled % spatialFrames) == (uHeader.frameIndex % spatialFrames));
+
+	ivec2 boundingSize = textureSize(uBoundingMap, 0);
+	vec2 uv = (vec2(tileCoord) + 0.5) / vec2(uHeader.tileCols, uHeader.tileRows);
+	float lod = log2(max(1.0, float(boundingSize.x) / float(uHeader.tileCols)));
+	vec4 bData = textureLod(uBoundingMap, uv, lod);
+	bool tileHasCloudDensity = (bData.r >= 0.0 && bData.b > 0.001);
+	bool wasEmpty = (bData.a <= 0.001);
+	bool newlyAppeared = tileHasCloudDensity && wasEmpty;
+
+	if (uPass == 0) {
+		if (tileHasCloudDensity && scheduledBySpatial) {
+			uint slot = atomicAdd(uHeader.count, 1u);
+			if (slot < uHeader.maxTiles) {
+				uTileQueue[slot] = uvec2(tileCoord);
+				atomicAdd(uDispatchCountX, 1u);
+			}
+		}
+	} else {
+		vec4 errorData = imageLoad(uErrorMap, tileCoord);
+		float errorVal = errorData.r;
+		float densityGrad = errorData.g;
+		float currentStepMult = (errorData.b > 0.01) ? errorData.b : 1.0;
+		uint lastUpdatedFrame = uint(round(errorData.a));
+
+		uint age = (uHeader.frameIndex > lastUpdatedFrame) ? (uHeader.frameIndex - lastUpdatedFrame) : 0u;
+		float velocityWeightedAge = float(age) * (1.0 + densityGrad * 10.0);
+
+		float densityDeltaScore = newlyAppeared ? 100.0 : max(bData.b - bData.a, 0.0);
+
+		float maxNeighborError = 0.0;
+		float maxNeighborGrad = 0.0;
+		const ivec2 neighbors[4] = ivec2[4](
+			ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1)
+		);
+		if (!newlyAppeared) {
+			for (int i = 0; i < 4; ++i) {
+				ivec2 nCoord = clamp(tileCoord + neighbors[i], ivec2(0), ivec2(tileCols - 1, tileRows - 1));
+				vec4 nData = imageLoad(uErrorMap, nCoord);
+				maxNeighborError = max(maxNeighborError, nData.r);
+				maxNeighborGrad = max(maxNeighborGrad, nData.g);
+			}
+		}
+
+		float selfScore = densityDeltaScore + errorVal * uPriorityErrorWeight + densityGrad * uPriorityGradWeight + velocityWeightedAge * uPriorityAgeWeight;
+		float neighborScore = maxNeighborError * uPriorityNeighborErrorWeight + maxNeighborGrad * uPriorityNeighborGradWeight;
+		float priorityScore = selfScore + neighborScore;
+
+		uint bayerVal = uint(bayer8x8[(tileCoord.y % 8) * 8 + (tileCoord.x % 8)]);
+		uint temporalBayer = (bayerVal + uHeader.frameIndex * 17u) % 64u;
+		float ditherMask = float(temporalBayer) / 64.0;
+
+		float dynamicThreshold = uPriorityThreshold + (ditherMask * 1.0);
+		float ratio = float(uHeader.maxTiles) / float(totalTiles);
+		dynamicThreshold /= ratio;
+
+		bool needsPriorityUpdate = !scheduledBySpatial && tileHasCloudDensity && ((priorityScore > dynamicThreshold) || (lastUpdatedFrame == 0u) || newlyAppeared);
+
+		if (needsPriorityUpdate) {
+			uint slot = atomicAdd(uHeader.count, 1u);
+			if (slot < uHeader.maxTiles) {
+				uTileQueue[slot] = uvec2(tileCoord);
+				atomicAdd(uDispatchCountX, 1u);
+			}
+		}
+
+		bool scheduled = (scheduledBySpatial || needsPriorityUpdate) && tileHasCloudDensity;
+
+		float targetStepMult = 1.0;
+		if (priorityScore > 0.35) {
+			targetStepMult = 0.6;
+		} else if (priorityScore < 0.08) {
+			targetStepMult = 1.5;
+		}
+		float updatedStepMult = clamp(mix(currentStepMult, targetStepMult, 0.25), 0.5, 2.0);
+		errorData.b = updatedStepMult;
+
+		if (!scheduled) {
+			errorData.r *= 0.99;
+			errorData.g *= 0.99;
+		}
+
+		imageStore(uErrorMap, tileCoord, errorData);
+	}
+}

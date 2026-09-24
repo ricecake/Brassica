@@ -8,6 +8,7 @@
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
 #include "types/AutoExposureData.hpp"
+#include "cloud/ICloudManager.hpp"
 #include "terrain/ITerrainClipmap.hpp"
 #include "types/CameraData.hpp"
 #include "types/TonemapPushConstants.hpp"
@@ -269,8 +270,8 @@ namespace brassica::ui {
 
 			ImGui::Separator();
 
-			// Atmosphere
-			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Atmosphere:");
+			// Atmosphere & Volumetric Cloud System
+			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Atmosphere & Volumetric Clouds:");
 			if (ImGui::Checkbox("Enable Atmosphere##Quick", &m_enableAtmosphere)) {
 				if (cfg) {
 					cfg->SetAppSetting("enable_atmosphere", m_enableAtmosphere);
@@ -280,6 +281,55 @@ namespace brassica::ui {
 				if (ImGui::SliderFloat("Cloud Coverage##Quick", &m_cloudCoverage, 0.0f, 1.0f)) {
 					if (cfg) {
 						cfg->SetAppSetting("quick_cloud_coverage", m_cloudCoverage);
+					}
+					if (ServiceLocator::Instance().Has<ICloudManager>()) {
+						auto cloudMgr = ServiceLocator::Instance().Get<ICloudManager>();
+						auto state = cloudMgr->GetState();
+						state.coverage = m_cloudCoverage;
+						cloudMgr->SetState(state);
+					}
+				}
+
+				if (ServiceLocator::Instance().Has<ICloudManager>()) {
+					auto cloudMgr = ServiceLocator::Instance().Get<ICloudManager>();
+					auto state = cloudMgr->GetState();
+					bool modified = false;
+
+					if (ImGui::TreeNode("Cloud Raymarching & Resolution")) {
+						modified |= ImGui::SliderFloat("Render Scale##Cloud", &state.renderScale, 0.1f, 1.0f);
+						modified |= ImGui::SliderFloat("Base Density##Cloud", &state.density, 0.001f, 1.0f);
+						modified |= ImGui::SliderFloat("Altitude##Cloud", &state.altitude, 100.0f, 10000.0f);
+						modified |= ImGui::SliderFloat("Thickness##Cloud", &state.thickness, 100.0f, 5000.0f);
+						modified |= ImGui::SliderFloat("Max Ray Dist##Cloud", &state.maxRayDistance, 10000.0f, 300000.0f);
+						ImGui::TreePop();
+					}
+
+					if (ImGui::TreeNode("Layered Self-Shadowing")) {
+						modified |= ImGui::SliderFloat("Self Shadow Depth##Cloud", &state.shadowOpticalDepthMultiplier, 0.1f, 10.0f);
+						modified |= ImGui::SliderFloat("Shadow Step Scale##Cloud", &state.shadowStepMultiplier, 0.1f, 5.0f);
+						modified |= ImGui::SliderFloat("Shadow Intensity##Cloud", &state.shadowIntensity, 0.0f, 1.0f);
+						ImGui::TreePop();
+					}
+
+					if (ImGui::TreeNode("Staggered Tile Scheduler")) {
+						modified |= ImGui::Checkbox("Enable Tile Scheduler##Cloud", &state.enableTileScheduler);
+						modified |= ImGui::SliderFloat("Rendering Budget##Cloud", &state.maxRefreshRate, 0.01f, 1.0f);
+						modified |= ImGui::SliderInt("Refresh Interval##Cloud", &state.spatialUpdateFrames, 1, 32);
+						ImGui::TreePop();
+					}
+
+					if (ImGui::TreeNode("SVGF Spatial & Temporal Filter")) {
+						modified |= ImGui::Checkbox("Enable Temporal##Cloud", &state.enableTemporal);
+						modified |= ImGui::Checkbox("Enable SVGF##Cloud", &state.enableSpatialFilter);
+						modified |= ImGui::SliderInt("SVGF Passes##Cloud", &state.svgfPasses, 1, 5);
+						modified |= ImGui::SliderFloat("Phi Luma##Cloud", &state.phiLuma, 0.1f, 50.0f);
+						modified |= ImGui::SliderFloat("Phi Depth##Cloud", &state.phiDepth, 0.01f, 5.0f);
+						modified |= ImGui::SliderFloat("Phi Density##Cloud", &state.phiDensity, 0.001f, 0.5f);
+						ImGui::TreePop();
+					}
+
+					if (modified) {
+						cloudMgr->SetState(state);
 					}
 				}
 			}

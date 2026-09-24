@@ -1,0 +1,100 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, r16f) uniform image2DArray outShadowMap;
+
+#define ATMOSPHERE_HEIGHT_DEFINED
+#include "../atmosphere/common.glsl"
+#include "../helpers/clouds.glsl"
+
+uniform mat4 u_lightSpaceMatrix;
+uniform mat4 u_invLightSpaceMatrix;
+uniform vec3 u_primaryLightDir;
+uniform int  u_frameIndex;
+
+layout(binding = 2) uniform sampler2D u_cloudWeatherMinMaxTexture;
+
+void main() {
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec3 image_size = imageSize(outShadowMap);
+	ivec2 size = image_size.xy;
+	if (pixel.x >= size.x || pixel.y >= size.y)
+		return;
+
+	// Staggered quarter-resolution schedule (2x2 Bayer grid)
+	ivec2 bayer_offsets[4] = ivec2[](
+		ivec2(0, 0),
+		ivec2(1, 1),
+		ivec2(1, 0),
+		ivec2(0, 1)
+	);
+	ivec2 current_offset = bayer_offsets[u_frameIndex % 4];
+	if ((pixel.x % 2) != current_offset.x || (pixel.y % 2) != current_offset.y) {
+		return; // Keep existing pixel values from prior frames
+	}
+
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+
+	vec4 clipSpace = vec4(uv * 2.0 - 1.0, -1.0, 1.0);
+	vec4 worldPosNear = u_invLightSpaceMatrix * clipSpace;
+	worldPosNear /= worldPosNear.w;
+
+	vec3 rayStart = worldPosNear.xyz;
+	vec3 rayDir = -normalize(u_primaryLightDir);
+
+	float t_start = 1e10;
+	float t_end = -1e10;
+	intersectCloudShell(rayStart, rayDir, worldScale, t_start, t_end);
+
+	if (t_start >= t_end) {
+		for (int k = 0; k < 8; ++k) {
+			imageStore(outShadowMap, ivec3(pixel, k), vec4(0.0));
+		}
+		return;
+	}
+
+	float accumulated[8] = float[](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+	float t = t_start;
+	int L = 3;
+	float baseStepSize = 100.0 * worldScale;
+
+	CloudProperties props;
+	props.altitude = cloudAltitude;
+	props.thickness = cloudThickness;
+	props.densityBase = cloudDensity;
+	props.coverage = cloudCoverage;
+	props.worldScale = worldScale;
+
+	for (int i = 0; i < 512; ++i) {
+		if (t >= t_end) break;
+
+		vec3 p = rayStart + rayDir * t;
+		vec3 advect = getCloudWindOffset(uTime);
+		vec3 p_advected = p - advect;
+		vec2 weatherUV = fract(p_advected.xz / (100000.0 * worldScale));
+
+		vec2 minMax = textureLod(u_cloudWeatherMinMaxTexture, weatherUV, float(L)).rg;
+		float maxDensity = applyDynamicCoverage(minMax.y, cloudCoverage);
+		float shadowPixelSize = (200000.0 * worldScale) / float(size.x);
+		CloudWeather weather = computeCloudWeather(p, props, shadowPixelSize);
+
+		float h = getCloudRelativeHeight(p, weather);
+
+		CloudDensityResult densityRes = calculateCloudDensity(p, weather, props, uTime, shadowPixelSize, false);
+		float stepDensity = max(0.0, densityRes.density.r) * baseStepSize;
+
+		for (int k = 0; k < 8; ++k) {
+			float h_k = 1.0 - (float(k) + 1.0) / 8.0;
+			if (h >= h_k) {
+				accumulated[k] += stepDensity;
+			}
+		}
+
+		t += baseStepSize;
+	}
+
+	for (int k = 0; k < 8; ++k) {
+		imageStore(outShadowMap, ivec3(pixel, k), vec4(accumulated[k], 0.0, 0.0, 0.0));
+	}
+}
