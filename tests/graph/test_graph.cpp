@@ -27,6 +27,7 @@
 #include "types/TransformComponent.hpp"
 #include <entt/entity/registry.hpp>
 #include "lighting/ILightManager.hpp"
+#include "cloud/ICloudManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -1198,4 +1199,81 @@ TEST_CASE("QuickSettingsWidget camera mode UI integration via ServiceLocator") {
 
 	camData->mode = brassica::CameraMode::Accelerated;
 	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Accelerated);
+}
+
+TEST_CASE("CloudState and ICloudManager state parameters and reflection") {
+	class MockCloudManager : public brassica::ICloudManager {
+	public:
+		void Initialize() override { m_initialized = true; }
+	};
+
+	MockCloudManager cloudMgr;
+	cloudMgr.Initialize();
+	CHECK(cloudMgr.IsInitialized());
+	CHECK(cloudMgr.GetManagerName() == "CloudManager");
+
+	auto state = cloudMgr.GetState();
+	CHECK(state.renderScale == doctest::Approx(1.0f));
+	CHECK(state.coverage == doctest::Approx(0.35f));
+	CHECK(state.density == doctest::Approx(0.100f));
+	CHECK(state.altitude == doctest::Approx(2000.0f));
+	CHECK(state.thickness == doctest::Approx(1500.0f));
+	CHECK(state.enableTileScheduler == true);
+	CHECK(state.enableSpatialFilter == true);
+	CHECK(state.svgfPasses == 2);
+	CHECK(state.shadowOpticalDepthMultiplier == doctest::Approx(2.0f));
+
+	state.renderScale = 0.5f;
+	state.coverage = 0.6f;
+	state.svgfPasses = 4;
+	cloudMgr.SetState(state);
+
+	auto updatedState = cloudMgr.GetState();
+	CHECK(updatedState.renderScale == doctest::Approx(0.5f));
+	CHECK(updatedState.coverage == doctest::Approx(0.6f));
+	CHECK(updatedState.svgfPasses == 4);
+
+	cloudMgr.FlushHistory();
+	CHECK_FALSE(cloudMgr.HasHistory());
+}
+
+namespace {
+	struct CloudBakeLikeNode {
+		using Resources = Declares<
+			Create<brassica::CloudWeatherTexture>,
+			Create<brassica::CloudWeatherMinMaxTexture>,
+			Create<brassica::Cloud3DVolumeTexture>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct CloudBoundingLikeNode {
+		using Resources = Declares<
+			Read<brassica::CloudWeatherMinMaxTexture>,
+			Create<brassica::CloudBoundingTexture>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct CloudRenderLikeNode {
+		using Resources = Declares<
+			Read<brassica::CloudBoundingTexture>,
+			Read<brassica::CloudWeatherMinMaxTexture>,
+			Create<brassica::CloudPackedColor>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("CloudNodes graph compilation and execution domains") {
+	Graph graph;
+	graph.Register<CloudBakeLikeNode>();
+	graph.Register<CloudBoundingLikeNode>();
+	graph.Register<CloudRenderLikeNode>();
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	CHECK(schedule.stages.size() >= 1);
 }
