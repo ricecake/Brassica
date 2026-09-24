@@ -106,7 +106,7 @@ int deltaZ = delta.y;
 
 	// 2. Subgroup Divergence Protection
 	// Ensure the entire quad stays active if *any* thread in the 2x2 block needs to compute
-	if (!subgroupAny(is_dirty)) {
+	if (uFrameIndex > 0 && !subgroupAny(is_dirty)) {
 		return;
 	}
 

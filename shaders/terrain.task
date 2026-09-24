@@ -17,9 +17,11 @@ layout(push_constant) uniform TerrainPushConstants {
 }
 params;
 
+// Shared in both terrain.task and terrain.mesh
 struct TaskPayload {
-	uint meshletIDs[32];
-	uint lodLevels[32];
+    vec2 relMeshletMinXZ[512]; // Explicit spatial anchor
+    uint renderLOD[512];       // The LOD level for vertex density
+    uint morphLOD[512];        // The parent LOD for outer-ring morphing
 };
 
 taskPayloadSharedEXT TaskPayload payload;
@@ -134,13 +136,49 @@ void main() {
 				visible = false;
 			}
 		}
+// Inside terrain.task main()
+if (visible) {
+    // 1. Sample Variance
+    vec2 centerXZ = uCameraPosition.xz + relMinB.xz + (meshletSize * 0.5);
+    float variance = sampleTerrainBiome(params.biomeIndex, centerXZ, lodLevel, params.gridParams.w).g;
+
+    // 2. Calculate Screen-Space Error (SSE)
+    float nodeSpacing = meshletSize / 10.0;
+    float geomError = variance * nodeSpacing * 2.5; // Scale to your specific heightmap amplitude
+
+    vec3 closestPoint = clamp(vec3(0.0), relMinB, relMaxB); // Camera is at 0,0,0
+    float dist = max(length(closestPoint), 1.0);
+
+    float K = 1000.0; // Pass ScreenHeight / (2 * tan(FOV/2)) via push constants later
+    float sse = (geomError * K) / dist;
+
+    // 3. Determine Subdivision (Target LOD)
+    uint targetLOD = lodLevel;
+    if (sse > 4.0 && lodLevel >= 2) targetLOD = lodLevel - 2; // Subdivide into 16
+    else if (sse > 1.5 && lodLevel >= 1) targetLOD = lodLevel - 1; // Subdivide into 4
+
+    // 4. Allocate and Emit
+    uint lodDiff = lodLevel - targetLOD;
+    uint emitCount = 1 << (lodDiff * 2); // 1, 4, or 16 meshlets
+
+    uint baseIdx = atomicAdd(meshletCount, emitCount);
+
+    float subSize = baseMeshletSize * getLODScale(float(targetLOD));
+    uint gridDim = 1 << lodDiff;
+
+    for (uint i = 0; i < emitCount; i++) {
+        uint lx = i % gridDim;
+        uint ly = i / gridDim;
+
+        uint writeIdx = baseIdx + i;
+        payload.relMeshletMinXZ[writeIdx] = relMinB.xz + vec2(lx, ly) * subSize;
+        payload.renderLOD[writeIdx] = targetLOD;
+        payload.morphLOD[writeIdx] = lodLevel; // Track parent for seamless edge morphing
+    }
+}
+
 	}
 
-	if (visible) {
-		uint index = atomicAdd(meshletCount, 1u);
-		payload.meshletIDs[index] = meshletID;
-		payload.lodLevels[index] = lodLevel;
-	}
 	barrier();
 
 	if (threadID == 0) {

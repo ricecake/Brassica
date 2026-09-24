@@ -17,9 +17,11 @@ layout(push_constant) uniform TerrainPushConstants {
 }
 params;
 
+// Shared in both terrain.task and terrain.mesh
 struct TaskPayload {
-	uint meshletIDs[32];
-	uint lodLevels[32];
+    vec2 relMeshletMinXZ[512]; // Explicit spatial anchor
+    uint renderLOD[512];       // The LOD level for vertex density
+    uint morphLOD[512];        // The parent LOD for outer-ring morphing
 };
 
 taskPayloadSharedEXT TaskPayload payload;
@@ -29,9 +31,14 @@ layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec4 outAlbedo[];
 
 void main() {
-	uint taskIndex = gl_WorkGroupID.x;
-	uint meshletID = payload.meshletIDs[taskIndex];
-	uint lodLevel = payload.lodLevels[taskIndex];
+
+	float baseMeshletSize = 32.0;
+uint taskIndex = gl_WorkGroupID.x;
+vec2 relMeshletMinXZ = payload.relMeshletMinXZ[taskIndex];
+uint lodLevel = payload.renderLOD[taskIndex];
+uint morphLOD = payload.morphLOD[taskIndex]; // Use for outer boundary checks
+	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
+float parentMeshletSize = baseMeshletSize * getLODScale(float(morphLOD));
 
 	SetMeshOutputsEXT(141, 240);
 
@@ -41,66 +48,63 @@ void main() {
 
 	uint meshletsPerRow = params.gridParams.y;
 	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-	uint localID = meshletID % totalPerLOD;
-
-	uint row = localID / meshletsPerRow;
-	uint col = localID % meshletsPerRow;
-
-	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 
 	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 	vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
-	vec2 relMeshletMinXZ = relCameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5) * meshletSize;
 
-	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-	vec2 relBaseXZ = relMeshletMinXZ + localPos;
+// Morphing relies on the Parent's dimensions
+float outerDist = (float(params.gridParams.y) * 0.5) * parentMeshletSize;
 
-	vec2 offsetDist = abs(relBaseXZ);
-	float distToCam = max(offsetDist.x, offsetDist.y);
-	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
+vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
+vec2 relBaseXZ = relMeshletMinXZ + localPos;
 
-	float alpha = 0.0;
-	vec2 relMorphedXZ = relBaseXZ;
+vec2 offsetDist = abs(relBaseXZ);
+float distToCam = max(offsetDist.x, offsetDist.y);
 
-	if (lodLevel < params.gridParams.x - 1 && outerDist > 0.0) {
-		float morphWidth = 2.5 * meshletSize;
-		float morphStart = max(0.0, outerDist - morphWidth);
+float alpha = 0.0;
+vec2 relMorphedXZ = relBaseXZ;
 
-		if (distToCam > morphStart) {
-			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
-			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+if (morphLOD < params.gridParams.x - 1 && outerDist > 0.0) {
+    float morphWidth = 2.5 * parentMeshletSize;
+    float morphStart = max(0.0, outerDist - morphWidth);
 
-			vec2 targetLocalPos = vec2(floor(float(lx) / 2.0) * 2.0, floor(float(ly) / 2.0) * 2.0) * (meshletSize / 10.0);
-			vec2 relTargetXZ = relMeshletMinXZ + targetLocalPos;
-			relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
-		}
-	}
+    if (distToCam > morphStart) {
+        alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
+        alpha = alpha * alpha * (3.0 - 2.0 * alpha);
 
+        float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
+
+        // Snap in absolute world space so the grid remains entirely static
+        vec2 worldBaseXZ = uCameraPosition.xz + relBaseXZ;
+        vec2 worldTargetXZ = floor(worldBaseXZ / targetGrid + 0.5) * targetGrid;
+        vec2 relTargetXZ = worldTargetXZ - uCameraPosition.xz;
+
+        relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
+    }
+}
 	vec2 morphedWorldXZ = uCameraPosition.xz + relMorphedXZ;
 
-	vec4 texSample = sampleTerrainClipmap(
-		params.clipmapIndex,
-		morphedWorldXZ,
-		lodLevel,
-		params.gridParams.w
-	);
-	float height = texSample.r;
-	vec3 normal = texSample.gba;
+vec4 texSample = sampleTerrainClipmap(
+    params.clipmapIndex,
+    morphedWorldXZ,
+    morphLOD, // <-- MUST be morphLOD, not lodLevel/renderLOD
+    params.gridParams.w
+);
+float height = texSample.r;
+vec3 normal = texSample.gba;
 
-	if (alpha > 0.0) {
-		vec4 texNext = sampleTerrainClipmap(
-			params.clipmapIndex,
-			morphedWorldXZ,
-			lodLevel + 1,
-			params.gridParams.w
-		);
-		height = mix(height, texNext.r, alpha);
-		if (length(texNext.gba) >= 0.1) {
-			normal = normalize(mix(normal, texNext.gba, alpha));
-		}
-	}
-
+if (alpha > 0.0) {
+    vec4 texNext = sampleTerrainClipmap(
+        params.clipmapIndex,
+        morphedWorldXZ,
+        morphLOD + 1, // <-- MUST be morphLOD + 1
+        params.gridParams.w
+    );
+    height = mix(height, texNext.r, alpha);
+    if (length(texNext.gba) >= 0.1) {
+        normal = normalize(mix(normal, texNext.gba, alpha));
+    }
+}
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	vec3 relWorldPos = vec3(relMorphedXZ.x, height - dropOff - uCameraPosition.y, relMorphedXZ.y);
@@ -174,24 +178,25 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
 
-		bool cullQuad = false;
-		if (lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			vec2  prevRelSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize - uCameraPosition.xz;
-			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
+bool cullQuad = false;
+if (morphLOD > 0) { // <-- Check against the macro ring (morphLOD)
+    float prevMeshletSize = baseMeshletSize * getLODScale(float(morphLOD - 1));
+    vec2  prevRelSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize - uCameraPosition.xz;
+    float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
-			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
-			vec2 quadCenterRel = relMeshletMinXZ + quadCenterLocal;
+    // quadCenterLocal must still be calculated using the child's meshletSize
+    vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
+    vec2 quadCenterRel = relMeshletMinXZ + quadCenterLocal;
 
-			vec2 dist = abs(quadCenterRel - prevRelSnap);
+    vec2 dist = abs(quadCenterRel - prevRelSnap);
 
-			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
-				cullQuad = true;
-			}
-		}
+    if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
+        cullQuad = true;
+    }
+}
 
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
+gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;
+gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
