@@ -1,9 +1,13 @@
 #include "ui/QuickSettingsWidget.hpp"
 
+#include <algorithm>
+#include <vector>
+
 #include "ConfigManager.hpp"
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
+#include "types/AutoExposureData.hpp"
 #include "terrain/ITerrainClipmap.hpp"
 #include "types/CameraData.hpp"
 #include "types/TonemapPushConstants.hpp"
@@ -101,9 +105,117 @@ namespace brassica::ui {
 
 			ImGui::Separator();
 
-			// Exposure & Post-Processing Tone / CDL
+			// Exposure & Post-Processing Tone / CDL / Auto-Exposure System
 			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Exposure & Tone Mapping:");
 			ImGui::SliderFloat("Exposure##Tone", &s_tonemapPush.exposure, 0.01f, 10.0f, "%.2f");
+
+			if (ImGui::BeginTabBar("AutoExposureTabs")) {
+				auto drawLayerSettings = [&](const char* label, LayerDataHost& layer, bool isScene) {
+					if (ImGui::BeginTabItem(label)) {
+						bool aeEnabled = layer.useAutoExposure != 0;
+						if (ImGui::Checkbox("Enable Auto-Exposure", &aeEnabled)) {
+							layer.useAutoExposure = aeEnabled ? 1 : 0;
+						}
+
+						if (layer.useAutoExposure != 0) {
+							ImGui::SliderFloat("Target Luminance", &layer.targetLuminance, 0.01f, 1.0f);
+							ImGui::SliderFloat("Min Exposure", &layer.minExposure, 0.001f, 10.0f);
+							ImGui::SliderFloat("Max Exposure", &layer.maxExposure, 1.0f, 100.0f);
+							ImGui::SliderFloat("Speed Up (Adaptation)", &layer.speedUp, 0.1f, 20.0f);
+							ImGui::SliderFloat("Speed Down (Adaptation)", &layer.speedDown, 0.1f, 20.0f);
+							ImGui::SliderFloat("Center Weight Tightness", &layer.centerWeightTightness, 0.0f, 10.0f);
+							ImGui::SliderFloat2("Focus Point", &layer.focusPoint.x, 0.0f, 1.0f);
+							ImGui::SliderFloat("Histogram Low Cutoff", &layer.histogramLowCutoff, 0.0f, 1.0f);
+							ImGui::SliderFloat("Histogram High Cutoff", &layer.histogramHighCutoff, 0.0f, 1.0f);
+
+							ImGui::Separator();
+							ImGui::Text("Statistics (Live Data):");
+							ImGui::Text("Adapted Luma: %.4f | Avg: %.4f", layer.adaptedLuminance, layer.avgLuma);
+							ImGui::Text("Min Luma: %.4f | Max: %.4f | StdDev: %.4f", layer.minLuma, layer.maxLuma, layer.stdDevLuma);
+
+							if (ImGui::TreeNode("Luminance Histogram (256 bins)")) {
+								std::vector<float> histValues(256);
+								float maxHistVal = 1.0f;
+								for (int i = 0; i < 256; i++) {
+									histValues[i] = static_cast<float>(layer.histogram[i]);
+									if (histValues[i] > maxHistVal) {
+										maxHistVal = histValues[i];
+									}
+								}
+								ImGui::PlotHistogram("##LumaHistogram", histValues.data(), 256, 0, nullptr, 0.0f, maxHistVal, ImVec2(300, 80));
+								ImGui::TreePop();
+							}
+						}
+
+						ImGui::Separator();
+						bool tmEnabled = layer.toneMappingEnabled != 0;
+						if (ImGui::Checkbox("Enable Tone Mapping", &tmEnabled)) {
+							layer.toneMappingEnabled = tmEnabled ? 1 : 0;
+						}
+
+						if (layer.toneMappingEnabled != 0) {
+							const char* modes[] = {"ACES", "Filmic", "Lottes", "Reinhard", "Reinhard II", "Uchimura", "Uncharted 2", "Unreal", "Debug"};
+							ImGui::Combo("Mode##LayerTM", &layer.toneMapMode, modes, IM_ARRAYSIZE(modes));
+
+							if (layer.toneMapMode == 5) { // Uchimura
+								bool autoTune = layer.autoTuneEnabled != 0;
+								if (ImGui::Checkbox("Enable Auto-Tune Uchimura", &autoTune)) {
+									layer.autoTuneEnabled = autoTune ? 1 : 0;
+								}
+								if (layer.autoTuneEnabled != 0) {
+									ImGui::SliderFloat("Min Contrast", &layer.minContrast, 0.1f, 1.0f);
+									ImGui::SliderFloat("Max Contrast", &layer.maxContrast, 1.0f, 5.0f);
+									ImGui::SliderFloat("Target Brightness", &layer.targetBrightness, 0.1f, 2.0f);
+									ImGui::TextDisabled("Auto P: %.2f | A: %.2f | M: %.2f", layer.autoUchimuraP, layer.autoUchimuraA, layer.autoUchimuraM);
+								} else {
+									ImGui::SliderFloat("Max Brightness (P)", &layer.uchimuraP, 0.1f, 10.0f);
+									ImGui::SliderFloat("Contrast (a)", &layer.uchimuraA, 0.1f, 5.0f);
+									ImGui::SliderFloat("Linear Start (m)", &layer.uchimuraM, 0.0f, 1.0f);
+									ImGui::SliderFloat("Linear Length (l)", &layer.uchimuraL, 0.0f, 1.0f);
+									ImGui::SliderFloat("Black (c)", &layer.uchimuraC, 1.0f, 5.0f);
+									ImGui::SliderFloat("Pedestal (b)", &layer.uchimuraB, 0.0f, 1.0f);
+								}
+							}
+						}
+
+						if (ImGui::TreeNode("ASC CDL & White Balance")) {
+							ImGui::ColorEdit3("Slope##LayerCDL", &layer.cdlSlope.x);
+							ImGui::ColorEdit3("Offset##LayerCDL", &layer.cdlOffset.x);
+							ImGui::ColorEdit3("Power##LayerCDL", &layer.cdlPower.x);
+							ImGui::SliderFloat("Saturation##LayerCDL", &layer.cdlSaturation, 0.0f, 3.0f);
+
+							ImGui::Separator();
+							ImGui::SliderFloat("Temperature (K)", &layer.whiteTemp, 2000.0f, 12000.0f);
+							ImGui::SliderFloat("Tint", &layer.whiteTint, -1.0f, 1.0f);
+
+							if (isScene) {
+								ImGui::Separator();
+								bool ltmEnabled = layer.ltmEnabled != 0;
+								if (ImGui::Checkbox("Enable Local Tone Mapping (LTM)", &ltmEnabled)) {
+									layer.ltmEnabled = ltmEnabled ? 1 : 0;
+								}
+								if (layer.ltmEnabled != 0) {
+									ImGui::SliderFloat("EV Spread", &layer.ltmEvSpread, 0.0f, 4.0f);
+									ImGui::SliderFloat("Well Exposed Target", &layer.ltmTarget, 0.0f, 1.0f);
+									ImGui::SliderFloat("Well Exposed Sigma", &layer.ltmSigma, 0.01f, 1.0f);
+									ImGui::SliderFloat("Weight Contrast", &layer.ltmWeightContrast, 0.0f, 1.0f);
+									ImGui::SliderFloat("Weight Saturation", &layer.ltmWeightSaturation, 0.0f, 1.0f);
+									ImGui::SliderFloat("Weight Exposedness", &layer.ltmWeightExposedness, 0.0f, 1.0f);
+									ImGui::SliderFloat("Boost Local Contrast", &layer.ltmBoostLocalContrast, 0.0f, 2.0f);
+								}
+							}
+							ImGui::TreePop();
+						}
+
+						ImGui::EndTabItem();
+					}
+				};
+
+				drawLayerSettings("Scene Layer", s_exposureData.layers[0], true);
+				drawLayerSettings("Sky Layer", s_exposureData.layers[1], false);
+
+				ImGui::EndTabBar();
+			}
 
 			const char* toneModes[] = {
 				"ACES",
@@ -118,30 +230,8 @@ namespace brassica::ui {
 				"None"
 			};
 			int currentMode = static_cast<int>(s_tonemapPush.toneMapMode);
-			if (ImGui::Combo("Mode##Tone", &currentMode, toneModes, IM_ARRAYSIZE(toneModes))) {
+			if (ImGui::Combo("Fallback Mode##Tone", &currentMode, toneModes, IM_ARRAYSIZE(toneModes))) {
 				s_tonemapPush.toneMapMode = static_cast<std::uint32_t>(currentMode);
-			}
-
-			if (currentMode == 5) { // Uchimura
-				ImGui::SliderFloat("Uchimura P##Tone", &s_tonemapPush.pMax, 0.1f, 5.0f);
-				ImGui::SliderFloat("Uchimura a##Tone", &s_tonemapPush.pA, 0.1f, 5.0f);
-				ImGui::SliderFloat("Uchimura m##Tone", &s_tonemapPush.pM, 0.0f, 1.0f);
-				ImGui::SliderFloat("Uchimura l##Tone", &s_tonemapPush.pL, 0.0f, 1.0f);
-				ImGui::SliderFloat("Uchimura c##Tone", &s_tonemapPush.pC, 0.1f, 5.0f);
-				ImGui::SliderFloat("Uchimura b##Tone", &s_tonemapPush.pB, 0.0f, 1.0f);
-			}
-
-			ImGui::SliderFloat("Contrast##Tone", &s_tonemapPush.contrast, 0.0f, 3.0f);
-			ImGui::SliderFloat("Saturation##Tone", &s_tonemapPush.saturation, 0.0f, 3.0f);
-			ImGui::SliderFloat("Temperature##Tone", &s_tonemapPush.temperature, -1.0f, 1.0f);
-			ImGui::SliderFloat("Tint##Tone", &s_tonemapPush.tint, -1.0f, 1.0f);
-
-			if (ImGui::TreeNode("ASC CDL Color Grading")) {
-				ImGui::ColorEdit3("Slope##CDL", &s_tonemapPush.cdlSlope.x);
-				ImGui::ColorEdit3("Offset##CDL", &s_tonemapPush.cdlOffset.x);
-				ImGui::ColorEdit3("Power##CDL", &s_tonemapPush.cdlPower.x);
-				ImGui::SliderFloat("CDL Saturation##CDL", &s_tonemapPush.cdlSaturation, 0.0f, 3.0f);
-				ImGui::TreePop();
 			}
 
 			ImGui::Separator();

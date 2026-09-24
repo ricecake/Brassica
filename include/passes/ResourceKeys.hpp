@@ -25,6 +25,28 @@ namespace brassica {
 
 	struct ClusteredLighting {};
 
+	struct AutoExposureBuffer {};
+
+	struct BloomTextureMip0 {};
+	struct BloomTextureMip1 {};
+	struct BloomTextureMip2 {};
+	struct BloomTextureMip3 {};
+	struct BloomTextureMip4 {};
+
+	struct LtmExpTextureMip0 {};
+	struct LtmExpTextureMip1 {};
+	struct LtmExpTextureMip2 {};
+	struct LtmExpTextureMip3 {};
+	struct LtmExpTextureMip4 {};
+
+	struct LtmWgtTextureMip0 {};
+	struct LtmWgtTextureMip1 {};
+	struct LtmWgtTextureMip2 {};
+	struct LtmWgtTextureMip3 {};
+	struct LtmWgtTextureMip4 {};
+
+	struct LtmFusedTexture {};
+
 	// The result of TerrainPass::BuildOrUpdateAccelerationStructure, registered into the graph
 	// as an Imported AccelerationStructure resource -- see the AccelerationStructure
 	// resource-kind plan. The build itself stays entirely out-of-band (TerrainPass's own
