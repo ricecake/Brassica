@@ -17,11 +17,11 @@ layout(push_constant) uniform TerrainPushConstants {
 }
 params;
 
-// Shared in both terrain.task and terrain.mesh
 struct TaskPayload {
-    vec2 relMeshletMinXZ[512]; // Explicit spatial anchor
-    uint renderLOD[512];       // The LOD level for vertex density
-    uint morphLOD[512];        // The parent LOD for outer-ring morphing
+    vec2 relMeshletMinXZ[512];
+    uint renderLOD[512];
+    uint morphLOD[512];
+    uint childXY[512];         // NEW: (cy << 16) | cx
 };
 
 taskPayloadSharedEXT TaskPayload payload;
@@ -103,6 +103,35 @@ void main() {
 		}
 	}
 
+	uint lodDiff = morphLOD - lodLevel;
+	uint gridDim = 1u << lodDiff;
+	uint cx = payload.childXY[taskIndex] & 0xFFFFu;
+	uint cy = payload.childXY[taskIndex] >> 16u;
+
+	bool isTopMacroEdge = (ly == 0) && (cy == 0);
+	bool isBottomMacroEdge = (ly == 10) && (cy == gridDim - 1);
+	bool isLeftMacroEdge = (lx == 0) && (cx == 0);
+	bool isRightMacroEdge = (lx == 10) && (cx == gridDim - 1);
+
+	bool isOddBoundaryInternal = ((lx % 2 != 0) && (isTopMacroEdge || isBottomMacroEdge)) ||
+	                     ((ly % 2 != 0) && (isLeftMacroEdge || isRightMacroEdge));
+
+	if (isOddBoundaryInternal) {
+		vec2 localA = vec2(float(lx - (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly - (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
+		vec2 localB = vec2(float(lx + (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly + (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
+
+		vec2 relBaseA = relMeshletMinXZ + localA;
+		vec2 relBaseB = relMeshletMinXZ + localB;
+
+		vec2 worldA = uCameraPosition.xz + relBaseA;
+		vec2 worldB = uCameraPosition.xz + relBaseB;
+
+		float hA = sampleTerrainClipmap(params.clipmapIndex, worldA, morphLOD, params.gridParams.w).r;
+		float hB = sampleTerrainClipmap(params.clipmapIndex, worldB, morphLOD, params.gridParams.w).r;
+
+		height = (hA + hB) * 0.5;
+	}
+
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	vec3 relWorldPos = vec3(relMorphedXZ.x, height - dropOff - uCameraPosition.y, relMorphedXZ.y);
@@ -152,7 +181,7 @@ void main() {
 	// float shift = psrdnoise((texelSize(lodLevel) * warp + morphedWorldXZ) / texelSize(lodLevel));
 	// lodColor = hueShift(lodColor, shift);
 
-vec3 debugColors[8] = vec3[](
+	vec3 debugColors[8] = vec3[](
 		vec3(1.0, 0.0, 0.0), // LOD 0: Red
 		vec3(1.0, 0.5, 0.0), // LOD 1: Orange
 		vec3(1.0, 1.0, 0.0), // LOD 2: Yellow
@@ -166,6 +195,12 @@ vec3 debugColors[8] = vec3[](
 	// Modulo ensures safety if LODs exceed the array bounds
 	vec3 lodColor = debugColors[lodLevel % 8u];
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
+
+	// Only generate skirts on the absolute outer edges of the macro-slot
+	bool drawSkirtTop = (ly == 0) && (cy == 0);
+	bool drawSkirtBottom = (ly == 10) && (cy == gridDim - 1);
+	bool drawSkirtLeft = (lx == 0) && (cx == 0);
+	bool drawSkirtRight = (lx == 10) && (cx == gridDim - 1);
 
 	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
 	if (isBoundarySample) {
@@ -231,8 +266,8 @@ vec3 debugColors[8] = vec3[](
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtTop;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtTop;
 	}
 
 	if (ly == 10 && lx < 10 && lx % 2 == 0) { // Bottom edge
@@ -245,8 +280,8 @@ vec3 debugColors[8] = vec3[](
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtBottom;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtBottom;
 	}
 
 	if (lx == 0 && ly < 10 && ly % 2 == 0) { // Left edge
@@ -259,8 +294,8 @@ vec3 debugColors[8] = vec3[](
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtLeft;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtLeft;
 	}
 
 	if (lx == 10 && ly < 10 && ly % 2 == 0) { // Right edge
@@ -273,7 +308,7 @@ vec3 debugColors[8] = vec3[](
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtRight;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtRight;
 	}
 }

@@ -17,11 +17,11 @@ layout(push_constant) uniform TerrainPushConstants {
 }
 params;
 
-// Shared in both terrain.task and terrain.mesh
 struct TaskPayload {
-    vec2 relMeshletMinXZ[512]; // Explicit spatial anchor
-    uint renderLOD[512];       // The LOD level for vertex density
-    uint morphLOD[512];        // The parent LOD for outer-ring morphing
+    vec2 relMeshletMinXZ[512];
+    uint renderLOD[512];
+    uint morphLOD[512];
+    uint childXY[512];         // NEW: (cy << 16) | cx
 };
 
 taskPayloadSharedEXT TaskPayload payload;
@@ -166,6 +166,7 @@ void main() {
 			float subSize = baseMeshletSize * getLODScale(float(targetLOD));
 			uint gridDim = 1 << lodDiff;
 
+			// Inside the emit loop in terrain.task
 			for (uint i = 0; i < emitCount; i++) {
 				uint lx = i % gridDim;
 				uint ly = i / gridDim;
@@ -173,10 +174,10 @@ void main() {
 				uint writeIdx = baseIdx + i;
 				payload.relMeshletMinXZ[writeIdx] = relMinB.xz + vec2(lx, ly) * subSize;
 				payload.renderLOD[writeIdx] = targetLOD;
-				payload.morphLOD[writeIdx] = lodLevel; // Track parent for seamless edge morphing
+				payload.morphLOD[writeIdx] = lodLevel;
+				payload.childXY[writeIdx] = (ly << 16) | lx; // Track local grid position
 			}
 		}
-
 	}
 
 	barrier();
