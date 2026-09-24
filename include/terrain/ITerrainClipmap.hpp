@@ -1,12 +1,13 @@
 #pragma once
 
+#include "constants.h"
 #include "IManager.hpp"
 
 namespace brassica {
 
 	struct TerrainClipmapState {
-		uint32_t numLODs{10};
-		float    baseTexelSize{0.5f};
+		uint32_t numLODs{constants::Class::Terrain::DefaultMaxLODs};
+		float    baseTexelSize{constants::Class::Terrain::BaseTexelSize};
 
 		auto GetReflection() const {
 			return std::make_tuple(

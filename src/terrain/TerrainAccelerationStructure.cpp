@@ -5,6 +5,7 @@
 #include <cstring>
 #include <vector>
 
+#include "constants.h"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 
@@ -82,7 +83,7 @@ namespace brassica {
 				return static_cast<void*>(nullptr);
 			};
 
-		uint32_t       maxAABBs = 12 * 16 * 16;
+		uint32_t       maxAABBs = constants::Class::Terrain::DefaultMaxLODs * constants::Class::Terrain::MeshletCountPerLOD;
 		vk::DeviceSize aabbBufferSize = sizeof(std::uint64_t) + sizeof(VkAabbPositionsKHR) * maxAABBs;
 
 		createBuffer(
@@ -224,7 +225,7 @@ namespace brassica {
 
 		InitAccelerationStructures();
 
-		uint32_t       maxAABBs = numLODs * 16 * 16;
+		uint32_t       maxAABBs = numLODs * constants::Class::Terrain::MeshletCountPerLOD;
 		vk::DeviceSize aabbBufferSize = sizeof(std::uint64_t) + sizeof(VkAabbPositionsKHR) * maxAABBs;
 
 		cmd.fillBuffer(aabbBuffer.buffer, 0, sizeof(std::uint64_t), 0);

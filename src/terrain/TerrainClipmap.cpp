@@ -240,12 +240,12 @@ namespace brassica {
 
 		if (maxDist > 0.0f) {
 			uint32_t derivedLODs = 1;
-			while (derivedLODs < 12 &&
+			while (derivedLODs < constants::Class::Terrain::DefaultMaxLODs &&
 			       (static_cast<float>(TERRAIN_MAP_DIM) * GetLODScale(static_cast<float>(derivedLODs - 1)) *
 			        baseTexelSize * 0.5f) < maxDist) {
 				derivedLODs++;
 			}
-			numLODs = std::clamp(derivedLODs, 1u, 12u);
+			numLODs = std::clamp(derivedLODs, 1u, static_cast<uint32_t>(constants::Class::Terrain::DefaultMaxLODs));
 		} else {
 			numLODs = lods;
 		}

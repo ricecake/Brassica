@@ -6,6 +6,7 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
@@ -23,7 +24,12 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct WaterPushConstants {
-		glm::uvec4    gridParams{14, 16, 3584, 0}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+		glm::uvec4    gridParams{
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::MeshletsPerRow,
+			constants::Class::Terrain::TotalMeshlets,
+			0
+		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
@@ -104,7 +110,12 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.gridParams = glm::uvec4(14, 16, 3584, 0);
+			push.gridParams = glm::uvec4(
+				p.terrainGridParams.x,
+				p.terrainGridParams.y,
+				p.terrainGridParams.z,
+				0
+			);
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
 		}

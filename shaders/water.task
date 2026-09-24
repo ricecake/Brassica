@@ -16,7 +16,6 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gNormalIndex;
 	uint  padding;
 }
-
 params;
 
 struct TaskPayload {
@@ -26,38 +25,38 @@ struct TaskPayload {
 
 taskPayloadSharedEXT TaskPayload payload;
 
-// Water ring distance scale: continuous growth with distance from camera
 float getWaterRingScale(float ring) {
-	// if (ring <= 3.0) {
-		return pow(2.0, ring);
-	// }
-	// return 8.0 * pow(2.25, ring - 3.0);
+	return pow(2.0, ring);
 }
 
-// Check AABB against frustum planes
-bool isAABBVisible(vec3 minB, vec3 maxB, mat4 vp) {
+// Check AABB against frustum planes in camera-relative space
+bool isAABBVisible(vec3 relMinB, vec3 relMaxB, mat4 vp) {
+	// Camera origin (0,0,0) containment check
+	vec3 margin = vec3(50.0, 100.0, 50.0);
+	if (relMinB.x <= margin.x && relMaxB.x >= -margin.x &&
+	    relMinB.z <= margin.z && relMaxB.z >= -margin.z &&
+	    relMinB.y <= margin.y && relMaxB.y >= -margin.y) {
+		return true;
+	}
+
 	vec4 planes[6];
 	planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]); // Left
 	planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]); // Right
 	planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]); // Bottom
 	planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]); // Top
-	planes[4] = vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]);                                             // Near
+	planes[4] = vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]); // Near
 	planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]); // Far
 
 	for (int i = 0; i < 6; i++) {
-		vec3 pVertex = minB;
-		if (planes[i].x >= 0.0)
-			pVertex.x = maxB.x;
-		if (planes[i].y >= 0.0)
-			pVertex.y = maxB.y;
-		if (planes[i].z >= 0.0)
-			pVertex.z = maxB.z;
+		vec3 pVertex = relMinB;
+		if (planes[i].x >= 0.0) pVertex.x = relMaxB.x;
+		if (planes[i].y >= 0.0) pVertex.y = relMaxB.y;
+		if (planes[i].z >= 0.0) pVertex.z = relMaxB.z;
 
 		float len = length(planes[i].xyz);
-		vec4  normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
+		vec4 normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
 
-		// Safety margin for wave height displacement
-		if (dot(normPlane.xyz, pVertex) + normPlane.w < -50.0) {
+		if (dot(normPlane.xyz, pVertex) + normPlane.w < -100.0) {
 			return false;
 		}
 	}
@@ -88,8 +87,7 @@ void main() {
 		uint row = localID / meshletsPerRow;
 		uint col = localID % meshletsPerRow;
 
-		// Low camera pitch angle detection: boost density when camera angle is grazing horizontal
-		vec3  camForward = normalize(-uInvViewMatrix[2].xyz);
+		vec3 camForward = normalize(-uInvViewMatrix[2].xyz);
 		float pitch = abs(camForward.y);
 		float lowAngleFactor = clamp(1.0 - pitch * 2.5, 0.0, 1.0);
 		float angleCompression = mix(1.0, 0.65, lowAngleFactor);
@@ -97,30 +95,35 @@ void main() {
 		float baseMeshletSize = 24.0;
 		float meshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel)) * angleCompression;
 
-		vec2  cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 		float maxWaveAmp = 20.0;
-		vec3  minB = vec3(
-			cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-			params.waterLevel - maxWaveAmp,
-			cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
+
+		vec3 relMinB = vec3(
+			relCameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
+			params.waterLevel - maxWaveAmp - uCameraPosition.y,
+			relCameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
 		);
-		vec3 maxB = minB + vec3(meshletSize, 2.0 * maxWaveAmp, meshletSize);
+		vec3 relMaxB = relMinB + vec3(meshletSize, 2.0 * maxWaveAmp, meshletSize);
 
-		vec2  maxRel = max(abs(minB.xz - uCameraPosition.xz), abs(maxB.xz - uCameraPosition.xz));
+		vec2 maxRel = max(abs(relMinB.xz), abs(relMaxB.xz));
 		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
-		minB.y -= maxDropOff;
+		relMinB.y -= maxDropOff;
 
-		visible = isAABBVisible(minB, maxB, uViewProjMatrix);
+		mat4 viewRel = mat4(mat3(uViewMatrix));
+		mat4 viewProjRel = uProjMatrix * viewRel;
+
+		visible = isAABBVisible(relMinB, relMaxB, viewProjRel);
 
 		if (visible && ringLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel - 1)) * angleCompression;
-			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
-			bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
-			bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
+			bool insideX = relMinB.x >= prevRelSnap.x - prevExtent && relMaxB.x <= prevRelSnap.x + prevExtent;
+			bool insideZ = relMinB.z >= prevRelSnap.y - prevExtent && relMaxB.z <= prevRelSnap.y + prevExtent;
 
-			// Cull meshlet if its bounding box is entirely inside the finer inner ring
 			if (insideX && insideZ) {
 				visible = false;
 			}
