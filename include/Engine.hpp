@@ -95,6 +95,8 @@ namespace brassica {
 
 		vk::Instance GetInstance() const { return instance; }
 
+		vk::PhysicalDevice GetPhysicalDevice() const { return chosenGPU; }
+
 		vk::Device GetDevice() const { return device; }
 
 		VmaAllocator GetAllocator() const { return allocator; }
