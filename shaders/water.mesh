@@ -10,13 +10,13 @@ layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
+	uint  sceneColorIndex;
 }
 params;
 

@@ -31,15 +31,19 @@ namespace brassica {
 	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
 		glm::uvec4 gridParams{
-			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::DefaultWindowLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,
 			constants::Class::Terrain::MapDim
-		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		}; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
+		std::uint32_t baseLOD{0};
+		std::uint32_t maxLODs{constants::Class::Terrain::DefaultMaxLODs};
+		std::uint32_t pad0{0};
+		std::uint32_t pad1{0};
 	};
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
@@ -106,6 +110,8 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.gridParams = p.terrainGridParams;
+			push.baseLOD = p.terrainBaseLOD;
+			push.maxLODs = p.terrainMaxLODs;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {

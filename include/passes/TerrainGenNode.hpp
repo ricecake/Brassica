@@ -22,15 +22,19 @@ namespace brassica {
 
 	struct TerrainGenPushConstants {
 		glm::uvec4 gridParams{
-			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::DefaultWindowLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,
 			constants::Class::Terrain::MapDim
-		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		}; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		std::uint32_t clipmapStorageIdx{0};
 		std::uint32_t minMaxStorageIdx{0};
 		std::uint32_t biomeStorageIdx{0};
 		std::uint32_t visibilityStorageIdx{0};
+		std::uint32_t baseLOD{0};
+		std::uint32_t maxLODs{constants::Class::Terrain::DefaultMaxLODs};
+		std::uint32_t pad0{0};
+		std::uint32_t pad1{0};
 	};
 
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {
@@ -74,6 +78,8 @@ namespace brassica {
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			cameraPos = p.cameraPosition;
 			push.gridParams = p.terrainGridParams;
+			push.baseLOD = p.terrainBaseLOD;
+			push.maxLODs = p.terrainMaxLODs;
 			hasUpdate = p.cameraPosition != p.previousCameraPosition;
 		}
 
@@ -85,28 +91,28 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainClipmapTexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = TerrainClipmapDesc(push.gridParams.x),
+					.desc = TerrainClipmapDesc(push.maxLODs),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainMinMaxTexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = TerrainMinMaxDesc(push.gridParams.x),
+					.desc = TerrainMinMaxDesc(push.maxLODs),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainBiomeTexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = TerrainBiomeDesc(push.gridParams.x),
+					.desc = TerrainBiomeDesc(push.maxLODs),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainTileVisibilityTexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = TerrainTileVisibilityDesc(push.gridParams.x),
+					.desc = TerrainTileVisibilityDesc(push.maxLODs),
 				}
 			);
 			r.realizations.push_back(

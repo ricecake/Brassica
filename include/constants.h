@@ -173,13 +173,14 @@ namespace brassica {
 				constexpr int   VerticesPerMeshlet = BaseMeshletDimension * BaseMeshletDimension; // 121
 				constexpr int   SkirtVertices = (BaseMeshletDimension - 1) * 4;                    // 40
 				constexpr int   TotalMeshletVertices = VerticesPerMeshlet + SkirtVertices;          // 161
-				constexpr int   DefaultMaxLODs = 14;
+				constexpr int   DefaultMaxLODs = 23;
+				constexpr int   DefaultWindowLODs = 12;
 				constexpr int   MapDim = 1088;                                                     // 1024 + 64 grid cell padding
 				constexpr float BaseTexelSize = 0.5f;
 				constexpr int   MeshletsPerRow = 16;                                               // 16x16 grid of meshlets per LOD
 				constexpr int   MeshletGridSizePerLOD = 4;                                          // 4x4
 				constexpr int   MeshletCountPerLOD = MeshletsPerRow * MeshletsPerRow;               // 256
-				constexpr int   TotalMeshlets = DefaultMaxLODs * MeshletCountPerLOD;               // 3584
+				constexpr int   TotalMeshlets = DefaultWindowLODs * MeshletCountPerLOD;            // 3072 (active window)
 				constexpr float PathCorridorWidth = 0.15f;
 			} // namespace Terrain
 

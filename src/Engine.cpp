@@ -1145,12 +1145,14 @@ namespace brassica {
 
 		terrainClipmap.UpdateCameraPosition(camera.position);
 
-		uint32_t lods = terrainClipmap.GetNumLODs();
+		uint32_t maxLODs = terrainClipmap.GetNumLODs();
+		uint32_t windowLODs = terrainClipmap.GetWindowLODs();
+		uint32_t baseLOD = terrainClipmap.GetBaseLOD();
 		uint32_t meshletsPerRow = constants::Class::Terrain::MeshletsPerRow;
-		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
+		uint32_t totalMeshlets = windowLODs * meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
-		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
+		terrainPush.gridParams = glm::uvec4(windowLODs, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
 
 		bool       terrainHasUpdate = false;
 
@@ -1199,6 +1201,8 @@ namespace brassica {
 			.cameraPosition = camera.position,
 			.previousCameraPosition = previousCameraPosition,
 			.terrainGridParams = terrainPush.gridParams,
+			.terrainBaseLOD = baseLOD,
+			.terrainMaxLODs = maxLODs,
 			.terrainHasUpdate = terrainHasUpdate,
 			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
 			.waterLevel = 0.0f,

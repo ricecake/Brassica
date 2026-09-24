@@ -68,7 +68,7 @@ namespace brassica {
 		// consumes Terrain's Create output and re-produces it, so Deferred's Read now picks up
 		// this node's write too -- the same last-writer-wins chaining WaterNode/
 		// AtmosphereCompositeNode already rely on for Modify<HdrColor>.
-		using Resources = graph::Declares<GBuffer<graph::Modify>, graph::Create<EntityIndirectBuffer<Tag>>>;
+		using Resources = graph::Declares<GBuffer<graph::ModifyOp>, graph::Create<EntityIndirectBuffer<Tag>>>;
 
 #if BRASSICA_HAS_VULKAN
 		static constexpr render::GraphicsPipelineState kPipelineState{

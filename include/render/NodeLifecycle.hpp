@@ -40,11 +40,13 @@ namespace brassica::render {
 		glm::vec3  cameraPosition{0.0f};
 		glm::vec3  previousCameraPosition{-9999.0f};
 		glm::uvec4 terrainGridParams{
-			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::DefaultWindowLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,
 			constants::Class::Terrain::MapDim
 		};
+		std::uint32_t terrainBaseLOD{0};
+		std::uint32_t terrainMaxLODs{constants::Class::Terrain::DefaultMaxLODs};
 		bool       terrainHasUpdate{false};
 		glm::vec3  waterColor{0.05f, 0.45f, 0.85f};
 		float      waterLevel{0.0f};

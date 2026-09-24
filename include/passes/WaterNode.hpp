@@ -25,11 +25,11 @@ namespace brassica {
 
 	struct WaterPushConstants {
 		glm::uvec4    gridParams{
-			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::DefaultWindowLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,
 			0
-		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+		}; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};

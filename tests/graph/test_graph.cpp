@@ -31,6 +31,7 @@
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "ServiceLocator.hpp"
+#include "terrain/ITerrainClipmap.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "ui/QuickSettingsWidget.hpp"
@@ -1198,4 +1199,26 @@ TEST_CASE("QuickSettingsWidget camera mode UI integration via ServiceLocator") {
 
 	camData->mode = brassica::CameraMode::Accelerated;
 	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Accelerated);
+}
+
+TEST_CASE("Height-dependent CalculateBaseLOD sliding window calculation") {
+	uint32_t totalMaxLODs = 23;
+	uint32_t windowLODs = 12;
+
+	// Ground level <= 50m: baseLOD is 0
+	CHECK(brassica::CalculateBaseLOD(0.0f, totalMaxLODs, windowLODs) == 0);
+	CHECK(brassica::CalculateBaseLOD(25.0f, totalMaxLODs, windowLODs) == 0);
+	CHECK(brassica::CalculateBaseLOD(50.0f, totalMaxLODs, windowLODs) == 0);
+
+	// Altitude 100m (50 * 2^1): baseLOD = 1 (LOD 0 falls off)
+	CHECK(brassica::CalculateBaseLOD(100.0f, totalMaxLODs, windowLODs) == 1);
+
+	// Altitude 200m (50 * 2^2): baseLOD = 2 (LODs 0 and 1 fall off)
+	CHECK(brassica::CalculateBaseLOD(200.0f, totalMaxLODs, windowLODs) == 2);
+
+	// Altitude 800m (50 * 2^4): baseLOD = 4
+	CHECK(brassica::CalculateBaseLOD(800.0f, totalMaxLODs, windowLODs) == 4);
+
+	// Extremely high altitude: clamped to maxBaseLOD = 23 - 12 = 11
+	CHECK(brassica::CalculateBaseLOD(500000.0f, totalMaxLODs, windowLODs) == 11);
 }

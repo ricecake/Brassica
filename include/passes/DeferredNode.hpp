@@ -23,11 +23,11 @@ namespace brassica {
 
 	struct DeferredPushConstants {
 		glm::uvec4 gridParams{
-			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::DefaultWindowLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,
 			constants::Class::Terrain::MapDim
-		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		}; // x = windowLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gNormalIndex{0};
 		std::uint32_t gAlbedoIndex{0};
@@ -38,6 +38,8 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
+		std::uint32_t baseLOD{0};
+		std::uint32_t maxLODs{constants::Class::Terrain::DefaultMaxLODs};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -84,6 +86,8 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.gridParams = p.terrainGridParams;
+			push.baseLOD = p.terrainBaseLOD;
+			push.maxLODs = p.terrainMaxLODs;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
