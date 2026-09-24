@@ -31,6 +31,7 @@ namespace brassica {
 		std::uint32_t minMaxStorageIdx{0};
 		std::uint32_t biomeStorageIdx{0};
 		std::uint32_t visibilityStorageIdx{0};
+		bool forceRegeneration = true;
 	};
 
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {
@@ -49,6 +50,7 @@ namespace brassica {
 		TerrainGenPushConstants          push{};
 		glm::vec3                        cameraPos{0.0f};
 		bool                             hasUpdate{true};
+		bool forceRegeneration{true};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -129,11 +131,12 @@ namespace brassica {
 				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
 			};
 
-			if (hasUpdate) {
+			if (hasUpdate || forceRegeneration) {
 				push.clipmapStorageIdx = ctx.StorageIndex<TerrainClipmapTexture>();
 				push.minMaxStorageIdx = ctx.StorageIndex<TerrainMinMaxTexture>();
 				push.biomeStorageIdx = ctx.StorageIndex<TerrainBiomeTexture>();
 				push.visibilityStorageIdx = ctx.StorageIndex<TerrainTileVisibilityTexture>();
+				push.forceRegeneration = forceRegeneration;
 
 				std::array<vk::PushConstantRange, 1> pushConstantRanges{
 					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainGenPushConstants)}
@@ -167,6 +170,7 @@ namespace brassica {
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
 				vkCmd.dispatch(groupX, groupY, groupZ);
+				forceRegeneration = false;
 			}
 
 			if (false && terrainAS) {

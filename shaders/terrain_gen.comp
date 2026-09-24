@@ -18,6 +18,7 @@ layout(push_constant) uniform PushConstants {
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
+	bool forceRegeneration;
 } push;
 
 void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
@@ -75,7 +76,7 @@ void main() {
 	int deltaX = delta.x;
 	int deltaZ = delta.y;
 
-	if (uFrameIndex > 0 && deltaX == 0 && deltaZ == 0) {
+	if (!push.forceRegeneration && uFrameIndex > 0 && deltaX == 0 && deltaZ == 0) {
 		return;
 	}
 
@@ -91,7 +92,7 @@ void main() {
 		is_dirty = dirtyX || dirtyZ;
 	}
 
-	if (uFrameIndex > 0 && !subgroupAny(is_dirty)) {
+	if (!push.forceRegeneration && uFrameIndex > 0 && !subgroupAny(is_dirty)) {
 		return;
 	}
 
