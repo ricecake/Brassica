@@ -42,6 +42,8 @@ namespace brassica {
 		std::uint32_t visibilityIndex{0};
 		std::uint32_t baseLOD{0};
 		std::uint32_t maxLODs{constants::Class::Terrain::DefaultMaxLODs};
+		std::uint32_t pad0{0};
+		std::uint32_t pad1{0};
 	};
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1

@@ -36,8 +36,6 @@ namespace brassica {
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
 		std::uint32_t sceneColor{0};
-		std::uint32_t baseLOD{0};
-		std::uint32_t maxLODs{constants::Class::Terrain::DefaultMaxLODs};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -120,8 +118,6 @@ namespace brassica {
 			);
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
-			push.baseLOD = p.terrainBaseLOD;
-			push.maxLODs = p.terrainMaxLODs;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {

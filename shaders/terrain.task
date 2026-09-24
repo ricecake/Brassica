@@ -16,6 +16,8 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  visibilityIndex;
 	uint  baseLOD;
 	uint  maxLODs;
+	uint  pad0;
+	uint  pad1;
 }
 params;
 

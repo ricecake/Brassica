@@ -33,6 +33,8 @@ namespace brassica {
 		std::uint32_t visibilityStorageIdx{0};
 		std::uint32_t baseLOD{0};
 		std::uint32_t maxLODs{constants::Class::Terrain::DefaultMaxLODs};
+		std::uint32_t pad0{0};
+		std::uint32_t pad1{0};
 	};
 
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {

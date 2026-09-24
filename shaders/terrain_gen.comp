@@ -20,6 +20,8 @@ layout(push_constant) uniform PushConstants {
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
 	uint  baseLOD;
 	uint  maxLODs;
+	uint  pad0;
+	uint  pad1;
 } push;
 
 void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
