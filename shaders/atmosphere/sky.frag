@@ -213,30 +213,38 @@ void main() {
 	vec3 cirrusColor = vec3(0.0);
 	if (true) {
 		float cirrusAlt = 10.0; // 10 km altitude
-		float camAltKM = uCameraPosition.y / (1000.0 * worldScale);
-		float h_cirrus = cirrusAlt - camAltKM;
+		float cloudRadius = planetRadius + cirrusAlt;
 
-		if (worldRay.y > 0.0) {
-			float t_cirrus = h_cirrus / max(worldRay.y, 0.001);
-			vec3  p_cirrus = uCameraPosition.xyz + worldRay * (t_cirrus * 1000.0 * worldScale);
+		float b = 2.0 * r * worldRay.y;
+		float c = (r * r) - (cloudRadius * cloudRadius);
+		float det = (b * b) - (4.0 * c);
 
-			// Advect cirrus using global flow
-			vec3 advect = vec3(1.0, 0.0, 1.0)*uTime * 0.5; // Cirrus moves slower relative to world
-			vec2 uv_cirrus = (p_cirrus.xz + advect.xz) * (0.00005 / worldScale);
+		if (det > 0.0) {
+			float sqrtDet = sqrt(det);
+			float t1 = (-b - sqrtDet) * 0.5;
+			float t2 = (-b + sqrtDet) * 0.5;
 
-			float n = (fbm_astral(vec3(uv_cirrus * 2.0, uTime * 0.01)) + 1.0) * 0.5;
-			float n2 = (fbm_astral(vec3(uv_cirrus * 5.0, uTime * 0.02 + 10.0)) + 1.0) * 0.5;
-			float noise = smoothstep(0.3, 0.8, n * n2);
+			float t_cirrus = (t1 > 0.0) ? t1 : t2;
 
-			vec3  T_cirrus = max(getTransmittance(kEarthRadius + cirrusAlt, sunDir.y), vec3(0.001));
-			float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
+			if (t_cirrus > 0.0) {
+				vec3 p_cirrus = uCameraPosition.xyz + worldRay * (t_cirrus * 1000.0 * worldScale);
 
-			// High-altitude cirrus receives strong scattered sky light even when noise is low
-			vec3 cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);
-			cirrusColor = cirrusLighting * noise * cirrusOpacity * 15.0;
+				vec3 advect = vec3(1.0, 0.0, 1.0) * uTime * 0.5;
+				vec2 uv_cirrus = (p_cirrus.xz + advect.xz) * (0.00005 / worldScale);
 
-			// Fade cirrus near horizon to avoid tiling artifacts
-			cirrusColor *= smoothstep(muHorizon, muHorizon+0.15, worldRay.y);
+				float n = (fbm_astral(vec3(uv_cirrus * 2.0, uTime * 0.01)) + 1.0) * 0.5;
+				float n2 = (fbm_astral(vec3(uv_cirrus * 5.0, uTime * 0.02 + 10.0)) + 1.0) * 0.5;
+				float noise = smoothstep(0.3, 0.8, n * n2);
+
+				vec3 T_cirrus = max(getTransmittance(planetRadius + cirrusAlt, sunDir.y), vec3(0.001));
+				float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
+
+				vec3 cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);
+				cirrusColor = cirrusLighting * noise * cirrusOpacity * 15.0;
+
+				float opticalDepthFade = exp(-t_cirrus * 0.0025);
+				cirrusColor *= opticalDepthFade;
+			}
 		}
 	}
 
