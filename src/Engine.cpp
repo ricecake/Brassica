@@ -6,6 +6,7 @@
 #include <fstream>
 
 #include "spdlog/spdlog.h"
+#include "terrain/TerrainMapExporter.hpp"
 
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
@@ -347,11 +348,12 @@ namespace brassica {
 	void Engine::Init(const EngineOptions& opts) {
 		ServiceLocator::SetInstance(&serviceLocator);
 
+		options = opts;
+
 		if (!inputHandler) {
 			inputHandler = CreateDefaultInputHandler();
 		}
 
-		options = opts;
 		InitWindow();
 		if (!InitVulkan()) {
 			spdlog::error("Vulkan initialization failed; engine cannot start.");
@@ -408,7 +410,14 @@ namespace brassica {
 		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
 		camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
 
-		terrainClipmap.Init(device, allocator, 10, 0.5f, 0.0f, camera.position);
+		terrainClipmap.Init(
+			device,
+			allocator,
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::BaseTexelSize,
+			0.0f,
+			camera.position
+		);
 
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),
@@ -661,6 +670,12 @@ namespace brassica {
 			} else {
 				camera.currentSpeed = 0.0f;
 			}
+		}
+		if (camera.position.y > 32000.0f) {
+			camera.position.y = 32000.0f;
+		}
+		if (camera.position.y < -1024.0f) {
+			camera.position.y = -1024.0f;
 		}
 	}
 
@@ -947,6 +962,18 @@ namespace brassica {
 	}
 
 	void Engine::Run() {
+		spdlog::info("Engine::Run options.renderTerrainMap = {}, path = '{}'", options.renderTerrainMap, options.terrainMapPath);
+		if (options.renderTerrainMap) {
+			spdlog::info("Terrain map export requested: output path '{}'...", options.terrainMapPath);
+			bool success = TerrainMapExporter::ExportGPU(*this, options.terrainMapPath, 4096, 2048);
+			if (success) {
+				spdlog::info("Terrain map export complete: '{}'. Exiting.", options.terrainMapPath);
+			} else {
+				spdlog::error("Failed to export terrain map to '{}'.", options.terrainMapPath);
+			}
+			return;
+		}
+
 		if (!device) {
 			spdlog::warn("Engine::Run called but Vulkan device is null.");
 			return;
@@ -1053,6 +1080,7 @@ namespace brassica {
 			aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
 		}
 
+		glm::vec3 previousCameraPosition = camera.position;
 		UpdateCamera(deltaTime);
 		lightManager.Update(deltaTime);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
@@ -1088,6 +1116,7 @@ namespace brassica {
 		ubo.viewProjMatrix = camera.viewProjMatrix;
 		ubo.invViewProjMatrix = camera.invViewProjMatrix;
 		ubo.cameraPosition = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
+		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
 		ubo.time = static_cast<float>(currentTime);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
@@ -1137,42 +1166,13 @@ namespace brassica {
 		terrainClipmap.UpdateCameraPosition(camera.position);
 
 		uint32_t lods = terrainClipmap.GetNumLODs();
-		uint32_t meshletsPerRow = 16;
+		uint32_t meshletsPerRow = constants::Class::Terrain::MeshletsPerRow;
 		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
-		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, TERRAIN_MAP_DIM);
+		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
 
-		glm::uvec4 offsets0_3{0u};
-		glm::uvec4 offsets4_7{0u};
-		glm::uvec4 offsets8_11{0u};
-		glm::uvec4 deltas0_3{0u};
-		glm::uvec4 deltas4_7{0u};
-		glm::uvec4 deltas8_11{0u};
 		bool       terrainHasUpdate = false;
-
-		for (uint32_t i = 0; i < terrainClipmap.GetNumLODs(); ++i) {
-			const auto& info = terrainClipmap.GetLevelInfo(i);
-			if (info.delta.x != 0 || info.delta.y != 0) {
-				terrainHasUpdate = true;
-			}
-			uint32_t packedOffset = (static_cast<uint32_t>(info.gridOffset.x) & 0xFFFFu) |
-				((static_cast<uint32_t>(info.gridOffset.y) & 0xFFFFu) << 16u);
-			uint32_t packedDelta = (static_cast<uint32_t>(info.delta.x) & 0xFFFFu) |
-				((static_cast<uint32_t>(info.delta.y) & 0xFFFFu) << 16u);
-			if (i < 4) {
-				offsets0_3[i] = packedOffset;
-				deltas0_3[i] = packedDelta;
-			} else if (i < 8) {
-				offsets4_7[i - 4] = packedOffset;
-				deltas4_7[i - 4] = packedDelta;
-			} else if (i < 12) {
-				offsets8_11[i - 8] = packedOffset;
-				deltas8_11[i - 8] = packedDelta;
-			}
-		}
-		terrainPush.lodOffsets0_3 = offsets0_3;
-		terrainPush.lodOffsets4_7 = offsets4_7;
 
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
@@ -1217,13 +1217,8 @@ namespace brassica {
 
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,
+			.previousCameraPosition = previousCameraPosition,
 			.terrainGridParams = terrainPush.gridParams,
-			.terrainLodOffsets0_3 = terrainPush.lodOffsets0_3,
-			.terrainLodOffsets4_7 = terrainPush.lodOffsets4_7,
-			.terrainLodOffsets8_11 = offsets8_11,
-			.terrainLodDeltas0_3 = deltas0_3,
-			.terrainLodDeltas4_7 = deltas4_7,
-			.terrainLodDeltas8_11 = deltas8_11,
 			.terrainHasUpdate = terrainHasUpdate,
 			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
 			.waterLevel = 0.0f,

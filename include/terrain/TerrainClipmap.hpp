@@ -6,14 +6,15 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "constants.h"
 #include "graph/Execution.hpp"
 #include "terrain/ITerrainClipmap.hpp"
 #include "vk_mem_alloc.h"
 
 namespace brassica {
 
-	constexpr uint32_t TERRAIN_MAP_DIM = 1088; // 1024 + 64 (1 grid cell padding for seamless off-screen streaming)
-	constexpr uint32_t DEFAULT_CLIPMAP_LODS = 10;
+	constexpr uint32_t TERRAIN_MAP_DIM = constants::Class::Terrain::MapDim;
+	constexpr uint32_t DEFAULT_CLIPMAP_LODS = constants::Class::Terrain::DefaultMaxLODs;
 
 	inline float GetLODScale(float lod) {
 		if (lod <= 3.0f) {
@@ -58,8 +59,8 @@ namespace brassica {
 			vk::Device       device,
 			VmaAllocator     allocator,
 			uint32_t         numLODs = DEFAULT_CLIPMAP_LODS,
-			float            baseTexelSize = 0.5f,
-			float            maxDistance = 32768.0f,
+			float            baseTexelSize = constants::Class::Terrain::BaseTexelSize,
+			float            maxDistance = 0.0f,
 			const glm::vec3& initialCameraPos = glm::vec3(0.0f)
 		);
 		void Cleanup();

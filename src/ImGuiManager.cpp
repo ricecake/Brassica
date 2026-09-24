@@ -30,6 +30,7 @@ namespace brassica {
 		ImGuiIO& io = ImGui::GetIO();
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		io.IniFilename = "imgui.ini"; // Initialize ImGui config system to store values
+		io.DisplaySize = ImVec2(1280.0f, 720.0f);
 
 		ImGui::StyleColorsDark();
 
@@ -150,6 +151,11 @@ namespace brassica {
 			ImGui_ImplVulkan_NewFrame();
 			if (m_window) {
 				ImGui_ImplGlfw_NewFrame();
+			} else {
+				ImGuiIO& io = ImGui::GetIO();
+				if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f) {
+					io.DisplaySize = ImVec2(1280.0f, 720.0f);
+				}
 			}
 		}
 

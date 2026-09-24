@@ -10,9 +10,6 @@ layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform DeferredPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-	uvec4 lodOffsets0_3;
-	uvec4 lodOffsets4_7;
-	uvec4 lodOffsets8_11;
 	uint  gPositionIndex;
 	uint  gNormalIndex;
 	uint  gAlbedoIndex;
@@ -62,10 +59,7 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 				params.minMaxIndex,
 				samplePos.xz,
 				stepLod,
-				params.gridParams.w,
-				params.lodOffsets0_3,
-				params.lodOffsets4_7,
-				params.lodOffsets8_11
+				params.gridParams.w
 			);
 			if (samplePos.y > minMax.y - dropOff + 1.0) {
 				continue;
@@ -76,10 +70,7 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 			params.clipmapIndex,
 			samplePos.xz,
 			stepLod,
-			params.gridParams.w,
-			params.lodOffsets0_3,
-			params.lodOffsets4_7,
-			params.lodOffsets8_11
+			params.gridParams.w
 		);
 		float terrainHeight = texSample.r - dropOff;
 

@@ -6,6 +6,7 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
@@ -29,10 +30,12 @@ namespace brassica {
 	// prefix of a push-constant block it actually uses, and every existing field's offset is
 	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
-		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-		glm::uvec4 lodOffsets0_3{0u};              // Toroidal offsets for LOD 0-3
-		glm::uvec4 lodOffsets4_7{0u};              // Toroidal offsets for LOD 4-7
-		glm::uvec4 lodOffsets8_11{0u};             // Toroidal offsets for LOD 8-11
+		glm::uvec4 gridParams{
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::MeshletsPerRow,
+			constants::Class::Terrain::TotalMeshlets,
+			constants::Class::Terrain::MapDim
+		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
@@ -103,9 +106,6 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.gridParams = p.terrainGridParams;
-			push.lodOffsets0_3 = p.terrainLodOffsets0_3;
-			push.lodOffsets4_7 = p.terrainLodOffsets4_7;
-			push.lodOffsets8_11 = p.terrainLodOffsets8_11;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {

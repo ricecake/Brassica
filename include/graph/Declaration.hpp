@@ -58,6 +58,9 @@ namespace brassica::graph {
 		using Produces = TypeList<K>;
 	};
 
+	template <ResourceRef K>
+	using ModifyKey = Modify<K, 0>;
+
 	// Transform<From, To> consumes one key and produces a different one -- e.g. tonemapping
 	// HdrColor into the Swapchain key. Unlike Modify, the two keys are not the same
 	// allocation-identity; this is the one case a flat Reads/Writes/Creates split can't

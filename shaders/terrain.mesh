@@ -1,6 +1,5 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
-//#extension GL_EXT_fragment_shading_rate : require
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
@@ -11,38 +10,36 @@ layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
-	uvec4 lodOffsets0_3;
-	uvec4 lodOffsets4_7;
-	uvec4 lodOffsets8_11;
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
 }
-
 params;
 
 struct TaskPayload {
-	uint meshletIDs[32];
-	uint lodLevels[32];
+    vec2 relMeshletMinXZ[512];
+    uint renderLOD[512];
+    uint morphLOD[512];
+    uint childXY[512];         // NEW: (cy << 16) | cx
 };
 
 taskPayloadSharedEXT TaskPayload payload;
-
+shared vec3 sharedPos[121];
 layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec4 outAlbedo[];
 
-vec3 pal(in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d) {
-	return a + b * cos(6.28318 * (c * t + d));
-}
-
 void main() {
-	uint taskIndex = gl_WorkGroupID.x;
-	uint meshletID = payload.meshletIDs[taskIndex];
-	uint lodLevel = payload.lodLevels[taskIndex];
-
 	SetMeshOutputsEXT(141, 240);
+
+	float baseMeshletSize = 32.0;
+	uint taskIndex = gl_WorkGroupID.x;
+	vec2 relMeshletMinXZ = payload.relMeshletMinXZ[taskIndex];
+	uint lodLevel = payload.renderLOD[taskIndex];
+	uint morphLOD = payload.morphLOD[taskIndex]; // Use for outer boundary checks
+	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
+	float parentMeshletSize = baseMeshletSize * getLODScale(float(morphLOD));
 
 	uint lx = gl_LocalInvocationID.x;
 	uint ly = gl_LocalInvocationID.y;
@@ -50,56 +47,45 @@ void main() {
 
 	uint meshletsPerRow = params.gridParams.y;
 	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-	uint localID = meshletID % totalPerLOD;
-
-	uint row = localID / meshletsPerRow;
-	uint col = localID % meshletsPerRow;
-
-	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 
 	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
-	vec3 meshletMin = vec3(
-		cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-		0.0,
-		cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
-	);
+	vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
+
+	float outerDist = (float(params.gridParams.y) * 0.5) * parentMeshletSize;
 
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-	// vec3 worldPos = meshletMin + vec3(localPos.x, 0.0, localPos.y);
-	vec2 baseWorldXZ = meshletMin.xz + localPos;
+	vec2 relBaseXZ = relMeshletMinXZ + localPos;
 
-	vec2 offsetDist = abs(baseWorldXZ - cameraSnap);
+	vec2 offsetDist = abs(relBaseXZ);
 	float distToCam = max(offsetDist.x, offsetDist.y);
-	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
 
 	float alpha = 0.0;
-	vec2 morphedXZ = baseWorldXZ;
+	vec2 relMorphedXZ = relBaseXZ;
 
-	if (lodLevel < params.gridParams.x - 1 && outerDist > 0.0) {
-		float morphWidth = 2.5 * meshletSize;
+	if (morphLOD < params.gridParams.x - 1 && outerDist > 0.0) {
+		float morphWidth = 2.5 * parentMeshletSize;
 		float morphStart = max(0.0, outerDist - morphWidth);
 
 		if (distToCam > morphStart) {
 			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
 
-			// Collapse odd vertices to even vertices on the XZ plane
-			vec2 targetLocalPos = vec2(floor(float(lx) / 2.0) * 2.0, floor(float(ly) / 2.0) * 2.0) * (meshletSize / 10.0);
-			vec2 targetXZ = meshletMin.xz + targetLocalPos;
-			morphedXZ = mix(baseWorldXZ, targetXZ, alpha);
+			float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
+
+			vec2 worldBaseXZ = uCameraPosition.xz + relBaseXZ;
+			vec2 worldTargetXZ = floor(worldBaseXZ / targetGrid + 0.5) * targetGrid;
+			vec2 relTargetXZ = worldTargetXZ - uCameraPosition.xz;
+
+			relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
 		}
 	}
+	vec2 morphedWorldXZ = uCameraPosition.xz + relMorphedXZ;
 
-	// Sample the clipmap using the morphed XZ position
 	vec4 texSample = sampleTerrainClipmap(
 		params.clipmapIndex,
-		morphedXZ,
-		lodLevel,
-		params.gridParams.w,
-		params.lodOffsets0_3,
-		params.lodOffsets4_7,
-		params.lodOffsets8_11
+		morphedWorldXZ,
+		morphLOD,
+		params.gridParams.w
 	);
 	float height = texSample.r;
 	vec3 normal = texSample.gba;
@@ -107,12 +93,9 @@ void main() {
 	if (alpha > 0.0) {
 		vec4 texNext = sampleTerrainClipmap(
 			params.clipmapIndex,
-			morphedXZ,
-			lodLevel + 1,
-			params.gridParams.w,
-			params.lodOffsets0_3,
-			params.lodOffsets4_7,
-			params.lodOffsets8_11
+			morphedWorldXZ,
+			morphLOD + 1,
+			params.gridParams.w
 		);
 		height = mix(height, texNext.r, alpha);
 		if (length(texNext.gba) >= 0.1) {
@@ -120,52 +103,105 @@ void main() {
 		}
 	}
 
-	vec3 worldPos = vec3(morphedXZ.x, height, morphedXZ.y);
+	uint lodDiff = morphLOD - lodLevel;
+	uint gridDim = 1u << lodDiff;
+	uint cx = payload.childXY[taskIndex] & 0xFFFFu;
+	uint cy = payload.childXY[taskIndex] >> 16u;
 
-	vec2  flatXZ = worldPos.xz - uCameraPosition.xz;
-	float distSq = dot(flatXZ, flatXZ);
-	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-	worldPos.y = height - dropOff;
+	bool isTopMacroEdge = (ly == 0) && (cy == 0);
+	bool isBottomMacroEdge = (ly == 10) && (cy == gridDim - 1);
+	bool isLeftMacroEdge = (lx == 0) && (cx == 0);
+	bool isRightMacroEdge = (lx == 10) && (cx == gridDim - 1);
 
-	vec4 clipPos = uViewProjMatrix * vec4(worldPos, 1.0);
-	gl_MeshVerticesEXT[vertexIndex].gl_Position = clipPos;
+	bool isOddBoundaryInternal = ((lx % 2 != 0) && (isTopMacroEdge || isBottomMacroEdge)) ||
+	                     ((ly % 2 != 0) && (isLeftMacroEdge || isRightMacroEdge));
 
-	outPosition[vertexIndex] = worldPos - uCameraPosition.xyz;
-	outNormal[vertexIndex] = normal;
+	if (isOddBoundaryInternal) {
+		vec2 localA = vec2(float(lx - (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly - (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
+		vec2 localB = vec2(float(lx + (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly + (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
 
-	vec3 lodColor = vec3(0.2, 0.6, 0.2);
-	vec3 sand = vec3(0.9, 0.8, 0.5);
-	vec3 snow = vec3(0.9, 0.95, 1.0);
-	vec3 rock = vec3(0.3, 0.22, 0.2);
+		vec2 relBaseA = relMeshletMinXZ + localA;
+		vec2 relBaseB = relMeshletMinXZ + localB;
 
-	lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
-	lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
-	lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
+		vec2 worldA = uCameraPosition.xz + relBaseA;
+		vec2 worldB = uCameraPosition.xz + relBaseB;
 
-	// Underwater seafloor terrain coloring with depth and slope variations
-	if (height < 0.0) {
-		float depth = -height;
-		vec3  wetSand = vec3(0.75, 0.70, 0.52);
-		vec3  shallowReef = vec3(0.40, 0.9, 0.7);
-		vec3  deepOceanBed = vec3(0.08, 0.16, 0.22);
-		vec3  seafloorRock = vec3(0.18, 0.18, 0.20);
+		float hA = sampleTerrainClipmap(params.clipmapIndex, worldA, morphLOD, params.gridParams.w).r;
+		float hB = sampleTerrainClipmap(params.clipmapIndex, worldB, morphLOD, params.gridParams.w).r;
 
-		vec3 seafloorColor = mix(wetSand, shallowReef, smoothstep(0.5, 5.0, depth));
-		seafloorColor = mix(seafloorColor, deepOceanBed, smoothstep(12.0, 45.0, depth));
-		seafloorColor = mix(seafloorRock, seafloorColor, smoothstep(0.3, 0.85, normal.y));
-
-		lodColor = seafloorColor;
+		height = (hA + hB) * 0.5;
 	}
 
-	vec3 flatWorldPos = vec3(baseWorldXZ.x, 0.0, baseWorldXZ.y);
-	// lodColor *= 1.0-(0.25*pow(dot_noise(flatWorldPos * 0.10/abs(dot_noise(flatWorldPos*0.125, 1.0)), 0.0),2));
-	float warp = psrdnoise(baseWorldXZ / texelSize(lodLevel));
-	float shift =  psrdnoise((texelSize(lodLevel)*warp+baseWorldXZ)/texelSize(lodLevel));
-	lodColor = hueShift(lodColor, shift);
+	float distSq = dot(relMorphedXZ, relMorphedXZ);
+	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+	vec3 relWorldPos = vec3(relMorphedXZ.x, height - dropOff - uCameraPosition.y, relMorphedXZ.y);
 
+	sharedPos[vertexIndex] = relWorldPos;
+	barrier();
+
+	bool isOddBoundary = ((lx % 2 != 0) && (ly == 0 || ly == 10)) ||
+	                     ((ly % 2 != 0) && (lx == 0 || lx == 10));
+
+	if (isOddBoundary) {
+		uint neighborA = (ly == 0 || ly == 10) ? vertexIndex - 1 : vertexIndex - 11;
+		uint neighborB = (ly == 0 || ly == 10) ? vertexIndex + 1 : vertexIndex + 11;
+		relWorldPos = (sharedPos[neighborA] + sharedPos[neighborB]) * 0.5;
+	}
+
+	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
+	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+
+	outPosition[vertexIndex] = relWorldPos;
+	outNormal[vertexIndex] = normal;
+
+	// vec3 lodColor = vec3(0.2, 0.6, 0.2);
+	// vec3 sand = vec3(0.9, 0.8, 0.5);
+	// vec3 snow = vec3(0.9, 0.95, 1.0);
+	// vec3 rock = vec3(0.3, 0.22, 0.2);
+
+	// lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
+	// lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
+	// lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
+
+	// if (height < 0.0) {
+	// 	float depth = -height;
+	// 	vec3  wetSand = vec3(0.75, 0.70, 0.52);
+	// 	vec3  shallowReef = vec3(0.40, 0.9, 0.7);
+	// 	vec3  deepOceanBed = vec3(0.08, 0.16, 0.22);
+	// 	vec3  seafloorRock = vec3(0.18, 0.18, 0.20);
+
+	// 	vec3 seafloorColor = mix(wetSand, shallowReef, smoothstep(0.5, 5.0, depth));
+	// 	seafloorColor = mix(seafloorColor, deepOceanBed, smoothstep(12.0, 45.0, depth));
+	// 	seafloorColor = mix(seafloorRock, seafloorColor, smoothstep(0.3, 0.85, normal.y));
+
+	// 	lodColor = seafloorColor;
+	// }
+
+	// float warp = psrdnoise(morphedWorldXZ / texelSize(lodLevel));
+	// float shift = psrdnoise((texelSize(lodLevel) * warp + morphedWorldXZ) / texelSize(lodLevel));
+	// lodColor = hueShift(lodColor, shift);
+
+	vec3 debugColors[8] = vec3[](
+		vec3(1.0, 0.0, 0.0), // LOD 0: Red
+		vec3(1.0, 0.5, 0.0), // LOD 1: Orange
+		vec3(1.0, 1.0, 0.0), // LOD 2: Yellow
+		vec3(0.0, 1.0, 0.0), // LOD 3: Green
+		vec3(0.0, 1.0, 1.0), // LOD 4: Cyan
+		vec3(0.0, 0.0, 1.0), // LOD 5: Blue
+		vec3(0.5, 0.0, 1.0), // LOD 6: Purple
+		vec3(1.0, 0.0, 1.0)  // LOD 7: Magenta
+	);
+
+	// Modulo ensures safety if LODs exceed the array bounds
+	vec3 lodColor = debugColors[lodLevel % 8u];
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 
-	// Generate skirt vertex for boundary vertices (sampled every 2 units to fit within Vulkan 256 primitive limit)
+	// Only generate skirts on the absolute outer edges of the macro-slot
+	bool drawSkirtTop = (ly == 0) && (cy == 0);
+	bool drawSkirtBottom = (ly == 10) && (cy == gridDim - 1);
+	bool drawSkirtLeft = (lx == 0) && (cx == 0);
+	bool drawSkirtRight = (lx == 10) && (cx == gridDim - 1);
+
 	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
 	if (isBoundarySample) {
 		uint skirtID;
@@ -181,18 +217,15 @@ void main() {
 		uint skirtIdx = 121 + skirtID;
 
 		float skirtDepth = max(10.0, meshletSize * 0.1);
-		vec3  skirtPos = worldPos - vec3(0.0, skirtDepth, 0.0);
+		vec3  relSkirtPos = relWorldPos - vec3(0.0, skirtDepth, 0.0);
 
-		gl_MeshVerticesEXT[skirtIdx].gl_Position = uViewProjMatrix * vec4(skirtPos, 1.0);
-		outPosition[skirtIdx] = skirtPos - uCameraPosition.xyz;
+		vec3 skirtViewPos = mat3(uViewMatrix) * relSkirtPos;
+		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);
+		outPosition[skirtIdx] = relSkirtPos;
 		outNormal[skirtIdx] = normal;
 		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
 	}
 
-	// Determine shading rate based on clipmap LOD
-	int shadingRate = 0; // Default 1x1
-
-	// Generate 10x10 quad primitives (200 triangles)
 	if (lx < 10 && ly < 10) {
 		uint quadIdx = ly * 10 + lx;
 		uint v0 = ly * 11 + lx;
@@ -203,23 +236,17 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
 
-		// gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_PrimitiveShadingRateEXT = shadingRate;
-
-		// Fine-grained overlap culling
 		bool cullQuad = false;
-		if (lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+		if (morphLOD > 0) {
+			float prevMeshletSize = baseMeshletSize * getLODScale(float(morphLOD - 1));
+			vec2  prevRelSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
-			vec2 quadCenterWorld = meshletMin.xz + quadCenterLocal;
+			vec2 quadCenterRel = relMeshletMinXZ + quadCenterLocal;
 
-			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
+			vec2 dist = abs(quadCenterRel - prevRelSnap);
 
-			// Cull if the quad center is strictly inside the previous LOD's active area.
-			// The -0.01 margin prevents floating point inaccuracies from culling edge quads.
 			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
 				cullQuad = true;
 			}
@@ -229,7 +256,6 @@ void main() {
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
-	// Generate skirt primitives along outer boundary edges (5 segments per edge, total 40 triangles)
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
 		uint s = lx / 2;
 		uint v0 = lx;
@@ -240,11 +266,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtTop;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtTop;
 	}
 
 	if (ly == 10 && lx < 10 && lx % 2 == 0) { // Bottom edge
@@ -257,11 +280,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtBottom;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtBottom;
 	}
 
 	if (lx == 0 && ly < 10 && ly % 2 == 0) { // Left edge
@@ -274,11 +294,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtLeft;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtLeft;
 	}
 
 	if (lx == 10 && ly < 10 && ly % 2 == 0) { // Right edge
@@ -291,10 +308,7 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-
-		// gl_MeshPrimitivesEXT[primIdx + 0].gl_PrimitiveShadingRateEXT = shadingRate;
-		// gl_MeshPrimitivesEXT[primIdx + 1].gl_PrimitiveShadingRateEXT = shadingRate;
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtRight;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtRight;
 	}
 }

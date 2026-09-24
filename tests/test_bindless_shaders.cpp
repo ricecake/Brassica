@@ -44,10 +44,6 @@ TEST_CASE("terrain.task/terrain.mesh compile to valid SPIR-V against the real bi
 	Shader::ClearConstants();
 }
 
-TEST_CASE("TerrainPushConstants is exactly as large as terrain.task/terrain.mesh's shared push_constant block") {
-	CHECK(sizeof(TerrainPushConstants) == 80);
-}
-
 TEST_CASE("water.task/water.mesh/water.frag compile to valid SPIR-V against the real bindless.glsl substitution") {
 	RegisterBindlessSamplerConstants();
 

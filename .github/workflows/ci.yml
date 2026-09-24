@@ -2,13 +2,63 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
+    tags:
+      - 'v*'
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.gitmodules'
+      - '.vscode/**'
+      - '.clang-format'
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.gitmodules'
+      - '.vscode/**'
+      - '.clang-format'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-24.04
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04, windows-latest]
+        build_type: [Release]
+        c_compiler: [gcc, cl]
+        include:
+          - os: windows-latest
+            c_compiler: cl
+            cpp_compiler: cl
+            artifact_name: windows-x64
+            artifact_ext: .exe
+          - os: ubuntu-latest
+            c_compiler: gcc
+            cpp_compiler: g++
+            artifact_name: linux-x64-ubuntu
+            artifact_ext: ""
+          - os: ubuntu-24.04
+            c_compiler: gcc
+            cpp_compiler: g++
+            artifact_name: linux-x64-ubuntu24
+            artifact_ext: ""
+        exclude:
+          - os: windows-latest
+            c_compiler: gcc
+          - os: windows-latest
+            c_compiler: clang
+          - os: ubuntu-latest
+            c_compiler: cl
+          - os: ubuntu-24.04
+            c_compiler: cl
 
     steps:
       - name: Checkout repository
@@ -16,7 +66,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
+      - name: Install dependencies (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -36,24 +87,189 @@ jobs:
             wayland-protocols \
             libxkbcommon-dev
 
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk -y
+          $vulkanDir = (Get-ChildItem "C:\VulkanSDK" -Directory | Select-Object -First 1).FullName
+          if ($vulkanDir) {
+            echo "VULKAN_SDK=$vulkanDir" >> $env:GITHUB_ENV
+            echo "$vulkanDir\Bin" >> $env:GITHUB_PATH
+          }
+
       - name: Sync shaderc dependencies
+        shell: bash
         run: |
           cd external/shaderc
           python3 utils/git-sync-deps
 
-      - name: Configure CMake
-        run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Check for changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            core:
+              - 'src/**'
+              - 'include/**'
+              - 'external/**'
+              - 'CMakeLists.txt'
+              - 'Makefile'
+              - '.github/workflows/**'
+            tests:
+              - 'tests/**'
+            shaders:
+              - 'shaders/**'
 
-      - name: Build tests and executables
+      - name: Set reusable strings
+        id: strings
+        shell: bash
         run: |
-          cmake --build build --target tests -j$(nproc)
-          cmake --build build -j$(nproc)
+          WORKSPACE_DIR="${{ github.workspace }}"
+          WORKSPACE_DIR="${WORKSPACE_DIR//\\//}"
+          echo "build-output-dir=$WORKSPACE_DIR/build" >> "$GITHUB_OUTPUT"
+          echo "workspace-dir=$WORKSPACE_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          CMAKE_ARGS=(
+            -B "${{ steps.strings.outputs.build-output-dir }}"
+            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+            -DBUILD_TESTING=ON
+            -S "${{ steps.strings.outputs.workspace-dir }}"
+          )
+          cmake "${CMAKE_ARGS[@]}"
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config ${{ matrix.build_type }} --parallel 2
+
+          if [[ "${{ steps.filter.outputs.core }}" == "true" || "${{ steps.filter.outputs.tests }}" == "true" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "Building tests..."
+            cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config ${{ matrix.build_type }} --target tests --parallel 2
+          fi
 
       - name: Run CTest
+        if: steps.filter.outputs.core == 'true' || steps.filter.outputs.tests == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: "${{ steps.strings.outputs.build-output-dir }}"
+        shell: bash
         run: |
-          ctest --test-dir build --output-on-failure
+          ctest --build-config ${{ matrix.build_type }} --output-on-failure
 
       - name: Run Sandbox App in Headless Mode
+        if: steps.filter.outputs.core == 'true' || steps.filter.outputs.shaders == 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
         run: |
-          ./build/bin/sandbox --headless 10
+          "${{ steps.strings.outputs.build-output-dir }}/bin/sandbox" --headless 10
+
+      - name: Prepare Release Artifacts (Linux)
+        if: startsWith(matrix.os, 'ubuntu') && matrix.c_compiler == 'gcc'
+        shell: bash
+        run: |
+          mkdir -p release/brassica-${{ matrix.artifact_name }}
+          # Target bin directory first, fallback to root build dir if executable is output there
+          find "${{ steps.strings.outputs.build-output-dir }}/bin" -maxdepth 1 -type f -executable -exec cp {} release/brassica-${{ matrix.artifact_name }}/ \; 2>/dev/null || true
+          find "${{ steps.strings.outputs.build-output-dir }}" -maxdepth 1 -type f -executable ! -name "test_*" ! -name "*.a" -exec cp {} release/brassica-${{ matrix.artifact_name }}/ \; 2>/dev/null || true
+
+          cp -r "${{ steps.strings.outputs.workspace-dir }}/shaders" release/brassica-${{ matrix.artifact_name }}/ || true
+          cp "${{ steps.strings.outputs.workspace-dir }}/README.md" release/brassica-${{ matrix.artifact_name }}/ || true
+
+          cd release
+          tar -czvf brassica-${{ matrix.artifact_name }}.tar.gz brassica-${{ matrix.artifact_name }}
+
+      - name: Prepare Release Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release/brassica-${{ matrix.artifact_name }}
+          $buildDir = "${{ steps.strings.outputs.build-output-dir }}"
+          $releaseDir = Join-Path$buildDir "Release"
+          $binDir = Join-Path$buildDir "bin"
+
+          if (Test-Path $binDir) {
+            Get-ChildItem -Path $binDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+          } elseif (Test-Path $releaseDir) {
+            Get-ChildItem -Path $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+          } else {
+            Get-ChildItem -Path $buildDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+          }
+
+          if (Test-Path "${{ steps.strings.outputs.workspace-dir }}/shaders") {
+            Copy-Item -Path "${{ steps.strings.outputs.workspace-dir }}/shaders" -Destination "release/brassica-${{ matrix.artifact_name }}/" -Recurse
+          }
+          Copy-Item -Path "${{ steps.strings.outputs.workspace-dir }}/README.md" -Destination "release/brassica-${{ matrix.artifact_name }}/" -ErrorAction SilentlyContinue
+
+          Compress-Archive -Path "release/brassica-${{ matrix.artifact_name }}" -DestinationPath "release/brassica-${{ matrix.artifact_name }}.zip"
+
+      - name: Upload Build Artifacts (Linux GCC)
+        if: startsWith(matrix.os, 'ubuntu') && matrix.c_compiler == 'gcc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: brassica-${{ matrix.artifact_name }}
+          path: release/brassica-${{ matrix.artifact_name }}.tar.gz
+          retention-days: 30
+
+      - name: Upload Build Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: brassica-${{ matrix.artifact_name }}
+          path: release/brassica-${{ matrix.artifact_name }}.zip
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Brassica ${{ github.ref_name }}
+          body: |
+            ## Brassica ${{ github.ref_name }}
+
+            ### Downloads
+
+            | Platform | Archive |
+            |----------|---------|
+            | Windows (x64) | `brassica-windows-x64.zip` |
+            | Linux Ubuntu (latest) (x64) | `brassica-linux-x64-ubuntu.tar.gz` |
+            | Linux Ubuntu 24.04 (x64) | `brassica-linux-x64-ubuntu24.tar.gz` |
+
+            ### Installation
+
+            1. Download the appropriate archive for your platform.
+            2. Extract the archive to your desired location.
+            3. Run the executables from the extracted directory.
+
+            ### Requirements
+
+            **Windows:**
+            - Visual C++ Redistributable 2022 or later
+            - Vulkan 1.3/1.4 Compatible Driver
+
+            **Linux:**
+            - Vulkan 1.3/1.4 Compatible Driver
+            - X11 or Wayland display server
+
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+          fail_on_unmatched_files: false
+          generate_release_notes: true

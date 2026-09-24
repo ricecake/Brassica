@@ -15,6 +15,7 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	mat4  uViewProjMatrix;
 	mat4  uInvViewProjMatrix;
 	vec4  uCameraPosition;
+	vec4  uPreviousCameraPosition;
 	float uTime;
 	float uFov;
 	float uAspectRatio;

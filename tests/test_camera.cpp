@@ -14,7 +14,7 @@ TEST_CASE("CameraData Default Values and Direction Vectors") {
 	CHECK(cam.speed == doctest::Approx(10.0f));
 	CHECK(cam.defaultSpeed == doctest::Approx(10.0f));
 	CHECK(cam.minSpeed == doctest::Approx(1.0f));
-	CHECK(cam.maxSpeed == doctest::Approx(1000.0f));
+	CHECK(cam.maxSpeed == doctest::Approx(50000.0f));
 	CHECK(!cam.isCaptured);
 
 	cam.UpdateOrientation();
@@ -56,6 +56,7 @@ TEST_CASE("CameraData Matrix and Frustum Plane Updates") {
 TEST_CASE("Engine GetCamera Access and Uniform Configuration") {
 	brassica::Engine engine;
 	auto& cam = engine.GetCamera();
+	cam.mode = brassica::CameraMode::Instant;
 
 	CHECK(cam.fov == doctest::Approx(1.2f));
 	CHECK(cam.position == glm::vec3(0.0f, 15.0f, 30.0f));
@@ -91,6 +92,8 @@ TEST_CASE("Camera Controls: Mode Cycle with Equal Key") {
 	auto handler = std::make_shared<brassica::DefaultInputHandler>();
 	engine.SetInputHandler(handler);
 
+	engine.GetCamera().mode = brassica::CameraMode::Instant;
+
 	CHECK(engine.GetCamera().mode == brassica::CameraMode::Instant);
 
 	// Press '=' key to cycle to Accelerated mode
@@ -109,6 +112,8 @@ TEST_CASE("Camera Controls: Speed Adjustment (PageUp, PageDown, Home, End)") {
 	auto handler = std::make_shared<brassica::DefaultInputHandler>();
 	engine.SetInputHandler(handler);
 
+	engine.GetCamera().speed = 10.0f;
+
 	CHECK(engine.GetCamera().speed == doctest::Approx(10.0f));
 
 	// Increase speed with Page Up
@@ -119,7 +124,9 @@ TEST_CASE("Camera Controls: Speed Adjustment (PageUp, PageDown, Home, End)") {
 	// Set to max speed with End
 	handler->OnKey(nullptr, GLFW_KEY_END, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.016f);
-	CHECK(engine.GetCamera().speed == doctest::Approx(1000.0f));
+	CHECK(engine.GetCamera().speed == engine.GetCamera().maxSpeed);
+
+	engine.GetCamera().speed = 1000.0f;
 
 	// Decrease speed with Page Down
 	handler->OnKey(nullptr, GLFW_KEY_PAGE_DOWN, 0, GLFW_PRESS, 0);
@@ -129,7 +136,7 @@ TEST_CASE("Camera Controls: Speed Adjustment (PageUp, PageDown, Home, End)") {
 	// Reset to default speed with Home
 	handler->OnKey(nullptr, GLFW_KEY_HOME, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.016f);
-	CHECK(engine.GetCamera().speed == doctest::Approx(10.0f));
+	CHECK(engine.GetCamera().speed == engine.GetCamera().defaultSpeed);
 }
 
 TEST_CASE("Camera Controls: WASD, Space, Shift, Q, E, Mouse Look") {

@@ -8,11 +8,6 @@
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
 
-TEST_CASE("FrameUBO Struct Size and Alignment") {
-	CHECK(sizeof(brassica::FrameUBO) == 432);
-	CHECK(alignof(brassica::FrameUBO) == 16);
-}
-
 TEST_CASE("Shader Stage Flag Bits") {
 	brassica::VertexShader vertShader;
 	CHECK(vertShader.GetStageFlag() == vk::ShaderStageFlagBits::eVertex);

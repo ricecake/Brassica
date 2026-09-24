@@ -1,6 +1,8 @@
 #version 460
 #include "bindless.glsl"
 #include "lighting.glsl"
+#include "common.glsl"
+#include "helpers/astral.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -15,12 +17,58 @@ layout(push_constant) uniform SkyPushConstants {
 	float padding;
 } push;
 
-#include "common.glsl"
-#include "helpers/astral.glsl"
+const float solar_flare_speed = 0.25;
+const float solar_flare_scale = 0.35;
+const float solar_flare_strength = 0.25;
+const float cirrusOpacity = 0.01250;
 
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
 	return SAMPLE_LINEAR(push.transmittanceIndex, uv).rgb;
+}
+
+vec2 sky_hash22(vec2 p) {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453123);
+}
+
+// Distance-to-edge Voronoi for sharp solar flare loop/filament boundaries
+float voronoiDistanceToEdgeSky(vec2 x) {
+    vec2 n = floor(x);
+    vec2 f = fract(x);
+
+    vec2 mg, mr;
+    float md = 8.0;
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 o = sky_hash22(n + g);
+            o = 0.5 + 0.5 * sin(uTime * 0.3 * solar_flare_speed + 6.2831 * o);
+            vec2 r = g + o - f;
+            float d = dot(r, r);
+
+            if (d < md) {
+                md = d;
+                mr = r;
+                mg = g;
+            }
+        }
+    }
+
+    md = 8.0;
+    for (int j = -2; j <= 2; ++j) {
+        for (int i = -2; i <= 2; ++i) {
+            vec2 g = mg + vec2(float(i), float(j));
+            vec2 o = sky_hash22(n + g);
+            o = 0.5 + 0.5 * sin(uTime * 0.3 * solar_flare_speed + 6.2831 * o);
+            vec2 r = g + o - f;
+
+            if (dot(mr - r, mr - r) > 0.00001) {
+                md = min(md, dot(0.5 * (mr + r), normalize(r - mr)));
+            }
+        }
+    }
+    return md;
 }
 
 void main() {
@@ -69,6 +117,38 @@ void main() {
 		distSq
 	);
 	sunMask += aureole;
+
+	// Add dramatically oversized solar flares/prominences flowing radially outwards
+	float solarFlares = 0.0;
+	if (true) {
+		float theta = atan(rayLocalY, rayLocalX);
+		float r_sun = length(vec2(rayLocalX, rayLocalY));
+
+		// Warp polar components with Simplex noise for turbulent plasma motion
+		vec3 warpPos = vec3(rayLocalX * 25.0 * solar_flare_scale, rayLocalY * 25.0 * solar_flare_scale, uTime * 0.1 * solar_flare_speed);
+		float angleWarp = snoise3d(warpPos) * 0.5;
+		float distWarp = snoise3d(warpPos + vec3(19.0, 29.0, 37.0)) * 0.06;
+
+		float warpedTheta = theta + angleWarp;
+		float warpedR = r_sun + distWarp;
+
+		// Map to a radial Voronoi cell space, moving outward with time
+		vec2 cellCoords = vec2(warpedTheta * 6.5, (warpedR - uTime * 0.06 * solar_flare_speed) * 18.0 * solar_flare_scale);
+		float voronoiDist = voronoiDistanceToEdgeSky(cellCoords);
+
+		// Create sharp filaments and thick prominence loops
+		float filament = 1.0 - smoothstep(0.0, 0.09, voronoiDist);
+		float loopArc = smoothstep(0.04, 0.45, voronoiDist);
+		float prominence = max(filament * 0.95, loopArc * 0.2);
+
+		// Radial decay starting from the sun surface (sunAngularRadius)
+		// Oversized flares: extend decay range
+		float flareDecay = exp(-max(0.0, r_sun - sunAngularRadius) * (14.0 / solar_flare_scale));
+
+		solarFlares = prominence * flareDecay * solar_flare_strength * 2.0;
+	}
+	sunMask += solarFlares;
+
 	sunMask = (sunMask * (1.0 + sunMask * 0.05)) / (1.0 + sunMask * 0.06);
 	sunMask *= step(0.0, rayLocalZ);
 
@@ -129,15 +209,46 @@ void main() {
 	vec3 moonTransmittance = max(getTransmittance(r, moonDir.y), vec3(0.001));
 	vec3 moonDisc = moonRadiance * phasedMask * moonTransmittance * moonFade;
 
-	// 5. Scaffolding Hooks: Volumetric Lighting & Raymarched Clouds
-	vec4 cloudResult = evaluateRaymarchedClouds(uCameraPosition.xyz / 1000.0, worldRay, 100.0, sunDir, sunRadiance);
-	vec3 skyWithClouds = mix(skyRadiance, cloudResult.rgb, cloudResult.a);
+	// 5. Cirrus Cloud Layer
+	vec3 cirrusColor = vec3(0.0);
+	if (true) {
+		float cirrusAlt = 10.0; // 10 km altitude
+		float cloudRadius = planetRadius + cirrusAlt;
 
-	vec3 finalColor = skyWithClouds + sunDisc + moonDisc + spaceBackground;
+		float b = 2.0 * r * worldRay.y;
+		float c = (r * r) - (cloudRadius * cloudRadius);
+		float det = (b * b) - (4.0 * c);
 
-	// Underwater fog used to be applied here too, redundantly and inconsistently with
-	// deferred.frag's own (broken) copy. Now handled uniformly for every pixel -- this
-	// background included, once DeferredNode copies it into HdrColor for empty G-buffer pixels --
-	// by AtmosphereCompositeNode, which runs after both nodes.
+		if (det > 0.0) {
+			float sqrtDet = sqrt(det);
+			float t1 = (-b - sqrtDet) * 0.5;
+			float t2 = (-b + sqrtDet) * 0.5;
+
+			float t_cirrus = (t1 > 0.0) ? t1 : t2;
+
+			if (t_cirrus > 0.0) {
+				vec3 p_cirrus = uCameraPosition.xyz + worldRay * (t_cirrus * 1000.0 * worldScale);
+
+				vec3 advect = vec3(1.0, 0.0, 1.0) * uTime * 0.5;
+				vec2 uv_cirrus = (p_cirrus.xz + advect.xz) * (0.00005 / worldScale);
+
+				float n = (fbm_astral(vec3(uv_cirrus * 2.0, uTime * 0.01)) + 1.0) * 0.5;
+				float n2 = (fbm_astral(vec3(uv_cirrus * 5.0, uTime * 0.02 + 10.0)) + 1.0) * 0.5;
+				float noise = smoothstep(0.3, 0.8, n * n2);
+
+				vec3 T_cirrus = max(getTransmittance(planetRadius + cirrusAlt, sunDir.y), vec3(0.001));
+				float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
+
+				vec3 cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);
+				cirrusColor = cirrusLighting * noise * cirrusOpacity * 15.0;
+
+				float opticalDepthFade = exp(-t_cirrus * 0.0025);
+				cirrusColor *= opticalDepthFade;
+			}
+		}
+	}
+
+	vec3 finalColor = skyRadiance + sunDisc + moonDisc + cirrusColor + spaceBackground;
+
 	outColor = vec4(finalColor, 1.0);
 }
