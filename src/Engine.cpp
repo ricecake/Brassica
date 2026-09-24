@@ -669,6 +669,12 @@ namespace brassica {
 				camera.currentSpeed = 0.0f;
 			}
 		}
+		if (camera.position.y > 32000.0f) {
+			camera.position.y = 32000.0f;
+		}
+		if (camera.position.y < -1024.0f) {
+			camera.position.y = -1024.0f;
+		}
 	}
 
 	bool Engine::InitVulkan() {
