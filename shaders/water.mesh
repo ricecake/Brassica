@@ -18,7 +18,6 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gNormalIndex;
 	uint  padding;
 }
-
 params;
 
 struct TaskPayload {
@@ -31,58 +30,15 @@ taskPayloadSharedEXT TaskPayload payload;
 layout(location = 0) out vec3 outWorldPos[];
 layout(location = 1) out vec3 outNormal[];
 
-// Water ring distance scale: continuous growth with distance from camera
 float getWaterRingScale(float ring) {
-	// if (ring <= 3.0) {
-		return pow(2.0, ring);
-	// }
-	// return 8.0 * pow(2.25, ring - 3.0);
-}
-
-float estTerrainHeight(vec2 worldXZ) {
-	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
-	vec3 warp = cross_noise_fbm(pos * 0.005, 3, 0.0);
-	pos += 50.0 * warp;
-	float b = dot_noise(pos * 0.0003, 0.0);
-	float m = dot_noise(pos * 0.0008, 0.0);
-	float baseVal = dot_noise_fbm(pos * 0.0015, 4, 0.0);
-	float detailVal = dot_noise_fbm(pos * 0.006, 4, 0.0);
-
-	float biome = clamp(b, 0.0, 1.0);
-	float mountainFactor = clamp((m - (-0.1)) / 0.4, 0.0, 1.0);
-	mountainFactor = mountainFactor * mountainFactor * (3.0 - 2.0 * mountainFactor);
-	float detailFactor = (0.15 + 0.85 * mountainFactor) * mix(0.3, 1.2, biome);
-
-	float baseOffset = mix(-35.0, 30.0, biome);
-	float baseHeightScale = mix(40.0, 120.0, biome);
-	float detailHeightScale = mix(20.0, 80.0, biome);
-
-	return baseOffset + baseVal * baseHeightScale + detailVal * detailHeightScale * detailFactor;
-}
-
-// Add this above calculateGerstnerOffsetAndNormal
-float estSmoothTerrainHeight(vec2 worldXZ) {
-	vec3 pos = vec3(worldXZ.x, 0.0, worldXZ.y);
-
-	// Only evaluate the lowest frequency noise. Skip FBM and detail noise.
-	float b = dot_noise(pos * 0.0003, 0.0);
-	float baseVal = dot_noise(pos * 0.0015, 0.0);
-
-	float biome = clamp(b, 0.0, 1.0);
-	float baseOffset = mix(-35.0, 30.0, biome);
-	float baseHeightScale = mix(40.0, 120.0, biome);
-
-	return baseOffset + baseVal * baseHeightScale;
+	return pow(2.0, ring);
 }
 
 vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
-	// normal = vec3(0,1,0);
-	// return vec3(0);
 	if (ringLevel >= 8.0) {
 		normal = vec3(0.0, 1.0, 0.0);
 		return vec3(0.0);
 	}
-	// vec3 globalWindDir = normalize(cross_noise(vec3(uv.x, 0.0, uv.y)*0.001, time*10.010));
 
 	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y);
 	mat3 grad;
@@ -91,109 +47,15 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 
 	vec3 sinGrad = amplitude * cross_noise_fbm((inWorldPos) * frequency + abs(dot_noise(inWorldPos * 0.0025, time * 0.5)), 4, time * 0.25, grad);
 
-	// Apply chain rule: d(Noise) * amplitude * inner_frequency_scale
 	vec3 dX = grad[0] * amplitude * frequency;
 	vec3 dZ = grad[2] * amplitude * frequency;
 
-	// Form true tangents by adding the displacement derivative to the flat plane vectors
 	vec3 tangentX = vec3(1.0, 0.0, 0.0) + dX;
 	vec3 tangentZ = vec3(0.0, 0.0, 1.0) + dZ;
 
-	// Cross Z with X to produce a positive Y-up normal (assuming right-handed coordinates)
 	normal = normalize(cross(tangentZ, tangentX));
 
 	return sinGrad;
-/*
-	vec3 tangent = vec3(1.0, 0.0, 0.0);
-	vec3 binormal = vec3(0.0, 0.0, 1.0);
-	vec3 totalOffset = vec3(0.0);
-
-	// Distance-proportional wave amplitude damping:
-	// Farther away, water transitions to flat with only small movements to save resources & prevent z-fighting
-	float mainWaveFade = clamp(1.0 - (distToCam - 600.0) / 2200.0, 0.0, 1.0);
-	float mediumWaveFade = clamp(1.0 - (distToCam - 300.0) / 1200.0, 0.0, 1.0);
-	float rippleFade = clamp(1.0 - distToCam / 400.0, 0.0, 1.0);
-
-	// Dynamic wave directions shifting continuously over time
-	vec2 d1 = normalize(vec2(0.8 + 0.15 * sin(time * 0.05), 0.6 + 0.15 * cos(time * 0.06)));
-	vec2 d2 = normalize(vec2(-0.6 + 0.12 * cos(time * 0.04), 0.8 + 0.12 * sin(time * 0.07)));
-	vec2 d3 = normalize(vec2(0.3 + 0.18 * sin(time * 0.08), -0.95 + 0.12 * cos(time * 0.09)));
-	vec2 d4 = normalize(vec2(-0.85 + 0.15 * cos(time * 0.06), -0.3 + 0.15 * sin(time * 0.05)));
-
-	// Default deep water parameters
-	float wl1 = 60.0, spd1 = 1.2;
-	float wl2 = 38.0, spd2 = 1.5;
-	float wl3 = 22.0, spd3 = 2.0;
-	float wl4 = 12.0, spd4 = 2.8;
-
-	float smoothH = estSmoothTerrainHeight(uv);
-	float smoothDepth = params.waterLevel - smoothH;
-
-	if (smoothDepth >= -30.0) {
-		float eps = mix(80.0, 40.0, smoothstep(-50.0, -10.0, smoothDepth));
-		vec2  grad = vec2(
-			estSmoothTerrainHeight(uv + vec2(eps, 0.0)) - estSmoothTerrainHeight(uv - vec2(eps, 0.0)),
-			estSmoothTerrainHeight(uv + vec2(0.0, eps)) - estSmoothTerrainHeight(uv - vec2(0.0, eps))
-		);
-
-		if (dot(grad, grad) > 0.0001) {
-			vec2  shoreDir = normalize(grad);
-			float shoreWeight = clamp(1.0 - smoothDepth / 20.0, 0.0, 1.0);
-
-			// 1. Unify Directions
-			d1 = normalize(mix(globalWindDir, shoreDir, shoreWeight));
-			d2 = normalize(mix(globalWindDir, shoreDir, shoreWeight * 0.9));
-			d3 = normalize(mix(globalWindDir, shoreDir, shoreWeight * 0.8));
-			d4 = normalize(mix(globalWindDir, shoreDir, shoreWeight * 0.7));
-
-			// 2. Unify Wavelengths and Speeds (Phase Syncing)
-			float targetWl = 45.0;  // Unified shore wave length
-			float targetSpd = 1.0;  // Unified shore wave speed (slower in shallow water)
-
-			wl1 = mix(wl1, targetWl, shoreWeight);
-			wl2 = mix(wl2, targetWl, shoreWeight);
-			spd1 = mix(spd1, targetSpd, shoreWeight);
-			spd2 = mix(spd2, targetSpd, shoreWeight);
-
-			// 3. Fade out medium waves to prevent visual noise at the shoreline
-			mediumWaveFade *= (1.0 - shoreWeight);
-		}
-	}
-
-	// Primary swell execution using the synced parameters
-	if (mainWaveFade > 0.001) {
-		float vectorAdjustment = dot(d1, d2) * 0.5 + 0.5;
-		mainWaveFade *= vectorAdjustment;
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d1, 0.18 * mainWaveFade, wl1, time * spd1, tangent, binormal);
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d2, 0.14 * mainWaveFade, wl2, time * spd2, tangent, binormal);
-	}
-
-	// Medium waves
-	if (mediumWaveFade > 0.001) {
-		float vectorAdjustment = dot(d3, d4) * 0.5 + 0.5;
-		mediumWaveFade *= vectorAdjustment;
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d3, 0.10 * mediumWaveFade, 22.0, time * 2.0, tangent, binormal);
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d4, 0.06 * mediumWaveFade, 12.0, time * 2.8, tangent, binormal);
-	}
-
-	// Micro ripples (near camera)
-	if (rippleFade > 0.001) {
-		vec2 d5 = normalize(vec2(0.95 + 0.05 * sin(time * 0.1), 0.1 + 0.05 * cos(time * 0.12)));
-		vec2 d6 = normalize(vec2(-0.2 + 0.05 * cos(time * 0.11), 0.98 + 0.05 * sin(time * 0.13)));
-
-		float vectorAdjustment = dot(d5, d6) * 0.5 + 0.5;
-		rippleFade *= vectorAdjustment;
-
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d5, 0.04 * rippleFade, 5.0, time * 1.0, tangent, binormal);
-		totalOffset += vectorAdjustment * gerstnerWave(uv, d6, 0.03 * rippleFade, 2.5, time * 1.2, tangent, binormal);
-	}
-
-	float blend = step(3, ringLevel) * smoothstep(3000, 4000, distToCam);
-
-	normal = normalize(cross(binormal, tangent));
-	normal = mix(normal, vec3(0.0), blend);
-	return mix(totalOffset, totalOffset, blend);
-*/
 }
 
 void main() {
@@ -214,7 +76,6 @@ void main() {
 	uint row = localID / meshletsPerRow;
 	uint col = localID % meshletsPerRow;
 
-	// Low camera pitch angle detection: boost density when camera angle is grazing horizontal
 	vec3  camForward = normalize(-uInvViewMatrix[2].xyz);
 	float pitch = abs(camForward.y);
 	float lowAngleFactor = clamp(1.0 - pitch * 2.5, 0.0, 1.0);
@@ -224,20 +85,16 @@ void main() {
 	float meshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel)) * angleCompression;
 
 	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
-	vec3 meshletMin = vec3(
-		cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-		params.waterLevel,
-		cameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
-	);
+	vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
+	vec2 relMeshletMinXZ = relCameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5) * meshletSize;
 
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-	vec2 baseWorldXZ = meshletMin.xz + localPos;
+	vec2 relBaseXZ = relMeshletMinXZ + localPos;
 
-	// 1. Evaluate morphing against the pure, unshifted grid
-	vec2 offsetDist = abs(baseWorldXZ - cameraSnap);
+	vec2 offsetDist = abs(relBaseXZ);
 	float distToCam = max(offsetDist.x, offsetDist.y);
 	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
-	vec2 morphedXZ = baseWorldXZ;
+	vec2 relMorphedXZ = relBaseXZ;
 
 	if (ringLevel < params.gridParams.x - 1 && outerDist > 0.0) {
 		float morphWidth = 2.0 * meshletSize;
@@ -247,46 +104,26 @@ void main() {
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
 
 			vec2 targetLocalPos = vec2(floor(float(lx) / 2.0) * 2.0, floor(float(ly) / 2.0) * 2.0) * (meshletSize / 10.0);
-			vec2 targetXZ = meshletMin.xz + targetLocalPos;
-			morphedXZ = mix(baseWorldXZ, targetXZ, alpha);
+			vec2 relTargetXZ = relMeshletMinXZ + targetLocalPos;
+			relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
 		}
 	}
 
-	vec2 worldXZ = morphedXZ;
+	vec2 worldXZ = uCameraPosition.xz + relMorphedXZ;
 
-	// // 2. Apply camera angle density boost to the already-morphed coordinates
-	// if (lowAngleFactor > 0.01) {
-	// 	vec2 toVertex = worldXZ - uCameraPosition.xz;
-	// 	float actualDist = length(toVertex);
-	// 	if (actualDist > 1.0) {
-	// 		vec2 dir = toVertex / actualDist;
-	// 		float viewDot = dot(dir, normalize(camForward.xz + vec2(0.0001)));
-	// 		if (viewDot > 0.0) {
-	// 			float bias = lowAngleFactor * 0.15 * viewDot * exp(-actualDist * 0.001);
-	// 			worldXZ -= dir * (actualDist * bias);
-	// 		}
-	// 	}
-	// }
-
-	// 3. Generate Gerstner waves at final coordinate
 	vec3 waveNormal;
-	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, length(worldXZ - uCameraPosition.xz), float(ringLevel), waveNormal);
+	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, length(relMorphedXZ), float(ringLevel), waveNormal);
 
-	// vec3 waveNormal;
-	// vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, distToCam, float(ringLevel), waveNormal);
-	vec3 finalWorldPos = vec3(worldXZ.x, params.waterLevel, worldXZ.y) + waveOffset;
-
-	// Curved planet horizon dropoff
-	vec2  flatXZ = worldXZ - uCameraPosition.xz;
-	float distSq = dot(flatXZ, flatXZ);
+	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-	finalWorldPos.y -= dropOff;
 
-	gl_MeshVerticesEXT[vertexIndex].gl_Position = uViewProjMatrix * vec4(finalWorldPos, 1.0);
-	outWorldPos[vertexIndex] = finalWorldPos;
+	vec3 relWorldPos = vec3(relMorphedXZ.x, params.waterLevel - uCameraPosition.y, relMorphedXZ.y) + waveOffset - vec3(0.0, dropOff, 0.0);
+
+	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
+	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+	outWorldPos[vertexIndex] = relWorldPos;
 	outNormal[vertexIndex] = waveNormal;
 
-	// Boundary skirt vertices along meshlet borders to prevent gaps
 	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
 	if (isBoundarySample) {
 		uint skirtID;
@@ -302,14 +139,14 @@ void main() {
 		uint skirtIdx = 121 + skirtID;
 
 		float skirtDepth = max(0.0, meshletSize * 0.005);
-		vec3  skirtPos = finalWorldPos - vec3(0.0, skirtDepth, 0.0);
+		vec3  relSkirtPos = relWorldPos - vec3(0.0, skirtDepth, 0.0);
 
-		gl_MeshVerticesEXT[skirtIdx].gl_Position = uViewProjMatrix * vec4(skirtPos, 1.0);
-		outWorldPos[skirtIdx] = skirtPos;
+		vec3 skirtViewPos = mat3(uViewMatrix) * relSkirtPos;
+		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);
+		outWorldPos[skirtIdx] = relSkirtPos;
 		outNormal[skirtIdx] = waveNormal;
 	}
 
-	// Quad primitives output (10x10 quads = 200 triangles)
 	if (lx < 10 && ly < 10) {
 		uint quadIdx = ly * 10 + lx;
 		uint v0 = ly * 11 + lx;
@@ -323,13 +160,13 @@ void main() {
 		bool cullQuad = false;
 		if (ringLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel - 1)) * angleCompression;
-			vec2  prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			vec2  prevRelSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
-			vec2 quadCenterWorld = meshletMin.xz + quadCenterLocal;
+			vec2 quadCenterRel = relMeshletMinXZ + quadCenterLocal;
 
-			vec2 dist = abs(quadCenterWorld - prevCameraSnap);
+			vec2 dist = abs(quadCenterRel - prevRelSnap);
 			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
 				cullQuad = true;
 			}
@@ -339,7 +176,6 @@ void main() {
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
-	// Boundary skirt triangles
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
 		uint s = lx / 2;
 		uint v0 = lx;

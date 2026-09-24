@@ -31,7 +31,8 @@ void main() {
 	vec4 albedo = SAMPLE_NEAREST(params.gAlbedoIndex, screenUV);
 	vec4 sceneColor = SAMPLE_NEAREST(params.sceneColorIndex, screenUV);
 	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
-	vec3 relWaterPos = inWorldPos - uCameraPosition.xyz;
+	vec3 relWaterPos = inWorldPos;
+	vec3 absWaterPos = uCameraPosition.xyz + inWorldPos;
 
 	float distToCamWater = length(relWaterPos);
 	float rayLengthThroughWater = 100.0;
@@ -149,7 +150,7 @@ void main() {
 	// carries the surface's visual roughness.
 	Material waterMaterial = Material(vec3(0.0), 0.05, 0.0, 1.0);
 	vec3     shineColor =
-		isAboveWater ? evaluateClusteredLightContributionPBR(inWorldPos, waveNormal, waterMaterial).color : vec3(0.0);
+		isAboveWater ? evaluateClusteredLightContributionPBR(absWaterPos, waveNormal, waterMaterial).color : vec3(0.0);
 
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
 	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);
@@ -163,7 +164,7 @@ void main() {
 
 	float shoreFoam = clamp(1.0 - depthBelowWater / 2.2, 0.0, 1.0);
 	shoreFoam = pow(shoreFoam, 1.4);
-	float foamNoise = InterleavedGradientNoise(inWorldPos.xz * 3.5, int(uTime * 12.0));
+	float foamNoise = InterleavedGradientNoise(absWaterPos.xz * 3.5, int(uTime * 12.0));
 	shoreFoam *= 0.65 + 0.35 * foamNoise;
 
 	float crestFactor = clamp((1.0 - waveNormal.y) * 3.5, 0.0, 1.0);

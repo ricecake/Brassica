@@ -8,6 +8,7 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "constants.h"
 #include "graph/Graph.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "VulkanCompat.hpp"
@@ -38,7 +39,12 @@ namespace brassica::render {
 	struct NodeFrameParams {
 		glm::vec3  cameraPosition{0.0f};
 		glm::vec3  previousCameraPosition{-9999.0f};
-		glm::uvec4 terrainGridParams{10, 16, 2560, 1088};
+		glm::uvec4 terrainGridParams{
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::MeshletsPerRow,
+			constants::Class::Terrain::TotalMeshlets,
+			constants::Class::Terrain::MapDim
+		};
 		bool       terrainHasUpdate{false};
 		glm::vec3  waterColor{0.05f, 0.45f, 0.85f};
 		float      waterLevel{0.0f};

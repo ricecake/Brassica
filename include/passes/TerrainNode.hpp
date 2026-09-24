@@ -6,6 +6,7 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
@@ -29,7 +30,12 @@ namespace brassica {
 	// prefix of a push-constant block it actually uses, and every existing field's offset is
 	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
-		glm::uvec4 gridParams{14, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4 gridParams{
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::MeshletsPerRow,
+			constants::Class::Terrain::TotalMeshlets,
+			constants::Class::Terrain::MapDim
+		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
