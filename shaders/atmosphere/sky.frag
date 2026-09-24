@@ -236,7 +236,7 @@ void main() {
 			cirrusColor = cirrusLighting * noise * cirrusOpacity * 15.0;
 
 			// Fade cirrus near horizon to avoid tiling artifacts
-			cirrusColor *= smoothstep(0.0, 0.15, worldRay.y);
+			cirrusColor *= smoothstep(muHorizon, muHorizon+0.15, worldRay.y);
 		}
 	}
 
