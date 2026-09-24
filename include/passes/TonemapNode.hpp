@@ -5,9 +5,11 @@
 #include <cstdint>
 
 #include <glm/glm.hpp>
+#include "vulkan/vulkan.hpp"
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -93,7 +95,6 @@ namespace brassica {
 		VertexShader             vertShader;
 		FragmentShader           fragShader;
 		vk::Format               swapchainFormat = vk::Format::eUndefined;
-		bool                     initializedBufferParams = false;
 		TonemapPushConstants     push{};
 		DownsamplePushConstants  downPush{};
 		AutoExposureUpdatePushConstants aeUpdatePush{};
@@ -145,21 +146,20 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Read,
-					.desc = graph::DepthAttachmentDesc(ctx.width, ctx.height, vk::Format::eD32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AutoExposureBuffer>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::BufferDesc{
-						.sizeBytes = sizeof(ExposureDataHost),
-						.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst),
-					},
+					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 				}
 			);
 
-			auto addStorageDesc = [&](graph::ResourceKeyId key, std::uint32_t w, std::uint32_t h) {
+			graph::ResourceDesc aeDesc = graph::MappedStorageBufferDesc(sizeof(ExposureDataHost));
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<AutoExposureBuffer>(),
+					.access = graph::AccessKind::Write,
+					.desc = aeDesc,
+				}
+			);
+
+			auto addStorageDesc = [&](graph::ResourceId key, std::uint32_t w, std::uint32_t h) {
 				r.realizations.push_back(
 					graph::ResourceRealization{
 						.key = key,
@@ -208,28 +208,45 @@ namespace brassica {
 			return r;
 		}
 
+		void ReadBackAutoExposureStats(graph::NodeContext& ctx) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					if (auto physBuf = registry->GetBuffer<AutoExposureBuffer>()) {
+						if (physBuf->IsHostMapped()) {
+							if (const void* mapped = physBuf->MappedSlice(ctx.frameIndex)) {
+								const auto* gpuData = static_cast<const ExposureDataHost*>(mapped);
+								for (int i = 0; i < 2; i++) {
+									s_exposureData.layers[i].adaptedLuminance = gpuData->layers[i].adaptedLuminance;
+									s_exposureData.layers[i].minLuma = gpuData->layers[i].minLuma;
+									s_exposureData.layers[i].maxLuma = gpuData->layers[i].maxLuma;
+									s_exposureData.layers[i].avgLuma = gpuData->layers[i].avgLuma;
+									s_exposureData.layers[i].stdDevLuma = gpuData->layers[i].stdDevLuma;
+									s_exposureData.layers[i].emaMinLuma = gpuData->layers[i].emaMinLuma;
+									s_exposureData.layers[i].emaMaxLuma = gpuData->layers[i].emaMaxLuma;
+									s_exposureData.layers[i].emaAvgLuma = gpuData->layers[i].emaAvgLuma;
+									s_exposureData.layers[i].emaStdDevLuma = gpuData->layers[i].emaStdDevLuma;
+									s_exposureData.layers[i].autoUchimuraP = gpuData->layers[i].autoUchimuraP;
+									s_exposureData.layers[i].autoUchimuraA = gpuData->layers[i].autoUchimuraA;
+									s_exposureData.layers[i].autoUchimuraM = gpuData->layers[i].autoUchimuraM;
+									s_exposureData.layers[i].autoUchimuraL = gpuData->layers[i].autoUchimuraL;
+									s_exposureData.layers[i].autoUchimuraC = gpuData->layers[i].autoUchimuraC;
+									s_exposureData.layers[i].autoUchimuraB = gpuData->layers[i].autoUchimuraB;
+									for (int b = 0; b < 256; b++) {
+										s_exposureData.layers[i].histogram[b] = gpuData->layers[i].histogram[b];
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
 		void Execute(graph::NodeContext& ctx) {
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
-			auto aeBuffer = ctx.GetBuffer<AutoExposureBuffer>();
-			if (aeBuffer && aeBuffer->GetBuffer() && !initializedBufferParams) {
-				vkCmd.updateBuffer(
-					aeBuffer->GetBuffer(),
-					0,
-					sizeof(ExposureDataHost),
-					&s_exposureData
-				);
-				initializedBufferParams = true;
-
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-					.srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-				};
-				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
-				vkCmd.pipelineBarrier2(dep);
-			}
+			// Upload Host Exposure parameters
+			ctx.WriteSpan<AutoExposureBuffer>(std::span<const ExposureDataHost>(&s_exposureData, 1));
 
 			float dt = 0.016f;
 
@@ -239,26 +256,26 @@ namespace brassica {
 			downPush.depthIndex = ctx.Index<GBufferDepth>();
 			downPush.deltaTime = dt;
 
-			downPush.outMip0Index = ctx.Index<BloomTextureMip0>();
-			downPush.outMip1Index = ctx.Index<BloomTextureMip1>();
-			downPush.outMip2Index = ctx.Index<BloomTextureMip2>();
-			downPush.outMip3Index = ctx.Index<BloomTextureMip3>();
-			downPush.outMip4Index = ctx.Index<BloomTextureMip4>();
+			downPush.outMip0Index = ctx.StorageIndex<BloomTextureMip0>();
+			downPush.outMip1Index = ctx.StorageIndex<BloomTextureMip1>();
+			downPush.outMip2Index = ctx.StorageIndex<BloomTextureMip2>();
+			downPush.outMip3Index = ctx.StorageIndex<BloomTextureMip3>();
+			downPush.outMip4Index = ctx.StorageIndex<BloomTextureMip4>();
 
-			downPush.outExpMip0Index = ctx.Index<LtmExpTextureMip0>();
-			downPush.outExpMip1Index = ctx.Index<LtmExpTextureMip1>();
-			downPush.outExpMip2Index = ctx.Index<LtmExpTextureMip2>();
-			downPush.outExpMip3Index = ctx.Index<LtmExpTextureMip3>();
-			downPush.outExpMip4Index = ctx.Index<LtmExpTextureMip4>();
+			downPush.outExpMip0Index = ctx.StorageIndex<LtmExpTextureMip0>();
+			downPush.outExpMip1Index = ctx.StorageIndex<LtmExpTextureMip1>();
+			downPush.outExpMip2Index = ctx.StorageIndex<LtmExpTextureMip2>();
+			downPush.outExpMip3Index = ctx.StorageIndex<LtmExpTextureMip3>();
+			downPush.outExpMip4Index = ctx.StorageIndex<LtmExpTextureMip4>();
 
-			downPush.outWgtMip0Index = ctx.Index<LtmWgtTextureMip0>();
-			downPush.outWgtMip1Index = ctx.Index<LtmWgtTextureMip1>();
-			downPush.outWgtMip2Index = ctx.Index<LtmWgtTextureMip2>();
-			downPush.outWgtMip3Index = ctx.Index<LtmWgtTextureMip3>();
-			downPush.outWgtMip4Index = ctx.Index<LtmWgtTextureMip4>();
+			downPush.outWgtMip0Index = ctx.StorageIndex<LtmWgtTextureMip0>();
+			downPush.outWgtMip1Index = ctx.StorageIndex<LtmWgtTextureMip1>();
+			downPush.outWgtMip2Index = ctx.StorageIndex<LtmWgtTextureMip2>();
+			downPush.outWgtMip3Index = ctx.StorageIndex<LtmWgtTextureMip3>();
+			downPush.outWgtMip4Index = ctx.StorageIndex<LtmWgtTextureMip4>();
 
 			render::ComputePipelineRequest downRequest{
-				.computeStage = &downsampleShader,
+				.shader = &downsampleShader,
 				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
 					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
@@ -282,20 +299,24 @@ namespace brassica {
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
 				vkCmd.dispatch(groupsX, groupsY, 1);
 
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-				};
-				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
-				vkCmd.pipelineBarrier2(dep);
+				vk::MemoryBarrier memoryBarrier(
+					vk::AccessFlagBits::eShaderWrite,
+					vk::AccessFlagBits::eShaderRead
+				);
+				vkCmd.pipelineBarrier(
+					vk::PipelineStageFlagBits::eComputeShader,
+					vk::PipelineStageFlagBits::eComputeShader,
+					vk::DependencyFlags{},
+					1, &memoryBarrier,
+					0, nullptr,
+					0, nullptr
+				);
 			}
 
 			// Stage 2: 1x1 Workgroup Histogram Reduction and Eye Adaptation Update
 			aeUpdatePush.deltaTime = dt;
 			render::ComputePipelineRequest aeUpdateRequest{
-				.computeStage = &aeUpdateShader,
+				.shader = &aeUpdateShader,
 				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
 					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
@@ -317,25 +338,29 @@ namespace brassica {
 
 				vkCmd.dispatch(1, 1, 1);
 
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead,
-				};
-				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
-				vkCmd.pipelineBarrier2(dep);
+				vk::MemoryBarrier memoryBarrier(
+					vk::AccessFlagBits::eShaderWrite,
+					vk::AccessFlagBits::eShaderRead
+				);
+				vkCmd.pipelineBarrier(
+					vk::PipelineStageFlagBits::eComputeShader,
+					vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eFragmentShader,
+					vk::DependencyFlags{},
+					1, &memoryBarrier,
+					0, nullptr,
+					0, nullptr
+				);
 			}
 
 			// Stage 3: Compute LTM Fuse Pass
 			fusePush.expTextureIndex = ctx.Index<LtmExpTextureMip0>();
 			fusePush.wgtTextureIndex = ctx.Index<LtmWgtTextureMip0>();
-			fusePush.outFusedIndex = ctx.Index<LtmFusedTexture>();
+			fusePush.outFusedIndex = ctx.StorageIndex<LtmFusedTexture>();
 			fusePush.startMip = 4;
 			fusePush.endMip = 0;
 
 			render::ComputePipelineRequest fuseRequest{
-				.computeStage = &ltmFuseShader,
+				.shader = &ltmFuseShader,
 				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
 					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
@@ -359,15 +384,22 @@ namespace brassica {
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
 				vkCmd.dispatch(groupsX, groupsY, 1);
 
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead,
-				};
-				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
-				vkCmd.pipelineBarrier2(dep);
+				vk::MemoryBarrier memoryBarrier(
+					vk::AccessFlagBits::eShaderWrite,
+					vk::AccessFlagBits::eShaderRead
+				);
+				vkCmd.pipelineBarrier(
+					vk::PipelineStageFlagBits::eComputeShader,
+					vk::PipelineStageFlagBits::eFragmentShader,
+					vk::DependencyFlags{},
+					1, &memoryBarrier,
+					0, nullptr,
+					0, nullptr
+				);
 			}
+
+			// Read back updated exposure statistics for live UI histogram & metrics
+			ReadBackAutoExposureStats(ctx);
 
 			// Stage 4: Tone Mapping Compositing Graphics Pass
 			push = s_tonemapPush;
