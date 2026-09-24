@@ -5,8 +5,15 @@
 
 #include "VulkanCompat.hpp"
 
-#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
-	#define BRASSICA_HAS_VULKAN 1
+#ifndef BRASSICA_HAS_VULKAN
+	#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
+		#define BRASSICA_HAS_VULKAN 1
+	#else
+		#define BRASSICA_HAS_VULKAN 0
+	#endif
+#endif
+
+#if BRASSICA_HAS_VULKAN
 	#include "graph/PhysicalRegistry.hpp"
 	#include "graph/PhysicalResource.hpp"
 	#include "render/PipelineLibrary.hpp"

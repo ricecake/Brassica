@@ -44,6 +44,8 @@ namespace brassica {
 		uint32_t    maxFrames{0};
 		std::string configFile{"config.ini"};
 		std::string appName{"Sandbox"};
+		bool        renderTerrainMap{false};
+		std::string terrainMapPath{"terrain_map.png"};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
 			ArgparseManager argManager;
@@ -55,6 +57,11 @@ namespace brassica {
 			opts.maxFrames = argManager.GetMaxFrames();
 			opts.configFile = argManager.GetConfigFile();
 			opts.appName = argManager.GetAppName();
+			opts.renderTerrainMap = argManager.GetRenderTerrainMap();
+			opts.terrainMapPath = argManager.GetTerrainMapPath();
+			if (opts.renderTerrainMap) {
+				opts.headless = true;
+			}
 			return opts;
 		}
 	};

@@ -15,6 +15,8 @@ namespace brassica {
 		uint32_t    maxFrames{0};
 		std::string configFile{"config.ini"};
 		std::string appName{"Sandbox"};
+		bool        renderTerrainMap{false};
+		std::string terrainMapPath{"terrain_map.png"};
 
 		auto GetReflection() const {
 			return std::make_tuple(
@@ -28,7 +30,9 @@ namespace brassica {
 					UIHint::Slider
 				),
 				MakeField("configFile", "Config File", &ArgparseManagerState::configFile),
-				MakeField("appName", "Application Name", &ArgparseManagerState::appName)
+				MakeField("appName", "Application Name", &ArgparseManagerState::appName),
+				MakeField("renderTerrainMap", "Render Terrain Map", &ArgparseManagerState::renderTerrainMap),
+				MakeField("terrainMapPath", "Terrain Map Output Path", &ArgparseManagerState::terrainMapPath)
 			);
 		}
 	};
@@ -46,7 +50,16 @@ namespace brassica {
 
 		std::string GetManagerName() const override { return "ArgparseManager"; }
 
-		State GetState() const override { return State{GetHeadless(), GetMaxFrames(), GetConfigFile(), GetAppName()}; }
+		State GetState() const override {
+			return State{
+				.headless = GetHeadless(),
+				.maxFrames = GetMaxFrames(),
+				.configFile = GetConfigFile(),
+				.appName = GetAppName(),
+				.renderTerrainMap = GetRenderTerrainMap(),
+				.terrainMapPath = GetTerrainMapPath()
+			};
+		}
 
 		void SetState(const State& state) override {
 			(void)state; // CLI parameters are parsed at startup
@@ -59,6 +72,8 @@ namespace brassica {
 		[[nodiscard]] uint32_t    GetMaxFrames() const;
 		[[nodiscard]] std::string GetConfigFile() const;
 		[[nodiscard]] std::string GetAppName() const;
+		[[nodiscard]] bool        GetRenderTerrainMap() const;
+		[[nodiscard]] std::string GetTerrainMapPath() const;
 
 		argparse::ArgumentParser& GetParser() { return m_parser; }
 

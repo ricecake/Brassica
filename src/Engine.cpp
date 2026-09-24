@@ -6,6 +6,7 @@
 #include <fstream>
 
 #include "spdlog/spdlog.h"
+#include "terrain/TerrainMapExporter.hpp"
 
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
@@ -347,11 +348,12 @@ namespace brassica {
 	void Engine::Init(const EngineOptions& opts) {
 		ServiceLocator::SetInstance(&serviceLocator);
 
+		options = opts;
+
 		if (!inputHandler) {
 			inputHandler = CreateDefaultInputHandler();
 		}
 
-		options = opts;
 		InitWindow();
 		if (!InitVulkan()) {
 			spdlog::error("Vulkan initialization failed; engine cannot start.");
@@ -954,6 +956,18 @@ namespace brassica {
 	}
 
 	void Engine::Run() {
+		spdlog::info("Engine::Run options.renderTerrainMap = {}, path = '{}'", options.renderTerrainMap, options.terrainMapPath);
+		if (options.renderTerrainMap) {
+			spdlog::info("Terrain map export requested: output path '{}'...", options.terrainMapPath);
+			bool success = TerrainMapExporter::ExportGPU(*this, options.terrainMapPath, 4096, 2048);
+			if (success) {
+				spdlog::info("Terrain map export complete: '{}'. Exiting.", options.terrainMapPath);
+			} else {
+				spdlog::error("Failed to export terrain map to '{}'.", options.terrainMapPath);
+			}
+			return;
+		}
+
 		if (!device) {
 			spdlog::warn("Engine::Run called but Vulkan device is null.");
 			return;
