@@ -100,11 +100,14 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(1024, 1024, vk::Format::eR16G16Sfloat),
 				}
 			);
+			auto volumeDesc = graph::ComputeStorageImageDesc(128, 128, vk::Format::eR16G16B16A16Sfloat);
+			volumeDesc.kind = graph::ResourceDesc::Kind::Image3D;
+			volumeDesc.depth = 128;
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<Cloud3DVolumeTexture>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::ComputeStorageImageDesc(128, 128, vk::Format::eR16G16B16A16Sfloat),
+					.desc = volumeDesc,
 				}
 			);
 #else
@@ -321,11 +324,13 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& /*ctx*/) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 #if BRASSICA_HAS_VULKAN
+			auto shadowDesc = graph::ComputeStorageImageDesc(512, 512, vk::Format::eR16Sfloat);
+			shadowDesc.layers = 8;
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudShadowMap>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::ComputeStorageImageDesc(512, 512, vk::Format::eR16Sfloat, 8),
+					.desc = shadowDesc,
 				}
 			);
 #else
@@ -433,20 +438,16 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudTileQueueSSBO>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::BufferDesc{
-						.sizeBytes = (tileCols * tileRows + 16) * sizeof(uint32_t) * 2,
-						.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer),
-					},
+					.desc = graph::StorageBufferDesc((tileCols * tileRows + 16) * sizeof(uint32_t) * 2),
 				}
 			);
+			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(3 * sizeof(uint32_t));
+			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudIndirectDispatchSSBO>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::BufferDesc{
-						.sizeBytes = 3 * sizeof(uint32_t),
-						.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndirectBuffer),
-					},
+					.desc = indirectDesc,
 				}
 			);
 #else

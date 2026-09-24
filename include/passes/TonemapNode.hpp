@@ -172,17 +172,14 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Read,
-					.desc = graph::DepthAttachmentDesc(ctx.width, ctx.height, vk::Format::eD32Sfloat),
+					.desc = graph::DepthBufferDesc(ctx.width, ctx.height, vk::Format::eD32Sfloat),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<AutoExposureBuffer>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::BufferDesc{
-						.sizeBytes = sizeof(ExposureDataHost),
-						.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst),
-					},
+					.desc = graph::StorageBufferDesc(sizeof(ExposureDataHost)),
 				}
 			);
 
@@ -325,23 +322,31 @@ namespace brassica {
 #if BRASSICA_HAS_VULKAN
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
-			auto aeBuffer = ctx.GetBuffer<AutoExposureBuffer>();
-			if (aeBuffer && aeBuffer->GetBuffer() && !initializedBufferParams) {
+			vk::Buffer aeBufferHandle{nullptr};
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					if (auto physBuf = registry->GetBuffer<AutoExposureBuffer>()) {
+						aeBufferHandle = physBuf->GetBuffer();
+					}
+				}
+			}
+
+			if (aeBufferHandle && !initializedBufferParams) {
 				vkCmd.updateBuffer(
-					aeBuffer->GetBuffer(),
+					aeBufferHandle,
 					0,
 					sizeof(ExposureDataHost),
 					&s_exposureData
 				);
 				initializedBufferParams = true;
 
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-					.srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-				};
-				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+				vk::MemoryBarrier2 barrier(
+					vk::PipelineStageFlagBits2::eTransfer,
+					vk::AccessFlagBits2::eTransferWrite,
+					vk::PipelineStageFlagBits2::eComputeShader,
+					vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
+				);
+				vk::DependencyInfo dep({}, 1, &barrier);
 				vkCmd.pipelineBarrier2(dep);
 			}
 
@@ -369,7 +374,7 @@ namespace brassica {
 			downPush.outWgtMip4Index = ctx.Index<LtmWgtTextureMip4>();
 
 			render::ComputePipelineRequest downRequest{
-				.computeStage = &downsampleShader,
+				.shader = &downsampleShader,
 				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
 					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
@@ -393,13 +398,13 @@ namespace brassica {
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
 				vkCmd.dispatch(groupsX, groupsY, 1);
 
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead,
-				};
-				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+				vk::MemoryBarrier2 barrier(
+					vk::PipelineStageFlagBits2::eComputeShader,
+					vk::AccessFlagBits2::eShaderStorageWrite,
+					vk::PipelineStageFlagBits2::eComputeShader,
+					vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead
+				);
+				vk::DependencyInfo dep({}, 1, &barrier);
 				vkCmd.pipelineBarrier2(dep);
 			}
 
@@ -411,7 +416,7 @@ namespace brassica {
 			fusePush.endMip = 0;
 
 			render::ComputePipelineRequest fuseRequest{
-				.computeStage = &ltmFuseShader,
+				.shader = &ltmFuseShader,
 				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
 					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
@@ -435,13 +440,13 @@ namespace brassica {
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
 				vkCmd.dispatch(groupsX, groupsY, 1);
 
-				vk::MemoryBarrier2 barrier{
-					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-					.dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
-					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead,
-				};
-				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+				vk::MemoryBarrier2 barrier(
+					vk::PipelineStageFlagBits2::eComputeShader,
+					vk::AccessFlagBits2::eShaderStorageWrite,
+					vk::PipelineStageFlagBits2::eFragmentShader,
+					vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead
+				);
+				vk::DependencyInfo dep({}, 1, &barrier);
 				vkCmd.pipelineBarrier2(dep);
 			}
 
