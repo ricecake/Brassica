@@ -67,14 +67,10 @@ void main() {
 	uvec3 globalId = uvec3(gl_WorkGroupID.xy * 16 + tile_pos + quad_local_pos, gl_GlobalInvocationID.z);
 
 	uint dim = push.gridParams.w;
-	uint relLOD = globalId.z;
-
-	if (globalId.x >= dim || globalId.y >= dim || relLOD >= push.gridParams.x) {
-		return;
-	}
-
+	uint relLOD = gl_GlobalInvocationID.z;
 	uint lod = push.baseLOD + relLOD;
-	if (lod >= push.maxLODs) {
+
+	if (globalId.x >= dim || globalId.y >= dim || relLOD >= push.gridParams.x || lod >= push.maxLODs) {
 		return;
 	}
 
