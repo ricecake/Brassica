@@ -149,8 +149,12 @@ void main() {
 				maxH = max(maxH, h);
 			}
 		}
-		minB.y = minH - 5.0;
-		maxB.y = maxH + 5.0;
+		minB.y = minH - 20.0;
+		maxB.y = maxH + 20.0;
+		if (lod <= 1u) {
+			minB.y = min(minB.y, -500.0);
+			maxB.y = max(maxB.y, 2500.0);
+		}
 	} else {
 		minB = vec3(cameraSnap.x, 0.0, cameraSnap.y);
 		maxB = minB;

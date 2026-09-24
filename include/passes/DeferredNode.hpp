@@ -6,6 +6,7 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
+#include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
@@ -21,7 +22,12 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct DeferredPushConstants {
-		glm::uvec4 gridParams{10, 16, 2560, 1088}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+		glm::uvec4 gridParams{
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::MeshletsPerRow,
+			constants::Class::Terrain::TotalMeshlets,
+			constants::Class::Terrain::MapDim
+		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gNormalIndex{0};
 		std::uint32_t gAlbedoIndex{0};

@@ -408,7 +408,14 @@ namespace brassica {
 		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
 		camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
 
-		terrainClipmap.Init(device, allocator, 10, 0.5f, 0.0f, camera.position);
+		terrainClipmap.Init(
+			device,
+			allocator,
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::BaseTexelSize,
+			0.0f,
+			camera.position
+		);
 
 		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
 			terrainClipmap.GetImage(),
@@ -1139,11 +1146,11 @@ namespace brassica {
 		terrainClipmap.UpdateCameraPosition(camera.position);
 
 		uint32_t lods = terrainClipmap.GetNumLODs();
-		uint32_t meshletsPerRow = 16;
+		uint32_t meshletsPerRow = constants::Class::Terrain::MeshletsPerRow;
 		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
-		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, TERRAIN_MAP_DIM);
+		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
 
 		bool       terrainHasUpdate = false;
 
