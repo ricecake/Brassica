@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
@@ -44,6 +45,10 @@ namespace brassica {
 		float         deltaTime{0.016f};
 	};
 
+	struct AutoExposureUpdatePushConstants {
+		float deltaTime{0.016f};
+	};
+
 	struct LtmFusePushConstants {
 		std::uint32_t expTextureIndex{0};
 		std::uint32_t wgtTextureIndex{0};
@@ -83,6 +88,7 @@ namespace brassica {
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            downsampleShader;
+		ComputeShader            aeUpdateShader;
 		ComputeShader            ltmFuseShader;
 		VertexShader             vertShader;
 		FragmentShader           fragShader;
@@ -90,12 +96,14 @@ namespace brassica {
 		bool                     initializedBufferParams = false;
 		TonemapPushConstants     push{};
 		DownsamplePushConstants  downPush{};
+		AutoExposureUpdatePushConstants aeUpdatePush{};
 		LtmFusePushConstants     fusePush{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			swapchainFormat = services.swapchainFormat;
 			downsampleShader.CompileComputeFromFile(services.device, "shaders/effects/bloom_downsample.comp");
+			aeUpdateShader.CompileComputeFromFile(services.device, "shaders/effects/autoexposure_update.comp");
 			ltmFuseShader.CompileComputeFromFile(services.device, "shaders/effects/ltm_fuse.comp");
 			vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert");
 			fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag");
@@ -108,6 +116,7 @@ namespace brassica {
 
 		void RegisterShaders(ShaderWatcher& watcher) {
 			watcher.RegisterShader(&downsampleShader);
+			watcher.RegisterShader(&aeUpdateShader);
 			watcher.RegisterShader(&ltmFuseShader);
 			watcher.RegisterShader(&vertShader);
 			watcher.RegisterShader(&fragShader);
@@ -115,6 +124,7 @@ namespace brassica {
 
 		void Destroy(vk::Device device) {
 			downsampleShader.Destroy(device);
+			aeUpdateShader.Destroy(device);
 			ltmFuseShader.Destroy(device);
 			vertShader.Destroy(device);
 			fragShader.Destroy(device);
@@ -221,10 +231,13 @@ namespace brassica {
 				vkCmd.pipelineBarrier2(dep);
 			}
 
-			// Compute Downsample Pass
+			float dt = 0.016f;
+
+			// Stage 1: Compute Downsample & Histogram Accumulation
 			downPush.srcResolution = glm::vec2(ctx.width, ctx.height);
 			downPush.hdrColorIndex = ctx.Index<HdrColor>();
 			downPush.depthIndex = ctx.Index<GBufferDepth>();
+			downPush.deltaTime = dt;
 
 			downPush.outMip0Index = ctx.Index<BloomTextureMip0>();
 			downPush.outMip1Index = ctx.Index<BloomTextureMip1>();
@@ -273,13 +286,48 @@ namespace brassica {
 					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
 					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
 					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+				};
+				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+				vkCmd.pipelineBarrier2(dep);
+			}
+
+			// Stage 2: 1x1 Workgroup Histogram Reduction and Eye Adaptation Update
+			aeUpdatePush.deltaTime = dt;
+			render::ComputePipelineRequest aeUpdateRequest{
+				.computeStage = &aeUpdateShader,
+				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
+					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+				},
+				.pushConstantRanges = std::array<vk::PushConstantRange, 1>{
+					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(AutoExposureUpdatePushConstants)}
+				},
+			};
+			render::ResolvedPipeline aeUpdateResolved = pipelineLibrary->ResolveCached(aeUpdateRequest);
+
+			if (aeUpdateResolved.pipeline) {
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, aeUpdateResolved.pipeline);
+				std::array<vk::DescriptorSet, 2> boundSets{
+					static_cast<VkDescriptorSet>(ctx.frameSet),
+					static_cast<VkDescriptorSet>(ctx.globalSet)
+				};
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, aeUpdateResolved.layout, 0, boundSets, nullptr);
+				vkCmd.pushConstants(aeUpdateResolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(AutoExposureUpdatePushConstants), &aeUpdatePush);
+
+				vkCmd.dispatch(1, 1, 1);
+
+				vk::MemoryBarrier2 barrier{
+					.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+					.srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+					.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
 					.dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead,
 				};
 				vk::DependencyInfo dep{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
 				vkCmd.pipelineBarrier2(dep);
 			}
 
-			// Compute LTM Fuse Pass
+			// Stage 3: Compute LTM Fuse Pass
 			fusePush.expTextureIndex = ctx.Index<LtmExpTextureMip0>();
 			fusePush.wgtTextureIndex = ctx.Index<LtmWgtTextureMip0>();
 			fusePush.outFusedIndex = ctx.Index<LtmFusedTexture>();
@@ -321,7 +369,7 @@ namespace brassica {
 				vkCmd.pipelineBarrier2(dep);
 			}
 
-			// Tone Mapping Compositing Graphics Pass
+			// Stage 4: Tone Mapping Compositing Graphics Pass
 			push = s_tonemapPush;
 			push.hdrColorIndex = ctx.Index<HdrColor>();
 			push.bloomBlurIndex = ctx.Index<BloomTextureMip0>();

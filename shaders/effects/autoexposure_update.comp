@@ -1,0 +1,134 @@
+#version 460
+#include "bindless.glsl"
+#include "types/autoexposure.glsl"
+
+layout(local_size_x = 256, local_size_y = 1) in;
+
+layout(push_constant) uniform AutoExposureUpdatePushConstants {
+	float deltaTime;
+} push;
+
+const float MIN_LOG_LUMA = -10.0;
+const float MAX_LOG_LUMA = 2.0;
+
+shared float s_binWeight[2][256];
+
+void update_layer_ae(int layerIdx) {
+	float totalWeight = 0.0;
+	for (int i = 0; i < 256; i++) {
+		totalWeight += s_binWeight[layerIdx][i];
+	}
+
+	if (totalWeight > 0.0) {
+		float lowCutoffWeight = totalWeight * layers[layerIdx].histogramLowCutoff;
+		float highCutoffWeight = totalWeight * layers[layerIdx].histogramHighCutoff;
+
+		float filteredWeightSum = 0.0;
+		float weightedLogLumaSum = 0.0;
+		float currentWeightAccum = 0.0;
+
+		float minValidLogLuma = MAX_LOG_LUMA;
+		float maxValidLogLuma = MIN_LOG_LUMA;
+
+		for (int i = 0; i < 256; i++) {
+			float binWeight = s_binWeight[layerIdx][i];
+			float nextWeightAccum = currentWeightAccum + binWeight;
+
+			if (nextWeightAccum > lowCutoffWeight && currentWeightAccum < highCutoffWeight) {
+				float validBinWeight = binWeight;
+				if (currentWeightAccum < lowCutoffWeight) {
+					validBinWeight -= (lowCutoffWeight - currentWeightAccum);
+				}
+				if (nextWeightAccum > highCutoffWeight) {
+					validBinWeight -= (nextWeightAccum - highCutoffWeight);
+				}
+
+				float binLogLuma = MIN_LOG_LUMA + (float(i) + 0.5) / 256.0 * (MAX_LOG_LUMA - MIN_LOG_LUMA);
+				weightedLogLumaSum += binLogLuma * validBinWeight;
+				filteredWeightSum += validBinWeight;
+
+				minValidLogLuma = min(minValidLogLuma, binLogLuma);
+				maxValidLogLuma = max(maxValidLogLuma, binLogLuma);
+			}
+			currentWeightAccum = nextWeightAccum;
+		}
+
+		if (filteredWeightSum > 0.0) {
+			float logAvgLuma = weightedLogLumaSum / filteredWeightSum;
+			float avgLumaVal = exp(logAvgLuma);
+
+			float weightedLogLumaSqSum = 0.0;
+			currentWeightAccum = 0.0;
+			for (int i = 0; i < 256; i++) {
+				float binWeight = s_binWeight[layerIdx][i];
+				float nextWeightAccum = currentWeightAccum + binWeight;
+				if (nextWeightAccum > lowCutoffWeight && currentWeightAccum < highCutoffWeight) {
+					float validBinWeight = binWeight;
+					if (currentWeightAccum < lowCutoffWeight) validBinWeight -= (lowCutoffWeight - currentWeightAccum);
+					if (nextWeightAccum > highCutoffWeight) validBinWeight -= (nextWeightAccum - highCutoffWeight);
+
+					float binLogLuma = MIN_LOG_LUMA + (float(i) + 0.5) / 256.0 * (MAX_LOG_LUMA - MIN_LOG_LUMA);
+					float diff = binLogLuma - logAvgLuma;
+					weightedLogLumaSqSum += diff * diff * validBinWeight;
+				}
+				currentWeightAccum = nextWeightAccum;
+			}
+			float logStdDev = sqrt(weightedLogLumaSqSum / filteredWeightSum);
+
+			// Update Statistics
+			layers[layerIdx].minLuma = exp(minValidLogLuma);
+			layers[layerIdx].maxLuma = exp(maxValidLogLuma);
+			layers[layerIdx].avgLuma = avgLumaVal;
+			layers[layerIdx].stdDevLuma = logStdDev;
+
+			// Update adapted luminance (EMA)
+			float speed = (avgLumaVal > layers[layerIdx].adaptedLuminance) ? layers[layerIdx].speedUp : layers[layerIdx].speedDown;
+			float adaptation = 1.0 - exp(-push.deltaTime * speed);
+			layers[layerIdx].adaptedLuminance += (avgLumaVal - layers[layerIdx].adaptedLuminance) * adaptation;
+
+			// Slow start EMA for statistics
+			float statsSpeed = 0.5;
+			float statsAdaptation = 1.0 - exp(-push.deltaTime * statsSpeed);
+
+			layers[layerIdx].emaMinLuma = mix(layers[layerIdx].emaMinLuma, layers[layerIdx].minLuma, statsAdaptation);
+			layers[layerIdx].emaMaxLuma = mix(layers[layerIdx].emaMaxLuma, layers[layerIdx].maxLuma, statsAdaptation);
+			layers[layerIdx].emaAvgLuma = mix(layers[layerIdx].emaAvgLuma, layers[layerIdx].avgLuma, statsAdaptation);
+			layers[layerIdx].emaStdDevLuma = mix(layers[layerIdx].emaStdDevLuma, layers[layerIdx].stdDevLuma, statsAdaptation);
+
+			// Auto-tune Tonemapper
+			if (layers[layerIdx].autoTuneEnabled != 0) {
+				layers[layerIdx].autoUchimuraA = clamp(layers[layerIdx].emaStdDevLuma * 2.0, layers[layerIdx].minContrast, layers[layerIdx].maxContrast);
+				layers[layerIdx].autoUchimuraM = clamp(layers[layerIdx].adaptedLuminance * 0.5, 0.0, 0.5);
+
+				float lumaRange = layers[layerIdx].emaMaxLuma - layers[layerIdx].emaAvgLuma;
+				layers[layerIdx].autoUchimuraP = clamp(layers[layerIdx].targetBrightness + lumaRange * 0.1, 0.5, 5.0);
+
+				layers[layerIdx].autoUchimuraL = 0.4;
+				layers[layerIdx].autoUchimuraC = 1.33;
+				layers[layerIdx].autoUchimuraB = 0.0;
+			}
+		}
+	}
+
+	// Reset histogram bin for next frame
+	layers[layerIdx].histogram[gl_LocalInvocationID.x] = 0;
+}
+
+void main() {
+	uint bin = gl_LocalInvocationID.x;
+
+	s_binWeight[0][bin] = float(layers[0].histogram[bin]);
+	s_binWeight[1][bin] = float(layers[1].histogram[bin]);
+
+	barrier();
+
+	if (bin == 0) {
+		if (layers[0].useAutoExposure != 0) update_layer_ae(0);
+		if (layers[1].useAutoExposure != 0) update_layer_ae(1);
+	}
+
+	barrier();
+	// Reset histogram for next frame
+	layers[0].histogram[bin] = 0;
+	layers[1].histogram[bin] = 0;
+}
