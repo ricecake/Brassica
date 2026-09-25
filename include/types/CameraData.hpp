@@ -49,6 +49,9 @@ namespace brassica {
 		// Control state
 		bool isCaptured{false};
 
+		// Last camera wrap offset applied during UpdateCamera
+		glm::vec3 lastWrapOffset{0.0f};
+
 		void CycleMode() {
 			mode = (mode == CameraMode::Instant) ? CameraMode::Accelerated : CameraMode::Instant;
 		}

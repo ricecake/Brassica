@@ -100,11 +100,12 @@ void main() {
 	// (and therefore depth-tested away by) water/terrain right where they visually overlapped it.
 	// Applied to the particle's center once, before deriving orientation/offsets from it, since a
 	// billboard-sized offset changes distSq by a negligible amount relative to FAKE_PLANET_RADIUS.
-	vec2  flatXZ = pos.xz - camPos.xz;
+	vec2  flatXZ = wrapShortestDistance(pos.xz - camPos.xz);
+	vec3  effectivePos = vec3(camPos.x + flatXZ.x, pos.y, camPos.z + flatXZ.y);
 	float distSq = dot(flatXZ, flatXZ);
-	pos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
+	effectivePos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
 
-	vec3 forward = normalize(camPos - pos);
+	vec3 forward = normalize(camPos - effectivePos);
 	vec3 up = vec3(0.0, 1.0, 0.0);
 	if (abs(dot(forward, up)) > 0.99) {
 		up = vec3(1.0, 0.0, 0.0);
@@ -139,7 +140,7 @@ void main() {
 	baseColor.a *= min(1.0, lifeRatio * 2.0);
 
 	for (uint i = 0u; i < 4u; ++i) {
-		vec3 vWorldPos = pos + offsets[i];
+		vec3 vWorldPos = effectivePos + offsets[i];
 		gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(vWorldPos, 1.0);
 
 		OUT[i].color = baseColor;

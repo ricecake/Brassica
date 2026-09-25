@@ -6,6 +6,7 @@
 #include "spdlog/spdlog.h"
 #include <FastNoise/FastNoise.h>
 
+#include "EngineConstants.hpp"
 #include "terrain/AsyncTerrainUploader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -51,6 +52,9 @@ namespace brassica {
 	}
 
 	glm::vec4 TerrainClipmap::SampleTerrain(float worldX, float worldZ, float texelSize) {
+		glm::vec2 wrapped = WrapShortestDistance(glm::vec2(worldX, worldZ));
+		worldX = wrapped.x;
+		worldZ = wrapped.y;
 		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;
 		float         eps = std::max(0.25f, texelSize);
@@ -269,10 +273,12 @@ namespace brassica {
 		CreateSampler();
 	}
 
-	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos) {
+	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos, const glm::vec3& wrapOffset) {
 		for (uint32_t l = 0; l < numLODs; ++l) {
 			auto& info = levelInfos[l];
 			float texelSize = info.texelSize;
+
+			info.centerWorldPos += glm::vec2(wrapOffset.x, wrapOffset.z);
 
 			glm::vec2 newCenter = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / texelSize) * texelSize;
 			glm::vec2 diff = newCenter - info.centerWorldPos;
