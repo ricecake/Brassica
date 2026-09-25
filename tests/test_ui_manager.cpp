@@ -226,4 +226,97 @@ namespace brassica {
 		CHECK(doctest::Approx(sunDirLocal.z).epsilon(0.001) == -1.0f);
 	}
 
+	TEST_CASE("Shortest Distance Wrap Helpers") {
+		float R = FAKE_PLANET_RADIUS;
+		float halfL = FAKE_PLANET_HALF_PERIMETER; // ~1,884,955.59m
+		float L = FAKE_PLANET_PERIMETER;           // ~3,769,911.18m
+
+		// Small delta should remain unchanged
+		glm::vec2 smallDelta(50.0f, -20.0f);
+		glm::vec2 wrappedSmall = WrapShortestDistance(smallDelta);
+		CHECK(doctest::Approx(wrappedSmall.x).epsilon(0.001) == 50.0f);
+		CHECK(doctest::Approx(wrappedSmall.y).epsilon(0.001) == -20.0f);
+
+		// Delta spanning across wrap line (> halfL)
+		// e.g. Object at -1.8e6, Camera at +1.8e6 => diff = -3.6e6
+		glm::vec2 largeNegDelta(-3600000.0f, 0.0f);
+		glm::vec2 wrappedNeg = WrapShortestDistance(largeNegDelta);
+		// Should pick shortest vector (+169,911.18m)
+		CHECK(wrappedNeg.x > 0.0f);
+		CHECK(doctest::Approx(wrappedNeg.x).epsilon(0.01) == (-3600000.0f + L));
+
+		// Opposite direction (> +halfL)
+		glm::vec2 largePosDelta(3600000.0f, 0.0f);
+		glm::vec2 wrappedPos = WrapShortestDistance(largePosDelta);
+		CHECK(wrappedPos.x < 0.0f);
+		CHECK(doctest::Approx(wrappedPos.x).epsilon(0.01) == (3600000.0f - L));
+
+		// 3D vector variant
+		glm::vec3 delta3D(-3600000.0f, 15.0f, 0.0f);
+		glm::vec3 wrapped3D = WrapShortestDistance(delta3D);
+		CHECK(doctest::Approx(wrapped3D.y).epsilon(0.001) == 15.0f);
+		CHECK(doctest::Approx(wrapped3D.x).epsilon(0.01) == (-3600000.0f + L));
+	}
+
+	TEST_CASE("Camera Position Wrap and Offset Tracking") {
+		float halfL = FAKE_PLANET_HALF_PERIMETER;
+		float L = FAKE_PLANET_PERIMETER;
+
+		// Position just below wrap boundary
+		glm::vec3 posBefore(halfL - 5.0f, 10.0f, 0.0f);
+		glm::vec3 step(10.0f, 0.0f, 0.0f); // moves across wrap boundary
+
+		glm::vec3 posTemp = posBefore + step; // halfL + 5.0f
+		glm::vec3 posWrapped = posTemp;
+		glm::vec3 wrapOffset{0.0f};
+
+		if (posWrapped.x > halfL) {
+			posWrapped.x -= L;
+			wrapOffset.x = -L;
+		}
+
+		// Verify new camera position wrapped to negative domain
+		CHECK(posWrapped.x < 0.0f);
+		CHECK(doctest::Approx(posWrapped.x).epsilon(0.01) == (-halfL + 5.0f));
+		CHECK(wrapOffset.x == -L);
+
+		// Verify delta calculation using wrapOffset
+		glm::vec3 prevAdjusted = posBefore + wrapOffset;
+		glm::vec3 frameDelta = posWrapped - prevAdjusted; // Should equal true step (10, 0, 0)
+		CHECK(doctest::Approx(frameDelta.x).epsilon(0.001) == 10.0f);
+		CHECK(doctest::Approx(frameDelta.y).epsilon(0.001) == 0.0f);
+		CHECK(doctest::Approx(frameDelta.z).epsilon(0.001) == 0.0f);
+	}
+
+	TEST_CASE("Pseudo Sphere Surface Normal and Celestial Continuity") {
+		float halfL = FAKE_PLANET_HALF_PERIMETER;
+		float R = FAKE_PLANET_RADIUS;
+
+		auto getCamNormal = [R](float x, float z) {
+			float theta = x / R;
+			float phi = z / R;
+			return glm::normalize(glm::vec3(
+				std::sin(theta) * std::cos(phi),
+				std::cos(theta) * std::cos(phi),
+				std::sin(phi)
+			));
+		};
+
+		// At origin (0,0), normal is (0,1,0)
+		glm::vec3 normOrigin = getCamNormal(0.0f, 0.0f);
+		CHECK(doctest::Approx(normOrigin.x).epsilon(0.001) == 0.0f);
+		CHECK(doctest::Approx(normOrigin.y).epsilon(0.001) == 1.0f);
+		CHECK(doctest::Approx(normOrigin.z).epsilon(0.001) == 0.0f);
+
+		// At boundary +halfL (+pi * R) vs -halfL (-pi * R)
+		glm::vec3 normPlusBoundary = getCamNormal(halfL, 0.0f);
+		glm::vec3 normMinusBoundary = getCamNormal(-halfL, 0.0f);
+
+		// Normals at +pi*R and -pi*R must be identical (0, -1, 0) -> continuous across warp
+		CHECK(doctest::Approx(normPlusBoundary.x).epsilon(0.001) == normMinusBoundary.x);
+		CHECK(doctest::Approx(normPlusBoundary.y).epsilon(0.001) == normMinusBoundary.y);
+		CHECK(doctest::Approx(normPlusBoundary.z).epsilon(0.001) == normMinusBoundary.z);
+		CHECK(doctest::Approx(normPlusBoundary.y).epsilon(0.001) == -1.0f);
+	}
+
 } // namespace brassica

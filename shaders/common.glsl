@@ -1,5 +1,18 @@
 const float FAKE_PLANET_RADIUS = 600000.0; // 600km radius (1/10th scale planet)
 const float PI = 3.14159265359;
+const float FAKE_PLANET_PERIMETER = 2.0 * PI * FAKE_PLANET_RADIUS;
+const float FAKE_PLANET_HALF_PERIMETER = PI * FAKE_PLANET_RADIUS;
+
+vec2 wrapShortestDistance(vec2 delta) {
+	float L = FAKE_PLANET_PERIMETER;
+	return delta - round(delta / L) * L;
+}
+
+vec3 wrapShortestDistance(vec3 delta) {
+	float L = FAKE_PLANET_PERIMETER;
+	vec2 relXZ = delta.xz - round(delta.xz / L) * L;
+	return vec3(relXZ.x, delta.y, relXZ.y);
+}
 const float PHI = 1.618033988749894848204586834;
 const float TAU = 2.0 * PI;
 

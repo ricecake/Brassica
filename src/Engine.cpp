@@ -677,6 +677,28 @@ namespace brassica {
 		if (camera.position.y < -1024.0f) {
 			camera.position.y = -1024.0f;
 		}
+
+		constexpr float R_max = FAKE_PLANET_HALF_PERIMETER;
+		constexpr float L = FAKE_PLANET_PERIMETER;
+
+		glm::vec3 wrapOffset{0.0f};
+		if (camera.position.x > R_max) {
+			camera.position.x -= L;
+			wrapOffset.x = -L;
+		} else if (camera.position.x < -R_max) {
+			camera.position.x += L;
+			wrapOffset.x = +L;
+		}
+
+		if (camera.position.z > R_max) {
+			camera.position.z -= L;
+			wrapOffset.z = -L;
+		} else if (camera.position.z < -R_max) {
+			camera.position.z += L;
+			wrapOffset.z = +L;
+		}
+
+		camera.lastWrapOffset = wrapOffset;
 	}
 
 	bool Engine::InitVulkan() {
@@ -1082,6 +1104,7 @@ namespace brassica {
 
 		glm::vec3 previousCameraPosition = camera.position;
 		UpdateCamera(deltaTime);
+		previousCameraPosition += camera.lastWrapOffset;
 		lightManager.Update(deltaTime);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
@@ -1163,7 +1186,7 @@ namespace brassica {
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 
-		terrainClipmap.UpdateCameraPosition(camera.position);
+		terrainClipmap.UpdateCameraPosition(camera.position, camera.lastWrapOffset);
 
 		uint32_t lods = terrainClipmap.GetNumLODs();
 		uint32_t meshletsPerRow = constants::Class::Terrain::MeshletsPerRow;
@@ -1195,8 +1218,13 @@ namespace brassica {
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
 		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
-		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
-		glm::vec3 camNormal = glm::normalize(camera.position - planetCenter);
+		float theta = camera.position.x / FAKE_PLANET_RADIUS;
+		float phi = camera.position.z / FAKE_PLANET_RADIUS;
+		glm::vec3 camNormal = glm::normalize(glm::vec3(
+			std::sin(theta) * std::cos(phi),
+			std::cos(theta) * std::cos(phi),
+			std::sin(phi)
+		));
 
 		float     cosTheta = glm::dot(upRef, camNormal);
 		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
@@ -1226,6 +1254,7 @@ namespace brassica {
 			.sunRadiance = sunRadiance,
 			.moonDir = moonDir,
 			.moonRadiance = moonRadiance,
+			.rotToCam = rotToCam,
 			.time = ubo.time,
 			.worldScale = 1.0f,
 			.multiScatScale = 1.0f,

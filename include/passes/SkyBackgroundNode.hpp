@@ -60,6 +60,7 @@ namespace brassica {
 			push.sunDirAndAureole = glm::vec4(p.sunDir, 0.5f);
 			push.moonDirAndCirrus = glm::vec4(p.moonDir, 0.3f);
 			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
+			push.rotToCamQuat = glm::vec4(p.rotToCam.x, p.rotToCam.y, p.rotToCam.z, p.rotToCam.w);
 			push.worldScale = p.worldScale;
 		}
 

@@ -11,11 +11,16 @@ layout(push_constant) uniform SkyPushConstants {
 	vec4 sunDirAndAureole;      // xyz = sunDir, w = sunAureole
 	vec4 moonDirAndCirrus;     // xyz = moonDir, w = cirrus
 	vec4 sunRadianceAndSkyExp; // xyz = sunRadiance, w = skyExposure
+	vec4 rotToCamQuat;         // x, y, z, w quaternion
 	float worldScale;
 	uint  skyViewIndex;
 	uint  transmittanceIndex;
 	float padding;
 } push;
+
+vec3 rotateQuat(vec4 q, vec3 v) {
+	return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
 
 const float solar_flare_speed = 0.25;
 const float solar_flare_scale = 0.35;
@@ -164,8 +169,9 @@ void main() {
 	if (starVisibility > 0.0) {
 		vec3 skyTransmittance = getTransmittance(r, worldRay.y);
 		if (any(greaterThan(skyTransmittance, vec3(0.0)))) {
-			vec3 stars = computeStars(worldRay, uTime);
-			vec3 nebula = computeNebula(worldRay, uTime);
+			vec3 celestialRay = rotateQuat(push.rotToCamQuat, worldRay);
+			vec3 stars = computeStars(celestialRay, uTime);
+			vec3 nebula = computeNebula(celestialRay, uTime);
 			spaceBackground = (stars + nebula) * skyTransmittance * starVisibility;
 		}
 	}

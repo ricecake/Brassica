@@ -65,7 +65,7 @@ namespace brassica {
 		);
 		void Cleanup();
 
-		void UpdateCameraPosition(const glm::vec3& cameraPos);
+		void UpdateCameraPosition(const glm::vec3& cameraPos, const glm::vec3& wrapOffset = glm::vec3(0.0f));
 
 		void Regenerate() override { m_forceRegenerate = true; }
 
