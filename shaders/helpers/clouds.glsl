@@ -4,12 +4,6 @@
 #include "../lighting.glsl"
 #include "cloud_utils.glsl"
 
-#ifndef CLOUD_3D_VOLUME_BINDING
-#define CLOUD_3D_VOLUME_BINDING 11
-#endif
-
-layout(binding = CLOUD_3D_VOLUME_BINDING) uniform sampler3D u_cloud3DTexture;
-
 struct CloudSpotDetails {
 	float density;
 	vec3 relativeExtinction;
@@ -35,7 +29,7 @@ CloudSpotDetails calculateCloudDensity(
 	vec4            volNoises
 ) {
 	float localFloor, actualThickness;
-	float h = getCloudRelativeHeight(p, weather, localFloor, actualThickness);
+	float h = getCloudRelativeHeight(p, weather, props.worldScale, localFloor, actualThickness);
 
 	vec3 advectSpeed = getCloudAdvectionSpeed(h, timeVal);
 	float baseNoise = volNoises.r;
@@ -67,10 +61,11 @@ CloudDensityResult calculateCloudDensity(
 	CloudProperties props,
 	float           timeVal,
 	float           lod,
-	bool            doCheap
+	bool            doCheap,
+	uint            volume3DIdx
 ) {
 	float localFloor, actualThickness;
-	float h = getCloudRelativeHeight(p, weather, localFloor, actualThickness);
+	float h = getCloudRelativeHeight(p, weather, props.worldScale, localFloor, actualThickness);
 	vec3 advectSpeed = getCloudAdvectionSpeed(h, timeVal);
 	CloudDensityResult pointDetails = CloudDensityResult(vec3(0.0), advectSpeed, 1.0, vec3(1.0), vec3(0.0), vec3(1.0));
 
@@ -85,10 +80,8 @@ CloudDensityResult calculateCloudDensity(
 	float volumeScale = 7000.0 * props.worldScale;
 	vec3 uvw = p_advected_3d / volumeScale;
 
-	float texelWorldSize = volumeScale / max(1.0, float(textureSize(u_cloud3DTexture, 0).x));
 	float volumeMip = lod;
-
-	vec4 volSample = textureLod(u_cloud3DTexture, uvw, clamp(volumeMip, 0.0, 4.0));
+	vec4 volSample = SAMPLE_3D_LOD(volume3DIdx, uvw, clamp(volumeMip, 0.0, 4.0));
 
 	CloudSpotDetails res = calculateCloudDensity(p, weather, props, timeVal, lod, doCheap, volSample);
 	vec3 emit = vec3(0.0);

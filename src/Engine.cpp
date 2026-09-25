@@ -1159,6 +1159,9 @@ namespace brassica {
 		bindlessBindings.samplerBinding = 2;
 		bindlessBindings.storageImageBinding = 3;
 		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.sampledImage3DBinding = 5;
+		bindlessBindings.storageImage3DBinding = 6;
+		bindlessBindings.storageImageArrayBinding = 7;
 		bindlessBindings.frameSet = frameDescriptorSets[activeFrame];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
@@ -1593,7 +1596,7 @@ namespace brassica {
 		if (bindlessSetLayout) {
 			return;
 		}
-		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 		// Binding 0: uTextures2D
 		bindings[0]
 			.setBinding(0)
@@ -1624,13 +1627,34 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
 			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 5: uTextures3D
+		bindings[5]
+			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(64)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 6: uImages3D
+		bindings[6]
+			.setBinding(6)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setDescriptorCount(64)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 7: uImageArrays
+		bindings[7]
+			.setBinding(7)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setDescriptorCount(64)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 5> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 8> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
 		bindingFlagsInfo.setBindingFlags(bindingFlags);
@@ -1644,11 +1668,12 @@ namespace brassica {
 		// Single instance -- never duplicated per frame, unlike the frame set above: a
 		// resource's descriptor is written once at creation and read for the rest of its life,
 		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
-		std::array<vk::DescriptorPoolSize, 4> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64},
+		std::array<vk::DescriptorPoolSize, 5> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 64},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256 + 64 + 64},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 64},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1711,6 +1736,9 @@ namespace brassica {
 		bindlessBindings.samplerBinding = 2;
 		bindlessBindings.storageImageBinding = 3;
 		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.sampledImage3DBinding = 5;
+		bindlessBindings.storageImage3DBinding = 6;
+		bindlessBindings.storageImageArrayBinding = 7;
 		bindlessBindings.frameSet = frameDescriptorSets[0];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
