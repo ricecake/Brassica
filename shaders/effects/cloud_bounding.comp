@@ -11,9 +11,9 @@ layout(binding = 1) uniform sampler2D depthTexture;
 
 layout(binding = 2) uniform sampler2D u_cloudWeatherMinMaxTexture;
 
-uniform float uCloudMaxRayDistance;
-uniform float uRenderScale;
-uniform int   uFrameIndex;
+#define uCloudMaxRayDistance u_cloud.maxRayDistance
+#define uRenderScale u_cloud.renderScale
+#define uFrameIndex uFrameIndex
 
 void main() {
 	ivec2 fullResSize = textureSize(depthTexture, 0);
