@@ -14,6 +14,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "types/TonemapPushConstants.hpp"
 #include "VulkanCompat.hpp"
 
@@ -37,8 +38,11 @@ namespace brassica {
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			swapchainFormat = services.swapchainFormat;
-			vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag");
+			if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag")) {
+				spdlog::critical("TonemapNode shader compilation failed.");
+				throw std::runtime_error("TonemapNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}

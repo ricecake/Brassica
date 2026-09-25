@@ -15,6 +15,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "terrain/TerrainAccelerationStructure.hpp"
 #include "terrain/TerrainClipmap.hpp"
 
@@ -56,8 +57,11 @@ namespace brassica {
 			pipelineLibrary = services.pipelineLibrary;
 			terrainAS = services.terrainAS;
 			physicalRegistry = services.physicalRegistry;
-			genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp");
-			aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp");
+			if (!genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp") ||
+			    !aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp")) {
+				spdlog::critical("TerrainGenNode shader compilation failed.");
+				throw std::runtime_error("TerrainGenNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
