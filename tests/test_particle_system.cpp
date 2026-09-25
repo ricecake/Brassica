@@ -261,7 +261,7 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 // sub-nodes directly through a real Provision()+Execute() (no ParticleRenderNode/mesh shaders, so
 // it runs even without VK_EXT_mesh_shader) and checks both that the 4 buffers provision correctly
 // and that dispatching against the resulting descriptor set produces no validation errors.
-TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any dispatch uses it" * doctest::should_fail()) {
+TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any dispatch uses it") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
@@ -581,7 +581,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 // dirty flag clears after the first write, so the second run leaves the seed positions untouched --
 // with the camera on each side of the water plane in turn, and reads back which alive-index buffer
 // each particle's index actually landed in both times.
-TEST_CASE("Particle liveness bucket assignment swaps with which side of water the camera is on" * doctest::should_fail()) {
+TEST_CASE("Particle liveness bucket assignment swaps with which side of water the camera is on") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");

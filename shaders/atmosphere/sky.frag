@@ -19,7 +19,9 @@ layout(push_constant) uniform SkyPushConstants {
 } push;
 
 vec3 rotateQuat(vec4 q, vec3 v) {
-	return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+	vec3 u = q.xyz;
+	float s = q.w;
+	return 2.0 * dot(u, v) * u + (s * s - dot(u, u)) * v + 2.0 * s * cross(u, v);
 }
 
 const float solar_flare_speed = 0.25;
