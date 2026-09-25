@@ -10,37 +10,72 @@
 
 layout(binding = CLOUD_SHADOW_MAP_BINDING) uniform sampler2DArray u_cloudShadowTexture;
 
-uniform mat4 u_cloudShadowMatrix;
-uniform bool u_useCloudShadowMap;
+layout(std140, set = 0, binding = 6) uniform CloudUBO {
+	mat4  u_cloudShadowMatrix;
+	vec4  extinctionColor;      // rgb = extinctionColor, w = extinction
+	vec4  albedo;               // rgb = albedo, w = density
+	vec4  color;                // rgb = color, w = coverage
+	float renderScale;
+	float worldScale;
+	float altitude;
+	float thickness;
 
-uniform float cloudAltitude;
-uniform float cloudThickness;
-uniform float cloudDensity;
-uniform float cloudCoverage;
-uniform float worldScale;
+	float maxRayDistance;
+	int   minSamples;
+	int   maxSamples;
+	float phaseG1;
 
-uniform float cloudPhaseG1;
-uniform float cloudPhaseG2;
-uniform float cloudPhaseAlpha;
-uniform float cloudPhaseIsotropic;
-uniform float cloudPowderScale;
-uniform float cloudPowderMultiplier;
-uniform float cloudPowderLocalScale;
-uniform float cloudBeerPowderMix;
+	float phaseG2;
+	float phaseAlpha;
+	float phaseIsotropic;
+	float powderScale;
 
-uniform float cloudShadowOpticalDepthMultiplier;
-uniform float cloudShadowStepMultiplier;
-uniform float cloudShadowIntensity;
-uniform float cloudSunLightScale;
-uniform float cloudMoonLightScale;
+	float powderMultiplier;
+	float powderLocalScale;
+	float beerPowderMix;
+	float shadowOpticalDepthMultiplier;
 
-uniform float cloudFlowSpeed;
-uniform float cloudFlowDirection;
-uniform float cloudFlowHeightScale;
-uniform float cloudCurlStrength;
-uniform float cloudCurlFrequency;
+	float shadowStepMultiplier;
+	float shadowIntensity;
+	float sunLightScale;
+	float moonLightScale;
 
-uniform float uTime;
+	float flowSpeed;
+	float flowDirection;
+	float flowHeightScale;
+	float curlStrength;
+
+	float curlFrequency;
+	uint  u_useCloudShadowMap;
+	float padding0;
+	float padding1;
+} u_cloud;
+
+#define u_cloudShadowMatrix u_cloud.u_cloudShadowMatrix
+#define u_useCloudShadowMap bool(u_cloud.u_useCloudShadowMap)
+#define cloudAltitude u_cloud.altitude
+#define cloudThickness u_cloud.thickness
+#define cloudDensity u_cloud.albedo.w
+#define cloudCoverage u_cloud.color.w
+#define worldScale u_cloud.worldScale
+#define cloudPhaseG1 u_cloud.phaseG1
+#define cloudPhaseG2 u_cloud.phaseG2
+#define cloudPhaseAlpha u_cloud.phaseAlpha
+#define cloudPhaseIsotropic u_cloud.phaseIsotropic
+#define cloudPowderScale u_cloud.powderScale
+#define cloudPowderMultiplier u_cloud.powderMultiplier
+#define cloudPowderLocalScale u_cloud.powderLocalScale
+#define cloudBeerPowderMix u_cloud.beerPowderMix
+#define cloudShadowOpticalDepthMultiplier u_cloud.shadowOpticalDepthMultiplier
+#define cloudShadowStepMultiplier u_cloud.shadowStepMultiplier
+#define cloudShadowIntensity u_cloud.shadowIntensity
+#define cloudSunLightScale u_cloud.sunLightScale
+#define cloudMoonLightScale u_cloud.moonLightScale
+#define cloudFlowSpeed u_cloud.flowSpeed
+#define cloudFlowDirection u_cloud.flowDirection
+#define cloudFlowHeightScale u_cloud.flowHeightScale
+#define cloudCurlStrength u_cloud.curlStrength
+#define cloudCurlFrequency u_cloud.curlFrequency
 #define u_time uTime
 
 struct CloudProperties {

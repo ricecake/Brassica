@@ -5,13 +5,15 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0, rgba32f) uniform image2D uErrorMap;
 layout(binding = 1) uniform sampler2D uBoundingMap;
 
-uniform int uPass; // 0 = Spatial Pass, 1 = Priority Pass
-uniform float uPriorityErrorWeight;
-uniform float uPriorityGradWeight;
-uniform float uPriorityAgeWeight;
-uniform float uPriorityNeighborErrorWeight;
-uniform float uPriorityNeighborGradWeight;
-uniform float uPriorityThreshold;
+#include "../helpers/cloud_utils.glsl"
+
+#define uPass 0
+#define uPriorityErrorWeight 2.5
+#define uPriorityGradWeight 2.0
+#define uPriorityAgeWeight 0.05
+#define uPriorityNeighborErrorWeight 1.5
+#define uPriorityNeighborGradWeight 1.0
+#define uPriorityThreshold u_cloud.priorityThreshold
 
 struct TileQueueHeader {
 	uint count;

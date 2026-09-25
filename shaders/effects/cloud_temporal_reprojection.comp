@@ -34,15 +34,17 @@ layout(binding = 8) uniform sampler2D uHistoryCloudDepth;
 layout(binding = 9) uniform sampler2D uHistoryMoments;
 layout(binding = 10) uniform sampler2D uBoundingMap;
 
-uniform float uCloudTemporalGamma;
-uniform float uCloudMaxHistoryLength;
-uniform float uCloudMaxRayDistance;
-uniform float uRenderScale;
-uniform bool  uEnableTemporal;
-uniform bool  uHasHistory;
-uniform bool  uUseTileQueue;
+#include "../helpers/cloud_utils.glsl"
 
-uniform float uDeltaTime;
+#define uCloudTemporalGamma 1.1
+#define uCloudMaxHistoryLength u_cloud.maxRayDistance
+#define uCloudMaxRayDistance u_cloud.maxRayDistance
+#define uRenderScale u_cloud.renderScale
+#define uEnableTemporal true
+#define uHasHistory true
+#define uUseTileQueue u_cloud.u_useCloudShadowMap
+
+#define uDeltaTime 0.016
 
 shared float sharedError[64];
 shared float sharedFlow[64];

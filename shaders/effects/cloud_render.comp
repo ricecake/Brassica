@@ -27,8 +27,8 @@ layout(std430, binding = 0) buffer TileQueueSSBO {
 
 layout(binding = 4) uniform sampler2D depthTexture;
 
-uniform float uDeltaTime;
-uniform vec3  cloudColorUniform;
+#define uDeltaTime 0.016
+#define cloudColorUniform u_cloud.color.rgb
 
 #define ATMOSPHERE_HEIGHT_DEFINED
 #include "../atmosphere/common.glsl"
@@ -37,13 +37,13 @@ uniform vec3  cloudColorUniform;
 layout(binding = 5) uniform sampler2D u_cloudMinMaxBoundingTexture;
 layout(binding = 6) uniform sampler2D u_cloudWeatherMinMaxTexture;
 
-uniform float uCloudMaxRayDistance;
-uniform float uRenderScale;
-uniform int   uCloudMinSamples;
-uniform int   uCloudMaxSamples;
-uniform float uCloudExtinction;
-uniform vec3  uCloudExtinctionColor;
-uniform vec3  uCloudAlbedo;
+#define uCloudMaxRayDistance u_cloud.maxRayDistance
+#define uRenderScale u_cloud.renderScale
+#define uCloudMinSamples u_cloud.minSamples
+#define uCloudMaxSamples u_cloud.maxSamples
+#define uCloudExtinction u_cloud.extinctionColor.w
+#define uCloudExtinctionColor u_cloud.extinctionColor.rgb
+#define uCloudAlbedo u_cloud.albedo.rgb
 
 float calculateBifurcatedStepSize(
     inout bool in_cloud,

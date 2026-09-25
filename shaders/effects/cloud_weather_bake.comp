@@ -5,12 +5,13 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0, rgba16f) uniform image2D outWeatherMap;
 layout(binding = 1, rg16f) uniform image2D outMinMaxMap;
 
+#include "../helpers/cloud_utils.glsl"
 #include "../helpers/noise.glsl"
 
-uniform float uWorldScale;
-uniform float uCloudCoverage;
-uniform float uCloudThickness;
-uniform float uTime;
+#define uWorldScale worldScale
+#define uCloudCoverage cloudCoverage
+#define uCloudThickness cloudThickness
+#define uTime uTime
 
 float remap(float value, float valueMin, float valueMax) {
 	return (value - valueMin) / max(1e-5, (valueMax - valueMin));
