@@ -2,8 +2,6 @@ BUILD_DIR = build
 CONFIG = RelWithDebInfo
 APP = sandbox
 
-GRAPH_CXXFLAGS = -std=c++23 -Wall -Wextra -Wpedantic -DBRASSICA_HAS_VULKAN=0 -Iinclude -Isrc -Iexternal/doctest -Iexternal/entt/src -Iexternal/glm -Iexternal/argparse/include -Iexternal/spdlog/include -Iexternal/imgui -Iexternal/glfw/include -Iexternal/VulkanMemoryAllocator/include -Iexternal/shaderc/libshaderc/include -Iexternal/efsw/include
-
 .PHONY: all clean format run clean-build test profile setup-deps graph-test graph-check
 
 all:
@@ -40,17 +38,6 @@ clean-build:
 
 clean:
 	rm -rf $(BUILD_DIR)
-
-# Frame graph declarative layer (include/graph/{TypeList,ResourceKey,...,Frame,Dot}.hpp): single
-# TU, zero link deps, no CMake -- deliberate, since configuring the root project at all requires
-# Vulkan (see CMakeLists.txt). The -I flags are the Vulkan-free guarantee: there is no path by
-# which a vulkan/ or fg/ include could resolve. The physical layer (PhysicalRegistry.hpp and
-# friends) requires a real Vulkan SDK and is tested separately, via `make test`
-# (tests/test_physical_backend.cpp) -- not here.
-graph-test:
-	@mkdir -p $(BUILD_DIR)/bin
-	@$(CXX) $(GRAPH_CXXFLAGS) -o $(BUILD_DIR)/bin/test_graph tests/graph/test_graph.cpp src/lighting/LightManager.cpp src/lighting/LightningManager.cpp src/ArgparseManager.cpp src/ConfigManager.cpp src/ui/QuickSettingsWidget.cpp src/ui/ManagerSettingsWidget.cpp external/imgui/imgui.cpp external/imgui/imgui_draw.cpp external/imgui/imgui_widgets.cpp external/imgui/imgui_tables.cpp
-	@$(BUILD_DIR)/bin/test_graph
 
 # Compile-time assertions only, no link/run step. Fastest inner loop while iterating on the
 # declaration/validation layers.

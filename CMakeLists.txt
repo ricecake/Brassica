@@ -232,7 +232,7 @@ endif()
 
 # 7. Test Targets
 enable_testing()
-file(GLOB TEST_SOURCES "tests/*.cpp")
+file(GLOB_RECURSE TEST_SOURCES "tests/*.cpp")
 set(ALL_TEST_TARGETS "")
 
 foreach(TEST_SOURCE ${TEST_SOURCES})
