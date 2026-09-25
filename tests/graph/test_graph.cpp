@@ -28,6 +28,8 @@
 #include <entt/entity/registry.hpp>
 #include "lighting/ILightManager.hpp"
 #include "cloud/ICloudManager.hpp"
+#include "passes/CloudNodes.hpp"
+#include "passes/TonemapNode.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -1301,15 +1303,41 @@ namespace {
 	};
 } // namespace
 
-TEST_CASE("CloudNodes graph compilation and execution domains") {
+TEST_CASE("Real CloudNodes and TonemapNode graph compilation, setup realizations, and stage scheduling") {
 	Graph graph;
-	graph.Register<CloudBakeLikeNode>();
-	graph.Register<CloudBoundingLikeNode>();
-	graph.Register<CloudRenderLikeNode>();
+	graph.Register<brassica::CloudBakeNode>();
+	graph.Register<brassica::CloudBoundingNode>();
+	graph.Register<brassica::CloudShadowBakeNode>();
+	graph.Register<brassica::CloudTileSchedulerNode>();
+	graph.Register<brassica::CloudRenderNode>();
+	graph.Register<brassica::CloudTemporalNode>();
+	graph.Register<brassica::CloudSpatialFilterNode>();
+	graph.Register<brassica::TonemapNode>();
+	graph.Register<Import<brassica::Swapchain>>();
+	graph.Register<Import<brassica::HdrColor>>();
+	graph.Register<Import<brassica::GBufferDepth>>();
 
-	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	FrameContext ctx{.width = 1920, .height = 1080, .frameIndex = 1};
+	graph.Setup(ctx);
+
+	auto compileResult = graph.Compile();
+	if (!compileResult.has_value()) {
+		INFO(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
 
 	const auto& schedule = graph.GetSchedule();
-	CHECK(schedule.stages.size() >= 1);
+	CHECK(schedule.stages.size() >= 4);
+
+	// Verify Setup realizations for CloudBakeNode
+	brassica::CloudBakeNode bakeNode;
+	Recipe bakeRecipe = bakeNode.Setup(ctx);
+	CHECK(bakeRecipe.domain == ExecutionDomain::Compute);
+	REQUIRE(bakeRecipe.realizations.size() == 3);
+
+	// Verify Setup realizations for TonemapNode
+	brassica::TonemapNode tonemapNode;
+	Recipe tonemapRecipe = tonemapNode.Setup(ctx);
+	CHECK(tonemapRecipe.domain == ExecutionDomain::Graphics);
+	REQUIRE(tonemapRecipe.realizations.size() == 20);
 }
