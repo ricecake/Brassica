@@ -5,6 +5,7 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 #include "common.glsl"
 #include "bindless.glsl"
+#include "lygia/generative/psrdnoise.glsl"
 
 layout(push_constant) uniform PushConstants {
     uint uStorageImageIdx;
@@ -37,6 +38,37 @@ vec3 getTerrainMapColor(float h, vec3 normal) {
     return col;
 }
 
+void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
+	float continent_mask;
+	vec3 grad_continent_mask;
+    vec3 p_scale = vec3(1.0 / (2.0 * PI * FAKE_PLANET_RADIUS), 1.0, 1.0 / (PI * FAKE_PLANET_RADIUS));
+	evaluate_soft_voronoi_pseudosphere2(p, 32, continent_mask, grad_continent_mask);
+	// p *= config.spatial_scale;
+
+    p *= p_scale;
+
+	vec3 grad_noise;
+	float warp = psrdnoise(p*continent_mask, vec3(0), 0.0);
+
+	float noise_height = dot_noise_fbm(p+warp, 4, 0.0, grad_noise);
+
+	vec3 grad_noise2;
+	float warp2 = psrdnoise(p/continent_mask, vec3(0), 10.0);
+	float noise_height2 = dot_noise_fbm(p*warp2, 4, 3.0, grad_noise2);
+
+	grad_noise += grad_noise2;
+	noise_height += noise_height2;
+
+	float final_height = noise_height * continent_mask;
+	vec3 final_grad = (grad_noise * continent_mask) + (noise_height * grad_continent_mask);
+
+	float height_amplitude = config.max_height - config.min_height;
+	vec3 scaled_grad = final_grad * height_amplitude * config.spatial_scale;
+
+	out_normal = normalize(vec3(-scaled_grad.x, 1.0, -scaled_grad.z));
+	out_height = remap(final_height, 0.0, 1.0, config.min_height, config.max_height);
+}
+
 void main() {
     uvec2 pixelPos = gl_GlobalInvocationID.xy;
     if (pixelPos.x >= uWidth || pixelPos.y >= uHeight) {
@@ -54,13 +86,9 @@ void main() {
     float eps = 10.0; // 10m finite difference
 
     TerrainConfig cfg = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
-    float b, m;
-
-    float h0 = evaluate_terrain(p, 0.0, 0.75, cfg, b, m);
-    float hX = evaluate_terrain(p + vec3(eps, 0.0, 0.0), 0.0, 0.75, cfg, b, m);
-    float hZ = evaluate_terrain(p + vec3(0.0, 0.0, eps), 0.0, 0.75, cfg, b, m);
-
-    vec3 normal = normalize(vec3(-(hX - h0) / eps, 1.0, -(hZ - h0) / eps));
+    float h0;
+    vec3 normal;
+    eval_terrain(p, cfg, h0, normal);
 
     vec3 color = getTerrainMapColor(h0, normal);
 

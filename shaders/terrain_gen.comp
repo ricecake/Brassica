@@ -22,11 +22,12 @@ layout(push_constant) uniform PushConstants {
 } push;
 
 void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
-	p *= config.spatial_scale;
-
 	float continent_mask;
 	vec3 grad_continent_mask;
+    vec3 p_scale = vec3(1.0 / (2.0 * PI * FAKE_PLANET_RADIUS), 1.0, 1.0 / (PI * FAKE_PLANET_RADIUS));
 	evaluate_soft_voronoi_pseudosphere2(p, 32, continent_mask, grad_continent_mask);
+	// p *= config.spatial_scale;
+	p *= p_scale * 30.0;
 
 	vec3 grad_noise;
 	float warp = psrdnoise(p*continent_mask, vec3(0), 0.0);
