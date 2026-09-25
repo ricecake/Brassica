@@ -28,9 +28,6 @@ namespace vk {
 	enum class Format { eUndefined = 0 };
 
 	class Device {};
-	class Image {};
-	class ImageView {};
-	class Sampler {};
 } // namespace vk
 
 namespace brassica {
