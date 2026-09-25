@@ -2,10 +2,13 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-layout(binding = 0, rgba16f) uniform image2D outPackedColor;
-layout(binding = 1, rgba32f) uniform image2D outPackedDepth;
-layout(binding = 2, rg16f)   uniform image2D outPackedVelocity;
-layout(binding = 3, rgba32f) uniform image2D uErrorMap;
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+
+#define ATMOSPHERE_HEIGHT_DEFINED
+#include "../atmosphere/common.glsl"
+#include "../bindless.glsl"
+#include "../helpers/clouds.glsl"
 
 struct TileQueueHeader {
 	uint count;
@@ -20,30 +23,39 @@ struct TileQueueHeader {
 	uint padding;
 };
 
-layout(std430, binding = 0) buffer TileQueueSSBO {
+layout(buffer_reference, std430) buffer TileQueueSSBORef {
 	TileQueueHeader uHeader;
 	uvec2 uTileQueue[];
 };
 
-layout(binding = 4) uniform sampler2D depthTexture;
-
-uniform float uDeltaTime;
-uniform vec3  cloudColorUniform;
-
-#define ATMOSPHERE_HEIGHT_DEFINED
-#include "../atmosphere/common.glsl"
-#include "../helpers/clouds.glsl"
-
-layout(binding = 5) uniform sampler2D u_cloudMinMaxBoundingTexture;
-layout(binding = 6) uniform sampler2D u_cloudWeatherMinMaxTexture;
-
-uniform float uCloudMaxRayDistance;
-uniform float uRenderScale;
-uniform int   uCloudMinSamples;
-uniform int   uCloudMaxSamples;
-uniform float uCloudExtinction;
-uniform vec3  uCloudExtinctionColor;
-uniform vec3  uCloudAlbedo;
+layout(push_constant) uniform CloudRenderPushConstants {
+	uint depthTextureIdx;
+	uint boundingMapIdx;
+	uint weatherMinMaxIdx;
+	uint weatherTextureIdx;
+	uint volume3DIdx;
+	uint packedColorStorageIdx;
+	uint packedDepthStorageIdx;
+	uint packedVelocityStorageIdx;
+	uint errorMapStorageIdx;
+	uint pad0;
+	uint64_t tileQueueBufferAddr;
+	float cloudMaxRayDistance;
+	float renderScale;
+	float worldScale;
+	int cloudMinSamples;
+	int cloudMaxSamples;
+	float cloudExtinction;
+	float deltaTime;
+	float cloudAltitude;
+	float cloudThickness;
+	float cloudDensity;
+	float cloudCoverage;
+	vec3 cloudExtinctionColor;
+	float pad1;
+	vec3 cloudAlbedo;
+	float pad2;
+} push;
 
 float calculateBifurcatedStepSize(
     inout bool in_cloud,
@@ -82,31 +94,31 @@ float InterleavedGradientNoise(vec2 pix, int frame) {
 }
 
 void main() {
-	float R_earth = kEarthRadius * 1000.0 * worldScale;
+	TileQueueSSBORef tileQueue = TileQueueSSBORef(push.tileQueueBufferAddr);
 
 	uint tileIndex = gl_WorkGroupID.x;
-	if (tileIndex >= uHeader.count) return;
+	if (tileIndex >= tileQueue.uHeader.count) return;
 
-	uvec2 tileCoord = uTileQueue[tileIndex];
+	uvec2 tileCoord = tileQueue.uTileQueue[tileIndex];
 	ivec2 fullResPixel = ivec2(tileCoord * 8u) + ivec2(gl_LocalInvocationID.xy);
-	ivec2 fullResSize = textureSize(depthTexture, 0);
+	ivec2 fullResSize = imageSize(uImagesRGBA32F[nonuniformEXT(push.packedColorStorageIdx)]);
 
 	if (fullResPixel.x >= fullResSize.x || fullResPixel.y >= fullResSize.y)
 		return;
 
-	vec4 tileErrorData = imageLoad(uErrorMap, ivec2(tileCoord));
+	vec4 tileErrorData = imageLoad(uImagesRGBA32F[nonuniformEXT(push.errorMapStorageIdx)], ivec2(tileCoord));
 	float tileStepMult = (tileErrorData.b > 0.01) ? tileErrorData.b : 1.0;
 
 	if (gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u) {
-		tileErrorData.a = float(uHeader.frameIndex);
+		tileErrorData.a = float(tileQueue.uHeader.frameIndex);
 		tileErrorData.r = 0.0;
 		tileErrorData.g = 0.0;
-		imageStore(uErrorMap, ivec2(tileCoord), tileErrorData);
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.errorMapStorageIdx)], ivec2(tileCoord), tileErrorData);
 	}
 
 	vec2 TexCoords = (vec2(fullResPixel) + 0.5) / vec2(fullResSize);
 
-	float depth = texture(depthTexture, TexCoords).r;
+	float depth = SAMPLE_NEAREST(push.depthTextureIdx, TexCoords).r;
 	float z = depth * 2.0 - 1.0;
 	vec4  clipSpacePosition = vec4(TexCoords * 2.0 - 1.0, z, 1.0);
 	vec4  viewSpacePosition = uInvProjMatrix * clipSpacePosition;
@@ -118,19 +130,19 @@ void main() {
 	vec3 rayDir = canonicalRayDir;
 
 	if (depth >= 0.9999) {
-		dist = uCloudMaxRayDistance * worldScale;
+		dist = push.cloudMaxRayDistance * push.worldScale;
 		worldPos = uCameraPosition.xyz + rayDir * dist;
 	}
 
 	CloudProperties props;
-	props.altitude = cloudAltitude;
-	props.thickness = cloudThickness;
-	props.densityBase = cloudDensity;
-	props.coverage = cloudCoverage;
-	props.worldScale = worldScale;
+	props.altitude = push.cloudAltitude;
+	props.thickness = push.cloudThickness;
+	props.densityBase = push.cloudDensity;
+	props.coverage = push.cloudCoverage;
+	props.worldScale = push.worldScale;
 
 	float t_start1, t_end1, t_start2, t_end2;
-	bool hitShell = intersectCloudShell(uCameraPosition.xyz, rayDir, worldScale, t_start1, t_end1, t_start2, t_end2);
+	bool hitShell = intersectCloudShell(uCameraPosition.xyz, rayDir, push.worldScale, push.cloudAltitude, push.cloudThickness, t_start1, t_end1, t_start2, t_end2);
 
 	int numSegments = 0;
 	float rawSegStart[2];
@@ -149,49 +161,28 @@ void main() {
 		}
 	}
 
-	int samples = uCloudMaxSamples;
-	float jitter = InterleavedGradientNoise(vec2(fullResPixel), int(uHeader.frameIndex));
+	int samples = push.cloudMaxSamples;
+	float jitter = InterleavedGradientNoise(vec2(fullResPixel), int(tileQueue.uHeader.frameIndex));
 
 	vec3 cloudColor = vec3(0.0);
 	vec3 cloudTransmittance = vec3(1.0);
-	float totalWeight = 0.0;
-	float weightedDistSum = 0.0;
-	vec3 weightedAdvectionSum = vec3(0.0);
-	vec3 accumulatedOpticalDepth = vec3(0.0);
 	float firstHitDist = -1.0;
 	float lastHitDist = -1.0;
 	float pathDensity = 0.0;
 
-	ivec2 boundingSize = textureSize(u_cloudMinMaxBoundingTexture, 0);
-	float b_firstHit = -1.0;
-	float b_lastHit = -1.0;
-	float b_totalDensity = 0.0;
-
-	for (int y = -1; y <= 1; y++) {
-		for (int x = -1; x <= 1; x++) {
-			ivec2 samplePixel = clamp(fullResPixel + ivec2(x, y), ivec2(0), boundingSize - 1);
-			vec4 b = texelFetch(u_cloudMinMaxBoundingTexture, samplePixel, 0);
-
-			if (b.r >= 0.0) {
-				if (b_firstHit < 0.0) {
-					b_firstHit = b.r;
-				} else {
-					b_firstHit = min(b_firstHit, b.r);
-				}
-				b_lastHit = max(b_lastHit, b.g);
-			}
-			b_totalDensity = max(b_totalDensity, b.b);
-		}
-	}
+	vec4 b = SAMPLE_LINEAR(push.boundingMapIdx, TexCoords);
+	float b_firstHit = b.r;
+	float b_lastHit = b.g;
+	float b_totalDensity = b.b;
 
 	if (numSegments == 0 || b_firstHit < 0.0 || b_totalDensity < 0.01) {
-		imageStore(outPackedColor, fullResPixel, vec4(0.0, 0.0, 0.0, 1.0));
-		imageStore(outPackedDepth, fullResPixel, vec4(uCloudMaxRayDistance * 0.5 * worldScale, uCloudMaxRayDistance * 0.5 * worldScale, 50.0, 0.0));
-		imageStore(outPackedVelocity, fullResPixel, vec4(0.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.packedColorStorageIdx)], fullResPixel, vec4(0.0, 0.0, 0.0, 1.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.packedDepthStorageIdx)], fullResPixel, vec4(push.cloudMaxRayDistance * 0.5 * push.worldScale, push.cloudMaxRayDistance * 0.5 * push.worldScale, 50.0, 0.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.packedVelocityStorageIdx)], fullResPixel, vec4(0.0));
 		return;
 	}
 
-	float bound_margin = 50.0 * worldScale;
+	float bound_margin = 50.0 * push.worldScale;
 	float b_start = max(0.0, b_firstHit - bound_margin);
 	float b_end = b_lastHit + bound_margin;
 
@@ -210,19 +201,17 @@ void main() {
 	}
 
 	if (validSegments == 0) {
-		imageStore(outPackedColor, fullResPixel, vec4(0.0, 0.0, 0.0, 1.0));
-		imageStore(outPackedDepth, fullResPixel, vec4(uCloudMaxRayDistance * 0.5 * worldScale, uCloudMaxRayDistance * 0.5 * worldScale, 50.0, 0.0));
-		imageStore(outPackedVelocity, fullResPixel, vec4(0.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.packedColorStorageIdx)], fullResPixel, vec4(0.0, 0.0, 0.0, 1.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.packedDepthStorageIdx)], fullResPixel, vec4(push.cloudMaxRayDistance * 0.5 * push.worldScale, push.cloudMaxRayDistance * 0.5 * push.worldScale, 50.0, 0.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.packedVelocityStorageIdx)], fullResPixel, vec4(0.0));
 		return;
 	}
 
 	float firstStepSize = 50.0;
 	int MAX_ITERATIONS = 500;
-	float steps = 0.0;
 
-	vec3 rgbExtinction = uCloudExtinctionColor * uCloudExtinction;
+	vec3 rgbExtinction = push.cloudExtinctionColor * push.cloudExtinction;
 	vec3 lightEnergy = vec3(0.0);
-	vec3 prevDensity = vec3(0.0);
 
 	vec3 primaryLightDir = vec3(0, 1, 0);
 
@@ -245,16 +234,15 @@ void main() {
 		zero_count = 0;
 
 		for (int i = 0; i < MAX_ITERATIONS; i++) {
-			steps += 1.0;
 			if (t_prev >= dist || t_prev >= seg_end || all(lessThan(cloudTransmittance, vec3(0.05)))) break;
 
 			vec3 p = uCameraPosition.xyz + rayDir * t;
 			float currentLod = log2(max(1.0, t * 0.001));
 
-			CloudWeather weather = computeCloudWeather(p, props, currentLod);
+			CloudWeather weather = computeCloudWeather(p, props, currentLod, push.weatherTextureIdx, uTime);
 			bool doCheap = (t_prev >= seg_end * 0.5 || all(lessThan(cloudTransmittance, vec3(0.75))));
 
-			CloudDensityResult densityRes = calculateCloudDensity(p, weather, props, uTime, currentLod, doCheap);
+			CloudDensityResult densityRes = calculateCloudDensity(p, weather, props, uTime, currentLod, doCheap, push.volume3DIdx);
 			vec3 d = densityRes.density;
 
 			float nextStepSize = calculateBifurcatedStepSize(inVolume, zero_count, max(d.x, max(d.y, d.z)), baseStepSize, 3.0, 3);
@@ -272,8 +260,6 @@ void main() {
 
 			float stepSize = t - t_prev;
 			if (stepSize > 0.0) {
-				float h_norm = getCloudRelativeHeight(p, weather);
-
 				if (max(d.x, max(d.y, d.z)) > 0.01) {
 					if (firstHitDist < 0.0) {
 						firstHitDist = t;
@@ -287,20 +273,17 @@ void main() {
 				if (any(greaterThan(d, vec3(0.000)))) {
 					vec3 localExtinction = rgbExtinction * densityRes.relativeExtinction;
 					vec3 averageDensity = d;
-					vec3 stepDensity = averageDensity * localExtinction;
 					vec3 stepOpticalDepth = averageDensity * stepSize * localExtinction;
 					vec3 transmittanceAtStep = exp(-stepOpticalDepth);
 
-					float shadowFactor = calculateCloudShadowFactor(p, primaryLightDir, 1.0);
-					vec3 S = vec3(shadowFactor) * uCloudAlbedo;
+					float shadowFactor = 1.0;
+					vec3 S = vec3(shadowFactor) * push.cloudAlbedo;
 
 					vec3 weight = cloudTransmittance * (vec3(1.0) - transmittanceAtStep);
 					lightEnergy += S * weight;
 
 					cloudTransmittance *= transmittanceAtStep;
-					accumulatedOpticalDepth += stepOpticalDepth;
 				}
-				prevDensity = d;
 				t_prev = t;
 			}
 
@@ -311,12 +294,12 @@ void main() {
 		if (all(lessThan(cloudTransmittance, vec3(0.05)))) break;
 	}
 
-	cloudColor = lightEnergy * uCloudAlbedo;
+	cloudColor = lightEnergy * push.cloudAlbedo;
 
 	vec4 finalColor = vec4(cloudColor, dot(smoothstep(0.05, 1.0, cloudTransmittance), vec3(0.3333)));
 	vec4 finalDepth = vec4(firstHitDist, lastHitDist, firstStepSize, pathDensity);
 
-	imageStore(outPackedColor, fullResPixel, finalColor);
-	imageStore(outPackedDepth, fullResPixel, finalDepth);
-	imageStore(outPackedVelocity, fullResPixel, vec4(0.0));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.packedColorStorageIdx)], fullResPixel, finalColor);
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.packedDepthStorageIdx)], fullResPixel, finalDepth);
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.packedVelocityStorageIdx)], fullResPixel, vec4(0.0));
 }

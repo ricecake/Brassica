@@ -2,29 +2,36 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-layout(binding = 0, rgba32f) uniform image2D outBoundingMap;
-layout(binding = 1) uniform sampler2D depthTexture;
-
 #define ATMOSPHERE_HEIGHT_DEFINED
 #include "../atmosphere/common.glsl"
+#include "../bindless.glsl"
 #include "../helpers/clouds.glsl"
 
-layout(binding = 2) uniform sampler2D u_cloudWeatherMinMaxTexture;
-
-uniform float uCloudMaxRayDistance;
-uniform float uRenderScale;
-uniform int   uFrameIndex;
+layout(push_constant) uniform CloudBoundingPushConstants {
+	uint depthTextureIdx;
+	uint weatherMinMaxIdx;
+	uint boundingStorageIdx;
+	float cloudMaxRayDistance;
+	float renderScale;
+	float worldScale;
+	float cloudCoverage;
+	float cloudAltitude;
+	float cloudThickness;
+	float time;
+	uint frameIndex;
+	uint padding;
+} push;
 
 void main() {
-	ivec2 fullResSize = textureSize(depthTexture, 0);
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 fullResSize = imageSize(uImagesRGBA32F[nonuniformEXT(push.boundingStorageIdx)]);
 
 	if (pixel.x >= fullResSize.x || pixel.y >= fullResSize.y)
 		return;
 
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(fullResSize);
 
-	float depth = texture(depthTexture, uv).r;
+	float depth = SAMPLE_NEAREST(push.depthTextureIdx, uv).r;
 	float z = depth * 2.0 - 1.0;
 	vec4 clipSpacePosition = vec4(uv * 2.0 - 1.0, z, 1.0);
 	vec4 viewSpacePosition = uInvProjMatrix * clipSpacePosition;
@@ -34,12 +41,12 @@ void main() {
 	float dist = length(worldPos - uCameraPosition.xyz);
 
 	if (depth >= 0.9999) {
-		dist = uCloudMaxRayDistance * worldScale;
+		dist = push.cloudMaxRayDistance * push.worldScale;
 		worldPos = uCameraPosition.xyz + rayDir * dist;
 	}
 
 	float t_start1, t_end1, t_start2, t_end2;
-	bool hitShell = intersectCloudShell(uCameraPosition.xyz, rayDir, worldScale, t_start1, t_end1, t_start2, t_end2);
+	bool hitShell = intersectCloudShell(uCameraPosition.xyz, rayDir, push.worldScale, push.cloudAltitude, push.cloudThickness, t_start1, t_end1, t_start2, t_end2);
 
 	int numSegments = 0;
 	float segStart[2];
@@ -59,16 +66,16 @@ void main() {
 	}
 
 	if (numSegments == 0) {
-		imageStore(outBoundingMap, pixel, vec4(-1.0, -1.0, 0.0, 0.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.boundingStorageIdx)], pixel, vec4(-1.0, -1.0, 0.0, 0.0));
 		return;
 	}
 
-	vec4 previousBounds = imageLoad(outBoundingMap, pixel);
+	vec4 previousBounds = imageLoad(uImagesRGBA32F[nonuniformEXT(push.boundingStorageIdx)], pixel);
 
-	if (cloudCoverage >= 1.0) {
+	if (push.cloudCoverage >= 1.0) {
 		float global_start = segStart[0];
 		float global_end = segEnd[numSegments - 1];
-		imageStore(outBoundingMap, pixel, vec4(global_start, global_end, 1.0, previousBounds.b));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.boundingStorageIdx)], pixel, vec4(global_start, global_end, 1.0, previousBounds.b));
 		return;
 	}
 
@@ -80,18 +87,18 @@ void main() {
 		float t = segStart[s];
 		float seg_end = segEnd[s];
 		int L = 3;
-		float baseStepSize = 25.0 * worldScale;
+		float baseStepSize = 25.0 * push.worldScale;
 
 		for (int i = 0; i < 2048; ++i) {
 			if (t >= seg_end) break;
 
 			vec3 p = uCameraPosition.xyz + rayDir * t;
-			vec3 advect = getCloudWindOffset(uTime);
+			vec3 advect = getCloudWindOffset(push.time, push.worldScale);
 			vec3 p_advected = p - advect;
-			vec2 weatherUV = fract(p_advected.xz / (100000.0 * worldScale));
+			vec2 weatherUV = fract(p_advected.xz / (100000.0 * push.worldScale));
 
-			vec2 minMax = textureLod(u_cloudWeatherMinMaxTexture, weatherUV, float(L)).rg;
-			float maxDensity = applyDynamicCoverage(minMax.y, cloudCoverage);
+			vec2 minMax = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.weatherMinMaxIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), weatherUV, float(L)).rg;
+			float maxDensity = applyDynamicCoverage(minMax.y, push.cloudCoverage);
 
 			if (maxDensity <= 0.001) {
 				t += baseStepSize * float(1 << L);
@@ -105,7 +112,7 @@ void main() {
 							firstHit = t;
 						}
 						lastHit = t;
-						totalDensity += maxDensity * (baseStepSize / (1000.0 * worldScale));
+						totalDensity += maxDensity * (baseStepSize / (1000.0 * push.worldScale));
 					}
 					t += baseStepSize;
 				}
@@ -113,5 +120,5 @@ void main() {
 		}
 	}
 
-	imageStore(outBoundingMap, pixel, vec4(firstHit, lastHit, totalDensity, previousBounds.b));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.boundingStorageIdx)], pixel, vec4(firstHit, lastHit, totalDensity, previousBounds.b));
 }
