@@ -31,6 +31,7 @@
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "ServiceLocator.hpp"
+#include "terrain/TerrainCollisionManager.hpp"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/LightingUBO.hpp"
@@ -1234,4 +1235,64 @@ TEST_CASE("TerrainMapColorConfig elevation, slope, and water color tinting") {
 	CHECK(r > 180);
 	CHECK(g > 180);
 	CHECK(b > 180);
+}
+
+TEST_CASE("TerrainCollisionManager CPU buffer range update and bilinear query") {
+	brassica::TerrainCollisionManager colMgr;
+	CHECK_FALSE(colMgr.HasData());
+
+	brassica::TerrainQueryRange range{
+		.center = glm::vec2(100.0f, -200.0f),
+		.extent = glm::vec2(100.0f, 100.0f),
+		.width = 11,
+		.height = 11
+	};
+
+	colMgr.UpdateBufferCPU(range);
+	CHECK(colMgr.HasData());
+	CHECK(colMgr.GetCPUBuffer().size() == 121);
+	CHECK(colMgr.GetRange().center == glm::vec2(100.0f, -200.0f));
+
+	// Query center coordinate
+	float hCenter = colMgr.GetHeightAt(100.0f, -200.0f);
+	glm::vec3 nCenter = colMgr.GetNormalAt(100.0f, -200.0f);
+
+	CHECK(hCenter >= -500.0f);
+	CHECK(hCenter <= 1500.0f);
+	CHECK(glm::length(nCenter) == doctest::Approx(1.0f).epsilon(0.01f));
+
+	// Query intermediate interpolated coordinate
+	float hInterp = colMgr.GetHeightAt(102.5f, -197.5f);
+	CHECK(hInterp >= -500.0f);
+	CHECK(hInterp <= 1500.0f);
+
+	// Out of range coordinate fallback
+	float hFar = colMgr.GetHeightAt(5000.0f, 5000.0f);
+	CHECK(hFar >= -500.0f);
+	CHECK(hFar <= 1500.0f);
+}
+
+TEST_CASE("TerrainCollisionManager camera collision detection and resolution") {
+	brassica::TerrainCollisionManager colMgr;
+	brassica::TerrainQueryRange range{
+		.center = glm::vec2(0.0f, 0.0f),
+		.extent = glm::vec2(200.0f, 200.0f),
+		.width = 21,
+		.height = 21
+	};
+	colMgr.UpdateBufferCPU(range);
+
+	float groundH = colMgr.GetHeightAt(0.0f, 0.0f);
+
+	// Camera safely above terrain
+	glm::vec3 camPosAbove(0.0f, groundH + 10.0f, 0.0f);
+	bool collidedAbove = colMgr.CheckAndResolveCameraCollision(camPosAbove, 2.0f);
+	CHECK_FALSE(collidedAbove);
+	CHECK(camPosAbove.y == doctest::Approx(groundH + 10.0f));
+
+	// Camera below terrain
+	glm::vec3 camPosBelow(0.0f, groundH - 5.0f, 0.0f);
+	bool collidedBelow = colMgr.CheckAndResolveCameraCollision(camPosBelow, 2.0f);
+	CHECK(collidedBelow);
+	CHECK(camPosBelow.y == doctest::Approx(groundH + 2.0f));
 }

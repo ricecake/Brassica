@@ -4,12 +4,18 @@
 #include <span>
 #include <vector>
 
-#include "vulkan/vulkan.hpp"
+#include "VulkanCompat.hpp"
 #include <glm/glm.hpp>
 
 #include "constants.h"
 #include "IManager.hpp"
+
+#if !defined(BRASSICA_HAS_VULKAN) || BRASSICA_HAS_VULKAN != 0
 #include "vk_mem_alloc.h"
+#else
+using VmaAllocator = void*;
+using VmaAllocation = void*;
+#endif
 
 namespace brassica {
 

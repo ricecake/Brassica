@@ -3,13 +3,28 @@
 #include <cstdint>
 #include <vector>
 
-#include "vulkan/vulkan.hpp"
+#include "VulkanCompat.hpp"
+
+#ifndef BRASSICA_HAS_VULKAN
+	#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
+		#define BRASSICA_HAS_VULKAN 1
+	#else
+		#define BRASSICA_HAS_VULKAN 0
+	#endif
+#endif
+
+#if BRASSICA_HAS_VULKAN
+	#include "vk_mem_alloc.h"
+#else
+	using VmaAllocator = void*;
+	using VmaAllocation = void*;
+#endif
+
 #include <glm/glm.hpp>
 
 #include "constants.h"
 #include "graph/Execution.hpp"
 #include "terrain/ITerrainClipmap.hpp"
-#include "vk_mem_alloc.h"
 
 namespace brassica {
 
@@ -89,23 +104,77 @@ namespace brassica {
 			float            time = 0.0f
 		);
 
-		vk::Image GetImage() const { return image; }
+		vk::Image GetImage() const {
+#if BRASSICA_HAS_VULKAN
+			return image;
+#else
+			return {};
+#endif
+		}
 
-		vk::ImageView GetImageView() const { return imageView; }
+		vk::ImageView GetImageView() const {
+#if BRASSICA_HAS_VULKAN
+			return imageView;
+#else
+			return {};
+#endif
+		}
 
-		vk::Image GetMinMaxImage() const { return minmaxImage; }
+		vk::Image GetMinMaxImage() const {
+#if BRASSICA_HAS_VULKAN
+			return minmaxImage;
+#else
+			return {};
+#endif
+		}
 
-		vk::ImageView GetMinMaxImageView() const { return minmaxImageView; }
+		vk::ImageView GetMinMaxImageView() const {
+#if BRASSICA_HAS_VULKAN
+			return minmaxImageView;
+#else
+			return {};
+#endif
+		}
 
-		vk::Image GetBiomeImage() const { return biomeImage; }
+		vk::Image GetBiomeImage() const {
+#if BRASSICA_HAS_VULKAN
+			return biomeImage;
+#else
+			return {};
+#endif
+		}
 
-		vk::ImageView GetBiomeImageView() const { return biomeImageView; }
+		vk::ImageView GetBiomeImageView() const {
+#if BRASSICA_HAS_VULKAN
+			return biomeImageView;
+#else
+			return {};
+#endif
+		}
 
-		vk::Image GetVisibilityImage() const { return visibilityImage; }
+		vk::Image GetVisibilityImage() const {
+#if BRASSICA_HAS_VULKAN
+			return visibilityImage;
+#else
+			return {};
+#endif
+		}
 
-		vk::ImageView GetVisibilityImageView() const { return visibilityImageView; }
+		vk::ImageView GetVisibilityImageView() const {
+#if BRASSICA_HAS_VULKAN
+			return visibilityImageView;
+#else
+			return {};
+#endif
+		}
 
-		vk::Sampler GetSampler() const { return sampler; }
+		vk::Sampler GetSampler() const {
+#if BRASSICA_HAS_VULKAN
+			return sampler;
+#else
+			return {};
+#endif
+		}
 
 		uint32_t GetNumLODs() const { return numLODs; }
 
@@ -114,28 +183,30 @@ namespace brassica {
 		const ClipmapLevelInfo& GetLevelInfo(uint32_t lod) const { return levelInfos[lod]; }
 
 	private:
-		vk::Device   device{nullptr};
-		VmaAllocator allocator{VK_NULL_HANDLE};
+		vk::Device   device{};
+		VmaAllocator allocator{nullptr};
 		uint32_t     numLODs{DEFAULT_CLIPMAP_LODS};
 		float        baseTexelSize{0.5f};
 
+#if BRASSICA_HAS_VULKAN
 		vk::Image     image{nullptr};
 		vk::ImageView imageView{nullptr};
-		VmaAllocation allocation{VK_NULL_HANDLE};
+		VmaAllocation allocation{nullptr};
 
 		vk::Image     minmaxImage{nullptr};
 		vk::ImageView minmaxImageView{nullptr};
-		VmaAllocation minmaxAllocation{VK_NULL_HANDLE};
+		VmaAllocation minmaxAllocation{nullptr};
 
 		vk::Image     biomeImage{nullptr};
 		vk::ImageView biomeImageView{nullptr};
-		VmaAllocation biomeAllocation{VK_NULL_HANDLE};
+		VmaAllocation biomeAllocation{nullptr};
 
 		vk::Image     visibilityImage{nullptr};
 		vk::ImageView visibilityImageView{nullptr};
-		VmaAllocation visibilityAllocation{VK_NULL_HANDLE};
+		VmaAllocation visibilityAllocation{nullptr};
 
 		vk::Sampler sampler{nullptr};
+#endif
 
 		std::vector<ClipmapLevelInfo> levelInfos;
 		bool                          m_forceRegenerate{false};
@@ -150,9 +221,19 @@ namespace brassica {
 			.width = TERRAIN_MAP_DIM,
 			.height = TERRAIN_MAP_DIM,
 			.layers = numLODs,
-			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.formatCode = static_cast<std::uint32_t>(
+#if BRASSICA_HAS_VULKAN
+				vk::Format::eR32G32B32A32Sfloat
+#else
+				0
+#endif
+			),
 			.usageMask = static_cast<std::uint32_t>(
+#if BRASSICA_HAS_VULKAN
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
+#else
+				0
+#endif
 			),
 		};
 	}

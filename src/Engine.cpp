@@ -403,8 +403,16 @@ namespace brassica {
 		render::EngineNodeRegistry::Instance().CreateAll();
 		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
-		float initialTerrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
-		camera.position.y = initialTerrainHeight + 2.0f;
+		TerrainQueryRange initialCollisionRange{
+			.center = glm::vec2(camera.position.x, camera.position.z),
+			.extent = glm::vec2(1000.0f, 1000.0f),
+			.width = 256,
+			.height = 256
+		};
+		terrainCollision.UpdateBuffer(this, initialCollisionRange);
+
+		float initialTerrainHeight = terrainCollision.GetHeightAt(camera.position.x, camera.position.z);
+		camera.position.y = std::max(camera.position.y, initialTerrainHeight + 2.0f);
 
 		float altitude = std::max(10.0f, camera.position.y);
 		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
@@ -674,8 +682,23 @@ namespace brassica {
 		if (camera.position.y > 32000.0f) {
 			camera.position.y = 32000.0f;
 		}
-		if (camera.position.y < -1024.0f) {
-			camera.position.y = -1024.0f;
+
+		glm::vec2 currentPos2D(camera.position.x, camera.position.z);
+		glm::vec2 center2D = terrainCollision.GetRange().center;
+		float maxOffset = std::min(terrainCollision.GetRange().extent.x, terrainCollision.GetRange().extent.y) * 0.25f;
+		if (!terrainCollision.HasData() || glm::length(currentPos2D - center2D) > maxOffset) {
+			TerrainQueryRange newRange{
+				.center = currentPos2D,
+				.extent = glm::vec2(1000.0f, 1000.0f),
+				.width = 256,
+				.height = 256
+			};
+			terrainCollision.UpdateBuffer(this, newRange);
+		}
+
+		bool collided = terrainCollision.CheckAndResolveCameraCollision(camera.position, 2.0f);
+		if (collided && camera.mode == CameraMode::Accelerated && camera.velocity.y < 0.0f) {
+			camera.velocity.y = 0.0f;
 		}
 	}
 

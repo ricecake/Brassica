@@ -1,0 +1,67 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+#include "common.glsl"
+#include "bindless.glsl"
+#include "lygia/generative/psrdnoise.glsl"
+
+layout(set = 0, binding = 0) buffer TerrainQuerySSBO {
+    vec4 samples[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint uWidth;
+    uint uHeight;
+    vec2 uMinWorldPos;
+    vec2 uTexelSize;
+    float uPlanetRadius;
+};
+
+void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
+	float continent_mask;
+	vec3 grad_continent_mask;
+    vec3 p_scale = vec3(1.0 / (2.0 * PI * FAKE_PLANET_RADIUS), 1.0, 1.0 / (PI * FAKE_PLANET_RADIUS));
+	evaluate_soft_voronoi_pseudosphere2(p, 32, continent_mask, grad_continent_mask);
+	p *= p_scale * 30.0;
+
+	vec3 grad_noise;
+	float warp = psrdnoise(p*continent_mask, vec3(0), 0.0);
+
+	float noise_height = dot_noise_fbm(p+warp, 4, 0.0, grad_noise);
+
+	vec3 grad_noise2;
+	float warp2 = psrdnoise(p/continent_mask, vec3(0), 10.0);
+	float noise_height2 = dot_noise_fbm(p*warp2, 4, 3.0, grad_noise2);
+
+	grad_noise += grad_noise2;
+	noise_height += noise_height2;
+
+	float final_height = noise_height * continent_mask;
+	vec3 final_grad = (grad_noise * continent_mask) + (noise_height * grad_continent_mask);
+
+	float height_amplitude = config.max_height - config.min_height;
+	vec3 scaled_grad = final_grad * height_amplitude * config.spatial_scale;
+
+	out_normal = normalize(vec3(-scaled_grad.x, 1.0, -scaled_grad.z));
+	out_height = remap(final_height, 0.0, 1.0, config.min_height, config.max_height);
+}
+
+void main() {
+    uvec2 pixelPos = gl_GlobalInvocationID.xy;
+    if (pixelPos.x >= uWidth || pixelPos.y >= uHeight) {
+        return;
+    }
+
+    vec2 worldXZ = uMinWorldPos + vec2(float(pixelPos.x), float(pixelPos.y)) * uTexelSize;
+    vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
+
+    TerrainConfig cfg = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
+    float h = 0.0;
+    vec3 normal = vec3(0.0, 1.0, 0.0);
+    eval_terrain(p, cfg, h, normal);
+
+    uint idx = pixelPos.y * uWidth + pixelPos.x;
+    samples[idx] = vec4(h, normal.x, normal.y, normal.z);
+}

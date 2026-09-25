@@ -4,13 +4,16 @@
 #include <cmath>
 
 #include "spdlog/spdlog.h"
-#include <FastNoise/FastNoise.h>
 
-#include "terrain/AsyncTerrainUploader.hpp"
-#include <glm/gtc/matrix_transform.hpp>
+#if BRASSICA_HAS_VULKAN
+	#include "terrain/AsyncTerrainUploader.hpp"
+	#include <FastNoise/FastNoise.h>
+	#include <glm/gtc/matrix_transform.hpp>
+#endif
 
 namespace brassica {
 
+#if BRASSICA_HAS_VULKAN
 	struct TerrainNoiseGenerators {
 		FastNoise::SmartNode<> baseScale;
 		FastNoise::SmartNode<> detailScale;
@@ -20,9 +23,6 @@ namespace brassica {
 
 		TerrainNoiseGenerators() {
 			land = FastNoise::NewFromEncodedNodeTree(
-				// "KQkdCRMABg@BkSCS4AAQ@BkHAABAnEUUCw@AD8EAgsAAECcRS@DOAE@BEC83MTD4EAw@CL@BPxMAAEjCGwAAekQE"
-				// "KQkdCRMABg@BkSCS4AAQ@BkHAABAnEUUCw@AD8EAgsAAECcRS@DOAE@BEC83MTD4EAw@CT@AgwRsAAHpEBA=="
-				//  "KQkdCRMABg@BkSCS4AAQ@BkHAABAnEUUCw@AD8EAgsAAECcRS@DOAE@BEC83MTD4EEwAAIMEbAAD6QwQ="
 				"FQkpCQ4JFgIXCRkJBgAAQBxGDAITCR@BD6RDAB@BCQs@AB6RBL/@AEA5qZE0IEAwrXoz4K/wEADAr/"
 				"BAAEAv8EAAQD@CBMAAEjCGwAAekQEAh0JFAkQCQYMC+xRuD4EAg0JCwAAgLNCEKRwPb8YmpmZPyAC@BOAQ@BMC65HYT4M"
 			);
@@ -49,8 +49,23 @@ namespace brassica {
 
 		return baseOffset + baseVal * baseHeightScale + detailVal * detailHeightScale * detailFactor;
 	}
+#endif
 
 	glm::vec4 TerrainClipmap::SampleTerrain(float worldX, float worldZ, float texelSize) {
+#if !BRASSICA_HAS_VULKAN
+		float eps = std::max(0.25f, texelSize);
+		auto  evalH = [](float x, float z) {
+            return std::sin(x * 0.005f) * std::cos(z * 0.005f) * 50.0f + std::sin(x * 0.02f + z * 0.01f) * 10.0f;
+		};
+		float     h = evalH(worldX, worldZ);
+		float     hL = evalH(worldX - eps, worldZ);
+		float     hR = evalH(worldX + eps, worldZ);
+		float     hD = evalH(worldX, worldZ - eps);
+		float     hU = evalH(worldX, worldZ + eps);
+
+		glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
+		return glm::vec4(h, normal.x, normal.y, normal.z);
+#else
 		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;
 		float         eps = std::max(0.25f, texelSize);
@@ -72,6 +87,7 @@ namespace brassica {
 
 		glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
 		return glm::vec4(h, normal.x, normal.y, normal.z);
+#endif
 	}
 
 	struct TerrainRegionData {
@@ -100,8 +116,8 @@ namespace brassica {
 		float texelSize = info.texelSize > 0.0f ? info.texelSize : 0.5f;
 		float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
 
-		float minWorldX = info.centerWorldPos.x - halfExtent;
-		float minWorldZ = info.centerWorldPos.y - halfExtent;
+		float minWorldX [[maybe_unused]] = info.centerWorldPos.x - halfExtent;
+		float minWorldZ [[maybe_unused]] = info.centerWorldPos.y - halfExtent;
 
 		if (deltaX != 0) {
 			if (deltaX > 0) {
@@ -135,6 +151,7 @@ namespace brassica {
 		std::vector<float> biomePatch(totalPadded, 0.5f);
 		std::vector<float> maskPatch(totalPadded, 0.0f);
 
+#if BRASSICA_HAS_VULKAN
 		auto&         gens = GetGenerators();
 		constexpr int seed = 1337;
 
@@ -177,6 +194,7 @@ namespace brassica {
 				seed
 			);
 		}
+#endif
 
 		float eps = std::max(0.25f, texelSize);
 
@@ -234,8 +252,13 @@ namespace brassica {
 		float            maxDist,
 		const glm::vec3& initialCameraPos
 	) {
+#if BRASSICA_HAS_VULKAN
 		device = dev;
 		allocator = alloc;
+#else
+		(void)dev;
+		(void)alloc;
+#endif
 		baseTexelSize = baseTexel;
 
 		if (maxDist > 0.0f) {
@@ -265,8 +288,10 @@ namespace brassica {
 			levelInfos[i].delta = glm::ivec2(TERRAIN_MAP_DIM, TERRAIN_MAP_DIM);
 		}
 
+#if BRASSICA_HAS_VULKAN
 		CreateTextureArrays();
 		CreateSampler();
+#endif
 	}
 
 	void TerrainClipmap::UpdateCameraPosition(const glm::vec3& cameraPos) {
@@ -309,6 +334,7 @@ namespace brassica {
 	}
 
 	void TerrainClipmap::Cleanup() {
+#if BRASSICA_HAS_VULKAN
 		if (device) {
 			if (sampler) {
 				device.destroySampler(sampler);
@@ -330,9 +356,11 @@ namespace brassica {
 			destroyArrayImage(biomeImage, biomeImageView, biomeAllocation);
 			destroyArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
 		}
+#endif
 	}
 
 	void TerrainClipmap::CreateTextureArrays() {
+#if BRASSICA_HAS_VULKAN
 		auto createArrayImage = [&](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc) {
 			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 			imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -368,9 +396,11 @@ namespace brassica {
 		createArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 		createArrayImage(biomeImage, biomeImageView, biomeAllocation);
 		createArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+#endif
 	}
 
 	void TerrainClipmap::CreateSampler() {
+#if BRASSICA_HAS_VULKAN
 		vk::SamplerCreateInfo samplerInfo{};
 		samplerInfo.setMagFilter(vk::Filter::eLinear);
 		samplerInfo.setMinFilter(vk::Filter::eLinear);
@@ -384,6 +414,7 @@ namespace brassica {
 		samplerInfo.setUnnormalizedCoordinates(VK_FALSE);
 
 		sampler = device.createSampler(samplerInfo);
+#endif
 	}
 
 	std::vector<glm::vec4> TerrainClipmap::GenerateLevelMap(uint32_t levelIndex) const {
@@ -416,7 +447,7 @@ namespace brassica {
 		uint32_t         levelIndex,
 		float            baseTexelSize,
 		const glm::vec2& centerWorldPos,
-		float            time
+		[[maybe_unused]] float time
 	) {
 		ClipmapLevelInfo info{};
 		info.level = levelIndex;

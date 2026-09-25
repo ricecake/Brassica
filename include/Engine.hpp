@@ -27,6 +27,7 @@
 #include "terrain/AsyncTerrainUploader.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
 #include "terrain/TerrainClipmap.hpp"
+#include "terrain/TerrainCollisionManager.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/FrameDetails.hpp"
@@ -149,6 +150,10 @@ namespace brassica {
 
 		const LightningManager& GetLightningManager() const { return lightningManager; }
 
+		TerrainCollisionManager& GetTerrainCollision() { return terrainCollision; }
+
+		const TerrainCollisionManager& GetTerrainCollision() const { return terrainCollision; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -244,8 +249,9 @@ namespace brassica {
 
 		TerrainAccelerationStructure terrainAS;
 
-		TerrainClipmap       terrainClipmap;
-		AsyncTerrainUploader terrainUploader;
+		TerrainClipmap          terrainClipmap;
+		AsyncTerrainUploader    terrainUploader;
+		TerrainCollisionManager terrainCollision;
 
 		uint32_t     globalSeed{0};
 		std::mt19937 rng;
