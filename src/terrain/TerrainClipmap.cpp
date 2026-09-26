@@ -305,7 +305,7 @@ namespace brassica {
 					info.gridOffset.y += static_cast<int>(TERRAIN_MAP_DIM);
 			}
 		}
-		m_forceRegenerate = false;
+		// m_forceRegenerate = false;
 	}
 
 	void TerrainClipmap::Cleanup() {

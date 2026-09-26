@@ -81,6 +81,7 @@ namespace brassica {
 			cameraPos = p.cameraPosition;
 			push.gridParams = p.terrainGridParams;
 			hasUpdate = p.cameraPosition != p.previousCameraPosition;
+			forceRegeneration = p.forceRegeneration;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -174,7 +175,7 @@ namespace brassica {
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
 				vkCmd.dispatch(groupX, groupY, groupZ);
-				forceRegeneration = false;
+				// forceRegeneration = false;
 			}
 
 			if (false && terrainAS) {

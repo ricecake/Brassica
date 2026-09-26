@@ -68,6 +68,8 @@ namespace brassica {
 		void UpdateCameraPosition(const glm::vec3& cameraPos);
 
 		void Regenerate() override { m_forceRegenerate = true; }
+		bool ShouldForceRegeneration() { return m_forceRegenerate; }
+		void ResetForceRegeneration() { m_forceRegenerate = false; }
 
 		// Unified CPU Terrain Generator
 		static glm::vec4 SampleTerrain(float worldX, float worldZ, float texelSize);
@@ -138,7 +140,7 @@ namespace brassica {
 		vk::Sampler sampler{nullptr};
 
 		std::vector<ClipmapLevelInfo> levelInfos;
-		bool                          m_forceRegenerate{false};
+		bool                          m_forceRegenerate{true};
 
 		void CreateTextureArrays();
 		void CreateSampler();

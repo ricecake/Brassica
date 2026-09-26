@@ -1172,7 +1172,7 @@ namespace brassica {
 		TerrainPushConstants terrainPush{};
 		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
 
-		bool       terrainHasUpdate = false;
+		bool       forceRegeneration = terrainClipmap.ShouldForceRegeneration();
 
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
@@ -1219,7 +1219,7 @@ namespace brassica {
 			.cameraPosition = camera.position,
 			.previousCameraPosition = previousCameraPosition,
 			.terrainGridParams = terrainPush.gridParams,
-			.terrainHasUpdate = terrainHasUpdate,
+			.forceRegeneration = forceRegeneration,
 			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
 			.waterLevel = 0.0f,
 			.sunDir = sunDir,
@@ -1299,6 +1299,8 @@ namespace brassica {
 			frameNumber++;
 			return;
 		}
+
+		terrainClipmap.ResetForceRegeneration();
 
 		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
 		// srcStage/srcAccess now come from the registry's tracked state rather than being

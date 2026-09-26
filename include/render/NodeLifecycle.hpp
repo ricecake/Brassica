@@ -45,7 +45,7 @@ namespace brassica::render {
 			constants::Class::Terrain::TotalMeshlets,
 			constants::Class::Terrain::MapDim
 		};
-		bool       terrainHasUpdate{false};
+		bool       forceRegeneration{true};
 		glm::vec3  waterColor{0.05f, 0.45f, 0.85f};
 		float      waterLevel{0.0f};
 		glm::vec3  sunDir{0.0f, 1.0f, 0.0f};
