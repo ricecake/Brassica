@@ -10,6 +10,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include <glm/glm.hpp>
 
 #include "graph/Declaration.hpp"
@@ -88,9 +89,12 @@ namespace brassica {
 		void Init(const render::NodeServices& services) override {
 			pipelineLibrary = services.pipelineLibrary;
 			dls = services.dispatchLoader;
-			taskShader.CompileTaskFromFile(services.device, "shaders/ball.task");
-			meshShader.CompileMeshFromFile(services.device, "shaders/ball.mesh");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/ball.frag");
+			if (!taskShader.CompileTaskFromFile(services.device, "shaders/ball.task") ||
+			    !meshShader.CompileMeshFromFile(services.device, "shaders/ball.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/ball.frag")) {
+				spdlog::critical("EntityNode shader compilation failed.");
+				throw std::runtime_error("EntityNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}

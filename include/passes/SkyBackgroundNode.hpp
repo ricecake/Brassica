@@ -12,6 +12,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "types/SkyPushConstants.hpp"
 
 namespace brassica {
@@ -39,8 +40,11 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/atmosphere/sky.frag");
+			if (!vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/atmosphere/sky.frag")) {
+				spdlog::critical("SkyBackgroundNode shader compilation failed.");
+				throw std::runtime_error("SkyBackgroundNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
