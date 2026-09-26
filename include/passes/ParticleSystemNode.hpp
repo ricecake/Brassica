@@ -17,6 +17,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "types/Particle.hpp"
 #include "VulkanCompat.hpp"
 
@@ -241,7 +242,10 @@ namespace brassica {
 			pipelineLibrary = services.pipelineLibrary;
 			particleSetLayout = setLayout;
 			particleSet = set;
-			compShader.CompileComputeFromFile(services.device, "shaders/particle_reset.comp");
+			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_reset.comp")) {
+				spdlog::critical("ParticleResetNode shader compilation failed.");
+				throw std::runtime_error("ParticleResetNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&compShader);
 			}
@@ -332,7 +336,10 @@ namespace brassica {
 			pipelineLibrary = services.pipelineLibrary;
 			particleSetLayout = setLayout;
 			particleSet = set;
-			compShader.CompileComputeFromFile(services.device, "shaders/particle_liveness.comp");
+			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_liveness.comp")) {
+				spdlog::critical("ParticleLivenessNode shader compilation failed.");
+				throw std::runtime_error("ParticleLivenessNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&compShader);
 			}
@@ -469,7 +476,10 @@ namespace brassica {
 			pipelineLibrary = services.pipelineLibrary;
 			particleSetLayout = setLayout;
 			particleSet = set;
-			compShader.CompileComputeFromFile(services.device, "shaders/particle_behavior.comp");
+			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_behavior.comp")) {
+				spdlog::critical("ParticleBehaviorNode shader compilation failed.");
+				throw std::runtime_error("ParticleBehaviorNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&compShader);
 			}
@@ -605,8 +615,11 @@ namespace brassica {
 			dls = services.dispatchLoader;
 			swapchainFormat = services.swapchainFormat;
 			descriptorSet = detail::CreateParticleDescriptorSet(services.device);
-			meshShader.CompileMeshFromFile(services.device, "shaders/particle.mesh");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/particle.frag");
+			if (!meshShader.CompileMeshFromFile(services.device, "shaders/particle.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/particle.frag")) {
+				spdlog::critical("UnderwaterParticleRenderNode shader compilation failed.");
+				throw std::runtime_error("UnderwaterParticleRenderNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&meshShader);
 				services.shaderWatcher->RegisterShader(&fragShader);
@@ -787,8 +800,11 @@ namespace brassica {
 			dls = services.dispatchLoader;
 			swapchainFormat = services.swapchainFormat;
 			descriptorSet = detail::CreateParticleDescriptorSet(services.device);
-			meshShader.CompileMeshFromFile(services.device, "shaders/particle.mesh");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/particle.frag");
+			if (!meshShader.CompileMeshFromFile(services.device, "shaders/particle.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/particle.frag")) {
+				spdlog::critical("AboveWaterParticleRenderNode shader compilation failed.");
+				throw std::runtime_error("AboveWaterParticleRenderNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&meshShader);
 				services.shaderWatcher->RegisterShader(&fragShader);

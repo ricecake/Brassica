@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat*/**" ]
     tags:
       - 'v*'
     paths-ignore:
@@ -12,7 +12,7 @@ on:
       - '.vscode/**'
       - '.clang-format'
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "feat*/**" ]
     paths-ignore:
       - '**.md'
       - '.gitignore'

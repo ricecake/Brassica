@@ -37,6 +37,7 @@ namespace brassica::testing {
 			vkb::InstanceBuilder instanceBuilder;
 			instanceBuilder.set_app_name("brassica-tests")
 				.require_api_version(1, 3, 0)
+				.set_headless(true)
 				.set_debug_callback(&MinimalDevice::DebugCallback)
 				.set_debug_callback_user_data_pointer(this);
 
@@ -84,12 +85,12 @@ namespace brassica::testing {
 
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
 			selector.set_minimum_version(1, 3)
+				.require_present(false)
 				.set_required_features(features1)
 				.set_required_features_13(features13)
 				.set_required_features_12(features12)
 				.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
-				.add_required_extension_features(meshFeatures)
-				.defer_surface_initialization();
+				.add_required_extension_features(meshFeatures);
 
 			auto physRes = selector.select();
 			if (!physRes) {

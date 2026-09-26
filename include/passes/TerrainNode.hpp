@@ -16,6 +16,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "terrain/TerrainAccelerationStructure.hpp"
 
 namespace brassica {
@@ -84,9 +85,12 @@ namespace brassica {
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			terrainAS = services.terrainAS;
-			taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task");
-			meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag");
+			if (!taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task") ||
+			    !meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag")) {
+				spdlog::critical("TerrainNode shader compilation failed.");
+				throw std::runtime_error("TerrainNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}

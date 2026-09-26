@@ -15,6 +15,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/SkyViewPushConstants.hpp"
 
@@ -81,7 +82,10 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			shader.CompileComputeFromFile(services.device, "shaders/atmosphere/transmittance_lut.comp");
+			if (!shader.CompileComputeFromFile(services.device, "shaders/atmosphere/transmittance_lut.comp")) {
+				spdlog::critical("TransmittanceLUTNode shader compilation failed.");
+				throw std::runtime_error("TransmittanceLUTNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&shader);
 			}
@@ -168,7 +172,10 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			shader.CompileComputeFromFile(services.device, "shaders/atmosphere/multiscattering_lut.comp");
+			if (!shader.CompileComputeFromFile(services.device, "shaders/atmosphere/multiscattering_lut.comp")) {
+				spdlog::critical("MultiScatteringLUTNode shader compilation failed.");
+				throw std::runtime_error("MultiScatteringLUTNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&shader);
 			}
@@ -262,7 +269,10 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			shader.CompileComputeFromFile(services.device, "shaders/atmosphere/sky_view_lut.comp");
+			if (!shader.CompileComputeFromFile(services.device, "shaders/atmosphere/sky_view_lut.comp")) {
+				spdlog::critical("SkyViewLUTNode shader compilation failed.");
+				throw std::runtime_error("SkyViewLUTNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&shader);
 			}

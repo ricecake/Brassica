@@ -69,6 +69,100 @@ namespace brassica {
 			return "";
 		}
 
+		class CustomIncluder: public shaderc::CompileOptions::IncluderInterface {
+		public:
+			explicit CustomIncluder(std::set<std::string>& includedFiles)
+				: m_includedFiles(includedFiles) {}
+
+			shaderc_include_result* GetInclude(
+				const char*          requested_source,
+				shaderc_include_type type,
+				const char*          requesting_source,
+				size_t               include_depth
+			) override {
+				namespace fs = std::filesystem;
+				(void)type;
+				(void)include_depth;
+
+				fs::path    requestingPath(requesting_source ? requesting_source : "");
+				std::string includePath(requested_source);
+
+				std::vector<fs::path> searchPaths;
+				if (!requesting_source || std::string(requesting_source).empty()) {
+					searchPaths.push_back(fs::path(includePath));
+				} else {
+					searchPaths.push_back(requestingPath.parent_path() / includePath);
+				}
+				searchPaths.push_back(fs::path("shaders") / includePath);
+				searchPaths.push_back(fs::path("external") / includePath);
+				searchPaths.push_back(fs::path(includePath));
+
+				std::string fullPathStr = "";
+				for (const auto& candidate : searchPaths) {
+					if (fs::exists(candidate) && !fs::is_directory(candidate)) {
+						fullPathStr = candidate.string();
+						break;
+					} else if (!loadFileRaw(candidate.string()).empty()) {
+						fullPathStr = candidate.string();
+						break;
+					}
+				}
+
+				auto* result = new shaderc_include_result();
+				auto* container = new IncludeContainer();
+
+				if (fullPathStr.empty()) {
+					container->source_name = requested_source;
+					container->content = "Shader #include error: file not found: " + includePath;
+					spdlog::error("Shader #include error: file not found for {}", includePath);
+				} else {
+					std::string normalized = normalizePath(fullPathStr);
+					container->source_name = normalized;
+
+					if (m_includedFiles.count(normalized)) {
+						// Include guard safety boundary: return empty content to avoid duplicate definition
+						container->content = "";
+					} else {
+						m_includedFiles.insert(normalized);
+						std::string raw = loadFileRaw(normalized);
+
+						// Perform macro replacements
+						for (auto const& [placeholder, value] : Shader::GetReplacements()) {
+							size_t pos = 0;
+							while ((pos = raw.find(placeholder, pos)) != std::string::npos) {
+								raw.replace(pos, placeholder.length(), value);
+								pos += value.length();
+							}
+						}
+						container->content = std::move(raw);
+					}
+				}
+
+				result->source_name = container->source_name.c_str();
+				result->source_name_length = container->source_name.size();
+				result->content = container->content.c_str();
+				result->content_length = container->content.size();
+				result->user_data = container;
+
+				return result;
+			}
+
+			void ReleaseInclude(shaderc_include_result* data) override {
+				if (data) {
+					delete static_cast<IncludeContainer*>(data->user_data);
+					delete data;
+				}
+			}
+
+		private:
+			struct IncludeContainer {
+				std::string source_name;
+				std::string content;
+			};
+
+			std::set<std::string>& m_includedFiles;
+		};
+
 		std::string loadShaderSourceInternal(
 			const std::string&     path,
 			std::set<std::string>& includedFiles,
@@ -107,8 +201,10 @@ namespace brassica {
 			std::string preVersionContent;
 			std::string postVersionContent;
 			bool        foundVersion = false;
+			uint32_t    currentLine = 0;
 
 			while (std::getline(iss, line)) {
+				++currentLine;
 				std::string trimmed = line;
 				size_t      firstNonWhitespace = trimmed.find_first_not_of(" \t\r\n");
 				if (firstNonWhitespace != std::string::npos) {
@@ -143,19 +239,22 @@ namespace brassica {
 						if (!fullPathStr.empty()) {
 							std::string includedSource = loadShaderSourceInternal(fullPathStr, includedFiles);
 							std::string commentStart = "//START " + fullPathStr + "\n";
+							std::string lineStart = "#line 1 \"" + fullPathStr + "\"\n";
 							std::string commentEnd = "//END " + fullPathStr + " (returning to " + normalizedPath +
 								")\n";
+							std::string lineReturn = "#line " + std::to_string(currentLine + 1) + " \"" +
+								normalizedPath + "\"\n";
+
+							std::string block = commentStart + lineStart + includedSource;
+							if (!includedSource.empty() && includedSource.back() != '\n') {
+								block += "\n";
+							}
+							block += commentEnd + lineReturn;
 
 							if (foundVersion) {
-								postVersionContent += commentStart + includedSource;
-								if (!includedSource.empty() && includedSource.back() != '\n')
-									postVersionContent += "\n";
-								postVersionContent += commentEnd;
+								postVersionContent += block;
 							} else {
-								preVersionContent += commentStart + includedSource;
-								if (!includedSource.empty() && includedSource.back() != '\n')
-									preVersionContent += "\n";
-								preVersionContent += commentEnd;
+								preVersionContent += block;
 							}
 						} else {
 							spdlog::error("Shader #include error: file not found for {}", includePath);
@@ -205,6 +304,9 @@ namespace brassica {
 			std::string finalSource = versionLine;
 			if (isTopLevel && !shaderStageDefine.empty()) {
 				finalSource += "#define " + shaderStageDefine + "\n";
+			}
+			if (isTopLevel) {
+				finalSource += "#line 1 \"" + normalizedPath + "\"\n";
 			}
 			finalSource += "#ifndef " + guard + "\n";
 			finalSource += "#define " + guard + "\n";
@@ -267,10 +369,11 @@ namespace brassica {
 		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
 		options.SetTargetSpirv(shaderc_spirv_version_1_5);
 		options.AddMacroDefinition("BRASSICA_PERFORMANCE_OPTIMIZED", "1");
+		options.SetIncluder(std::make_unique<CustomIncluder>(includedFiles));
 
 		auto result = compiler.CompileGlslToSpv(source, kind, name, options);
 		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
-			spdlog::error("Shader compilation error ({}) : {}", name, result.GetErrorMessage());
+			spdlog::error("Shader compilation error ({}) :\n{}", name, result.GetErrorMessage());
 			return false;
 		}
 
@@ -324,10 +427,11 @@ namespace brassica {
 		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
 		options.SetTargetSpirv(shaderc_spirv_version_1_5);
 		options.AddMacroDefinition("BRASSICA_PERFORMANCE_OPTIMIZED", "1");
+		options.SetIncluder(std::make_unique<CustomIncluder>(newIncludedFiles));
 
 		auto result = compiler.CompileGlslToSpv(newSource, shaderKind, filePath.c_str(), options);
 		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
-			spdlog::error("Shader re-compilation error ({}) : {}", filePath, result.GetErrorMessage());
+			spdlog::error("Shader re-compilation error ({}) :\n{}", filePath, result.GetErrorMessage());
 			return false;
 		}
 

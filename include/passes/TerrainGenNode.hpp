@@ -15,6 +15,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "terrain/TerrainAccelerationStructure.hpp"
 #include "terrain/TerrainClipmap.hpp"
 
@@ -56,8 +57,11 @@ namespace brassica {
 			pipelineLibrary = services.pipelineLibrary;
 			terrainAS = services.terrainAS;
 			physicalRegistry = services.physicalRegistry;
-			genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp");
-			aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp");
+			if (!genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp") ||
+			    !aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp")) {
+				spdlog::critical("TerrainGenNode shader compilation failed.");
+				throw std::runtime_error("TerrainGenNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
@@ -77,6 +81,7 @@ namespace brassica {
 			cameraPos = p.cameraPosition;
 			push.gridParams = p.terrainGridParams;
 			hasUpdate = p.cameraPosition != p.previousCameraPosition;
+			forceRegeneration = p.forceRegeneration;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -170,7 +175,7 @@ namespace brassica {
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
 				vkCmd.dispatch(groupX, groupY, groupZ);
-				forceRegeneration = false;
+				// forceRegeneration = false;
 			}
 
 			if (false && terrainAS) {

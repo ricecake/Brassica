@@ -17,6 +17,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "VulkanCompat.hpp"
 
 namespace brassica {
@@ -89,9 +90,12 @@ namespace brassica {
 			pipelineLibrary = services.pipelineLibrary;
 			dls = services.dispatchLoader;
 			swapchainFormat = services.swapchainFormat;
-			taskShader.CompileTaskFromFile(services.device, "shaders/water.task");
-			meshShader.CompileMeshFromFile(services.device, "shaders/water.mesh");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/water.frag");
+			if (!taskShader.CompileTaskFromFile(services.device, "shaders/water.task") ||
+			    !meshShader.CompileMeshFromFile(services.device, "shaders/water.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/water.frag")) {
+				spdlog::critical("WaterNode shader compilation failed.");
+				throw std::runtime_error("WaterNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}

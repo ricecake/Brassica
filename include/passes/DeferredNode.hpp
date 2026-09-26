@@ -16,6 +16,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -65,8 +66,11 @@ namespace brassica {
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			swapchainFormat = services.swapchainFormat;
-			vertShader.CompileVertexFromFile(services.device, "shaders/deferred.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/deferred.frag");
+			if (!vertShader.CompileVertexFromFile(services.device, "shaders/deferred.vert") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/deferred.frag")) {
+				spdlog::critical("DeferredNode shader compilation failed.");
+				throw std::runtime_error("DeferredNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
