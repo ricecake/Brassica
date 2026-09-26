@@ -300,6 +300,8 @@ namespace brassica {
 				frameTimelineSemaphore = nullptr;
 			}
 
+			CleanupAsyncTransferResources();
+
 			for (auto sem : swapchainRenderSemaphores) {
 				if (sem)
 					device.destroySemaphore(sem);
@@ -362,6 +364,7 @@ namespace brassica {
 		InitSwapchain();
 		InitCommands();
 		InitSyncStructures();
+		InitAsyncTransferResources();
 
 		std::random_device rd;
 		globalSeed = rd();
@@ -676,6 +679,32 @@ namespace brassica {
 		}
 		if (camera.position.y < -1024.0f) {
 			camera.position.y = -1024.0f;
+		}
+
+		// Non-blocking async transfer readback camera constraint demonstration:
+		// Poll any completed async readback transfer
+		PollReadbackData();
+
+		// Trigger new readback if clipmap image is available
+		if (terrainClipmap.GetImage()) {
+			TriggerImageRegionReadbackAsync(
+				terrainClipmap.GetImage(),
+				0, // LOD level 0
+				vk::Offset2D{TERRAIN_MAP_DIM / 2 - 2, TERRAIN_MAP_DIM / 2 - 2},
+				vk::Extent2D{4, 4},
+				vk::ImageLayout::eGeneral
+			);
+		}
+
+		std::vector<glm::vec4> readbackData;
+		uint32_t rw = 0, rh = 0;
+		float minHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
+		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
+			// Find terrain height from center pixel in non-blocking async transfer buffer
+			minHeight = readbackData[readbackData.size() / 2].r + 2.0f;
+		}
+		if (camera.position.y < minHeight) {
+			camera.position.y = minHeight;
 		}
 	}
 
@@ -1716,6 +1745,202 @@ namespace brassica {
 		bindlessBindings.frameSet = frameDescriptorSets[0];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
+	}
+
+	void Engine::InitAsyncTransferResources() {
+		if (!device) {
+			return;
+		}
+
+		vk::CommandPoolCreateInfo poolInfo{};
+		poolInfo.setQueueFamilyIndex(transferQueueFamily);
+		poolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+		asyncTransferCommandPool = device.createCommandPool(poolInfo);
+
+		vk::CommandBufferAllocateInfo allocInfo{};
+		allocInfo.setCommandPool(asyncTransferCommandPool);
+		allocInfo.setLevel(vk::CommandBufferLevel::ePrimary);
+		allocInfo.setCommandBufferCount(1);
+		asyncTransferCommandBuffer = device.allocateCommandBuffers(allocInfo).front();
+
+		vk::SemaphoreTypeCreateInfo typeInfo{};
+		typeInfo.setSemaphoreType(vk::SemaphoreType::eTimeline);
+		typeInfo.setInitialValue(0);
+
+		vk::SemaphoreCreateInfo semInfo{};
+		semInfo.setPNext(&typeInfo);
+		readbackTimelineSemaphore = device.createSemaphore(semInfo);
+
+		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		bufferInfo.size = 1024 * 1024 * 16; // 16MB max readback staging
+		bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		VmaAllocationCreateInfo allocCreateInfo{};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+		                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer       buf{VK_NULL_HANDLE};
+		VmaAllocationInfo allocationInfo{};
+		if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &buf, &readbackStagingAllocation, &allocationInfo) == VK_SUCCESS) {
+			readbackStagingBuffer = buf;
+			readbackStagingMapped = allocationInfo.pMappedData;
+		} else {
+			spdlog::error("Failed to allocate readback staging buffer.");
+		}
+	}
+
+	void Engine::CleanupAsyncTransferResources() {
+		if (device) {
+			if (readbackStagingBuffer && readbackStagingAllocation) {
+				vmaDestroyBuffer(allocator, readbackStagingBuffer, readbackStagingAllocation);
+				readbackStagingBuffer = nullptr;
+				readbackStagingAllocation = VK_NULL_HANDLE;
+				readbackStagingMapped = nullptr;
+			}
+			if (readbackTimelineSemaphore) {
+				device.destroySemaphore(readbackTimelineSemaphore);
+				readbackTimelineSemaphore = nullptr;
+			}
+			if (asyncTransferCommandPool) {
+				device.destroyCommandPool(asyncTransferCommandPool);
+				asyncTransferCommandPool = nullptr;
+			}
+		}
+	}
+
+	bool Engine::TriggerImageRegionReadbackAsync(
+		vk::Image image,
+		uint32_t lodLevel,
+		vk::Offset2D offset,
+		vk::Extent2D extent,
+		vk::ImageLayout currentLayout
+	) {
+		if (!image || readbackInFlight || !readbackStagingBuffer) {
+			return false;
+		}
+
+		size_t requiredBytes = static_cast<size_t>(extent.width) * extent.height * sizeof(glm::vec4);
+		if (requiredBytes > 1024 * 1024 * 16) {
+			spdlog::warn("Requested image region readback size {} bytes exceeds staging capacity.", requiredBytes);
+			return false;
+		}
+
+		cachedReadbackWidth = extent.width;
+		cachedReadbackHeight = extent.height;
+
+		readbackSubmittedTimelineValue++;
+
+		asyncTransferCommandBuffer.reset();
+		asyncTransferCommandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+		vk::ImageMemoryBarrier2 barrier1{};
+		barrier1.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+		barrier1.setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead);
+		barrier1.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier1.setDstAccessMask(vk::AccessFlagBits2::eTransferRead);
+		barrier1.setOldLayout(currentLayout);
+		barrier1.setNewLayout(vk::ImageLayout::eTransferSrcOptimal);
+		barrier1.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier1.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier1.setImage(image);
+		barrier1.setSubresourceRange(vk::ImageSubresourceRange{
+			vk::ImageAspectFlagBits::eColor,
+			lodLevel,
+			1,
+			0,
+			1
+		});
+
+		vk::DependencyInfo depInfo1{};
+		depInfo1.setImageMemoryBarriers(barrier1);
+		asyncTransferCommandBuffer.pipelineBarrier2(depInfo1);
+
+		vk::BufferImageCopy copyRegion{};
+		copyRegion.setBufferOffset(0);
+		copyRegion.setBufferRowLength(extent.width);
+		copyRegion.setBufferImageHeight(extent.height);
+		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{
+			vk::ImageAspectFlagBits::eColor,
+			lodLevel,
+			0,
+			1
+		});
+		copyRegion.setImageOffset(vk::Offset3D{offset.x, offset.y, 0});
+		copyRegion.setImageExtent(vk::Extent3D{extent.width, extent.height, 1});
+
+		asyncTransferCommandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, readbackStagingBuffer, copyRegion);
+
+		vk::ImageMemoryBarrier2 barrier2{};
+		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferRead);
+		barrier2.setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+		barrier2.setDstAccessMask(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite);
+		barrier2.setOldLayout(vk::ImageLayout::eTransferSrcOptimal);
+		barrier2.setNewLayout(currentLayout);
+		barrier2.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier2.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier2.setImage(image);
+		barrier2.setSubresourceRange(vk::ImageSubresourceRange{
+			vk::ImageAspectFlagBits::eColor,
+			lodLevel,
+			1,
+			0,
+			1
+		});
+
+		vk::DependencyInfo depInfo2{};
+		depInfo2.setImageMemoryBarriers(barrier2);
+		asyncTransferCommandBuffer.pipelineBarrier2(depInfo2);
+
+		asyncTransferCommandBuffer.end();
+
+		vk::SemaphoreSubmitInfo signalInfo{};
+		signalInfo.setSemaphore(readbackTimelineSemaphore);
+		signalInfo.setValue(readbackSubmittedTimelineValue);
+		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
+
+		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
+		cmdSubmitInfo.setCommandBuffer(asyncTransferCommandBuffer);
+
+		vk::SubmitInfo2 submitInfo{};
+		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
+		submitInfo.setSignalSemaphoreInfos(signalInfo);
+
+		transferQueue.submit2(submitInfo, nullptr);
+		readbackInFlight = true;
+
+		return true;
+	}
+
+	void Engine::PollReadbackData() {
+		if (!readbackInFlight || !readbackTimelineSemaphore) {
+			return;
+		}
+
+		uint64_t currentValue = device.getSemaphoreCounterValue(readbackTimelineSemaphore);
+		if (currentValue >= readbackSubmittedTimelineValue) {
+			readbackCompletedTimelineValue = currentValue;
+			readbackInFlight = false;
+
+			size_t pixelCount = static_cast<size_t>(cachedReadbackWidth) * cachedReadbackHeight;
+			cachedReadbackData.resize(pixelCount);
+			if (readbackStagingMapped) {
+				std::memcpy(cachedReadbackData.data(), readbackStagingMapped, pixelCount * sizeof(glm::vec4));
+			}
+			hasReadbackData = true;
+		}
+	}
+
+	bool Engine::GetLatestReadbackData(std::vector<glm::vec4>& outData, uint32_t& outWidth, uint32_t& outHeight) const {
+		if (!hasReadbackData) {
+			return false;
+		}
+		outData = cachedReadbackData;
+		outWidth = cachedReadbackWidth;
+		outHeight = cachedReadbackHeight;
+		return true;
 	}
 
 	void Engine::CleanupGlobalDescriptors() {

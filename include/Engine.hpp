@@ -99,6 +99,17 @@ namespace brassica {
 
 		vk::Device GetDevice() const { return device; }
 
+		vk::Queue GetGraphicsQueue() const { return graphicsQueue; }
+		uint32_t  GetGraphicsQueueFamily() const { return graphicsQueueFamily; }
+
+		vk::Queue GetComputeQueue() const { return computeQueue; }
+		uint32_t  GetComputeQueueFamily() const { return computeQueueFamily; }
+
+		vk::Queue GetTransferQueue() const { return transferQueue; }
+		uint32_t  GetTransferQueueFamily() const { return transferQueueFamily; }
+
+		const graph::QueueSet& GetQueueSet() const { return queueSet; }
+
 		VmaAllocator GetAllocator() const { return allocator; }
 
 		vk::Extent2D GetSwapchainExtent() const {
@@ -189,6 +200,19 @@ namespace brassica {
 		graph::PhysicalResourceRegistry& GetPhysicalRegistry() { return physicalRegistry; }
 
 		const graph::PhysicalResourceRegistry& GetPhysicalRegistry() const { return physicalRegistry; }
+
+		// Async Image Region Readback methods
+		bool TriggerImageRegionReadbackAsync(
+			vk::Image image,
+			uint32_t lodLevel,
+			vk::Offset2D offset,
+			vk::Extent2D extent,
+			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
+		);
+
+		void PollReadbackData();
+
+		bool GetLatestReadbackData(std::vector<glm::vec4>& outData, uint32_t& outWidth, uint32_t& outHeight) const;
 
 	private:
 		void InitWindow();
@@ -307,6 +331,25 @@ namespace brassica {
 
 		entt::registry                              registry;
 		std::vector<std::shared_ptr<SystemHandler>> systemHandlers;
+
+		// Async Readback Transfer Queue Resources
+		vk::CommandPool   asyncTransferCommandPool{nullptr};
+		vk::CommandBuffer asyncTransferCommandBuffer{nullptr};
+		vk::Buffer        readbackStagingBuffer{nullptr};
+		VmaAllocation     readbackStagingAllocation{VK_NULL_HANDLE};
+		void*             readbackStagingMapped{nullptr};
+		vk::Semaphore     readbackTimelineSemaphore{nullptr};
+		uint64_t          readbackSubmittedTimelineValue{0};
+		uint64_t          readbackCompletedTimelineValue{0};
+		bool              readbackInFlight{false};
+
+		std::vector<glm::vec4> cachedReadbackData;
+		uint32_t               cachedReadbackWidth{0};
+		uint32_t               cachedReadbackHeight{0};
+		bool                   hasReadbackData{false};
+
+		void InitAsyncTransferResources();
+		void CleanupAsyncTransferResources();
 	};
 
 } // namespace brassica
