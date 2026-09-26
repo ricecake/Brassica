@@ -2,10 +2,14 @@
 
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
-layout(binding = 0, rgba16f) uniform image3D outVolume;
-
 #include "../bindless.glsl"
 #include "../common.glsl"
+
+layout(set = 1, binding = 3, rgba16f) uniform image3D outVolume;
+
+layout(push_constant) uniform Cloud3DVolumeBakePushConstants {
+	uint outVolumeIdx;
+} push;
 
 void main() {
 	ivec3 voxel = ivec3(gl_GlobalInvocationID.xyz);

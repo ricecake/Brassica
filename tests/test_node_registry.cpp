@@ -9,8 +9,7 @@
 // list -- see include/passes/AllNodes.hpp's own header comment for why that list exists at all.
 // 13 -> 15: UnderwaterParticleRenderNode/AboveWaterParticleRenderNode were promoted out of
 // ParticleSystemNode's Subgraph to be independent top-level nodes (ParticleSystemNode.hpp)...
-// 15 -> 22: Added 7 cloud layer nodes (CloudBakeNode, CloudBoundingNode, CloudShadowBakeNode,
-// CloudTileSchedulerNode, CloudRenderNode, CloudTemporalNode, CloudSpatialFilterNode) in CloudNodes.hpp.
+// 15 -> 23: Added 7 cloud layer nodes and TonemapComputeNode in CloudNodes.hpp and TonemapNode.hpp.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 22);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 23);
 }

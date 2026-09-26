@@ -4,15 +4,9 @@
 #include "../atmosphere/common.glsl"
 #include "../textures/cloud.glsl"
 
-#ifndef CLOUD_SHADOW_MAP_BINDING
-#define CLOUD_SHADOW_MAP_BINDING 10
-#endif
-
-layout(binding = CLOUD_SHADOW_MAP_BINDING) uniform sampler2DArray u_cloudShadowTexture;
-
-layout(std140, set = 0, binding = 5) uniform CloudParamsUBO {
+layout(std140, set = 0, binding = 5) uniform CloudUBO {
 	mat4  u_cloudShadowMatrix;
-	bool  u_useCloudShadowMap;
+	int   u_useCloudShadowMap;
 
 	float cloudAltitude;
 	float cloudThickness;
@@ -68,7 +62,6 @@ struct CloudWeather {
 	float moisture;
 	float humidity;
 };
-
 
 float cloudPhase(float cosTheta) {
 	float hg = mix(henyeyGreenstein(cloudPhaseG1, cosTheta), henyeyGreenstein(cloudPhaseG2, cosTheta), cloudPhaseAlpha);
@@ -269,18 +262,26 @@ CloudWeather loadCloudWeather(vec3 p, CloudProperties props, vec4 tex) {
 	return loadCloudWeather(p, props, tex, vec4(0.5, 1.0, 1.0, 1.0));
 }
 
-CloudWeather computeCloudWeather(vec3 p, CloudProperties props, float lod) {
+CloudWeather computeCloudWeather(vec3 p, CloudProperties props, float lod, uint weatherTextureIdx) {
 	vec3 advect = getCloudWindOffset(uTime);
 	vec3 p_advected = p - advect;
 
 	vec2 uv = p_advected.xz / (100000.0 * props.worldScale);
-	vec4 bakedWeather = textureLod(u_cloudWeatherTexture, uv, clamp(lod, 0.0, 11.0));
+	vec4 bakedWeather = SAMPLE_LINEAR(weatherTextureIdx, uv);
 
 	return loadCloudWeather(p, props, bakedWeather);
 }
 
+CloudWeather computeCloudWeather(vec3 p, CloudProperties props, uint weatherTextureIdx) {
+	return computeCloudWeather(p, props, 0.0, weatherTextureIdx);
+}
+
+CloudWeather computeCloudWeather(vec3 p, CloudProperties props, float lod) {
+	return computeCloudWeather(p, props, lod, 0u);
+}
+
 CloudWeather computeCloudWeather(vec3 p, CloudProperties props) {
-	return computeCloudWeather(p, props, 0.0);
+	return computeCloudWeather(p, props, 0.0, 0u);
 }
 
 float getDistanceToCloudEdge(float coverage, float h, float type, float thicknessVal) {
@@ -290,25 +291,18 @@ float getDistanceToCloudEdge(float coverage, float h, float type, float thicknes
 	return max(0.0, min(distHorizontal, distVertical));
 }
 
-float sampleDeepOpacityMap(vec2 shadowUV, float h, float lod) {
-	float layerIdx = 8.0 * (1.0 - h) - 1.0;
-	if (layerIdx < 0.0) {
-		float t = layerIdx + 1.0;
-		float depth0 = textureLod(u_cloudShadowTexture, vec3(shadowUV, 0.0), lod).r;
-		return mix(0.0, depth0, clamp(t, 0.0, 1.0));
-	} else {
-		float floorIdx = floor(layerIdx);
-		float ceilIdx = ceil(layerIdx);
-		float t = fract(layerIdx);
-		float depthFloor = textureLod(u_cloudShadowTexture, vec3(shadowUV, clamp(floorIdx, 0.0, 7.0)), lod).r;
-		float depthCeil = textureLod(u_cloudShadowTexture, vec3(shadowUV, clamp(ceilIdx, 0.0, 7.0)), lod).r;
-		return mix(depthFloor, depthCeil, t);
-	}
+float sampleDeepOpacityMap(vec2 shadowUV, float h, float lod, uint shadowMapIdx) {
+	float depth0 = SAMPLE_LINEAR(shadowMapIdx, shadowUV).r;
+	return depth0;
 }
 
-float calculateCloudShadowFactor(vec3 frag_pos, vec3 L, float intensity) {
+float sampleDeepOpacityMap(vec2 shadowUV, float h, float lod) {
+	return sampleDeepOpacityMap(shadowUV, h, lod, 0u);
+}
+
+float calculateCloudShadowFactor(vec3 frag_pos, vec3 L, float intensity, uint shadowMapIdx, uint weatherTextureIdx) {
 	if (intensity <= 0.0) return 1.0;
-	if (!u_useCloudShadowMap) return 1.0;
+	if (u_useCloudShadowMap == 0) return 1.0;
 
 	vec4 lightSpacePos = u_cloudShadowMatrix * vec4(frag_pos, 1.0);
 	vec2 shadowUV = lightSpacePos.xy * 0.5 + 0.5;
@@ -320,17 +314,21 @@ float calculateCloudShadowFactor(vec3 frag_pos, vec3 L, float intensity) {
 	props.coverage = cloudCoverage;
 	props.worldScale = worldScale;
 
-	CloudWeather weather = computeCloudWeather(frag_pos, props);
+	CloudWeather weather = computeCloudWeather(frag_pos, props, weatherTextureIdx);
 	float h = getCloudRelativeHeight(frag_pos, weather);
 
-	float accumulatedDensity = sampleDeepOpacityMap(shadowUV, h, 0.0) * 0.001 * cloudShadowOpticalDepthMultiplier / max(0.001, worldScale);
+	float accumulatedDensity = sampleDeepOpacityMap(shadowUV, h, 0.0, shadowMapIdx) * 0.001 * cloudShadowOpticalDepthMultiplier / max(0.001, worldScale);
 	float shadowTerm = exp(-accumulatedDensity);
 
 	return mix(1.0, shadowTerm, intensity * cloudShadowIntensity);
 }
 
+float calculateCloudShadowFactor(vec3 frag_pos, vec3 L, float intensity) {
+	return calculateCloudShadowFactor(frag_pos, L, intensity, 0u, 0u);
+}
+
 float calculateCloudAmbientOcclusion(vec3 frag_pos) {
-	if (!u_useCloudShadowMap) return 1.0;
+	if (u_useCloudShadowMap == 0) return 1.0;
 
 	CloudProperties props;
 	props.altitude = cloudAltitude;

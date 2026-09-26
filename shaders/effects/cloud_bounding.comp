@@ -2,23 +2,21 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-layout(binding = 0, rgba32f) uniform image2D outBoundingMap;
-layout(binding = 1) uniform sampler2D depthTexture;
-
 #define ATMOSPHERE_HEIGHT_DEFINED
 #include "../atmosphere/common.glsl"
 #include "../helpers/clouds.glsl"
 
-layout(binding = 2) uniform sampler2D u_cloudWeatherMinMaxTexture;
-
 layout(push_constant) uniform CloudBoundingPushConstants {
+	uint depthTextureIdx;
+	uint weatherMinMaxIdx;
+	uint outBoundingMapIdx;
 	float uCloudMaxRayDistance;
 	float uRenderScale;
 	int   uFrameIndex;
 } push;
 
 void main() {
-	ivec2 fullResSize = textureSize(depthTexture, 0);
+	ivec2 fullResSize = imageSize(uImagesRGBA32F[nonuniformEXT(push.outBoundingMapIdx)]);
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 
 	if (pixel.x >= fullResSize.x || pixel.y >= fullResSize.y)
@@ -26,7 +24,7 @@ void main() {
 
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(fullResSize);
 
-	float depth = texture(depthTexture, uv).r;
+	float depth = SAMPLE_NEAREST(push.depthTextureIdx, uv).r;
 	float z = depth * 2.0 - 1.0;
 	vec4 clipSpacePosition = vec4(uv * 2.0 - 1.0, z, 1.0);
 	vec4 viewSpacePosition = uInvProjMatrix * clipSpacePosition;
@@ -61,16 +59,16 @@ void main() {
 	}
 
 	if (numSegments == 0) {
-		imageStore(outBoundingMap, pixel, vec4(-1.0, -1.0, 0.0, 0.0));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.outBoundingMapIdx)], pixel, vec4(-1.0, -1.0, 0.0, 0.0));
 		return;
 	}
 
-	vec4 previousBounds = imageLoad(outBoundingMap, pixel);
+	vec4 previousBounds = imageLoad(uImagesRGBA32F[nonuniformEXT(push.outBoundingMapIdx)], pixel);
 
 	if (cloudCoverage >= 1.0) {
 		float global_start = segStart[0];
 		float global_end = segEnd[numSegments - 1];
-		imageStore(outBoundingMap, pixel, vec4(global_start, global_end, 1.0, previousBounds.b));
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.outBoundingMapIdx)], pixel, vec4(global_start, global_end, 1.0, previousBounds.b));
 		return;
 	}
 
@@ -92,7 +90,7 @@ void main() {
 			vec3 p_advected = p - advect;
 			vec2 weatherUV = fract(p_advected.xz / (100000.0 * worldScale));
 
-			vec2 minMax = textureLod(u_cloudWeatherMinMaxTexture, weatherUV, float(L)).rg;
+			vec2 minMax = SAMPLE_LINEAR(push.weatherMinMaxIdx, weatherUV).rg;
 			float maxDensity = applyDynamicCoverage(minMax.y, cloudCoverage);
 
 			if (maxDensity <= 0.001) {
@@ -115,5 +113,5 @@ void main() {
 		}
 	}
 
-	imageStore(outBoundingMap, pixel, vec4(firstHit, lastHit, totalDensity, previousBounds.b));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.outBoundingMapIdx)], pixel, vec4(firstHit, lastHit, totalDensity, previousBounds.b));
 }

@@ -5,9 +5,7 @@
 #include <cstdint>
 
 #include <glm/glm.hpp>
-
-#include "VulkanCompat.hpp"
-
+#include <vulkan/vulkan.hpp>
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
@@ -55,7 +53,7 @@ namespace brassica {
 		std::int32_t  endMip{0};
 	};
 
-	struct TonemapNode: render::NodeRegistrar<TonemapNode> {
+	struct TonemapComputeNode: render::NodeRegistrar<TonemapComputeNode> {
 		using Resources = graph::Declares<
 			graph::Read<HdrColor>,
 			graph::Read<GBufferDepth>,
@@ -75,92 +73,40 @@ namespace brassica {
 			graph::Create<LtmWgtTextureMip2>,
 			graph::Create<LtmWgtTextureMip3>,
 			graph::Create<LtmWgtTextureMip4>,
-			graph::Create<LtmFusedTexture>,
-			graph::Modify<Swapchain>>;
+			graph::Create<LtmFusedTexture>>;
 
 		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
 
-#if BRASSICA_HAS_VULKAN
-		static constexpr render::GraphicsPipelineState kPipelineState{
-			.cullMode = vk::CullModeFlagBits::eNone,
-		};
-
-		ComputeShader  downsampleShader;
-		ComputeShader  ltmFuseShader;
-		VertexShader   vertShader;
-		FragmentShader fragShader;
-		vk::Format     swapchainFormat = vk::Format::eUndefined;
-#endif
-
+		ComputeShader            downsampleShader;
+		ComputeShader            ltmFuseShader;
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		bool                     initializedBufferParams = false;
-		TonemapPushConstants     push{};
 		DownsamplePushConstants  downPush{};
 		LtmFusePushConstants     fusePush{};
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
-			swapchainFormat = services.swapchainFormat;
-if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") ||
-			    !fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag")) {
-				spdlog::critical("TonemapNode shader compilation failed.");
-				throw std::runtime_error("TonemapNode shader compilation failed.");
-			}
-
 			downsampleShader.CompileComputeFromFile(services.device, "shaders/effects/bloom_downsample.comp");
 			ltmFuseShader.CompileComputeFromFile(services.device, "shaders/effects/ltm_fuse.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
 
 			s_exposureData.layers[1].targetLuminance = 0.5f;
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&downsampleShader);
 			watcher.RegisterShader(&ltmFuseShader);
-			watcher.RegisterShader(&vertShader);
-			watcher.RegisterShader(&fragShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			downsampleShader.Destroy(device);
 			ltmFuseShader.Destroy(device);
-			vertShader.Destroy(device);
-			fragShader.Destroy(device);
-#else
-			(void)device;
-#endif
 		}
 
-		void SetFrameParams(const render::NodeFrameParams& /*p*/) { push = s_tonemapPush; }
-
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-#if BRASSICA_HAS_VULKAN
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::DepthBufferDesc(ctx.width, ctx.height, vk::Format::eD32Sfloat),
-				}
-			);
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<AutoExposureBuffer>(),
@@ -208,104 +154,10 @@ if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") |
 				}
 			);
 
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<Swapchain>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
-				}
-			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<HdrColor>(),
-				.access = graph::AccessKind::Read,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 97, // eR16G16B16A16Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<GBufferDepth>(),
-				.access = graph::AccessKind::Read,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 126, // eD32Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<AutoExposureBuffer>(),
-				.access = graph::AccessKind::ReadWrite,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Buffer,
-					.byteSize = sizeof(ExposureDataHost),
-				},
-			});
-
-			auto addStorageDesc = [&](graph::ResourceId key, std::uint32_t w, std::uint32_t h) {
-				r.realizations.push_back(graph::ResourceRealization{
-					.key = key,
-					.access = graph::AccessKind::Write,
-					.desc = graph::ResourceDesc{
-						.kind = graph::ResourceDesc::Kind::Image2D,
-						.width = w,
-						.height = h,
-						.formatCode = 97, // eR16G16B16A16Sfloat
-					},
-				});
-			};
-
-			std::uint32_t w = ctx.width / 2;
-			std::uint32_t h = ctx.height / 2;
-
-			addStorageDesc(graph::IdOf<BloomTextureMip0>(), std::max(1u, w), std::max(1u, h));
-			addStorageDesc(graph::IdOf<BloomTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
-			addStorageDesc(graph::IdOf<BloomTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
-			addStorageDesc(graph::IdOf<BloomTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
-			addStorageDesc(graph::IdOf<BloomTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
-
-			addStorageDesc(graph::IdOf<LtmExpTextureMip0>(), std::max(1u, w), std::max(1u, h));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
-
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip0>(), std::max(1u, w), std::max(1u, h));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
-
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<LtmFusedTexture>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = std::max(1u, w),
-					.height = std::max(1u, h),
-					.formatCode = 97, // eR16G16B16A16Sfloat
-				},
-			});
-
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<Swapchain>(),
-				.access = graph::AccessKind::ReadWrite,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 44, // eB8G8R8A8Unorm
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			vk::Buffer aeBufferHandle{nullptr};
@@ -435,6 +287,71 @@ if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") |
 				vk::DependencyInfo dep({}, 1, &barrier);
 				vkCmd.pipelineBarrier2(dep);
 			}
+		}
+	};
+
+	struct TonemapNode: render::NodeRegistrar<TonemapNode> {
+		using Resources = graph::Declares<
+			graph::Read<HdrColor>,
+			graph::Read<GBufferDepth>,
+			graph::Read<BloomTextureMip0>,
+			graph::Read<LtmFusedTexture>,
+			graph::Read<LtmExpTextureMip0>,
+			graph::Modify<Swapchain>>;
+
+		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
+
+		static constexpr render::GraphicsPipelineState kPipelineState{
+			.cullMode = vk::CullModeFlagBits::eNone,
+		};
+
+		VertexShader   vertShader;
+		FragmentShader fragShader;
+		vk::Format     swapchainFormat = vk::Format::eUndefined;
+
+		render::PipelineLibrary* pipelineLibrary = nullptr;
+		TonemapPushConstants     push{};
+
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			swapchainFormat = services.swapchainFormat;
+			if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag")) {
+				spdlog::critical("TonemapNode shader compilation failed.");
+				throw std::runtime_error("TonemapNode shader compilation failed.");
+			}
+
+			if (services.shaderWatcher) {
+				RegisterShaders(*services.shaderWatcher);
+			}
+		}
+
+		void RegisterShaders(ShaderWatcher& watcher) {
+			watcher.RegisterShader(&vertShader);
+			watcher.RegisterShader(&fragShader);
+		}
+
+		void Destroy(vk::Device device) {
+			vertShader.Destroy(device);
+			fragShader.Destroy(device);
+		}
+
+		void SetFrameParams(const render::NodeFrameParams& /*p*/) { push = s_tonemapPush; }
+
+		graph::Recipe Setup(const graph::FrameContext& ctx) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<Swapchain>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
+				}
+			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext& ctx) {
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			// Tone Mapping Compositing Graphics Pass
 			push = s_tonemapPush;
@@ -490,12 +407,10 @@ if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") |
 			);
 
 			vkCmd.draw(3, 1, 0, 0);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 
+	BRASSICA_REGISTER_NODE(TonemapComputeNode);
 	BRASSICA_REGISTER_NODE(TonemapNode);
 
 } // namespace brassica

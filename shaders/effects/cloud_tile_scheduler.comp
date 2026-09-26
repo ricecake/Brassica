@@ -4,10 +4,9 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "../bindless.glsl"
 
-layout(binding = 0, rgba32f) uniform image2D uErrorMap;
-layout(binding = 1) uniform sampler2D uBoundingMap;
-
 layout(push_constant) uniform CloudTileSchedulerPushConstants {
+	uint boundingMapIdx;
+	uint outErrorMapIdx;
 	int uPass; // 0 = Spatial Pass, 1 = Priority Pass
 	float uPriorityErrorWeight;
 	float uPriorityGradWeight;
@@ -15,7 +14,7 @@ layout(push_constant) uniform CloudTileSchedulerPushConstants {
 	float uPriorityNeighborErrorWeight;
 	float uPriorityNeighborGradWeight;
 	float uPriorityThreshold;
-};
+} push;
 
 struct TileQueueHeader {
 	uint count;
@@ -30,12 +29,12 @@ struct TileQueueHeader {
 	uint padding;
 };
 
-layout(std430, binding = 0) buffer TileQueueSSBO {
+layout(std430, set = 2, binding = 0) buffer TileQueueSSBO {
 	TileQueueHeader uHeader;
 	uvec2 uTileQueue[];
 };
 
-layout(std430, binding = 1) buffer IndirectDispatchSSBO {
+layout(std430, set = 2, binding = 1) buffer IndirectDispatchSSBO {
 	uint uDispatchCountX;
 	uint uDispatchCountY;
 	uint uDispatchCountZ;
@@ -92,15 +91,13 @@ void main() {
 	uint scrambled = mortonOwenScramble(uvec2(tileCoord), 0u);
 	bool scheduledBySpatial = ((scrambled % spatialFrames) == (uHeader.frameIndex % spatialFrames));
 
-	ivec2 boundingSize = textureSize(uBoundingMap, 0);
 	vec2 uv = (vec2(tileCoord) + 0.5) / vec2(uHeader.tileCols, uHeader.tileRows);
-	float lod = log2(max(1.0, float(boundingSize.x) / float(uHeader.tileCols)));
-	vec4 bData = textureLod(uBoundingMap, uv, lod);
+	vec4 bData = SAMPLE_LINEAR(push.boundingMapIdx, uv);
 	bool tileHasCloudDensity = (bData.r >= 0.0 && bData.b > 0.001);
 	bool wasEmpty = (bData.a <= 0.001);
 	bool newlyAppeared = tileHasCloudDensity && wasEmpty;
 
-	if (uPass == 0) {
+	if (push.uPass == 0) {
 		if (tileHasCloudDensity && scheduledBySpatial) {
 			uint slot = atomicAdd(uHeader.count, 1u);
 			if (slot < uHeader.maxTiles) {
@@ -109,7 +106,7 @@ void main() {
 			}
 		}
 	} else {
-		vec4 errorData = imageLoad(uErrorMap, tileCoord);
+		vec4 errorData = imageLoad(uImagesRGBA32F[nonuniformEXT(push.outErrorMapIdx)], tileCoord);
 		float errorVal = errorData.r;
 		float densityGrad = errorData.g;
 		float currentStepMult = (errorData.b > 0.01) ? errorData.b : 1.0;
@@ -128,21 +125,21 @@ void main() {
 		if (!newlyAppeared) {
 			for (int i = 0; i < 4; ++i) {
 				ivec2 nCoord = clamp(tileCoord + neighbors[i], ivec2(0), ivec2(tileCols - 1, tileRows - 1));
-				vec4 nData = imageLoad(uErrorMap, nCoord);
+				vec4 nData = imageLoad(uImagesRGBA32F[nonuniformEXT(push.outErrorMapIdx)], nCoord);
 				maxNeighborError = max(maxNeighborError, nData.r);
 				maxNeighborGrad = max(maxNeighborGrad, nData.g);
 			}
 		}
 
-		float selfScore = densityDeltaScore + errorVal * uPriorityErrorWeight + densityGrad * uPriorityGradWeight + velocityWeightedAge * uPriorityAgeWeight;
-		float neighborScore = maxNeighborError * uPriorityNeighborErrorWeight + maxNeighborGrad * uPriorityNeighborGradWeight;
+		float selfScore = densityDeltaScore + errorVal * push.uPriorityErrorWeight + densityGrad * push.uPriorityGradWeight + velocityWeightedAge * push.uPriorityAgeWeight;
+		float neighborScore = maxNeighborError * push.uPriorityNeighborErrorWeight + maxNeighborGrad * push.uPriorityNeighborGradWeight;
 		float priorityScore = selfScore + neighborScore;
 
 		uint bayerVal = uint(bayer8x8[(tileCoord.y % 8) * 8 + (tileCoord.x % 8)]);
 		uint temporalBayer = (bayerVal + uHeader.frameIndex * 17u) % 64u;
 		float ditherMask = float(temporalBayer) / 64.0;
 
-		float dynamicThreshold = uPriorityThreshold + (ditherMask * 1.0);
+		float dynamicThreshold = push.uPriorityThreshold + (ditherMask * 1.0);
 		float ratio = float(uHeader.maxTiles) / float(totalTiles);
 		dynamicThreshold /= ratio;
 
@@ -172,6 +169,6 @@ void main() {
 			errorData.g *= 0.99;
 		}
 
-		imageStore(uErrorMap, tileCoord, errorData);
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.outErrorMapIdx)], tileCoord, errorData);
 	}
 }

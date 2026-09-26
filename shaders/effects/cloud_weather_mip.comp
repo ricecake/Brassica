@@ -4,28 +4,27 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "../bindless.glsl"
 
-layout(binding = 0, rg16f) uniform image2D outMinMaxDst;
-layout(binding = 1) uniform sampler2D uMinMaxSrc;
-
 layout(push_constant) uniform CloudWeatherMipPushConstants {
+	uint minMaxSrcIdx;
+	uint outMinMaxDstIdx;
 	int uSrcLevel;
 } push;
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 dstSize = imageSize(outMinMaxDst);
+	ivec2 dstSize = imageSize(uImagesRGBA32F[nonuniformEXT(push.outMinMaxDstIdx)]);
 	if (pixel.x >= dstSize.x || pixel.y >= dstSize.y) return;
 
 	ivec2 srcPixel = pixel * 2;
 	vec2 texelSize = 1.0 / vec2(dstSize * 2);
 
-	vec2 s0 = textureLod(uMinMaxSrc, (vec2(srcPixel) + vec2(0.5, 0.5)) * texelSize, float(push.uSrcLevel)).rg;
-	vec2 s1 = textureLod(uMinMaxSrc, (vec2(srcPixel) + vec2(1.5, 0.5)) * texelSize, float(push.uSrcLevel)).rg;
-	vec2 s2 = textureLod(uMinMaxSrc, (vec2(srcPixel) + vec2(0.5, 1.5)) * texelSize, float(push.uSrcLevel)).rg;
-	vec2 s3 = textureLod(uMinMaxSrc, (vec2(srcPixel) + vec2(1.5, 1.5)) * texelSize, float(push.uSrcLevel)).rg;
+	vec2 s0 = SAMPLE_LINEAR(push.minMaxSrcIdx, (vec2(srcPixel) + vec2(0.5, 0.5)) * texelSize).rg;
+	vec2 s1 = SAMPLE_LINEAR(push.minMaxSrcIdx, (vec2(srcPixel) + vec2(1.5, 0.5)) * texelSize).rg;
+	vec2 s2 = SAMPLE_LINEAR(push.minMaxSrcIdx, (vec2(srcPixel) + vec2(0.5, 1.5)) * texelSize).rg;
+	vec2 s3 = SAMPLE_LINEAR(push.minMaxSrcIdx, (vec2(srcPixel) + vec2(1.5, 1.5)) * texelSize).rg;
 
 	float minVal = min(min(s0.r, s1.r), min(s2.r, s3.r));
 	float maxVal = max(max(s0.g, s1.g), max(s2.g, s3.g));
 
-	imageStore(outMinMaxDst, pixel, vec4(minVal, maxVal, 0.0, 0.0));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.outMinMaxDstIdx)], pixel, vec4(minVal, maxVal, 0.0, 0.0));
 }
