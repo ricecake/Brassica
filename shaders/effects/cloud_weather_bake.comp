@@ -2,13 +2,12 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0, rgba16f) uniform image2D outWeatherMap;
-layout(binding = 1, rg16f) uniform image2D outMinMaxMap;
-
 #include "../bindless.glsl"
 #include "../common.glsl"
 
 layout(push_constant) uniform CloudWeatherBakePushConstants {
+	uint  outWeatherMapIdx;
+	uint  outMinMaxMapIdx;
 	float uWorldScale;
 	float uCloudCoverage;
 	float uCloudThickness;
@@ -17,7 +16,7 @@ layout(push_constant) uniform CloudWeatherBakePushConstants {
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = imageSize(outWeatherMap);
+	ivec2 size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outWeatherMapIdx)]);
 	if (pixel.x >= size.x || pixel.y >= size.y) return;
 
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
@@ -36,6 +35,6 @@ void main() {
 	float ridgeChannel = length(cross_noise_fbm(vec3(uv * period2 + vec2(0.5), 0.0), 3.0, 0.0));
 	float moistureMap = clamp(dot_noise_fbm(vec3(uv * period1 + vec2(0.13, 0.37), 0.0), 4.0, 0.0), 0.0, 1.0);
 
-	imageStore(outWeatherMap, pixel, vec4(finalCoverage, typeValue, ridgeChannel, moistureMap));
-	imageStore(outMinMaxMap, pixel, vec4(finalCoverage, finalCoverage, moistureMap, 1.0));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.outWeatherMapIdx)], pixel, vec4(finalCoverage, typeValue, ridgeChannel, moistureMap));
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.outMinMaxMapIdx)], pixel, vec4(finalCoverage, finalCoverage, moistureMap, 1.0));
 }

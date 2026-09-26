@@ -2,39 +2,119 @@
 
 #include <array>
 #include <cstdint>
-
-#include "VulkanCompat.hpp"
-
-#ifndef BRASSICA_HAS_VULKAN
-	#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
-		#define BRASSICA_HAS_VULKAN 1
-	#else
-		#define BRASSICA_HAS_VULKAN 0
-	#endif
-#endif
-
-#if BRASSICA_HAS_VULKAN
-	#include "graph/PhysicalResource.hpp"
-	#include "render/PipelineLibrary.hpp"
-	#include "Shader.hpp"
-	#include "ShaderWatcher.hpp"
-#else
-namespace brassica {
-	class ShaderWatcher;
-
-	namespace render {
-		class PipelineLibrary;
-	} // namespace render
-} // namespace brassica
-#endif
+#include <vulkan/vulkan.hpp>
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalResource.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
+#include "render/PipelineLibrary.hpp"
+#include "Shader.hpp"
+#include "ShaderWatcher.hpp"
 
 namespace brassica {
+
+	struct CloudWeatherBakePushConstants {
+		std::uint32_t outWeatherMapIdx{0};
+		std::uint32_t outMinMaxMapIdx{0};
+		float uWorldScale{1.0f};
+		float uCloudCoverage{0.35f};
+		float uCloudThickness{1500.0f};
+		float uTime{0.0f};
+	};
+
+	struct Cloud3DVolumeBakePushConstants {
+		std::uint32_t outVolumeIdx{0};
+	};
+
+	struct CloudBoundingPushConstants {
+		std::uint32_t depthTextureIdx{0};
+		std::uint32_t weatherMinMaxIdx{0};
+		std::uint32_t outBoundingMapIdx{0};
+		float uCloudMaxRayDistance{175000.0f};
+		float uRenderScale{1.0f};
+		std::int32_t uFrameIndex{0};
+	};
+
+	struct CloudShadowBakePushConstants {
+		std::uint32_t weatherMinMaxIdx{0};
+		std::uint32_t outShadowMapIdx{0};
+		alignas(16) glm::mat4 u_invLightSpaceMatrix{1.0f};
+		alignas(16) glm::vec3 u_primaryLightDir{0.0f, 1.0f, 0.0f};
+		alignas(4)  std::int32_t u_frameIndex{0};
+	};
+
+	struct CloudTileSchedulerPushConstants {
+		std::uint32_t boundingMapIdx{0};
+		std::uint32_t outErrorMapIdx{0};
+		std::int32_t uPass{0};
+		float uPriorityErrorWeight{2.5f};
+		float uPriorityGradWeight{2.0f};
+		float uPriorityAgeWeight{0.05f};
+		float uPriorityNeighborErrorWeight{1.5f};
+		float uPriorityNeighborGradWeight{1.0f};
+		float uPriorityThreshold{0.05f};
+	};
+
+	struct CloudRenderPushConstants {
+		std::uint32_t depthTextureIdx{0};
+		std::uint32_t boundingTextureIdx{0};
+		std::uint32_t weatherMinMaxIdx{0};
+		std::uint32_t weatherTextureIdx{0};
+		std::uint32_t volume3DIdx{0};
+		std::uint32_t outPackedColorIdx{0};
+		std::uint32_t outPackedDepthIdx{0};
+		std::uint32_t outPackedVelocityIdx{0};
+		std::uint32_t outErrorMapIdx{0};
+		float uDeltaTime{0.016f};
+		float uCloudMaxRayDistance{175000.0f};
+		float uRenderScale{1.0f};
+		std::int32_t uCloudMinSamples{32};
+		std::int32_t uCloudMaxSamples{96};
+		float uCloudExtinction{0.372f};
+		alignas(16) glm::vec3 uCloudExtinctionColor{1.0f, 1.0f, 1.0f};
+		alignas(16) glm::vec3 uCloudAlbedo{0.85f, 0.85f, 0.85f};
+		alignas(16) glm::vec3 cloudColorUniform{1.0f, 1.0f, 1.0f};
+	};
+
+	struct CloudTemporalPushConstants {
+		std::uint32_t packedFrameIdx{0};
+		std::uint32_t packedDepthIdx{0};
+		std::uint32_t packedVelocityIdx{0};
+		std::uint32_t historyFrameIdx{0};
+		std::uint32_t historyCloudDepthIdx{0};
+		std::uint32_t historyMomentsIdx{0};
+		std::uint32_t boundingMapIdx{0};
+		std::uint32_t outColorIdx{0};
+		std::uint32_t outDepthIdx{0};
+		std::uint32_t outMomentsIdx{0};
+		std::uint32_t outErrorMapIdx{0};
+		float uCloudTemporalGamma{1.1f};
+		float uCloudMaxHistoryLength{32.0f};
+		float uCloudMaxRayDistance{175000.0f};
+		float uRenderScale{1.0f};
+		std::int32_t uEnableTemporal{1};
+		std::int32_t uHasHistory{0};
+		std::int32_t uUseTileQueue{1};
+		float uDeltaTime{0.016f};
+	};
+
+	struct CloudSpatialFilterPushConstants {
+		std::uint32_t cloudColorIdx{0};
+		std::uint32_t cloudDepthIdx{0};
+		std::uint32_t cloudMomentsIdx{0};
+		std::uint32_t errorMapIdx{0};
+		std::uint32_t outFilteredColorIdx{0};
+		std::int32_t uStepSize{1};
+		std::int32_t uPassIndex{0};
+		float uCloudPhiLuma{20.0f};
+		float uCloudPhiDensity{0.05f};
+		float uCloudPhiDepth{1.5f};
+		float uCloudSvgfHistoryBoost{4.0f};
+		float uCloudSvgfHistoryThreshold{10.0f};
+	};
 
 	// Boidish Cloud System Nodes
 	struct CloudBakeNode : render::NodeRegistrar<CloudBakeNode> {
@@ -46,46 +126,31 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-#if BRASSICA_HAS_VULKAN
 		ComputeShader weatherShader;
 		ComputeShader volumeShader;
-#endif
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			weatherShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_weather_bake.comp");
 			volumeShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_3d_volume_bake.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&weatherShader);
 			watcher.RegisterShader(&volumeShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			weatherShader.Destroy(device);
 			volumeShader.Destroy(device);
-#else
-			(void)device;
-#endif
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudWeatherTexture>(),
@@ -110,50 +175,28 @@ namespace brassica {
 					.desc = volumeDesc,
 				}
 			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudWeatherTexture>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = 1024,
-					.height = 1024,
-					.formatCode = 97, // eR16G16B16A16Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudWeatherMinMaxTexture>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = 1024,
-					.height = 1024,
-					.formatCode = 83, // eR16G16Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<Cloud3DVolumeTexture>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image3D,
-					.width = 128,
-					.height = 128,
-					.depth = 128,
-					.formatCode = 97, // eR16G16B16A16Sfloat
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 
-			render::ComputePipelineRequest reqW{.shader = &weatherShader, .setLayouts = setLayouts};
+			CloudWeatherBakePushConstants pushW{
+				.outWeatherMapIdx = ctx.Index<CloudWeatherTexture>(),
+				.outMinMaxMapIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesW{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudWeatherBakePushConstants)}
+			};
+
+			render::ComputePipelineRequest reqW{
+				.shader = &weatherShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesW
+			};
 			render::ResolvedPipeline resW = pipelineLibrary->ResolveCached(reqW);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
@@ -169,17 +212,30 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resW.layout, 0, boundSets, nullptr);
 			}
 
+			vkCmd.pushConstants(resW.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudWeatherBakePushConstants), &pushW);
 			vkCmd.dispatch(64, 64, 1);
 
-			render::ComputePipelineRequest reqV{.shader = &volumeShader, .setLayouts = setLayouts};
+			Cloud3DVolumeBakePushConstants pushV{
+				.outVolumeIdx = ctx.Index<Cloud3DVolumeTexture>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesV{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(Cloud3DVolumeBakePushConstants)}
+			};
+
+			render::ComputePipelineRequest reqV{
+				.shader = &volumeShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesV
+			};
 			render::ResolvedPipeline resV = pipelineLibrary->ResolveCached(reqV);
 			if (resV.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resV.pipeline);
 			}
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resV.layout, 0, boundSets, nullptr);
+			}
+			vkCmd.pushConstants(resV.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(Cloud3DVolumeBakePushConstants), &pushV);
 			vkCmd.dispatch(32, 32, 32);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 
@@ -192,41 +248,26 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-#if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
-#endif
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			compShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_bounding.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&compShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			compShader.Destroy(device);
-#else
-			(void)device;
-#endif
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudBoundingTexture>(),
@@ -234,29 +275,29 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
 				}
 			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudBoundingTexture>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 109, // eR32G32B32A32Sfloat
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 
-			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
+			CloudBoundingPushConstants pushB{
+				.depthTextureIdx = ctx.Index<GBufferDepth>(),
+				.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
+				.outBoundingMapIdx = ctx.Index<CloudBoundingTexture>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesB{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudBoundingPushConstants)}
+			};
+
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesB
+			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
@@ -272,12 +313,11 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
 
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudBoundingPushConstants), &pushB);
+
 			uint32_t gx = (ctx.width + 7) / 8;
 			uint32_t gy = (ctx.height + 7) / 8;
 			vkCmd.dispatch(gx, gy, 1);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 
@@ -289,41 +329,26 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-#if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
-#endif
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			compShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_shadow_bake.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&compShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			compShader.Destroy(device);
-#else
-			(void)device;
-#endif
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& /*ctx*/) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-#if BRASSICA_HAS_VULKAN
 			auto shadowDesc = graph::ComputeStorageImageDesc(512, 512, vk::Format::eR16Sfloat);
 			shadowDesc.layers = 8;
 			r.realizations.push_back(
@@ -333,30 +358,28 @@ namespace brassica {
 					.desc = shadowDesc,
 				}
 			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudShadowMap>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = 512,
-					.height = 512,
-					.layers = 8,
-					.formatCode = 76, // eR16Sfloat
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 
-			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
+			CloudShadowBakePushConstants pushS{
+				.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
+				.outShadowMapIdx = ctx.Index<CloudShadowMap>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesS{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudShadowBakePushConstants)}
+			};
+
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesS
+			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
@@ -372,10 +395,8 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
 
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudShadowBakePushConstants), &pushS);
 			vkCmd.dispatch(64, 64, 1);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 
@@ -389,36 +410,49 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::GIComput;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-#if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
-#endif
+		vk::DescriptorSetLayout cloudSsboLayout{nullptr};
+		vk::DescriptorPool      cloudSsboPool{nullptr};
+		vk::DescriptorSet       cloudSsboSet{nullptr};
+		vk::Device              m_device{nullptr};
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
+			m_device = services.device;
 			pipelineLibrary = services.pipelineLibrary;
 			compShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_tile_scheduler.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
+
+			std::array<vk::DescriptorSetLayoutBinding, 2> ssboBindings{};
+			ssboBindings[0].setBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+			ssboBindings[1].setBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+			vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+			layoutInfo.setBindings(ssboBindings);
+			cloudSsboLayout = services.device.createDescriptorSetLayout(layoutInfo);
+
+			std::array<vk::DescriptorPoolSize, 1> poolSizes{
+				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2}
+			};
+			vk::DescriptorPoolCreateInfo poolInfo{};
+			poolInfo.setPoolSizes(poolSizes);
+			poolInfo.setMaxSets(1);
+			cloudSsboPool = services.device.createDescriptorPool(poolInfo);
+
+			vk::DescriptorSetAllocateInfo allocInfo{};
+			allocInfo.setDescriptorPool(cloudSsboPool);
+			allocInfo.setSetLayouts(cloudSsboLayout);
+			cloudSsboSet = services.device.allocateDescriptorSets(allocInfo).front();
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&compShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			compShader.Destroy(device);
-#else
-			(void)device;
-#endif
+			if (cloudSsboPool) device.destroyDescriptorPool(cloudSsboPool);
+			if (cloudSsboLayout) device.destroyDescriptorSetLayout(cloudSsboLayout);
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -426,7 +460,6 @@ namespace brassica {
 			uint32_t tileCols = (ctx.width + 7) / 8;
 			uint32_t tileRows = (ctx.height + 7) / 8;
 
-#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudErrorMap>(),
@@ -450,45 +483,44 @@ namespace brassica {
 					.desc = indirectDesc,
 				}
 			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudErrorMap>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = tileCols,
-					.height = tileRows,
-					.formatCode = 109, // eR32G32B32A32Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudTileQueueSSBO>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Buffer,
-					.byteSize = (tileCols * tileRows + 16) * sizeof(uint32_t) * 2,
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudIndirectDispatchSSBO>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Buffer,
-					.byteSize = 3 * sizeof(uint32_t),
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					auto tileQueueBuf = registry->GetBuffer<CloudTileQueueSSBO>();
+					auto indirectBuf = registry->GetBuffer<CloudIndirectDispatchSSBO>();
+					if (tileQueueBuf && indirectBuf) {
+						vk::DescriptorBufferInfo b0{tileQueueBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+						vk::DescriptorBufferInfo b1{indirectBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+						std::array<vk::WriteDescriptorSet, 2> writes{};
+						writes[0].setDstSet(cloudSsboSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
+						writes[1].setDstSet(cloudSsboSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b1);
+						m_device.updateDescriptorSets(writes, nullptr);
+					}
+				}
+			}
+
+			std::array<vk::DescriptorSetLayout, 3> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout),
+				cloudSsboLayout
 			};
 
-			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
+			CloudTileSchedulerPushConstants pushT{
+				.boundingMapIdx = ctx.Index<CloudBoundingTexture>(),
+				.outErrorMapIdx = ctx.Index<CloudErrorMap>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesT{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTileSchedulerPushConstants)}
+			};
+
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesT
+			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
@@ -496,22 +528,22 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 			}
 
-			std::array<vk::DescriptorSet, 2> boundSets{
+			std::array<vk::DescriptorSet, 3> boundSets{
 				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
+				static_cast<VkDescriptorSet>(ctx.globalSet),
+				cloudSsboSet
 			};
-			if (boundSets[0] && boundSets[1]) {
+			if (boundSets[0] && boundSets[1] && boundSets[2]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTileSchedulerPushConstants), &pushT);
 
 			uint32_t tileCols = (ctx.width + 7) / 8;
 			uint32_t tileRows = (ctx.height + 7) / 8;
 			uint32_t gx = (tileCols + 7) / 8;
 			uint32_t gy = (tileRows + 7) / 8;
 			vkCmd.dispatch(gx, gy, 1);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 
@@ -529,41 +561,52 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-#if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
-#endif
+		vk::DescriptorSetLayout cloudSsboLayout{nullptr};
+		vk::DescriptorPool      cloudSsboPool{nullptr};
+		vk::DescriptorSet       cloudSsboSet{nullptr};
+		vk::Device              m_device{nullptr};
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
+			m_device = services.device;
 			pipelineLibrary = services.pipelineLibrary;
 			compShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_render.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
+
+			std::array<vk::DescriptorSetLayoutBinding, 1> ssboBindings{};
+			ssboBindings[0].setBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+			vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+			layoutInfo.setBindings(ssboBindings);
+			cloudSsboLayout = services.device.createDescriptorSetLayout(layoutInfo);
+
+			std::array<vk::DescriptorPoolSize, 1> poolSizes{
+				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1}
+			};
+			vk::DescriptorPoolCreateInfo poolInfo{};
+			poolInfo.setPoolSizes(poolSizes);
+			poolInfo.setMaxSets(1);
+			cloudSsboPool = services.device.createDescriptorPool(poolInfo);
+
+			vk::DescriptorSetAllocateInfo allocInfo{};
+			allocInfo.setDescriptorPool(cloudSsboPool);
+			allocInfo.setSetLayouts(cloudSsboLayout);
+			cloudSsboSet = services.device.allocateDescriptorSets(allocInfo).front();
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&compShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			compShader.Destroy(device);
-#else
-			(void)device;
-#endif
+			if (cloudSsboPool) device.destroyDescriptorPool(cloudSsboPool);
+			if (cloudSsboLayout) device.destroyDescriptorSetLayout(cloudSsboLayout);
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudPackedColor>(),
@@ -585,49 +628,48 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16Sfloat),
 				}
 			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudPackedColor>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 97, // eR16G16B16A16Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudPackedDepth>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 109, // eR32G32B32A32Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudPackedVelocity>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 83, // eR16G16Sfloat
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					auto tileQueueBuf = registry->GetBuffer<CloudTileQueueSSBO>();
+					if (tileQueueBuf) {
+						vk::DescriptorBufferInfo b0{tileQueueBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+						std::array<vk::WriteDescriptorSet, 1> writes{};
+						writes[0].setDstSet(cloudSsboSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
+						m_device.updateDescriptorSets(writes, nullptr);
+					}
+				}
+			}
+
+			std::array<vk::DescriptorSetLayout, 3> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout),
+				cloudSsboLayout
 			};
 
-			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
+			CloudRenderPushConstants pushR{
+				.depthTextureIdx = ctx.Index<GBufferDepth>(),
+				.boundingTextureIdx = ctx.Index<CloudBoundingTexture>(),
+				.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
+				.weatherTextureIdx = ctx.Index<CloudWeatherTexture>(),
+				.volume3DIdx = ctx.Index<Cloud3DVolumeTexture>(),
+				.outPackedColorIdx = ctx.Index<CloudPackedColor>(),
+				.outPackedDepthIdx = ctx.Index<CloudPackedDepth>(),
+				.outPackedVelocityIdx = ctx.Index<CloudPackedVelocity>(),
+				.outErrorMapIdx = ctx.Index<CloudErrorMap>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesR{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudRenderPushConstants)}
+			};
+
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesR
+			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
@@ -635,20 +677,20 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 			}
 
-			std::array<vk::DescriptorSet, 2> boundSets{
+			std::array<vk::DescriptorSet, 3> boundSets{
 				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
+				static_cast<VkDescriptorSet>(ctx.globalSet),
+				cloudSsboSet
 			};
-			if (boundSets[0] && boundSets[1]) {
+			if (boundSets[0] && boundSets[1] && boundSets[2]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudRenderPushConstants), &pushR);
 
 			uint32_t tileCols = (ctx.width + 7) / 8;
 			uint32_t tileRows = (ctx.height + 7) / 8;
 			vkCmd.dispatch(tileCols * tileRows, 1, 1);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 
@@ -664,41 +706,52 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-#if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
-#endif
+		vk::DescriptorSetLayout cloudSsboLayout{nullptr};
+		vk::DescriptorPool      cloudSsboPool{nullptr};
+		vk::DescriptorSet       cloudSsboSet{nullptr};
+		vk::Device              m_device{nullptr};
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
+			m_device = services.device;
 			pipelineLibrary = services.pipelineLibrary;
 			compShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_temporal_reprojection.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
+
+			std::array<vk::DescriptorSetLayoutBinding, 1> ssboBindings{};
+			ssboBindings[0].setBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setDescriptorCount(1).setStageFlags(vk::ShaderStageFlagBits::eCompute);
+			vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+			layoutInfo.setBindings(ssboBindings);
+			cloudSsboLayout = services.device.createDescriptorSetLayout(layoutInfo);
+
+			std::array<vk::DescriptorPoolSize, 1> poolSizes{
+				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1}
+			};
+			vk::DescriptorPoolCreateInfo poolInfo{};
+			poolInfo.setPoolSizes(poolSizes);
+			poolInfo.setMaxSets(1);
+			cloudSsboPool = services.device.createDescriptorPool(poolInfo);
+
+			vk::DescriptorSetAllocateInfo allocInfo{};
+			allocInfo.setDescriptorPool(cloudSsboPool);
+			allocInfo.setSetLayouts(cloudSsboLayout);
+			cloudSsboSet = services.device.allocateDescriptorSets(allocInfo).front();
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&compShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			compShader.Destroy(device);
-#else
-			(void)device;
-#endif
+			if (cloudSsboPool) device.destroyDescriptorPool(cloudSsboPool);
+			if (cloudSsboLayout) device.destroyDescriptorSetLayout(cloudSsboLayout);
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudTemporalColor>(),
@@ -713,39 +766,47 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
 				}
 			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudTemporalColor>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 97, // eR16G16B16A16Sfloat
-				},
-			});
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudTemporalMoments>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 109, // eR32G32B32A32Sfloat
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					auto tileQueueBuf = registry->GetBuffer<CloudTileQueueSSBO>();
+					if (tileQueueBuf) {
+						vk::DescriptorBufferInfo b0{tileQueueBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
+						std::array<vk::WriteDescriptorSet, 1> writes{};
+						writes[0].setDstSet(cloudSsboSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
+						m_device.updateDescriptorSets(writes, nullptr);
+					}
+				}
+			}
+
+			std::array<vk::DescriptorSetLayout, 3> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout),
+				cloudSsboLayout
 			};
 
-			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
+			CloudTemporalPushConstants pushTemp{
+				.packedFrameIdx = ctx.Index<CloudPackedColor>(),
+				.packedDepthIdx = ctx.Index<CloudPackedDepth>(),
+				.packedVelocityIdx = ctx.Index<CloudPackedVelocity>(),
+				.boundingMapIdx = ctx.Index<CloudBoundingTexture>(),
+				.outColorIdx = ctx.Index<CloudTemporalColor>(),
+				.outDepthIdx = ctx.Index<CloudPackedDepth>(),
+				.outMomentsIdx = ctx.Index<CloudTemporalMoments>(),
+				.outErrorMapIdx = ctx.Index<CloudErrorMap>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesTemp{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTemporalPushConstants)}
+			};
+
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesTemp
+			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
@@ -753,20 +814,20 @@ namespace brassica {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 			}
 
-			std::array<vk::DescriptorSet, 2> boundSets{
+			std::array<vk::DescriptorSet, 3> boundSets{
 				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
+				static_cast<VkDescriptorSet>(ctx.globalSet),
+				cloudSsboSet
 			};
-			if (boundSets[0] && boundSets[1]) {
+			if (boundSets[0] && boundSets[1] && boundSets[2]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTemporalPushConstants), &pushTemp);
 
 			uint32_t gx = (ctx.width + 7) / 8;
 			uint32_t gy = (ctx.height + 7) / 8;
 			vkCmd.dispatch(gx, gy, 1);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 
@@ -781,41 +842,26 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-#if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
-#endif
 
 		void Init(const render::NodeServices& services) {
-#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			compShader.CompileComputeFromFile(services.device, "shaders/effects/cloud_spatial_filter.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&compShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) {
-#if BRASSICA_HAS_VULKAN
 			compShader.Destroy(device);
-#else
-			(void)device;
-#endif
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudFilteredColor>(),
@@ -823,29 +869,31 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
 				}
 			);
-#else
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<CloudFilteredColor>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::ResourceDesc{
-					.kind = graph::ResourceDesc::Kind::Image2D,
-					.width = ctx.width,
-					.height = ctx.height,
-					.formatCode = 109, // eR32G32B32A32Sfloat
-				},
-			});
-#endif
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 
-			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
+			CloudSpatialFilterPushConstants pushFilter{
+				.cloudColorIdx = ctx.Index<CloudTemporalColor>(),
+				.cloudDepthIdx = ctx.Index<CloudPackedDepth>(),
+				.cloudMomentsIdx = ctx.Index<CloudTemporalMoments>(),
+				.errorMapIdx = ctx.Index<CloudErrorMap>(),
+				.outFilteredColorIdx = ctx.Index<CloudFilteredColor>(),
+			};
+			std::array<vk::PushConstantRange, 1> pushRangesFilter{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudSpatialFilterPushConstants)}
+			};
+
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRangesFilter
+			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
@@ -861,12 +909,11 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
 
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudSpatialFilterPushConstants), &pushFilter);
+
 			uint32_t gx = (ctx.width + 7) / 8;
 			uint32_t gy = (ctx.height + 7) / 8;
 			vkCmd.dispatch(gx, gy, 1);
-#else
-			(void)ctx;
-#endif
 		}
 	};
 

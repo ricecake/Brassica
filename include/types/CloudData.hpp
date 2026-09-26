@@ -73,4 +73,36 @@ namespace brassica {
 
 	using CloudDataHost = CloudState;
 
+	struct alignas(16) CloudUBO {
+		alignas(16) glm::mat4 u_cloudShadowMatrix{1.0f};
+		alignas(4)  std::int32_t u_useCloudShadowMap{0};
+
+		alignas(4)  float cloudAltitude{2000.0f};
+		alignas(4)  float cloudThickness{1500.0f};
+		alignas(4)  float cloudDensity{0.100f};
+		alignas(4)  float cloudCoverage{0.35f};
+		alignas(4)  float worldScale{1.0f};
+
+		alignas(4)  float cloudPhaseG1{0.850f};
+		alignas(4)  float cloudPhaseG2{-0.200f};
+		alignas(4)  float cloudPhaseAlpha{0.500f};
+		alignas(4)  float cloudPhaseIsotropic{0.050f};
+		alignas(4)  float cloudPowderScale{0.00125f};
+		alignas(4)  float cloudPowderMultiplier{50.0f};
+		alignas(4)  float cloudPowderLocalScale{5.0f};
+		alignas(4)  float cloudBeerPowderMix{0.600f};
+
+		alignas(4)  float cloudShadowOpticalDepthMultiplier{2.0f};
+		alignas(4)  float cloudShadowStepMultiplier{1.0f};
+		alignas(4)  float cloudShadowIntensity{1.0f};
+		alignas(4)  float cloudSunLightScale{1.0f};
+		alignas(4)  float cloudMoonLightScale{1.0f};
+
+		alignas(4)  float cloudFlowSpeed{0.25f};
+		alignas(4)  float cloudFlowDirection{3.14159265f};
+		alignas(4)  float cloudFlowHeightScale{0.015f};
+		alignas(4)  float cloudCurlStrength{10.0f};
+		alignas(4)  float cloudCurlFrequency{2.0f};
+	};
+
 } // namespace brassica
