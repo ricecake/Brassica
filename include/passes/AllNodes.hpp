@@ -17,6 +17,7 @@
 #include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/SkyBackgroundNode.hpp"
+#include "passes/TerrainBiomeNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
 #include "passes/TonemapNode.hpp"

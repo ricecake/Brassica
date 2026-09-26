@@ -1,0 +1,92 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "helpers/octahedral.glsl"
+#include "helpers/whittaker.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform ClimateWeatherPushConstants {
+	uint climateStorageIdx; // Input advected climate storage image
+	uint outStorageIdx;     // Output final weather & Whittaker biome storage image
+	uint textureDim;        // 2048
+	uint pad;
+} push;
+
+void main() {
+	uvec2 pixel = gl_GlobalInvocationID.xy;
+	if (pixel.x >= push.textureDim || pixel.y >= push.textureDim) {
+		return;
+	}
+
+	ivec2 coord = ivec2(pixel);
+	int dim = int(push.textureDim);
+
+	vec4 centerData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coord);
+	float temp = centerData.r;
+	float moisture = centerData.g;
+	vec2 wind = centerData.ba;
+
+	// Neighbor sampling for spatial derivatives
+	ivec2 coordR = ivec2((coord.x + 1) % dim, coord.y);
+	ivec2 coordL = ivec2((coord.x - 1 + dim) % dim, coord.y);
+	ivec2 coordU = ivec2(coord.x, (coord.y + 1) % dim);
+	ivec2 coordD = ivec2(coord.x, (coord.y - 1 + dim) % dim);
+
+	vec4 dataR = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordR);
+	vec4 dataL = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordL);
+	vec4 dataU = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordU);
+	vec4 dataD = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordD);
+
+	// Partial derivatives of wind field (dwx/du, dwx/dv, dwy/du, dwy/dv)
+	float dwx_du = (dataR.b - dataL.b) * 0.5 * float(dim);
+	float dwx_dv = (dataU.b - dataD.b) * 0.5 * float(dim);
+	float dwy_du = (dataR.a - dataL.a) * 0.5 * float(dim);
+	float dwy_dv = (dataU.a - dataD.a) * 0.5 * float(dim);
+
+	float divergence = dwx_du + dwy_dv;
+	float curl = dwy_du - dwx_dv;
+	float shear = sqrt((dwx_du - dwy_dv) * (dwx_du - dwy_dv) + (dwx_dv + dwy_du) * (dwx_dv + dwy_du));
+
+	// Temperature gradient magnitude
+	float dT_du = (dataR.r - dataL.r) * 0.5 * float(dim);
+	float dT_dv = (dataU.r - dataD.r) * 0.5 * float(dim);
+	float tempGrad = length(vec2(dT_du, dT_dv));
+
+	// Terrain slope gradient & Orographic lift
+	vec2 uv = (vec2(pixel) + 0.5) / float(dim);
+	vec3 dir = octahedralUVToDirection(uv);
+	vec3 p = dir * FAKE_PLANET_RADIUS;
+	float landMask = 0.0;
+	vec3 gradMask = vec3(0.0);
+	evaluate_soft_voronoi_pseudosphere2(p, 32, landMask, gradMask);
+
+	vec2 slopeGrad2D = vec2(gradMask.x, gradMask.z) * 0.001;
+	float orographicLift = dot(wind, slopeGrad2D);
+
+	// Rain shadow occurs downwind of mountains (orographicLift < 0 with sinking air divergence > 0)
+	float rainShadow = clamp(-orographicLift * 100.0 + max(0.0, divergence) * 0.5, 0.0, 1.0);
+
+	// Precipitation probability: boosted by convergence (divergence < 0), moisture, and orographic lift
+	float convergenceBoost = max(0.0, -divergence) * 0.8;
+	float precipProb = clamp(moisture * 0.6 + convergenceBoost + max(0.0, orographicLift) * 50.0 - rainShadow * 0.4, 0.0, 1.0);
+
+	// Thunderstorm severity: high moisture + temperature front + high shear/curl
+	float severity = clamp(moisture * tempGrad * 0.2 + abs(curl) * 0.15 + shear * 0.15, 0.0, 1.0);
+
+	// Precipitation type: 1.0 = Snow, 0.5 = Sleet, 0.0 = Rain
+	float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+
+	// Sample Whittaker Biome classification
+	WhittakerBiome biome = evaluateWhittakerBiome(temp, clamp(moisture - rainShadow * 0.3, 0.0, 1.0), severity, precipType);
+
+	// Store final output: r = packed biome index & precip prob, g = severity, b = rain shadow, a = snow cover / type
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
+		coord,
+		vec4(biome.biomeIndex / 10.0 + precipProb * 0.05, severity, rainShadow, biome.snowCover)
+	);
+}

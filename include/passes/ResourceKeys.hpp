@@ -46,6 +46,10 @@ namespace brassica {
 
 	struct TerrainTileVisibilityTexture {};
 
+	struct TerrainWeatherBiomeTexture {};
+
+	struct TerrainWeatherPingPongTexture {};
+
 	struct TransmittanceLUT {};
 
 	struct MultiScatteringLUT {};

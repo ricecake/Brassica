@@ -2,6 +2,8 @@
 #define BRASSICA_TERRAIN_GLSL
 
 #include "bindless.glsl"
+#include "helpers/octahedral.glsl"
+#include "helpers/whittaker.glsl"
 
 float getLODScale(float lod) {
 	// if (lod <= 3.0) {
@@ -76,6 +78,13 @@ float sampleTerrainTileVisibility(
 ) {
 	vec2 uv = sampleToroidalUV(worldXZ, level, textureDim);
 	return SAMPLE_ARRAY_WRAP(visIndex, vec3(uv, float(level))).r;
+}
+
+// Sample octahedral weather and Whittaker biome texture
+vec4 sampleTerrainWeatherBiome(uint weatherStorageIdx, vec3 worldPos) {
+	vec3 dir = normalize(worldPos - vec3(0.0, -FAKE_PLANET_RADIUS, 0.0));
+	vec2 uv = directionToOctahedralUV(dir);
+	return SAMPLE_NEAREST(weatherStorageIdx, uv);
 }
 
 // -----------------------------------------------------------------------------

@@ -20,6 +20,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint  weatherBiomeIndex;
 }
 
 params;
@@ -99,6 +100,18 @@ void main() {
 		hdrColor = hdrBg;
 	} else {
 		float roughness = normalSample.a > 0.0 ? normalSample.a : 0.7;
+
+		if (params.weatherBiomeIndex > 0u) {
+			vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, pos);
+			float severity = weatherSample.g;
+			float rainShadow = weatherSample.b;
+			float snowCover = weatherSample.a;
+			float tempEstimate = clamp(1.0 - (pos.y + 100.0) / 1500.0, 0.0, 1.0);
+			WhittakerBiome wb = evaluateWhittakerBiome(tempEstimate, clamp(0.5 - rainShadow * 0.3, 0.0, 1.0), severity, snowCover > 0.1 ? 1.0 : 0.0);
+			albedo.rgb = mix(albedo.rgb, wb.color, 0.65);
+			roughness = mix(roughness, wb.roughness, 0.65);
+		}
+
 		Material material = Material(albedo.rgb, roughness, 0.0, 1.0);
 
 		// Aerial perspective / underwater extinction is no longer applied here: it happens
