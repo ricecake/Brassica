@@ -13,5 +13,5 @@
 // scheduler relative to WaterNode's SubPhase::WaterRender -- a Subgraph child's own kPhase only
 // orders it against its Subgraph siblings, never an outer sibling.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 15);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 16);
 }
