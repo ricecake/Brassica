@@ -2,6 +2,7 @@
 #define ATMOSPHERE_COMMON_GLSL
 
 #include "../common.glsl"
+#include "../bindless.glsl"
 
 const float kEarthRadius = FAKE_PLANET_RADIUS / 1000.0; // 600.0 km
 

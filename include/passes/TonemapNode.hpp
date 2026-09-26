@@ -110,7 +110,7 @@ if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") |
 
 			downsampleShader.CompileComputeFromFile(services.device, "shaders/effects/bloom_downsample.comp");
 			ltmFuseShader.CompileComputeFromFile(services.device, "shaders/effects/ltm_fuse.comp");
-			
+			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
 #else

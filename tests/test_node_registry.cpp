@@ -8,10 +8,9 @@
 // via SystemHandler::GetEntityNode().RegisterInto (Engine::DrawFrame), not through this static
 // list -- see include/passes/AllNodes.hpp's own header comment for why that list exists at all.
 // 13 -> 15: UnderwaterParticleRenderNode/AboveWaterParticleRenderNode were promoted out of
-// ParticleSystemNode's Subgraph to be independent top-level nodes (ParticleSystemNode.hpp), so
-// their SubPhase::UnderwaterParticleRender/ParticleRender phases actually reach the outer
-// scheduler relative to WaterNode's SubPhase::WaterRender -- a Subgraph child's own kPhase only
-// orders it against its Subgraph siblings, never an outer sibling.
+// ParticleSystemNode's Subgraph to be independent top-level nodes (ParticleSystemNode.hpp)...
+// 15 -> 22: Added 7 cloud layer nodes (CloudBakeNode, CloudBoundingNode, CloudShadowBakeNode,
+// CloudTileSchedulerNode, CloudRenderNode, CloudTemporalNode, CloudSpatialFilterNode) in CloudNodes.hpp.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 15);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 22);
 }

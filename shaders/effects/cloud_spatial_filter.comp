@@ -4,20 +4,24 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(binding = 0, rgba32f) uniform image2D outFilteredColor;
 
+#include "../bindless.glsl"
+
 layout(binding = 1) uniform sampler2D uCloudColor;   // Accumulated RGBA
 layout(binding = 2) uniform sampler2D uCloudDepth;   // Accumulated Depth Props
 layout(binding = 3) uniform sampler2D uCloudMoments; // Accumulated Moments
 layout(binding = 4) uniform sampler2D uErrorMap;     // Tile Error Map
 
-uniform int   uStepSize;     // 1, 2, 4, 8, 16...
-uniform int   uPassIndex;
+layout(push_constant) uniform CloudSpatialFilterPushConstants {
+	int   uStepSize;     // 1, 2, 4, 8, 16...
+	int   uPassIndex;
 
-uniform float uCloudPhiLuma;
-uniform float uCloudPhiDensity;
-uniform float uCloudPhiDepth;
+	float uCloudPhiLuma;
+	float uCloudPhiDensity;
+	float uCloudPhiDepth;
 
-uniform float uCloudSvgfHistoryBoost;
-uniform float uCloudSvgfHistoryThreshold;
+	float uCloudSvgfHistoryBoost;
+	float uCloudSvgfHistoryThreshold;
+};
 
 const float kernel[5] = float[](1.0/16.0, 1.0/4.0, 3.0/8.0, 1.0/4.0, 1.0/16.0);
 

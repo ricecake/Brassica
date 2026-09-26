@@ -27,9 +27,6 @@ layout(std430, binding = 0) buffer TileQueueSSBO {
 
 layout(binding = 4) uniform sampler2D depthTexture;
 
-uniform float uDeltaTime;
-uniform vec3  cloudColorUniform;
-
 #define ATMOSPHERE_HEIGHT_DEFINED
 #include "../atmosphere/common.glsl"
 #include "../helpers/clouds.glsl"
@@ -37,13 +34,17 @@ uniform vec3  cloudColorUniform;
 layout(binding = 5) uniform sampler2D u_cloudMinMaxBoundingTexture;
 layout(binding = 6) uniform sampler2D u_cloudWeatherMinMaxTexture;
 
-uniform float uCloudMaxRayDistance;
-uniform float uRenderScale;
-uniform int   uCloudMinSamples;
-uniform int   uCloudMaxSamples;
-uniform float uCloudExtinction;
-uniform vec3  uCloudExtinctionColor;
-uniform vec3  uCloudAlbedo;
+layout(push_constant) uniform CloudRenderPushConstants {
+	float uDeltaTime;
+	float uCloudMaxRayDistance;
+	float uRenderScale;
+	int   uCloudMinSamples;
+	int   uCloudMaxSamples;
+	float uCloudExtinction;
+	vec3  uCloudExtinctionColor;
+	vec3  uCloudAlbedo;
+	vec3  cloudColorUniform;
+};
 
 float calculateBifurcatedStepSize(
     inout bool in_cloud,
@@ -76,10 +77,6 @@ float calculateBifurcatedStepSize(
     }
 }
 
-float InterleavedGradientNoise(vec2 pix, int frame) {
-	vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
-	return fract(magic.z * fract(dot(pix + vec2(frame * 5.588238), magic.xy)));
-}
 
 void main() {
 	float R_earth = kEarthRadius * 1000.0 * worldScale;

@@ -10,37 +10,38 @@
 
 layout(binding = CLOUD_SHADOW_MAP_BINDING) uniform sampler2DArray u_cloudShadowTexture;
 
-uniform mat4 u_cloudShadowMatrix;
-uniform bool u_useCloudShadowMap;
+layout(std140, set = 0, binding = 5) uniform CloudParamsUBO {
+	mat4  u_cloudShadowMatrix;
+	bool  u_useCloudShadowMap;
 
-uniform float cloudAltitude;
-uniform float cloudThickness;
-uniform float cloudDensity;
-uniform float cloudCoverage;
-uniform float worldScale;
+	float cloudAltitude;
+	float cloudThickness;
+	float cloudDensity;
+	float cloudCoverage;
+	float worldScale;
 
-uniform float cloudPhaseG1;
-uniform float cloudPhaseG2;
-uniform float cloudPhaseAlpha;
-uniform float cloudPhaseIsotropic;
-uniform float cloudPowderScale;
-uniform float cloudPowderMultiplier;
-uniform float cloudPowderLocalScale;
-uniform float cloudBeerPowderMix;
+	float cloudPhaseG1;
+	float cloudPhaseG2;
+	float cloudPhaseAlpha;
+	float cloudPhaseIsotropic;
+	float cloudPowderScale;
+	float cloudPowderMultiplier;
+	float cloudPowderLocalScale;
+	float cloudBeerPowderMix;
 
-uniform float cloudShadowOpticalDepthMultiplier;
-uniform float cloudShadowStepMultiplier;
-uniform float cloudShadowIntensity;
-uniform float cloudSunLightScale;
-uniform float cloudMoonLightScale;
+	float cloudShadowOpticalDepthMultiplier;
+	float cloudShadowStepMultiplier;
+	float cloudShadowIntensity;
+	float cloudSunLightScale;
+	float cloudMoonLightScale;
 
-uniform float cloudFlowSpeed;
-uniform float cloudFlowDirection;
-uniform float cloudFlowHeightScale;
-uniform float cloudCurlStrength;
-uniform float cloudCurlFrequency;
+	float cloudFlowSpeed;
+	float cloudFlowDirection;
+	float cloudFlowHeightScale;
+	float cloudCurlStrength;
+	float cloudCurlFrequency;
+};
 
-uniform float uTime;
 #define u_time uTime
 
 struct CloudProperties {
@@ -68,21 +69,6 @@ struct CloudWeather {
 	float humidity;
 };
 
-float remap(float value, float valueMin, float valueMax) {
-	return (value - valueMin) / max(1e-5, (valueMax - valueMin));
-}
-
-float remapClamp(float value, float inMin, float inMax, float outMin, float outMax) {
-	float t = clamp((value - inMin) / max(1e-5, (inMax - inMin)), 0.0, 1.0);
-	return mix(outMin, outMax, t);
-}
-
-float schlickGain(float x, float g) {
-	g = clamp(g, 0.001, 0.999);
-	float absDiff = abs(2.0 * x - 1.0);
-	float denominator = g + absDiff * (1.0 - 2.0 * g);
-	return 0.5 + ((x - 0.5) * (1.0 - g)) / denominator;
-}
 
 float cloudPhase(float cosTheta) {
 	float hg = mix(henyeyGreenstein(cloudPhaseG1, cosTheta), henyeyGreenstein(cloudPhaseG2, cosTheta), cloudPhaseAlpha);

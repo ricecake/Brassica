@@ -29,20 +29,23 @@ layout(binding = 4) uniform sampler2D uPackedFrame;
 layout(binding = 5) uniform sampler2D uPackedDepth;
 layout(binding = 6) uniform sampler2D uPackedVelocity;
 
+#include "../bindless.glsl"
+
 layout(binding = 7) uniform sampler2D uHistoryFrame;
 layout(binding = 8) uniform sampler2D uHistoryCloudDepth;
 layout(binding = 9) uniform sampler2D uHistoryMoments;
 layout(binding = 10) uniform sampler2D uBoundingMap;
 
-uniform float uCloudTemporalGamma;
-uniform float uCloudMaxHistoryLength;
-uniform float uCloudMaxRayDistance;
-uniform float uRenderScale;
-uniform bool  uEnableTemporal;
-uniform bool  uHasHistory;
-uniform bool  uUseTileQueue;
-
-uniform float uDeltaTime;
+layout(push_constant) uniform CloudTemporalPushConstants {
+	float uCloudTemporalGamma;
+	float uCloudMaxHistoryLength;
+	float uCloudMaxRayDistance;
+	float uRenderScale;
+	bool  uEnableTemporal;
+	bool  uHasHistory;
+	bool  uUseTileQueue;
+	float uDeltaTime;
+};
 
 shared float sharedError[64];
 shared float sharedFlow[64];

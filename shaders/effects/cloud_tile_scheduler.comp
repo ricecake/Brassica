@@ -2,16 +2,20 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
+#include "../bindless.glsl"
+
 layout(binding = 0, rgba32f) uniform image2D uErrorMap;
 layout(binding = 1) uniform sampler2D uBoundingMap;
 
-uniform int uPass; // 0 = Spatial Pass, 1 = Priority Pass
-uniform float uPriorityErrorWeight;
-uniform float uPriorityGradWeight;
-uniform float uPriorityAgeWeight;
-uniform float uPriorityNeighborErrorWeight;
-uniform float uPriorityNeighborGradWeight;
-uniform float uPriorityThreshold;
+layout(push_constant) uniform CloudTileSchedulerPushConstants {
+	int uPass; // 0 = Spatial Pass, 1 = Priority Pass
+	float uPriorityErrorWeight;
+	float uPriorityGradWeight;
+	float uPriorityAgeWeight;
+	float uPriorityNeighborErrorWeight;
+	float uPriorityNeighborGradWeight;
+	float uPriorityThreshold;
+};
 
 struct TileQueueHeader {
 	uint count;

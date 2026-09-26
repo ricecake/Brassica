@@ -5,27 +5,15 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0, rgba16f) uniform image2D outWeatherMap;
 layout(binding = 1, rg16f) uniform image2D outMinMaxMap;
 
-#include "../helpers/noise.glsl"
+#include "../bindless.glsl"
+#include "../common.glsl"
 
-uniform float uWorldScale;
-uniform float uCloudCoverage;
-uniform float uCloudThickness;
-uniform float uTime;
-
-float remap(float value, float valueMin, float valueMax) {
-	return (value - valueMin) / max(1e-5, (valueMax - valueMin));
-}
-
-float remapClamp(float value, float inMin, float inMax, float outMin, float outMax) {
-	float t = clamp((value - inMin) / max(1e-5, (inMax - inMin)), 0.0, 1.0);
-	return mix(outMin, outMax, t);
-}
-
-float smaxCubic(float a, float b, float k) {
-	k *= 1.4;
-	float h = max(k - abs(a - b), 0.0);
-	return max(a, b) + h * h * h / (6.0 * k * k);
-}
+layout(push_constant) uniform CloudWeatherBakePushConstants {
+	float uWorldScale;
+	float uCloudCoverage;
+	float uCloudThickness;
+	float uTime;
+} push;
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -38,15 +26,15 @@ void main() {
 	float period2 = 8.0;
 	float period4 = 2.0;
 
-	float macro = dot_noise_fbm(uv * period2, 4);
-	float worley = cross_noise_fbm(uv * period1, 4);
+	float macro = dot_noise_fbm(vec3(uv * period2, 0.0), 4.0, 0.0);
+	float worley = length(cross_noise_fbm(vec3(uv * period1, 0.0), 4.0, 0.0));
 
 	float finalCoverage = remapClamp(macro, worley, 1.0, 0.0, 1.0);
 	finalCoverage = smaxCubic(finalCoverage, worley, 0.1);
 
-	float typeValue = dot_noise_fbm((uv + 0.25 * macro) * period4, 2);
-	float ridgeChannel = cross_noise_fbm(uv * period2 + vec2(0.5), 3);
-	float moistureMap = clamp(dot_noise_fbm(uv * period1 + vec2(0.13, 0.37), 4), 0.0, 1.0);
+	float typeValue = dot_noise_fbm(vec3((uv + 0.25 * macro) * period4, 0.0), 2.0, 0.0);
+	float ridgeChannel = length(cross_noise_fbm(vec3(uv * period2 + vec2(0.5), 0.0), 3.0, 0.0));
+	float moistureMap = clamp(dot_noise_fbm(vec3(uv * period1 + vec2(0.13, 0.37), 0.0), 4.0, 0.0), 0.0, 1.0);
 
 	imageStore(outWeatherMap, pixel, vec4(finalCoverage, typeValue, ridgeChannel, moistureMap));
 	imageStore(outMinMaxMap, pixel, vec4(finalCoverage, finalCoverage, moistureMap, 1.0));
