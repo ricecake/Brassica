@@ -27,6 +27,9 @@
 #include "types/TransformComponent.hpp"
 #include <entt/entity/registry.hpp>
 #include "lighting/ILightManager.hpp"
+#include "cloud/ICloudManager.hpp"
+#include "passes/CloudNodes.hpp"
+#include "passes/TonemapNode.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -1234,4 +1237,107 @@ TEST_CASE("TerrainMapColorConfig elevation, slope, and water color tinting") {
 	CHECK(r > 180);
 	CHECK(g > 180);
 	CHECK(b > 180);
+}
+
+TEST_CASE("CloudState and ICloudManager state parameters and reflection") {
+	class MockCloudManager : public brassica::ICloudManager {
+	public:
+		void Initialize() override { m_initialized = true; }
+	};
+
+	MockCloudManager cloudMgr;
+	cloudMgr.Initialize();
+	CHECK(cloudMgr.IsInitialized());
+	CHECK(cloudMgr.GetManagerName() == "CloudManager");
+
+	auto state = cloudMgr.GetState();
+	CHECK(state.renderScale == doctest::Approx(1.0f));
+	CHECK(state.coverage == doctest::Approx(0.35f));
+	CHECK(state.density == doctest::Approx(0.100f));
+	CHECK(state.altitude == doctest::Approx(2000.0f));
+	CHECK(state.thickness == doctest::Approx(1500.0f));
+	CHECK(state.enableTileScheduler == true);
+	CHECK(state.enableSpatialFilter == true);
+	CHECK(state.svgfPasses == 2);
+	CHECK(state.shadowOpticalDepthMultiplier == doctest::Approx(2.0f));
+
+	state.renderScale = 0.5f;
+	state.coverage = 0.6f;
+	state.svgfPasses = 4;
+	cloudMgr.SetState(state);
+
+	auto updatedState = cloudMgr.GetState();
+	CHECK(updatedState.renderScale == doctest::Approx(0.5f));
+	CHECK(updatedState.coverage == doctest::Approx(0.6f));
+	CHECK(updatedState.svgfPasses == 4);
+
+	cloudMgr.FlushHistory();
+	CHECK_FALSE(cloudMgr.HasHistory());
+}
+
+namespace {
+	struct CloudBakeLikeNode {
+		using Resources = Declares<
+			Create<brassica::CloudWeatherTexture>,
+			Create<brassica::CloudWeatherMinMaxTexture>,
+			Create<brassica::Cloud3DVolumeTexture>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct CloudBoundingLikeNode {
+		using Resources = Declares<
+			Read<brassica::CloudWeatherMinMaxTexture>,
+			Create<brassica::CloudBoundingTexture>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct CloudRenderLikeNode {
+		using Resources = Declares<
+			Read<brassica::CloudBoundingTexture>,
+			Read<brassica::CloudWeatherMinMaxTexture>,
+			Create<brassica::CloudPackedColor>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("Real CloudNodes and TonemapNode graph compilation, setup realizations, and stage scheduling") {
+	Graph graph;
+	graph.Register<brassica::CloudBakeNode>();
+	graph.Register<brassica::CloudBoundingNode>();
+	graph.Register<brassica::CloudShadowBakeNode>();
+	graph.Register<brassica::CloudTileSchedulerNode>();
+	graph.Register<brassica::CloudRenderNode>();
+	graph.Register<brassica::CloudTemporalNode>();
+	graph.Register<brassica::CloudSpatialFilterNode>();
+	graph.Register<brassica::TonemapNode>();
+	graph.Register<Import<brassica::Swapchain>>();
+	graph.Register<Import<brassica::HdrColor>>();
+	graph.Register<Import<brassica::GBufferDepth>>();
+
+	FrameContext ctx{.width = 1920, .height = 1080, .frameIndex = 1};
+	graph.Setup(ctx);
+
+	auto compileResult = graph.Compile();
+	if (!compileResult.has_value()) {
+		INFO(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	CHECK(schedule.stages.size() >= 4);
+
+	// Verify Setup realizations for CloudBakeNode
+	brassica::CloudBakeNode bakeNode;
+	Recipe bakeRecipe = bakeNode.Setup(ctx);
+	CHECK(bakeRecipe.domain == ExecutionDomain::Compute);
+	REQUIRE(bakeRecipe.realizations.size() == 3);
+
+	// Verify Setup realizations for TonemapNode
+	brassica::TonemapNode tonemapNode;
+	Recipe tonemapRecipe = tonemapNode.Setup(ctx);
+	CHECK(tonemapRecipe.domain == ExecutionDomain::Graphics);
+	REQUIRE(tonemapRecipe.realizations.size() == 20);
 }

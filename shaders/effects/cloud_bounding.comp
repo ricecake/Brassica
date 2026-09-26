@@ -1,0 +1,117 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba32f) uniform image2D outBoundingMap;
+layout(binding = 1) uniform sampler2D depthTexture;
+
+#define ATMOSPHERE_HEIGHT_DEFINED
+#include "../atmosphere/common.glsl"
+#include "../helpers/clouds.glsl"
+
+layout(binding = 2) uniform sampler2D u_cloudWeatherMinMaxTexture;
+
+uniform float uCloudMaxRayDistance;
+uniform float uRenderScale;
+uniform int   uFrameIndex;
+
+void main() {
+	ivec2 fullResSize = textureSize(depthTexture, 0);
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+
+	if (pixel.x >= fullResSize.x || pixel.y >= fullResSize.y)
+		return;
+
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(fullResSize);
+
+	float depth = texture(depthTexture, uv).r;
+	float z = depth * 2.0 - 1.0;
+	vec4 clipSpacePosition = vec4(uv * 2.0 - 1.0, z, 1.0);
+	vec4 viewSpacePosition = uInvProjMatrix * clipSpacePosition;
+	viewSpacePosition /= viewSpacePosition.w;
+	vec3 worldPos = (uInvViewMatrix * viewSpacePosition).xyz;
+	vec3 rayDir = normalize(worldPos - uCameraPosition.xyz);
+	float dist = length(worldPos - uCameraPosition.xyz);
+
+	if (depth >= 0.9999) {
+		dist = uCloudMaxRayDistance * worldScale;
+		worldPos = uCameraPosition.xyz + rayDir * dist;
+	}
+
+	float t_start1, t_end1, t_start2, t_end2;
+	bool hitShell = intersectCloudShell(uCameraPosition.xyz, rayDir, worldScale, t_start1, t_end1, t_start2, t_end2);
+
+	int numSegments = 0;
+	float segStart[2];
+	float segEnd[2];
+
+	if (hitShell) {
+		if (t_start1 < t_end1 && t_start1 < dist) {
+			segStart[numSegments] = t_start1;
+			segEnd[numSegments] = min(t_end1, dist);
+			numSegments++;
+		}
+		if (t_start2 < t_end2 && t_start2 < dist) {
+			segStart[numSegments] = t_start2;
+			segEnd[numSegments] = min(t_end2, dist);
+			numSegments++;
+		}
+	}
+
+	if (numSegments == 0) {
+		imageStore(outBoundingMap, pixel, vec4(-1.0, -1.0, 0.0, 0.0));
+		return;
+	}
+
+	vec4 previousBounds = imageLoad(outBoundingMap, pixel);
+
+	if (cloudCoverage >= 1.0) {
+		float global_start = segStart[0];
+		float global_end = segEnd[numSegments - 1];
+		imageStore(outBoundingMap, pixel, vec4(global_start, global_end, 1.0, previousBounds.b));
+		return;
+	}
+
+	float firstHit = -1.0;
+	float lastHit = -1.0;
+	float totalDensity = 0.0;
+
+	for (int s = 0; s < numSegments; s++) {
+		float t = segStart[s];
+		float seg_end = segEnd[s];
+		int L = 3;
+		float baseStepSize = 25.0 * worldScale;
+
+		for (int i = 0; i < 2048; ++i) {
+			if (t >= seg_end) break;
+
+			vec3 p = uCameraPosition.xyz + rayDir * t;
+			vec3 advect = getCloudWindOffset(uTime);
+			vec3 p_advected = p - advect;
+			vec2 weatherUV = fract(p_advected.xz / (100000.0 * worldScale));
+
+			vec2 minMax = textureLod(u_cloudWeatherMinMaxTexture, weatherUV, float(L)).rg;
+			float maxDensity = applyDynamicCoverage(minMax.y, cloudCoverage);
+
+			if (maxDensity <= 0.001) {
+				t += baseStepSize * float(1 << L);
+				L = clamp(L + 1, 0, 10);
+			} else {
+				if (L > 0) {
+					L--;
+				} else {
+					if (maxDensity > 0.01) {
+						if (firstHit < 0.0) {
+							firstHit = t;
+						}
+						lastHit = t;
+						totalDensity += maxDensity * (baseStepSize / (1000.0 * worldScale));
+					}
+					t += baseStepSize;
+				}
+			}
+		}
+	}
+
+	imageStore(outBoundingMap, pixel, vec4(firstHit, lastHit, totalDensity, previousBounds.b));
+}

@@ -1,0 +1,54 @@
+#version 460
+#include "bindless.glsl"
+#include "types/autoexposure.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(push_constant) uniform LtmFusePushConstants {
+	uint expTextureIndex;
+	uint wgtTextureIndex;
+	uint outFusedIndex;
+	int  startMip; // e.g. numMips - 1
+	int  endMip;   // e.g. 0 (full resolution of the low-res target)
+} push;
+
+void main() {
+	ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outFusedIndex)]);
+	if (id.x >= size.x || id.y >= size.y) return;
+
+	vec2 uv = (vec2(id) + 0.5) / vec2(size);
+
+	// 1. Blend the coarsest level (Gaussian)
+	vec3 weights = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.wgtTextureIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, float(push.startMip)).rgb;
+	vec3 exposures = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.expTextureIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, float(push.startMip)).rgb;
+
+	float weightSum = weights.x + weights.y + weights.z;
+	weights /= max(weightSum, 0.00001);
+
+	float accum = dot(exposures, weights);
+
+	// 2. Blend the finer levels (Laplacians)
+	for (int i = push.startMip; i > push.endMip; i--) {
+		vec3 expFine = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.expTextureIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, float(i - 1)).rgb;
+		vec3 expCoarse = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.expTextureIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, float(i)).rgb;
+		vec3 laplacian = expFine - expCoarse;
+
+		vec3 w = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.wgtTextureIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, float(i - 1)).rgb;
+
+		// Contrast weight (Laplacian magnitude)
+		vec3 c = pow(max(abs(laplacian), vec3(0.0001)), vec3(layers[0].ltmWeightContrast));
+		w *= c;
+
+		if (layers[0].ltmBoostLocalContrast > 0.0) {
+			w *= (abs(laplacian) * layers[0].ltmBoostLocalContrast + 1.0);
+		}
+
+		float wSum = w.x + w.y + w.z;
+		w /= max(wSum, 0.00001);
+
+		accum += dot(laplacian, w);
+	}
+
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.outFusedIndex)], id, vec4(accum, 0.0, 0.0, 1.0));
+}

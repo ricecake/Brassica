@@ -1,0 +1,109 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba16f) uniform image2D outColor;
+layout(binding = 1, rgba32f) uniform image2D outDepth;
+layout(binding = 2, rgba32f) uniform image2D outMoments;
+layout(binding = 3, rgba32f) uniform image2D uErrorMap;
+
+struct TileQueueHeader {
+	uint count;
+	uint maxTiles;
+	uint spatialUpdateFrames;
+	uint frameIndex;
+	float minRefreshRate;
+	float maxRefreshRate;
+	uint tileCols;
+	uint tileRows;
+	uint totalTiles;
+	uint padding;
+};
+
+layout(std430, binding = 0) buffer TileQueueSSBO {
+	TileQueueHeader uHeader;
+	uvec2 uTileQueue[];
+};
+
+layout(binding = 4) uniform sampler2D uPackedFrame;
+layout(binding = 5) uniform sampler2D uPackedDepth;
+layout(binding = 6) uniform sampler2D uPackedVelocity;
+
+layout(binding = 7) uniform sampler2D uHistoryFrame;
+layout(binding = 8) uniform sampler2D uHistoryCloudDepth;
+layout(binding = 9) uniform sampler2D uHistoryMoments;
+layout(binding = 10) uniform sampler2D uBoundingMap;
+
+uniform float uCloudTemporalGamma;
+uniform float uCloudMaxHistoryLength;
+uniform float uCloudMaxRayDistance;
+uniform float uRenderScale;
+uniform bool  uEnableTemporal;
+uniform bool  uHasHistory;
+uniform bool  uUseTileQueue;
+
+uniform float uDeltaTime;
+
+shared float sharedError[64];
+shared float sharedFlow[64];
+
+float luma(vec3 color) {
+	return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
+vec3 RGBToYCoCg(vec3 rgb) {
+	float y  = dot(rgb, vec3(0.25, 0.5, 0.25));
+	float co = dot(rgb, vec3(0.5, 0.0, -0.5));
+	float cg = dot(rgb, vec3(-0.25, 0.5, -0.25));
+	return vec3(y, co, cg);
+}
+
+vec3 YCoCgToRGB(vec3 ycocg) {
+	float y  = ycocg.x;
+	float co = ycocg.y;
+	float cg = ycocg.z;
+	float r = y + co - cg;
+	float g = y + cg;
+	float b = y - co - cg;
+	return vec3(r, g, b);
+}
+
+void main() {
+	ivec2 pixel;
+	if (uUseTileQueue) {
+		uint tileIndex = gl_WorkGroupID.x;
+		if (tileIndex >= uHeader.count) return;
+		uvec2 tileCoord = uTileQueue[tileIndex];
+		pixel = ivec2(tileCoord * 8u) + ivec2(gl_LocalInvocationID.xy);
+	} else {
+		pixel = ivec2(gl_GlobalInvocationID.xy);
+	}
+	ivec2 size = imageSize(outColor);
+	uint localIdx = gl_LocalInvocationIndex;
+	bool inBounds = (pixel.x < size.x && pixel.y < size.y);
+
+	ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+	vec2 uv = (vec2(clampedPixel) + 0.5) / vec2(size);
+
+	vec4 currentRGBA = texelFetch(uPackedFrame, clampedPixel, 0);
+	vec4 currDepthProps = texelFetch(uPackedDepth, clampedPixel, 0);
+
+	vec4 historyRGBA = uHasHistory ? texture(uHistoryFrame, uv) : currentRGBA;
+	vec4 historyMoments = uHasHistory ? texture(uHistoryMoments, uv) : vec4(0.0);
+	float historyLength = uHasHistory ? historyMoments.w : 0.0;
+
+	historyLength = uEnableTemporal ? min(uCloudMaxHistoryLength, historyLength + 1.0) : 1.0;
+	float alpha = 1.0 / max(historyLength, 1.0);
+
+	vec4 accumulatedRGBA = mix(historyRGBA, currentRGBA, alpha);
+	vec4 accumulatedDepth = currDepthProps;
+
+	float currentLuma = luma(accumulatedRGBA.rgb);
+	vec4 accumulatedMoments = vec4(currentLuma, currentLuma * currentLuma, accumulatedDepth.a, historyLength);
+
+	if (inBounds) {
+		imageStore(outColor, clampedPixel, accumulatedRGBA);
+		imageStore(outDepth, clampedPixel, accumulatedDepth);
+		imageStore(outMoments, clampedPixel, accumulatedMoments);
+	}
+}
