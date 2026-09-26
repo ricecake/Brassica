@@ -16,6 +16,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -55,9 +56,12 @@ namespace brassica {
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			dls = services.dispatchLoader;
-			taskShader.CompileTaskFromFile(services.device, "shaders/ball.task");
-			meshShader.CompileMeshFromFile(services.device, "shaders/ball.mesh");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/ball.frag");
+			if (!taskShader.CompileTaskFromFile(services.device, "shaders/ball.task") ||
+			    !meshShader.CompileMeshFromFile(services.device, "shaders/ball.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/ball.frag")) {
+				spdlog::critical("BallNode shader compilation failed.");
+				throw std::runtime_error("BallNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}

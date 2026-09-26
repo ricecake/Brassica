@@ -80,4 +80,9 @@ struct LayerData {
 	uint  histogram[256];
 };
 
+layout(std430, set = 0, binding = 5) buffer AutoExposureBuffer {
+	LayerData layers[2]; // 0: Scene, 1: Sky
+	uint      workgroupCounter;
+};
+
 #endif // TYPES_AUTOEXPOSURE_GLSL

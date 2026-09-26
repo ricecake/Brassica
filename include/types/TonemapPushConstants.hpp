@@ -8,10 +8,17 @@ namespace brassica {
 
 	struct TonemapPushConstants {
 		std::uint32_t hdrColorIndex{0};
-		std::uint32_t bloomTextureIndex{0};
-		std::uint32_t toneMapMode{
-			5
-		}; // 0=ACES, 1=Filmic, 2=Lottes, 3=Reinhard, 4=Reinhard2, 5=Uchimura, 6=Uncharted2, 7=Unreal, 8=Debug, 9=None
+		std::uint32_t bloomBlurIndex{0};
+		std::uint32_t ltmFusedIndex{0};
+		std::uint32_t ltmExpMipIndex{0};
+
+		std::uint32_t depthTextureIndex{0};
+		std::uint32_t toneMapMode{5};
+		glm::vec2     ltmRes{0.0f, 0.0f};
+
+		float intensity{0.075f};
+		float minIntensity{0.05f};
+		float maxIntensity{0.15f};
 		float exposure{1.0f};
 
 		float contrast{1.0f};

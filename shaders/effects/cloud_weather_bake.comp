@@ -1,0 +1,53 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba16f) uniform image2D outWeatherMap;
+layout(binding = 1, rg16f) uniform image2D outMinMaxMap;
+
+#include "../helpers/noise.glsl"
+
+uniform float uWorldScale;
+uniform float uCloudCoverage;
+uniform float uCloudThickness;
+uniform float uTime;
+
+float remap(float value, float valueMin, float valueMax) {
+	return (value - valueMin) / max(1e-5, (valueMax - valueMin));
+}
+
+float remapClamp(float value, float inMin, float inMax, float outMin, float outMax) {
+	float t = clamp((value - inMin) / max(1e-5, (inMax - inMin)), 0.0, 1.0);
+	return mix(outMin, outMax, t);
+}
+
+float smaxCubic(float a, float b, float k) {
+	k *= 1.4;
+	float h = max(k - abs(a - b), 0.0);
+	return max(a, b) + h * h * h / (6.0 * k * k);
+}
+
+void main() {
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(outWeatherMap);
+	if (pixel.x >= size.x || pixel.y >= size.y) return;
+
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+
+	float period1 = 16.0;
+	float period2 = 8.0;
+	float period4 = 2.0;
+
+	float macro = dot_noise_fbm(uv * period2, 4);
+	float worley = cross_noise_fbm(uv * period1, 4);
+
+	float finalCoverage = remapClamp(macro, worley, 1.0, 0.0, 1.0);
+	finalCoverage = smaxCubic(finalCoverage, worley, 0.1);
+
+	float typeValue = dot_noise_fbm((uv + 0.25 * macro) * period4, 2);
+	float ridgeChannel = cross_noise_fbm(uv * period2 + vec2(0.5), 3);
+	float moistureMap = clamp(dot_noise_fbm(uv * period1 + vec2(0.13, 0.37), 4), 0.0, 1.0);
+
+	imageStore(outWeatherMap, pixel, vec4(finalCoverage, typeValue, ridgeChannel, moistureMap));
+	imageStore(outMinMaxMap, pixel, vec4(finalCoverage, finalCoverage, moistureMap, 1.0));
+}
