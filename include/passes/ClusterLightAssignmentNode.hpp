@@ -13,6 +13,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -24,7 +25,10 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			compShader.CompileComputeFromFile(services.device, "shaders/effects/cluster_light_assignment.comp");
+			if (!compShader.CompileComputeFromFile(services.device, "shaders/effects/cluster_light_assignment.comp")) {
+				spdlog::critical("ClusterLightAssignmentNode shader compilation failed.");
+				throw std::runtime_error("ClusterLightAssignmentNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}

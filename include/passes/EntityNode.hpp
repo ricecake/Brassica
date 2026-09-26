@@ -5,30 +5,12 @@
 
 #include "VulkanCompat.hpp"
 
-#ifndef BRASSICA_HAS_VULKAN
-	#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
-		#define BRASSICA_HAS_VULKAN 1
-	#else
-		#define BRASSICA_HAS_VULKAN 0
-	#endif
-#endif
-
-#if BRASSICA_HAS_VULKAN
-	#include "graph/PhysicalRegistry.hpp"
-	#include "graph/PhysicalResource.hpp"
-	#include "render/PipelineLibrary.hpp"
-	#include "Shader.hpp"
-	#include "ShaderWatcher.hpp"
-#else
-namespace brassica {
-	class ShaderWatcher;
-
-	namespace render {
-		class PipelineLibrary;
-	} // namespace render
-} // namespace brassica
-#endif
-
+#include "graph/PhysicalRegistry.hpp"
+#include "graph/PhysicalResource.hpp"
+#include "render/PipelineLibrary.hpp"
+#include "Shader.hpp"
+#include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include <glm/glm.hpp>
 
 #include "graph/Declaration.hpp"
@@ -77,7 +59,6 @@ namespace brassica {
 		// AtmosphereCompositeNode already rely on for Modify<HdrColor>.
 		using Resources = graph::Declares<GBuffer<graph::ModifyKey>, graph::Create<EntityIndirectBuffer<Tag>>>;
 
-#if BRASSICA_HAS_VULKAN
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
@@ -89,7 +70,6 @@ namespace brassica {
 		TaskShader     taskShader;
 		MeshShader     meshShader;
 		FragmentShader fragShader;
-#endif
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
 		const DispatchLoaderDynamic* dls = nullptr;
@@ -107,45 +87,35 @@ namespace brassica {
 		void RegisterInto(graph::Graph& graph) override { graph.RegisterRef(*this); }
 
 		void Init(const render::NodeServices& services) override {
-#if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			dls = services.dispatchLoader;
-			taskShader.CompileTaskFromFile(services.device, "shaders/ball.task");
-			meshShader.CompileMeshFromFile(services.device, "shaders/ball.mesh");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/ball.frag");
+			if (!taskShader.CompileTaskFromFile(services.device, "shaders/ball.task") ||
+			    !meshShader.CompileMeshFromFile(services.device, "shaders/ball.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/ball.frag")) {
+				spdlog::critical("EntityNode shader compilation failed.");
+				throw std::runtime_error("EntityNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-#else
-			(void)services;
-#endif
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-#if BRASSICA_HAS_VULKAN
 			watcher.RegisterShader(&taskShader);
 			watcher.RegisterShader(&meshShader);
 			watcher.RegisterShader(&fragShader);
-#else
-			(void)watcher;
-#endif
 		}
 
 		void Destroy(vk::Device device) override {
-#if BRASSICA_HAS_VULKAN
 			taskShader.Destroy(device);
 			meshShader.Destroy(device);
 			fragShader.Destroy(device);
-#else
-			(void)device;
-#endif
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.isActive = (indirectCmd.groupCountX > 0 || indirectCmd.groupCountY > 0 || indirectCmd.groupCountZ > 0);
 
-#if BRASSICA_HAS_VULKAN
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferPosition>(),
@@ -184,15 +154,11 @@ namespace brassica {
 					.desc = indirectDesc,
 				}
 			);
-#else
-			(void)ctx;
-#endif
 
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-#if BRASSICA_HAS_VULKAN
 			ctx.WriteSpan<EntityIndirectBuffer<Tag>>(std::span<const MeshTasksIndirectCommand>(&indirectCmd, 1));
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
@@ -270,9 +236,6 @@ namespace brassica {
 				std::uint32_t groups = indirectCmd.groupCountX > 0 ? indirectCmd.groupCountX : 1;
 				vkCmd.drawMeshTasksEXT(groups, 1, 1, *dls);
 			}
-#else
-			(void)ctx;
-#endif
 		}
 	};
 

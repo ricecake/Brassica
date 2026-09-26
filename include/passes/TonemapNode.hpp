@@ -8,34 +8,16 @@
 
 #include "VulkanCompat.hpp"
 
-#ifndef BRASSICA_HAS_VULKAN
-	#if __has_include(<vulkan/vulkan.hpp>) || __has_include("vulkan/vulkan.hpp")
-		#define BRASSICA_HAS_VULKAN 1
-	#else
-		#define BRASSICA_HAS_VULKAN 0
-	#endif
-#endif
-
-#if BRASSICA_HAS_VULKAN
-	#include "graph/PhysicalResource.hpp"
-	#include "render/PipelineLibrary.hpp"
-	#include "Shader.hpp"
-	#include "ShaderWatcher.hpp"
-#else
-namespace brassica {
-	class ShaderWatcher;
-
-	namespace render {
-		class PipelineLibrary;
-	} // namespace render
-} // namespace brassica
-#endif
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
+#include "render/PipelineLibrary.hpp"
+#include "Shader.hpp"
+#include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "types/AutoExposureData.hpp"
 #include "types/TonemapPushConstants.hpp"
 
@@ -120,11 +102,15 @@ namespace brassica {
 #if BRASSICA_HAS_VULKAN
 			pipelineLibrary = services.pipelineLibrary;
 			swapchainFormat = services.swapchainFormat;
+if (!vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag")) {
+				spdlog::critical("TonemapNode shader compilation failed.");
+				throw std::runtime_error("TonemapNode shader compilation failed.");
+			}
+
 			downsampleShader.CompileComputeFromFile(services.device, "shaders/effects/bloom_downsample.comp");
 			ltmFuseShader.CompileComputeFromFile(services.device, "shaders/effects/ltm_fuse.comp");
-			vertShader.CompileVertexFromFile(services.device, "shaders/tonemap.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/tonemap.frag");
-			if (services.shaderWatcher) {
+			
 				RegisterShaders(*services.shaderWatcher);
 			}
 #else

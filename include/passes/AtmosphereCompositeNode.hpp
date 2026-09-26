@@ -14,6 +14,7 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "spdlog/spdlog.h"
 #include "types/AtmosphereCompositePushConstants.hpp"
 
 namespace brassica {
@@ -57,8 +58,11 @@ namespace brassica {
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert");
-			fragShader.CompileFragmentFromFile(services.device, "shaders/atmosphere/composite.frag");
+			if (!vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/atmosphere/composite.frag")) {
+				spdlog::critical("AtmosphereCompositeNode shader compilation failed.");
+				throw std::runtime_error("AtmosphereCompositeNode shader compilation failed.");
+			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
