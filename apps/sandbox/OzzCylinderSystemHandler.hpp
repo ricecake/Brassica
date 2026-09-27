@@ -5,7 +5,7 @@
 #include "Engine.hpp"
 #include "SystemHandler.hpp"
 #include "animation/SkinnedCylinder.hpp"
-#include "passes/EntityNode.hpp"
+#include "passes/OzzCylinderNode.hpp"
 #include "terrain/TerrainClipmap.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
@@ -14,7 +14,9 @@ namespace brassica {
 
 	class OzzCylinderSystemHandler: public SystemHandler {
 	public:
-		OzzCylinderSystemHandler() { CreateEntityNode<OzzCylinderSystemHandler>(); }
+		OzzCylinderSystemHandler() {
+			m_entityNode = std::make_shared<OzzCylinderNode<struct OzzCylinderTag>>();
+		}
 
 		void Setup(Engine& engine, const FrameDetails& frameDetails) override {
 			float targetX = 6.0f;
@@ -34,7 +36,7 @@ namespace brassica {
 			cmd.groupCountX = 1;
 			cmd.groupCountY = 1;
 			cmd.groupCountZ = 1;
-			GetEntityNode().SetIndirectCommand(cmd);
+			GetCylinderNode().SetIndirectCommand(cmd);
 
 			UpdateRenderData(transform, frameDetails.totalTime);
 		}
@@ -66,6 +68,14 @@ namespace brassica {
 
 		[[nodiscard]] const SkinnedCylinder& GetSkinnedCylinder() const { return m_cylinder; }
 
+	protected:
+		OzzCylinderNode<struct OzzCylinderTag>& GetCylinderNode() {
+			if (!m_entityNode) {
+				m_entityNode = std::make_shared<OzzCylinderNode<struct OzzCylinderTag>>();
+			}
+			return static_cast<OzzCylinderNode<struct OzzCylinderTag>&>(*m_entityNode);
+		}
+
 	private:
 		void UpdateRenderData(const TransformComponent& transform, double totalTime) {
 			EntityPushConstants push{};
@@ -78,7 +88,9 @@ namespace brassica {
 				0
 			);
 
-			GetEntityNode().SetPushConstants(push);
+			auto& node = GetCylinderNode();
+			node.SetMeshData(m_cylinder.GetPositions(), m_cylinder.GetNormals(), m_cylinder.GetIndices());
+			node.SetPushConstants(push);
 		}
 
 		entt::entity    cylinderEntity{entt::null};

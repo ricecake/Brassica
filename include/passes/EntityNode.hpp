@@ -48,15 +48,6 @@ namespace brassica {
 
 	template <typename Tag = struct DefaultEntityTag>
 	struct EntityNode: public IEntityNode {
-		// GBuffer<graph::Modify>, not Create: TerrainNode is the real Create<GBuffer...> producer
-		// (GBuffer<graph::Create> there), and this node's own Setup() below realizes all four
-		// GBuffer keys with AccessKind::ReadWrite (a depth-tested opaque draw into the *existing*
-		// gbuffer, not a fresh one) -- declaring Create here claimed to be a second, independent
-		// producer of the same keys with no dependency on Terrain's write, and DeferredNode's
-		// Read<GBuffer> had no reason to end up ordered after this node's draw either. Modify
-		// consumes Terrain's Create output and re-produces it, so Deferred's Read now picks up
-		// this node's write too -- the same last-writer-wins chaining WaterNode/
-		// AtmosphereCompositeNode already rely on for Modify<HdrColor>.
 		using Resources = graph::Declares<GBuffer<graph::ModifyKey>, graph::Create<EntityIndirectBuffer<Tag>>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
