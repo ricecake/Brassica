@@ -53,6 +53,8 @@ else()
     set(BRASSICA_LIB_TYPE STATIC)
 endif()
 
+add_compile_definitions(EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
+
 # 2. Dependency Discovery
 find_package(Vulkan REQUIRED)
 find_package(Threads REQUIRED)
@@ -152,6 +154,7 @@ target_include_directories(brassica
         external/stb
         external/miniaudio
         external/imgui_entt_entity_editor
+        external/eigen
 )
 
 target_link_libraries(brassica
