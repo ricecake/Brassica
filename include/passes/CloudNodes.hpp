@@ -14,10 +14,13 @@
 #endif
 
 #if BRASSICA_HAS_VULKAN
+	#include "cloud/ICloudManager.hpp"
 	#include "graph/PhysicalResource.hpp"
 	#include "render/PipelineLibrary.hpp"
+	#include "ServiceLocator.hpp"
 	#include "Shader.hpp"
 	#include "ShaderWatcher.hpp"
+	#include "types/CloudPushConstants.hpp"
 #else
 namespace brassica {
 	class ShaderWatcher;
@@ -46,10 +49,13 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
+		render::NodeFrameParams  frameParams{};
 #if BRASSICA_HAS_VULKAN
 		ComputeShader weatherShader;
 		ComputeShader volumeShader;
 #endif
+
+		void SetFrameParams(const render::NodeFrameParams& params) { frameParams = params; }
 
 		void Init(const render::NodeServices& services) {
 #if BRASSICA_HAS_VULKAN
@@ -100,14 +106,11 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(1024, 1024, vk::Format::eR16G16Sfloat),
 				}
 			);
-			auto volumeDesc = graph::ComputeStorageImageDesc(128, 128, vk::Format::eR16G16B16A16Sfloat);
-			volumeDesc.kind = graph::ResourceDesc::Kind::Image3D;
-			volumeDesc.depth = 128;
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<Cloud3DVolumeTexture>(),
 					.access = graph::AccessKind::Write,
-					.desc = volumeDesc,
+					.desc = graph::ComputeStorageImageDesc(128, 128, 128, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 #else
@@ -153,22 +156,35 @@ namespace brassica {
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 
-			render::ComputePipelineRequest reqW{.shader = &weatherShader, .setLayouts = setLayouts};
-			render::ResolvedPipeline resW = pipelineLibrary->ResolveCached(reqW);
-
-			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resW.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resW.pipeline);
+			ICloudManager::State cloudState{};
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				cloudState = ServiceLocator::Instance().Get<ICloudManager>()->GetState();
 			}
 
+			CloudBakePushConstants push{};
+			push.weatherStorageIdx = ctx.StorageIndex<CloudWeatherTexture>();
+			push.minMaxStorageIdx = ctx.StorageIndex<CloudWeatherMinMaxTexture>();
+			push.volumeStorageIdx = ctx.StorageIndex<Cloud3DVolumeTexture>();
+			push.worldScale = frameParams.worldScale;
+			push.cloudCoverage = cloudState.coverage;
+			push.cloudThickness = cloudState.thickness;
+			push.time = frameParams.time;
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			std::array<vk::DescriptorSet, 2> boundSets{
 				static_cast<VkDescriptorSet>(ctx.frameSet),
 				static_cast<VkDescriptorSet>(ctx.globalSet)
 			};
+
+			render::ComputePipelineRequest reqW{.shader = &weatherShader, .setLayouts = setLayouts};
+			render::ResolvedPipeline resW = pipelineLibrary->ResolveCached(reqW);
+			if (resW.pipeline) {
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resW.pipeline);
+			}
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resW.layout, 0, boundSets, nullptr);
 			}
-
+			vkCmd.pushConstants(resW.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudBakePushConstants), &push);
 			vkCmd.dispatch(64, 64, 1);
 
 			render::ComputePipelineRequest reqV{.shader = &volumeShader, .setLayouts = setLayouts};
@@ -176,6 +192,10 @@ namespace brassica {
 			if (resV.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resV.pipeline);
 			}
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resV.layout, 0, boundSets, nullptr);
+			}
+			vkCmd.pushConstants(resV.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudBakePushConstants), &push);
 			vkCmd.dispatch(32, 32, 32);
 #else
 			(void)ctx;
@@ -192,9 +212,12 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
+		render::NodeFrameParams  frameParams{};
 #if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
 #endif
+
+		void SetFrameParams(const render::NodeFrameParams& params) { frameParams = params; }
 
 		void Init(const render::NodeServices& services) {
 #if BRASSICA_HAS_VULKAN
@@ -259,6 +282,24 @@ namespace brassica {
 			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
+			ICloudManager::State cloudState{};
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				cloudState = ServiceLocator::Instance().Get<ICloudManager>()->GetState();
+			}
+
+			CloudBoundingPushConstants push{};
+			push.depthTextureIdx = ctx.Index<GBufferDepth>();
+			push.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>();
+			push.boundingStorageIdx = ctx.StorageIndex<CloudBoundingTexture>();
+			push.cloudMaxRayDistance = cloudState.maxRayDistance;
+			push.renderScale = cloudState.renderScale;
+			push.worldScale = frameParams.worldScale;
+			push.cloudCoverage = cloudState.coverage;
+			push.cloudAltitude = cloudState.altitude;
+			push.cloudThickness = cloudState.thickness;
+			push.time = frameParams.time;
+			push.frameIndex = static_cast<uint32_t>(ctx.frameIndex);
+
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
@@ -271,6 +312,8 @@ namespace brassica {
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudBoundingPushConstants), &push);
 
 			uint32_t gx = (ctx.width + 7) / 8;
 			uint32_t gy = (ctx.height + 7) / 8;
@@ -289,9 +332,12 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
+		render::NodeFrameParams  frameParams{};
 #if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
 #endif
+
+		void SetFrameParams(const render::NodeFrameParams& params) { frameParams = params; }
 
 		void Init(const render::NodeServices& services) {
 #if BRASSICA_HAS_VULKAN
@@ -359,6 +405,20 @@ namespace brassica {
 			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
+			ICloudManager::State cloudState{};
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				cloudState = ServiceLocator::Instance().Get<ICloudManager>()->GetState();
+			}
+
+			CloudShadowBakePushConstants push{};
+			push.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>();
+			push.shadowMapStorageIdx = ctx.StorageIndex<CloudShadowMap>();
+			push.frameIndex = static_cast<uint32_t>(ctx.frameIndex);
+			push.worldScale = frameParams.worldScale;
+			push.cloudAltitude = cloudState.altitude;
+			push.cloudThickness = cloudState.thickness;
+			push.primaryLightDir = frameParams.sunDir;
+
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
@@ -371,6 +431,8 @@ namespace brassica {
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudShadowBakePushConstants), &push);
 
 			vkCmd.dispatch(64, 64, 1);
 #else
@@ -389,9 +451,12 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::GIComput;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
+		render::NodeFrameParams  frameParams{};
 #if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
 #endif
+
+		void SetFrameParams(const render::NodeFrameParams& params) { frameParams = params; }
 
 		void Init(const render::NodeServices& services) {
 #if BRASSICA_HAS_VULKAN
@@ -491,6 +556,26 @@ namespace brassica {
 			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
+			ICloudManager::State cloudState{};
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				cloudState = ServiceLocator::Instance().Get<ICloudManager>()->GetState();
+			}
+
+			auto* registry = static_cast<graph::PhysicalResourceRegistry*>(ctx.resources);
+
+			CloudTileSchedulerPushConstants push{};
+			push.boundingMapIdx = ctx.Index<CloudBoundingTexture>();
+			push.errorMapStorageIdx = ctx.StorageIndex<CloudErrorMap>();
+			push.tileQueueBufferAddr = registry ? registry->GetBufferDeviceAddress<CloudTileQueueSSBO>() : 0;
+			push.indirectDispatchBufferAddr = registry ? registry->GetBufferDeviceAddress<CloudIndirectDispatchSSBO>() : 0;
+			push.pass = 0;
+			push.priorityErrorWeight = cloudState.priorityErrorWeight;
+			push.priorityGradWeight = cloudState.priorityGradWeight;
+			push.priorityAgeWeight = cloudState.priorityAgeWeight;
+			push.priorityNeighborErrorWeight = cloudState.priorityNeighborErrorWeight;
+			push.priorityNeighborGradWeight = cloudState.priorityNeighborGradWeight;
+			push.priorityThreshold = cloudState.priorityThreshold;
+
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
@@ -503,6 +588,8 @@ namespace brassica {
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTileSchedulerPushConstants), &push);
 
 			uint32_t tileCols = (ctx.width + 7) / 8;
 			uint32_t tileRows = (ctx.height + 7) / 8;
@@ -520,6 +607,8 @@ namespace brassica {
 			graph::Read<GBufferDepth>,
 			graph::Read<CloudBoundingTexture>,
 			graph::Read<CloudWeatherMinMaxTexture>,
+			graph::Read<CloudWeatherTexture>,
+			graph::Read<Cloud3DVolumeTexture>,
 			graph::Read<CloudTileQueueSSBO>,
 			graph::Read<CloudIndirectDispatchSSBO>,
 			graph::Create<CloudPackedColor>,
@@ -529,9 +618,12 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
+		render::NodeFrameParams  frameParams{};
 #if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
 #endif
+
+		void SetFrameParams(const render::NodeFrameParams& params) { frameParams = params; }
 
 		void Init(const render::NodeServices& services) {
 #if BRASSICA_HAS_VULKAN
@@ -630,6 +722,38 @@ namespace brassica {
 			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
+			ICloudManager::State cloudState{};
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				cloudState = ServiceLocator::Instance().Get<ICloudManager>()->GetState();
+			}
+
+			auto* registry = static_cast<graph::PhysicalResourceRegistry*>(ctx.resources);
+
+			CloudRenderPushConstants push{};
+			push.depthTextureIdx = ctx.Index<GBufferDepth>();
+			push.boundingMapIdx = ctx.Index<CloudBoundingTexture>();
+			push.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>();
+			push.weatherTextureIdx = ctx.Index<CloudWeatherTexture>();
+			push.volume3DIdx = ctx.Index<Cloud3DVolumeTexture>();
+			push.packedColorStorageIdx = ctx.StorageIndex<CloudPackedColor>();
+			push.packedDepthStorageIdx = ctx.StorageIndex<CloudPackedDepth>();
+			push.packedVelocityStorageIdx = ctx.StorageIndex<CloudPackedVelocity>();
+			push.errorMapStorageIdx = ctx.StorageIndex<CloudErrorMap>();
+			push.tileQueueBufferAddr = registry ? registry->GetBufferDeviceAddress<CloudTileQueueSSBO>() : 0;
+			push.cloudMaxRayDistance = cloudState.maxRayDistance;
+			push.renderScale = cloudState.renderScale;
+			push.worldScale = frameParams.worldScale;
+			push.cloudMinSamples = cloudState.minSamples;
+			push.cloudMaxSamples = cloudState.maxSamples;
+			push.cloudExtinction = cloudState.extinction;
+			push.deltaTime = frameParams.time;
+			push.cloudAltitude = cloudState.altitude;
+			push.cloudThickness = cloudState.thickness;
+			push.cloudDensity = cloudState.density;
+			push.cloudCoverage = cloudState.coverage;
+			push.cloudExtinctionColor = cloudState.extinctionColor;
+			push.cloudAlbedo = cloudState.albedo;
+
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
@@ -642,6 +766,8 @@ namespace brassica {
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudRenderPushConstants), &push);
 
 			uint32_t tileCols = (ctx.width + 7) / 8;
 			uint32_t tileRows = (ctx.height + 7) / 8;
@@ -664,9 +790,12 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
+		render::NodeFrameParams  frameParams{};
 #if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
 #endif
+
+		void SetFrameParams(const render::NodeFrameParams& params) { frameParams = params; }
 
 		void Init(const render::NodeServices& services) {
 #if BRASSICA_HAS_VULKAN
@@ -748,6 +877,35 @@ namespace brassica {
 			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
+			ICloudManager::State cloudState{};
+			bool hasHistory = false;
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<ICloudManager>();
+				cloudState = mgr->GetState();
+				hasHistory = mgr->HasHistory();
+			}
+
+			auto* registry = static_cast<graph::PhysicalResourceRegistry*>(ctx.resources);
+
+			CloudTemporalPushConstants push{};
+			push.packedColorIdx = ctx.Index<CloudPackedColor>();
+			push.packedDepthIdx = ctx.Index<CloudPackedDepth>();
+			push.packedVelocityIdx = ctx.Index<CloudPackedVelocity>();
+			push.boundingMapIdx = ctx.Index<CloudBoundingTexture>();
+			push.colorStorageIdx = ctx.StorageIndex<CloudTemporalColor>();
+			push.depthStorageIdx = ctx.StorageIndex<CloudPackedDepth>();
+			push.momentsStorageIdx = ctx.StorageIndex<CloudTemporalMoments>();
+			push.errorMapStorageIdx = ctx.StorageIndex<CloudErrorMap>();
+			push.tileQueueBufferAddr = registry ? registry->GetBufferDeviceAddress<CloudTileQueueSSBO>() : 0;
+			push.cloudTemporalGamma = cloudState.temporalGamma;
+			push.cloudMaxHistoryLength = cloudState.maxHistoryLength;
+			push.cloudMaxRayDistance = cloudState.maxRayDistance;
+			push.renderScale = cloudState.renderScale;
+			push.deltaTime = frameParams.time;
+			push.enableTemporal = cloudState.enableTemporal ? 1 : 0;
+			push.hasHistory = hasHistory ? 1 : 0;
+			push.useTileQueue = cloudState.enableTileScheduler ? 1 : 0;
+
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
@@ -760,6 +918,8 @@ namespace brassica {
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTemporalPushConstants), &push);
 
 			uint32_t gx = (ctx.width + 7) / 8;
 			uint32_t gy = (ctx.height + 7) / 8;
@@ -781,9 +941,12 @@ namespace brassica {
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
+		render::NodeFrameParams  frameParams{};
 #if BRASSICA_HAS_VULKAN
 		ComputeShader compShader;
 #endif
+
+		void SetFrameParams(const render::NodeFrameParams& params) { frameParams = params; }
 
 		void Init(const render::NodeServices& services) {
 #if BRASSICA_HAS_VULKAN
@@ -848,6 +1011,25 @@ namespace brassica {
 			render::ComputePipelineRequest request{.shader = &compShader, .setLayouts = setLayouts};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
+			ICloudManager::State cloudState{};
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				cloudState = ServiceLocator::Instance().Get<ICloudManager>()->GetState();
+			}
+
+			CloudSpatialFilterPushConstants push{};
+			push.cloudColorIdx = ctx.Index<CloudTemporalColor>();
+			push.cloudDepthIdx = ctx.Index<CloudPackedDepth>();
+			push.cloudMomentsIdx = ctx.Index<CloudTemporalMoments>();
+			push.errorMapIdx = ctx.Index<CloudErrorMap>();
+			push.filteredColorStorageIdx = ctx.StorageIndex<CloudFilteredColor>();
+			push.stepSize = 1;
+			push.passIndex = 0;
+			push.phiLuma = cloudState.phiLuma;
+			push.phiDensity = cloudState.phiDensity;
+			push.phiDepth = cloudState.phiDepth;
+			push.svgfHistoryBoost = cloudState.svgfHistoryBoost;
+			push.svgfHistoryThreshold = cloudState.svgfHistoryThreshold;
+
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
@@ -860,6 +1042,8 @@ namespace brassica {
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudSpatialFilterPushConstants), &push);
 
 			uint32_t gx = (ctx.width + 7) / 8;
 			uint32_t gy = (ctx.height + 7) / 8;

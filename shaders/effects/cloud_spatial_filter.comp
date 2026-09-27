@@ -2,22 +2,22 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-layout(binding = 0, rgba32f) uniform image2D outFilteredColor;
+#include "../bindless.glsl"
 
-layout(binding = 1) uniform sampler2D uCloudColor;   // Accumulated RGBA
-layout(binding = 2) uniform sampler2D uCloudDepth;   // Accumulated Depth Props
-layout(binding = 3) uniform sampler2D uCloudMoments; // Accumulated Moments
-layout(binding = 4) uniform sampler2D uErrorMap;     // Tile Error Map
-
-uniform int   uStepSize;     // 1, 2, 4, 8, 16...
-uniform int   uPassIndex;
-
-uniform float uCloudPhiLuma;
-uniform float uCloudPhiDensity;
-uniform float uCloudPhiDepth;
-
-uniform float uCloudSvgfHistoryBoost;
-uniform float uCloudSvgfHistoryThreshold;
+layout(push_constant) uniform CloudSpatialFilterPushConstants {
+	uint cloudColorIdx;
+	uint cloudDepthIdx;
+	uint cloudMomentsIdx;
+	uint errorMapIdx;
+	uint filteredColorStorageIdx;
+	int stepSize;
+	int passIndex;
+	float phiLuma;
+	float phiDensity;
+	float phiDepth;
+	float svgfHistoryBoost;
+	float svgfHistoryThreshold;
+} push;
 
 const float kernel[5] = float[](1.0/16.0, 1.0/4.0, 3.0/8.0, 1.0/4.0, 1.0/16.0);
 
@@ -27,18 +27,18 @@ float luma(vec3 color) {
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = imageSize(outFilteredColor);
+	ivec2 size = imageSize(uImagesRGBA32F[nonuniformEXT(push.filteredColorStorageIdx)]);
 	if (pixel.x >= size.x || pixel.y >= size.y) return;
 
 	vec2 texelSize = 1.0 / vec2(size);
 	vec2 uv = (vec2(pixel) + 0.5) * texelSize;
 
-	float centerDepth = texture(uCloudDepth, uv).r;
-	vec4 centerColor = texture(uCloudColor, uv);
-	vec4 centerMoments = texture(uCloudMoments, uv);
+	float centerDepth = SAMPLE_LINEAR(push.cloudDepthIdx, uv).r;
+	vec4 centerColor = SAMPLE_LINEAR(push.cloudColorIdx, uv);
+	vec4 centerMoments = SAMPLE_LINEAR(push.cloudMomentsIdx, uv);
 
 	ivec2 tileCoord = pixel / ivec2(8);
-	vec4 tileErrorData = texelFetch(uErrorMap, tileCoord, 0);
+	vec4 tileErrorData = imageLoad(uImagesRGBA32F[nonuniformEXT(push.errorMapIdx)], tileCoord);
 	float tileError = tileErrorData.r;
 
 	float centerDensity = centerColor.a;
@@ -46,33 +46,42 @@ void main() {
 
 	float varLuma = max(0.0, centerMoments.y - centerMoments.x * centerMoments.x);
 	float stdLuma = sqrt(varLuma);
-	float historyScale = mix(uCloudSvgfHistoryBoost, 1.0, smoothstep(1.0, max(2.0, uCloudSvgfHistoryThreshold), centerHistory));
+	float historyScale = mix(push.svgfHistoryBoost, 1.0, smoothstep(1.0, max(2.0, push.svgfHistoryThreshold), centerHistory));
 	float errorBoost = 1.0 + tileError * 3.0;
 
-	float phiLuma = (uCloudPhiLuma * stdLuma + 0.02) * historyScale * errorBoost;
-	float phiDensity = (uCloudPhiDensity * centerDensity + 0.1) * historyScale * errorBoost;
-	float phiDepth = (uCloudPhiDepth * centerDepth + 0.05) * historyScale * errorBoost;
+	float phiL = max(1e-4, push.phiLuma * stdLuma * historyScale * errorBoost);
+	float phiD = max(1e-4, push.phiDepth * 0.1);
+	float phiAlpha = max(1e-4, push.phiDensity * historyScale);
 
-	vec4  sumColor = vec4(0.0);
+	vec4 sumColor = vec4(0.0);
 	float sumWeight = 0.0;
 
 	for (int y = -2; y <= 2; y++) {
 		for (int x = -2; x <= 2; x++) {
-			vec2 offset = vec2(x, y) * float(uStepSize) * texelSize;
+			ivec2 samplePixel = pixel + ivec2(x, y) * push.stepSize;
+			if (samplePixel.x < 0 || samplePixel.y < 0 || samplePixel.x >= size.x || samplePixel.y >= size.y) continue;
 
-			vec4 sampleColor = texture(uCloudColor, uv + offset);
-			float sampleDensity = sampleColor.a;
-			float sampleDepth = texture(uCloudDepth, uv + offset).r;
+			vec2 sampleUV = (vec2(samplePixel) + 0.5) * texelSize;
+			vec4 sampleColor = SAMPLE_LINEAR(push.cloudColorIdx, sampleUV);
+			float sampleDepth = SAMPLE_LINEAR(push.cloudDepthIdx, sampleUV).r;
 
-			float lumaWeight = exp(-abs(luma(centerColor.rgb) - luma(sampleColor.rgb)) / max(1e-4, phiLuma));
-			float densityWeight = exp(-abs(centerDensity - sampleDensity) / max(1e-4, phiDensity));
-			float depthWeight = exp(-abs(centerDepth - sampleDepth) / max(1e-4, phiDepth));
+			float kernelWeight = kernel[x + 2] * kernel[y + 2];
 
-			float weight = kernel[x + 2] * kernel[y + 2] * lumaWeight * densityWeight * depthWeight;
-			sumColor += sampleColor * weight;
-			sumWeight += weight;
+			float diffL = abs(luma(sampleColor.rgb) - luma(centerColor.rgb));
+			float weightL = exp(-diffL / phiL);
+
+			float diffD = abs(sampleDepth - centerDepth);
+			float weightD = exp(-diffD / phiD);
+
+			float diffAlpha = abs(sampleColor.a - centerDensity);
+			float weightAlpha = exp(-diffAlpha / phiAlpha);
+
+			float w = kernelWeight * weightL * weightD * weightAlpha;
+			sumColor += sampleColor * w;
+			sumWeight += w;
 		}
 	}
 
-	imageStore(outFilteredColor, pixel, sumColor / max(sumWeight, 0.0001));
+	vec4 finalColor = (sumWeight > 0.0) ? (sumColor / sumWeight) : centerColor;
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.filteredColorStorageIdx)], pixel, finalColor);
 }

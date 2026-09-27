@@ -877,19 +877,36 @@ namespace brassica::graph {
 	}
 
 	inline ResourceDesc ComputeStorageImageDesc(
-		std::uint32_t width,
-		std::uint32_t height,
-		vk::Format    format = vk::Format::eR16G16B16A16Sfloat
+		vk::Extent3D extent,
+		vk::Format   format = vk::Format::eR16G16B16A16Sfloat
 	) {
 		return ResourceDesc{
-			.kind = ResourceDesc::Kind::Image2D,
-			.width = width,
-			.height = height,
+			.kind = extent.depth > 1 ? ResourceDesc::Kind::Image3D : ResourceDesc::Kind::Image2D,
+			.width = extent.width,
+			.height = extent.height,
+			.depth = extent.depth,
 			.formatCode = static_cast<std::uint32_t>(format),
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
 			),
 		};
+	}
+
+	inline ResourceDesc ComputeStorageImageDesc(
+		std::uint32_t width,
+		std::uint32_t height,
+		std::uint32_t depth,
+		vk::Format    format = vk::Format::eR16G16B16A16Sfloat
+	) {
+		return ComputeStorageImageDesc(vk::Extent3D(width, height, depth), format);
+	}
+
+	inline ResourceDesc ComputeStorageImageDesc(
+		std::uint32_t width,
+		std::uint32_t height,
+		vk::Format    format = vk::Format::eR16G16B16A16Sfloat
+	) {
+		return ComputeStorageImageDesc(vk::Extent3D(width, height, 1), format);
 	}
 
 	inline ResourceDesc UniformBufferDesc(std::uint64_t byteSize) {
@@ -912,7 +929,8 @@ namespace brassica::graph {
 			// eTransferDst: same reason as UniformBufferDesc above -- ParticleSystemNode's
 			// typeBufferNode is exactly this preset, uploaded via HostWriteNode/WriteSpan.
 			.usageMask = static_cast<std::uint32_t>(
-				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst
+				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst |
+				vk::BufferUsageFlagBits::eShaderDeviceAddress
 			),
 			.byteSize = byteSize,
 		};

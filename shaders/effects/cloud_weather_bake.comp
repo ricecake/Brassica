@@ -2,15 +2,19 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0, rgba16f) uniform image2D outWeatherMap;
-layout(binding = 1, rg16f) uniform image2D outMinMaxMap;
-
+#include "../bindless.glsl"
 #include "../helpers/noise.glsl"
 
-uniform float uWorldScale;
-uniform float uCloudCoverage;
-uniform float uCloudThickness;
-uniform float uTime;
+layout(push_constant) uniform CloudBakePushConstants {
+	uint weatherStorageIdx;
+	uint minMaxStorageIdx;
+	uint volumeStorageIdx;
+	float worldScale;
+	float cloudCoverage;
+	float cloudThickness;
+	float time;
+	uint padding;
+} push;
 
 float remap(float value, float valueMin, float valueMax) {
 	return (value - valueMin) / max(1e-5, (valueMax - valueMin));
@@ -29,7 +33,7 @@ float smaxCubic(float a, float b, float k) {
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = imageSize(outWeatherMap);
+	ivec2 size = imageSize(uImagesRGBA32F[nonuniformEXT(push.weatherStorageIdx)]);
 	if (pixel.x >= size.x || pixel.y >= size.y) return;
 
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
@@ -48,6 +52,7 @@ void main() {
 	float ridgeChannel = cross_noise_fbm(uv * period2 + vec2(0.5), 3);
 	float moistureMap = clamp(dot_noise_fbm(uv * period1 + vec2(0.13, 0.37), 4), 0.0, 1.0);
 
-	imageStore(outWeatherMap, pixel, vec4(finalCoverage, typeValue, ridgeChannel, moistureMap));
-	imageStore(outMinMaxMap, pixel, vec4(finalCoverage, finalCoverage, moistureMap, 1.0));
+	vec4 weatherVal = vec4(finalCoverage, typeValue, ridgeChannel, moistureMap);
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.weatherStorageIdx)], pixel, weatherVal);
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], pixel, vec4(finalCoverage, finalCoverage, 0.0, 0.0));
 }

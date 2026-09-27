@@ -36,6 +36,9 @@ layout(set = 1, binding = 0) uniform texture2D uTextures2D[];
 layout(set = 1, binding = 1) uniform texture2DArray uTextureArrays[];
 layout(set = 1, binding = 2) uniform sampler uSamplers[];
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
+layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
+layout(set = 1, binding = 6, rgba16f) uniform image3D uImages3D[];
+layout(set = 1, binding = 7, r16f) uniform image2DArray uImageArrays[];
 
 // Sampler catalog indices, written once by Engine::InitGlobalDescriptors and injected here via
 // Shader::RegisterConstant's [[NAME]] substitution -- GLSL and C++ read the same catalog by
@@ -45,7 +48,7 @@ layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
 #define BRASSICA_SAMPLER_LINEAR_REPEAT_MIP [[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]]
 #define BRASSICA_SAMPLER_NEAREST_REPEAT [[BRASSICA_SAMPLER_NEAREST_REPEAT]]
 
-// idx is a bindless index into uTextures2D/uTextureArrays (NodeContext::Index<K>() on the C++
+// idx is a bindless index into uTextures2D/uTextureArrays/uTextures3D (NodeContext::Index<K>() on the C++
 // side) -- always wrapped in nonuniformEXT here, once, rather than trusting every call site to
 // remember it. A missing/never-registered resource resolves to index 0, the permanent 1x1
 // fallback texture (PhysicalRegistry::EnsureFallbackTexture) -- reading it is always well-defined
@@ -62,5 +65,20 @@ layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
 
 #define SAMPLE_ARRAY_WRAP(idx, uvw)                                                                                    \
 	texture(sampler2DArray(uTextureArrays[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
+
+#define SAMPLE_3D_NEAREST(idx, uvw)                                                                                    \
+	texture(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uvw)
+
+#define SAMPLE_3D_LINEAR(idx, uvw)                                                                                     \
+	texture(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uvw)
+
+#define SAMPLE_3D_REPEAT_MIP(idx, uvw)                                                                                 \
+	texture(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
+
+#define SAMPLE_3D_LOD(idx, uvw, lod)                                                                                   \
+	textureLod(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uvw, lod)
+
+#define SAMPLE_ARRAY_LINEAR_LOD(idx, uvw, lod)                                                                         \
+	textureLod(sampler2DArray(uTextureArrays[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uvw, lod)
 
 #endif // BRASSICA_BINDLESS_GLSL
