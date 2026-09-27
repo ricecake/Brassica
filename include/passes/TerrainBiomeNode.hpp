@@ -64,7 +64,8 @@ namespace brassica {
 		ComputeShader            weatherShader;
 
 		bool          forceRegeneration{true};
-		bool          hasUpdate{true};
+		std::uint32_t frameCounter{0};
+		std::uint32_t updateInterval{300};
 		std::uint32_t textureDim{2048};
 
 		void Init(const render::NodeServices& services) {
@@ -94,13 +95,14 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			forceRegeneration = p.forceRegeneration;
-			hasUpdate = (p.cameraPosition != p.previousCameraPosition);
+			++frameCounter;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext&) {
+			bool shouldRun = forceRegeneration || (frameCounter == 1) || (frameCounter % updateInterval == 0);
 			graph::Recipe r{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = forceRegeneration || hasUpdate
+				.isActive = shouldRun
 			};
 			r.realizations.push_back(
 				graph::ResourceRealization{

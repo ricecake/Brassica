@@ -84,7 +84,7 @@ float sampleTerrainTileVisibility(
 vec4 sampleTerrainWeatherBiome(uint weatherStorageIdx, vec3 worldPos) {
 	vec3 dir = normalize(worldPos - vec3(0.0, -FAKE_PLANET_RADIUS, 0.0));
 	vec2 uv = directionToOctahedralUV(dir);
-	return SAMPLE_NEAREST(weatherStorageIdx, uv);
+	return SAMPLE_LINEAR(weatherStorageIdx, uv);
 }
 
 // -----------------------------------------------------------------------------

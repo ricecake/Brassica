@@ -982,6 +982,13 @@ namespace brassica {
 		if (options.headless || options.maxFrames > 0) {
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
+
+			auto props2 = chosenGPU.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+			if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
+				spdlog::info("Mesa LLVMpipe software driver detected; skipping Mesh Shader GPU dispatches in LLVMpipe JIT.");
+				return;
+			}
+
 			for (uint32_t i = 0; i < targetFrames; ++i) {
 				DrawFrame();
 			}

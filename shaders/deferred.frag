@@ -103,11 +103,13 @@ void main() {
 
 		if (params.weatherBiomeIndex > 0u) {
 			vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, pos);
-			float severity = weatherSample.g;
-			float rainShadow = weatherSample.b;
-			float snowCover = weatherSample.a;
-			float tempEstimate = clamp(1.0 - (pos.y + 100.0) / 1500.0, 0.0, 1.0);
-			WhittakerBiome wb = evaluateWhittakerBiome(tempEstimate, clamp(0.5 - rainShadow * 0.3, 0.0, 1.0), severity, snowCover > 0.1 ? 1.0 : 0.0);
+			float temp = weatherSample.r;
+			float moisture = weatherSample.g;
+			float severity = weatherSample.b;
+			float rainShadow = weatherSample.a;
+
+			float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+			WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
 			albedo.rgb = mix(albedo.rgb, wb.color, 0.65);
 			roughness = mix(roughness, wb.roughness, 0.65);
 		}
