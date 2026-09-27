@@ -272,6 +272,7 @@ namespace brassica {
 		if (device) {
 			device.waitIdle();
 
+			audioManager.Shutdown();
 			imguiManager.Shutdown();
 			shaderWatcher.StopWatching();
 
@@ -489,6 +490,10 @@ namespace brassica {
 		serviceLocator.Provide<ConfigManager>(std::shared_ptr<ConfigManager>(&configManager, [](ConfigManager*) {}));
 		serviceLocator.Provide<CameraData>(std::shared_ptr<CameraData>(&camera, [](CameraData*) {}));
 
+		audioManager.Initialize();
+		serviceLocator.Provide<IAudioManager>(std::shared_ptr<IAudioManager>(&audioManager, [](IAudioManager*) {}));
+		serviceLocator.Provide<AudioManager>(std::shared_ptr<AudioManager>(&audioManager, [](AudioManager*) {}));
+
 		lightManager.Initialize();
 		serviceLocator.Provide<ILightManager>(std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {}));
 		serviceLocator.Provide<LightManager>(std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {}));
@@ -512,6 +517,7 @@ namespace brassica {
 		);
 		serviceLocator.Provide<ImGuiManager>(std::shared_ptr<ImGuiManager>(&imguiManager, [](ImGuiManager*) {}));
 
+		audioManager.LoadState(configManager);
 		lightManager.LoadState(configManager);
 		terrainClipmap.LoadState(configManager);
 		terrainAS.LoadState(configManager);
@@ -1082,6 +1088,20 @@ namespace brassica {
 
 		glm::vec3 previousCameraPosition = camera.position;
 		UpdateCamera(deltaTime);
+
+		AudioState audioState{};
+		audioState.listenerPos = camera.position;
+		audioState.listenerFront = camera.GetForward();
+		audioState.listenerUp = camera.GetUp();
+		audioState.listenerSpeed = camera.GetDisplayedSpeed();
+		audioState.listenerFov = glm::degrees(camera.fov);
+		audioState.altitude = std::max(0.0f, camera.position.y);
+		audioState.speed = camera.GetDisplayedSpeed();
+		audioState.windStrength = 0.5f;
+		audioState.windVelocity = glm::vec3(5.0f, 0.0f, 0.0f) * audioState.windStrength;
+		audioManager.UpdateState(audioState);
+		audioManager.Update(deltaTime);
+
 		lightManager.Update(deltaTime);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
