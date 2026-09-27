@@ -215,6 +215,20 @@ foreach(APP_DIR ${APP_DIRS})
     endif()
 endforeach()
 
+# 5. Apps & Executables
+file(GLOB TOOL_DIRS "tools/*")
+foreach(TOOL_DIR ${TOOL_DIRS})
+    if(IS_DIRECTORY ${TOOL_DIR})
+        get_filename_component(TOOL_NAME ${TOOL_DIR} NAME)
+        file(GLOB TOOL_SOURCES "${TOOL_DIR}/main.cpp" "${TOOL_DIR}/src/*.cpp")
+        if(TOOL_SOURCES)
+            add_executable(${TOOL_NAME} ${TOOL_SOURCES})
+            target_link_libraries(${TOOL_NAME} PRIVATE brassica)
+            target_include_directories(${TOOL_NAME} PRIVATE "${TOOL_DIR}/include")
+        endif()
+    endif()
+endforeach()
+
 # 6. Formatting Target
 find_program(CLANG_FORMAT_EXE NAMES clang-format)
 if(CLANG_FORMAT_EXE)
