@@ -21,14 +21,13 @@ struct TectonicPlate {
 
 // Should return a value roughly between -1.0 and 1.0
 float sample_crustal_density(glm::vec3 p) {
-	// Example: fn2_node_tree->GenSingle3D(p.x, p.y, p.z, seed);
-	return 0.0f; // Placeholder
+	return Simplex::iqfBm(p);
 }
 
 // If FastNoise2 doesn't have native curl noise, you can approximate it
 // by taking the cross product of the gradients of three distinct Simplex layers.
 glm::vec3 sample_mantle_curl(glm::vec3 p) {
-	return glm::vec3(0.0f); // Placeholder
+	return Simplex::curlNoise(p);
 }
 
 // ==============================================================================
