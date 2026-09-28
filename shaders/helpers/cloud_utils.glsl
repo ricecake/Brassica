@@ -4,7 +4,7 @@
 #include "../atmosphere/common.glsl"
 #include "../textures/cloud.glsl"
 
-layout(std140, set = 0, binding = 5) uniform CloudUBO {
+layout(std140, set = 0, binding = 6) uniform CloudUBO {
 	mat4  u_cloudShadowMatrix;
 	int   u_useCloudShadowMap;
 

@@ -1423,7 +1423,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1454,9 +1454,15 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 5: CloudUBO
+		// Binding 5: AutoExposureBuffer
 		bindings[5]
 			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 6: CloudUBO
+		bindings[6]
+			.setBinding(6)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
@@ -1467,7 +1473,7 @@ namespace brassica {
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2 * FRAME_OVERLAP}
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1549,6 +1555,13 @@ namespace brassica {
 				&atmosphereUboMapped[i]
 			);
 			createBufferHelper(
+				sizeof(ExposureDataHost),
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+				autoExposureBuffers[i],
+				autoExposureAllocations[i],
+				&autoExposureMapped[i]
+			);
+			createBufferHelper(
 				sizeof(CloudUBO),
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				cloudUboBuffers[i],
@@ -1556,15 +1569,16 @@ namespace brassica {
 				&cloudUboMapped[i]
 			);
 
-			std::array<vk::DescriptorBufferInfo, 6> bufferDescs{};
+			std::array<vk::DescriptorBufferInfo, 7> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
 			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
 			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
-			bufferDescs[5].setBuffer(cloudUboBuffers[i]).setOffset(0).setRange(sizeof(CloudUBO));
+			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
+			bufferDescs[6].setBuffer(cloudUboBuffers[i]).setOffset(0).setRange(sizeof(CloudUBO));
 
-			std::array<vk::WriteDescriptorSet, 6> writes{};
+			std::array<vk::WriteDescriptorSet, 7> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -1593,8 +1607,13 @@ namespace brassica {
 			writes[5]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(5)
-				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[5]);
+			writes[6]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(6)
+				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+				.setBufferInfo(bufferDescs[6]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -1619,6 +1638,12 @@ namespace brassica {
 				atmosphereUboBuffers[i] = nullptr;
 				atmosphereUboAllocations[i] = nullptr;
 				atmosphereUboMapped[i] = nullptr;
+			}
+			if (autoExposureBuffers[i] && autoExposureAllocations[i]) {
+				vmaDestroyBuffer(allocator, autoExposureBuffers[i], autoExposureAllocations[i]);
+				autoExposureBuffers[i] = nullptr;
+				autoExposureAllocations[i] = nullptr;
+				autoExposureMapped[i] = nullptr;
 			}
 			if (cloudUboBuffers[i] && cloudUboAllocations[i]) {
 				vmaDestroyBuffer(allocator, cloudUboBuffers[i], cloudUboAllocations[i]);
