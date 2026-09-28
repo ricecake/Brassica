@@ -178,7 +178,7 @@ target_include_directories(brassica
         external/imgui_entt_entity_editor
         ${CMAKE_CURRENT_SOURCE_DIR}/external/geometry-central/include
         ${CMAKE_CURRENT_SOURCE_DIR}/external/ozz-animation/include
-        ${EIGEN3_INCLUDE_DIR}
+        external/eigen
 )
 
 target_link_libraries(brassica
@@ -239,6 +239,20 @@ foreach(APP_DIR ${APP_DIRS})
             add_executable(${APP_NAME} ${APP_SOURCES})
             target_link_libraries(${APP_NAME} PRIVATE brassica)
             target_include_directories(${APP_NAME} PRIVATE "${APP_DIR}/include")
+        endif()
+    endif()
+endforeach()
+
+# 5. Apps & Executables
+file(GLOB TOOL_DIRS "tools/*")
+foreach(TOOL_DIR ${TOOL_DIRS})
+    if(IS_DIRECTORY ${TOOL_DIR})
+        get_filename_component(TOOL_NAME ${TOOL_DIR} NAME)
+        file(GLOB TOOL_SOURCES "${TOOL_DIR}/main.cpp" "${TOOL_DIR}/src/*.cpp")
+        if(TOOL_SOURCES)
+            add_executable(${TOOL_NAME} ${TOOL_SOURCES})
+            target_link_libraries(${TOOL_NAME} PRIVATE brassica)
+            target_include_directories(${TOOL_NAME} PRIVATE "${TOOL_DIR}/include")
         endif()
     endif()
 endforeach()

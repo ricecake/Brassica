@@ -45,6 +45,11 @@ namespace brassica {
 			.default_value(std::string(""))
 			.implicit_value(std::string("terrain_map.png"))
 			.nargs(0, 1);
+
+		m_parser.add_argument("--aggressive-validation", "-aggressive-validation")
+			.help("Enable GPU-assisted + synchronization Vulkan validation (much slower; for debugging only)")
+			.default_value(false)
+			.implicit_value(true);
 	}
 
 	void ArgparseManager::Initialize() {
@@ -142,6 +147,12 @@ namespace brassica {
 				return path;
 		}
 		return "terrain_map.png";
+	}
+
+	bool ArgparseManager::GetAggressiveValidation() const {
+		if (!m_argsParsed)
+			return false;
+		return m_parser.get<bool>("--aggressive-validation");
 	}
 
 } // namespace brassica
