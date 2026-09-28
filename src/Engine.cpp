@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include "cloud/ICloudManager.hpp"
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
 
@@ -1214,6 +1215,39 @@ namespace brassica {
 			vmaFlushAllocation(allocator, atmosphereUboAllocations[activeFrame], 0, sizeof(AtmospherePushConstants));
 		}
 
+		CloudUBO cloudUbo{};
+		if (serviceLocator.Has<ICloudManager>()) {
+			auto cloudMgr = serviceLocator.Get<ICloudManager>();
+			const auto& state = cloudMgr->GetState();
+			cloudUbo.cloudAltitude = state.altitude;
+			cloudUbo.cloudThickness = state.thickness;
+			cloudUbo.cloudDensity = state.density;
+			cloudUbo.cloudCoverage = state.coverage;
+			cloudUbo.worldScale = state.worldScale;
+			cloudUbo.cloudPhaseG1 = state.phaseG1;
+			cloudUbo.cloudPhaseG2 = state.phaseG2;
+			cloudUbo.cloudPhaseAlpha = state.phaseAlpha;
+			cloudUbo.cloudPhaseIsotropic = state.phaseIsotropic;
+			cloudUbo.cloudPowderScale = state.powderScale;
+			cloudUbo.cloudPowderMultiplier = state.powderMultiplier;
+			cloudUbo.cloudPowderLocalScale = state.powderLocalScale;
+			cloudUbo.cloudBeerPowderMix = state.beerPowderMix;
+			cloudUbo.cloudShadowOpticalDepthMultiplier = state.shadowOpticalDepthMultiplier;
+			cloudUbo.cloudShadowStepMultiplier = state.shadowStepMultiplier;
+			cloudUbo.cloudShadowIntensity = state.shadowIntensity;
+			cloudUbo.cloudSunLightScale = state.sunLightScale;
+			cloudUbo.cloudMoonLightScale = state.moonLightScale;
+			cloudUbo.cloudFlowSpeed = state.flowSpeed;
+			cloudUbo.cloudFlowDirection = state.flowDirection;
+			cloudUbo.cloudFlowHeightScale = state.flowHeightScale;
+			cloudUbo.cloudCurlStrength = state.curlStrength;
+			cloudUbo.cloudCurlFrequency = state.curlFrequency;
+		}
+		if (cloudUboMapped[activeFrame]) {
+			std::memcpy(cloudUboMapped[activeFrame], &cloudUbo, sizeof(CloudUBO));
+			vmaFlushAllocation(allocator, cloudUboAllocations[activeFrame], 0, sizeof(CloudUBO));
+		}
+
 		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
 		if (lightsSSBOMapped[activeFrame]) {
 			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
@@ -1463,7 +1497,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1494,14 +1528,26 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 5: AutoExposureBuffer
+		bindings[5]
+			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 6: CloudUBO
+		bindings[6]
+			.setBinding(6)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 3 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2 * FRAME_OVERLAP}
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1582,15 +1628,31 @@ namespace brassica {
 				atmosphereUboAllocations[i],
 				&atmosphereUboMapped[i]
 			);
+			createBufferHelper(
+				sizeof(ExposureDataHost),
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+				autoExposureBuffers[i],
+				autoExposureAllocations[i],
+				&autoExposureMapped[i]
+			);
+			createBufferHelper(
+				sizeof(CloudUBO),
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				cloudUboBuffers[i],
+				cloudUboAllocations[i],
+				&cloudUboMapped[i]
+			);
 
-			std::array<vk::DescriptorBufferInfo, 5> bufferDescs{};
+			std::array<vk::DescriptorBufferInfo, 7> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
 			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
 			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
+			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
+			bufferDescs[6].setBuffer(cloudUboBuffers[i]).setOffset(0).setRange(sizeof(CloudUBO));
 
-			std::array<vk::WriteDescriptorSet, 5> writes{};
+			std::array<vk::WriteDescriptorSet, 7> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -1616,6 +1678,16 @@ namespace brassica {
 				.setDstBinding(4)
 				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 				.setBufferInfo(bufferDescs[4]);
+			writes[5]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(5)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setBufferInfo(bufferDescs[5]);
+			writes[6]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(6)
+				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+				.setBufferInfo(bufferDescs[6]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -1640,6 +1712,18 @@ namespace brassica {
 				atmosphereUboBuffers[i] = nullptr;
 				atmosphereUboAllocations[i] = nullptr;
 				atmosphereUboMapped[i] = nullptr;
+			}
+			if (autoExposureBuffers[i] && autoExposureAllocations[i]) {
+				vmaDestroyBuffer(allocator, autoExposureBuffers[i], autoExposureAllocations[i]);
+				autoExposureBuffers[i] = nullptr;
+				autoExposureAllocations[i] = nullptr;
+				autoExposureMapped[i] = nullptr;
+			}
+			if (cloudUboBuffers[i] && cloudUboAllocations[i]) {
+				vmaDestroyBuffer(allocator, cloudUboBuffers[i], cloudUboAllocations[i]);
+				cloudUboBuffers[i] = nullptr;
+				cloudUboAllocations[i] = nullptr;
+				cloudUboMapped[i] = nullptr;
 			}
 			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
 				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);

@@ -1312,6 +1312,7 @@ TEST_CASE("Real CloudNodes and TonemapNode graph compilation, setup realizations
 	graph.Register<brassica::CloudRenderNode>();
 	graph.Register<brassica::CloudTemporalNode>();
 	graph.Register<brassica::CloudSpatialFilterNode>();
+	graph.Register<brassica::TonemapComputeNode>();
 	graph.Register<brassica::TonemapNode>();
 	graph.Register<Import<brassica::Swapchain>>();
 	graph.Register<Import<brassica::HdrColor>>();
@@ -1335,9 +1336,14 @@ TEST_CASE("Real CloudNodes and TonemapNode graph compilation, setup realizations
 	CHECK(bakeRecipe.domain == ExecutionDomain::Compute);
 	REQUIRE(bakeRecipe.realizations.size() == 3);
 
-	// Verify Setup realizations for TonemapNode
+	// Verify Setup realizations for TonemapComputeNode and TonemapNode
+	brassica::TonemapComputeNode tonemapComputeNode;
+	Recipe tonemapComputeRecipe = tonemapComputeNode.Setup(ctx);
+	CHECK(tonemapComputeRecipe.domain == ExecutionDomain::Compute);
+	REQUIRE(tonemapComputeRecipe.realizations.size() == 17);
+
 	brassica::TonemapNode tonemapNode;
 	Recipe tonemapRecipe = tonemapNode.Setup(ctx);
 	CHECK(tonemapRecipe.domain == ExecutionDomain::Graphics);
-	REQUIRE(tonemapRecipe.realizations.size() == 20);
+	REQUIRE(tonemapRecipe.realizations.size() == 1);
 }

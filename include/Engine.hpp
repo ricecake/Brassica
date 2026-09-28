@@ -307,6 +307,14 @@ namespace brassica {
 		vk::Buffer    clusterGridBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation clusterGridAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 
+		vk::Buffer    autoExposureBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation autoExposureAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         autoExposureMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
+		vk::Buffer    cloudUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation cloudUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         cloudUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
 		void InitFrameSet();
