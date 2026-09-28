@@ -77,3 +77,12 @@
 [submodule "external/argparse"]
 	path = external/argparse
 	url = https://github.com/p-ranav/argparse.git
+[submodule "external/geometry-central"]
+	path = external/geometry-central
+	url = https://github.com/nmwsharp/geometry-central.git
+[submodule "external/ozz-animation"]
+	path = external/ozz-animation
+	url = https://github.com/guillaumeblanc/ozz-animation.git
+[submodule "external/eigen"]
+	path = external/eigen
+	url = https://gitlab.com/libeigen/eigen.git

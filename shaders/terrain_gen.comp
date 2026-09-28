@@ -5,9 +5,7 @@
 #extension GL_KHR_shader_subgroup_clustered : require
 
 #include "bindless.glsl"
-#include "common.glsl"
-#include "terrain.glsl"
-#include "lygia/generative/psrdnoise.glsl"
+#include "terrain/generation.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
@@ -20,36 +18,6 @@ layout(push_constant) uniform PushConstants {
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
 	bool forceRegeneration;
 } push;
-
-void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal) {
-	float continent_mask;
-	vec3 grad_continent_mask;
-    vec3 p_scale = vec3(1.0 / (2.0 * PI * FAKE_PLANET_RADIUS), 1.0, 1.0 / (PI * FAKE_PLANET_RADIUS));
-	evaluate_soft_voronoi_pseudosphere2(p, 32, continent_mask, grad_continent_mask);
-	// p *= config.spatial_scale;
-	p *= p_scale * 30.0;
-
-	vec3 grad_noise;
-	float warp = psrdnoise(p*continent_mask, vec3(0), 0.0);
-
-	float noise_height = dot_noise_fbm(p+warp, 4, 0.0, grad_noise);
-
-	vec3 grad_noise2;
-	float warp2 = psrdnoise(p/continent_mask, vec3(0), 10.0);
-	float noise_height2 = dot_noise_fbm(p*warp2, 4, 3.0, grad_noise2);
-
-	grad_noise += grad_noise2;
-	noise_height += noise_height2;
-
-	float final_height = noise_height * continent_mask;
-	vec3 final_grad = (grad_noise * continent_mask) + (noise_height * grad_continent_mask);
-
-	float height_amplitude = config.max_height - config.min_height;
-	vec3 scaled_grad = final_grad * height_amplitude * config.spatial_scale;
-
-	out_normal = normalize(vec3(-scaled_grad.x, 1.0, -scaled_grad.z));
-	out_height = remap(final_height, 0.0, 1.0, config.min_height, config.max_height);
-}
 
 void main() {
 	uint quad_id = gl_LocalInvocationIndex / 4;
@@ -109,7 +77,9 @@ void main() {
 	float land_mask = 0.0;
 	vec3 normal = vec3(0.0, 1.0, 0.0);
 
-	eval_terrain(p, con, h, normal);
+	// eval_terrain(p, con, h, normal);
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal);
+
 
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
 	float h_swap_y = subgroupQuadSwapVertical(h);

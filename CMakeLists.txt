@@ -53,6 +53,8 @@ else()
     set(BRASSICA_LIB_TYPE STATIC)
 endif()
 
+add_compile_definitions(EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
+
 # 2. Dependency Discovery
 find_package(Vulkan REQUIRED)
 find_package(Threads REQUIRED)
@@ -152,6 +154,7 @@ target_include_directories(brassica
         external/stb
         external/miniaudio
         external/imgui_entt_entity_editor
+        external/eigen
 )
 
 target_link_libraries(brassica
@@ -208,6 +211,20 @@ foreach(APP_DIR ${APP_DIRS})
             add_executable(${APP_NAME} ${APP_SOURCES})
             target_link_libraries(${APP_NAME} PRIVATE brassica)
             target_include_directories(${APP_NAME} PRIVATE "${APP_DIR}/include")
+        endif()
+    endif()
+endforeach()
+
+# 5. Apps & Executables
+file(GLOB TOOL_DIRS "tools/*")
+foreach(TOOL_DIR ${TOOL_DIRS})
+    if(IS_DIRECTORY ${TOOL_DIR})
+        get_filename_component(TOOL_NAME ${TOOL_DIR} NAME)
+        file(GLOB TOOL_SOURCES "${TOOL_DIR}/main.cpp" "${TOOL_DIR}/src/*.cpp")
+        if(TOOL_SOURCES)
+            add_executable(${TOOL_NAME} ${TOOL_SOURCES})
+            target_link_libraries(${TOOL_NAME} PRIVATE brassica)
+            target_include_directories(${TOOL_NAME} PRIVATE "${TOOL_DIR}/include")
         endif()
     endif()
 endforeach()
