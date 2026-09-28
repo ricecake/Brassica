@@ -685,20 +685,19 @@ namespace brassica {
 		// Poll any completed async readback transfer
 		PollReadbackData();
 
-		// Compute LOD 0 texel offset corresponding to camera position
-		const auto& level0 = terrainClipmap.GetLevelInfo(0);
-		float texelSize0 = level0.texelSize;
-		glm::vec2 relPos = (glm::vec2(camera.position.x, camera.position.z) - level0.centerWorldPos) / texelSize0;
-		int camU = (static_cast<int>(std::floor(relPos.x)) + level0.gridOffset.x) % TERRAIN_MAP_DIM;
-		int camV = (static_cast<int>(std::floor(relPos.y)) + level0.gridOffset.y) % TERRAIN_MAP_DIM;
-		if (camU < 0) camU += TERRAIN_MAP_DIM;
-		if (camV < 0) camV += TERRAIN_MAP_DIM;
+		// Trigger new readback if clipmap image is initialized
+		if (terrainClipmap.GetImage() && terrainClipmap.GetNumLODs() > 0) {
+			const auto& level0 = terrainClipmap.GetLevelInfo(0);
+			float texelSize0 = level0.texelSize > 0.0001f ? level0.texelSize : 0.5f;
+			glm::vec2 relPos = (glm::vec2(camera.position.x, camera.position.z) - level0.centerWorldPos) / texelSize0;
+			int camU = (static_cast<int>(std::floor(relPos.x)) + level0.gridOffset.x) % TERRAIN_MAP_DIM;
+			int camV = (static_cast<int>(std::floor(relPos.y)) + level0.gridOffset.y) % TERRAIN_MAP_DIM;
+			if (camU < 0) camU += TERRAIN_MAP_DIM;
+			if (camV < 0) camV += TERRAIN_MAP_DIM;
 
-		int minU = std::clamp(camU - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
-		int minV = std::clamp(camV - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
+			int minU = std::clamp(camU - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
+			int minV = std::clamp(camV - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
 
-		// Trigger new readback if clipmap image is available
-		if (terrainClipmap.GetImage()) {
 			TriggerImageRegionReadbackAsync(
 				terrainClipmap.GetImage(),
 				0, // arrayLayer (LOD 0)
