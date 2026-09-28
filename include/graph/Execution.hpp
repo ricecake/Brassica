@@ -118,6 +118,14 @@ namespace brassica::graph {
 		virtual std::uint32_t IndexOf(ResourceId) const = 0;
 		virtual std::uint32_t StorageIndexOf(ResourceId) const = 0;
 
+		// The bindless-storage-buffer analogue of StorageIndexOf, for a buffer registered through
+		// PhysicalResourceRegistry::ProvisionBuffer with eStorageBuffer usage (PhysicalRegistry.hpp's
+		// AssignAndWriteBindlessBufferIndex). Non-pure, defaulted to 0 ("never assigned") unlike
+		// IndexOf/StorageIndexOf: this capability was added after several other ResourceServices
+		// implementations already existed (test fixtures, mainly), and none of them need to grow a
+		// buffer-bindless arena just to keep compiling.
+		virtual std::uint32_t BufferIndexOf(ResourceId) const { return 0u; }
+
 		virtual void WaitIdle() {}
 
 		// Begins a CPU write into `id`'s current-frame slot -- valid only for a resource whose
@@ -188,6 +196,11 @@ namespace brassica::graph {
 		template <typename K>
 		[[nodiscard]] std::uint32_t StorageIndex() const {
 			return resources ? resources->StorageIndexOf(IdOf<K>()) : 0u;
+		}
+
+		template <typename K>
+		[[nodiscard]] std::uint32_t BufferIndex() const {
+			return resources ? resources->BufferIndexOf(IdOf<K>()) : 0u;
 		}
 
 		// Writes sizeBytes into K's current-frame slot via fn(std::span<std::byte>), then

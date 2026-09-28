@@ -7,6 +7,8 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(push_constant) uniform CloudTileSchedulerPushConstants {
 	uint boundingMapIdx;
 	uint outErrorMapIdx;
+	uint tileQueueBufIdx;
+	uint indirectBufIdx;
 	int uPass; // 0 = Spatial Pass, 1 = Priority Pass
 	float uPriorityErrorWeight;
 	float uPriorityGradWeight;
@@ -29,16 +31,25 @@ struct TileQueueHeader {
 	uint padding;
 };
 
-layout(std430, set = 2, binding = 0) buffer TileQueueSSBO {
+// Bindless: aliases bindless.glsl's shared storage-buffer binding (set 1, binding 6), same
+// idiom as uImagesRGBA32F's image2D/image2DArray/image3D aliases at binding 3 -- each shape gets
+// its own array declaration at the same binding, selected by the caller's push-constant index.
+// uHeader/uTileQueue/uDispatchCountX are macros, not real variables, so every existing reference
+// below keeps working unchanged while actually indexing through the bindless array.
+layout(std430, set = 1, binding = 6) buffer TileQueueSSBOArray {
 	TileQueueHeader uHeader;
 	uvec2 uTileQueue[];
-};
+} uTileQueueBuffers[];
 
-layout(std430, set = 2, binding = 1) buffer IndirectDispatchSSBO {
+layout(std430, set = 1, binding = 6) buffer IndirectDispatchSSBOArray {
 	uint uDispatchCountX;
 	uint uDispatchCountY;
 	uint uDispatchCountZ;
-};
+} uIndirectDispatchBuffers[];
+
+#define uHeader uTileQueueBuffers[nonuniformEXT(push.tileQueueBufIdx)].uHeader
+#define uTileQueue uTileQueueBuffers[nonuniformEXT(push.tileQueueBufIdx)].uTileQueue
+#define uDispatchCountX uIndirectDispatchBuffers[nonuniformEXT(push.indirectBufIdx)].uDispatchCountX
 
 const int bayer8x8[64] = int[64](
 	 0, 32,  8, 40,  2, 34, 10, 42,

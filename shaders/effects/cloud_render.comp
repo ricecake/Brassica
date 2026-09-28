@@ -19,10 +19,13 @@ struct TileQueueHeader {
 	uint padding;
 };
 
-layout(std430, set = 2, binding = 0) buffer TileQueueSSBO {
+// Bindless: aliases bindless.glsl's shared storage-buffer binding (set 1, binding 6) -- see
+// cloud_tile_scheduler.comp's identical alias for the full explanation. uHeader/uTileQueue are
+// macros, not real variables.
+layout(std430, set = 1, binding = 6) buffer TileQueueSSBOArray {
 	TileQueueHeader uHeader;
 	uvec2 uTileQueue[];
-};
+} uTileQueueBuffers[];
 
 layout(push_constant) uniform CloudRenderPushConstants {
 	uint depthTextureIdx;
@@ -34,6 +37,7 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	uint outPackedDepthIdx;
 	uint outPackedVelocityIdx;
 	uint outErrorMapIdx;
+	uint tileQueueBufIdx;
 	float uDeltaTime;
 	float uCloudMaxRayDistance;
 	float uRenderScale;
@@ -44,6 +48,9 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	vec3 uCloudAlbedo;
 	vec3 cloudColorUniform;
 } push;
+
+#define uHeader uTileQueueBuffers[nonuniformEXT(push.tileQueueBufIdx)].uHeader
+#define uTileQueue uTileQueueBuffers[nonuniformEXT(push.tileQueueBufIdx)].uTileQueue
 
 float calculateBifurcatedStepSize(
     inout bool in_cloud,
@@ -207,7 +214,7 @@ void main() {
 	}
 
 	float firstStepSize = 50.0;
-	int MAX_ITERATIONS = 500;
+	int MAX_ITERATIONS = 1500;
 
 	vec3 rgbExtinction = push.uCloudExtinctionColor * push.uCloudExtinction;
 	vec3 lightEnergy = vec3(0.0);

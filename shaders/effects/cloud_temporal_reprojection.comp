@@ -17,10 +17,13 @@ struct TileQueueHeader {
 	uint padding;
 };
 
-layout(std430, set = 2, binding = 0) buffer TileQueueSSBO {
+// Bindless: aliases bindless.glsl's shared storage-buffer binding (set 1, binding 6) -- see
+// cloud_tile_scheduler.comp's identical alias for the full explanation. uHeader/uTileQueue are
+// macros, not real variables.
+layout(std430, set = 1, binding = 6) buffer TileQueueSSBOArray {
 	TileQueueHeader uHeader;
 	uvec2 uTileQueue[];
-};
+} uTileQueueBuffers[];
 
 layout(push_constant) uniform CloudTemporalPushConstants {
 	uint packedFrameIdx;
@@ -34,6 +37,7 @@ layout(push_constant) uniform CloudTemporalPushConstants {
 	uint outDepthIdx;
 	uint outMomentsIdx;
 	uint outErrorMapIdx;
+	uint tileQueueBufIdx;
 	float uCloudTemporalGamma;
 	float uCloudMaxHistoryLength;
 	float uCloudMaxRayDistance;
@@ -43,6 +47,9 @@ layout(push_constant) uniform CloudTemporalPushConstants {
 	int uUseTileQueue;
 	float uDeltaTime;
 } push;
+
+#define uHeader uTileQueueBuffers[nonuniformEXT(push.tileQueueBufIdx)].uHeader
+#define uTileQueue uTileQueueBuffers[nonuniformEXT(push.tileQueueBufIdx)].uTileQueue
 
 float luma(vec3 color) {
 	return dot(color, vec3(0.299, 0.587, 0.114));

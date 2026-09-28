@@ -80,7 +80,7 @@ CloudDensityResult calculateCloudDensity(
 	float volumeScale = 7000.0 * props.worldScale;
 	vec3 uvw = p_advected_3d / volumeScale;
 
-	vec4 volSample = SAMPLE_ARRAY_WRAP(volume3DIdx, uvw);
+	vec4 volSample = SAMPLE_3D_LINEAR(volume3DIdx, uvw);
 
 	CloudSpotDetails res = calculateCloudDensity(p, weather, props, timeVal, lod, doCheap, volSample);
 	vec3 emit = vec3(0.0);

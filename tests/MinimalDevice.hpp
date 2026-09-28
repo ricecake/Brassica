@@ -71,8 +71,10 @@ namespace brassica::testing {
 			features12.runtimeDescriptorArray = VK_TRUE;
 			features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
 			features12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+			features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
 			features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 			features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+			features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
 
 			VkPhysicalDeviceFeatures features1{};
 			features1.shaderInt64 = VK_TRUE;

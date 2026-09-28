@@ -421,7 +421,8 @@ namespace brassica::graph {
 			m_mappedBase(o.m_mappedBase),
 			m_lastStage(o.m_lastStage),
 			m_lastAccess(o.m_lastAccess),
-			m_hasDefinedContents(o.m_hasDefinedContents) {
+			m_hasDefinedContents(o.m_hasDefinedContents),
+			m_bindlessIndex(o.m_bindlessIndex) {
 			o.m_buffer = nullptr;
 			o.m_allocation = nullptr;
 			o.m_mappedBase = nullptr;
@@ -445,6 +446,7 @@ namespace brassica::graph {
 				m_lastStage = o.m_lastStage;
 				m_lastAccess = o.m_lastAccess;
 				m_hasDefinedContents = o.m_hasDefinedContents;
+				m_bindlessIndex = o.m_bindlessIndex;
 
 				o.m_buffer = nullptr;
 				o.m_allocation = nullptr;
@@ -522,6 +524,18 @@ namespace brassica::graph {
 
 		void SetHasDefinedContents(bool defined) { m_hasDefinedContents = defined; }
 
+		// This buffer's slot in the engine's global bindless storage-buffer array
+		// (PhysicalResourceRegistry's storageBufferBinding), assigned once at creation/import and
+		// never reassigned for the life of the object -- same contract as
+		// PhysicalTexture::GetStorageBindlessIndex. 0 means "never assigned" (either this buffer
+		// has no eStorageBuffer usage, or no bindless set was ever configured); unlike the sampled
+		// image arena there is no fallback reservation at index 0 here, since nothing currently
+		// reads a bindless buffer index without having first checked it against the resource that
+		// should own it.
+		[[nodiscard]] std::uint32_t GetBindlessIndex() const { return m_bindlessIndex; }
+
+		void SetBindlessIndex(std::uint32_t index) { m_bindlessIndex = index; }
+
 	private:
 		void CreateBuffer(VmaAllocation existingAllocation, vk::DeviceSize offsetInBlock) {
 			vk::BufferCreateInfo bufferInfo = detail::BuildBufferCreateInfo(m_desc);
@@ -598,6 +612,7 @@ namespace brassica::graph {
 		vk::PipelineStageFlags2 m_lastStage{};
 		vk::AccessFlags2        m_lastAccess{};
 		bool                    m_hasDefinedContents{false};
+		std::uint32_t           m_bindlessIndex{0};
 	};
 
 	// Deliberately Imported-only: no Owning/Aliased modes, no VMA, no destructor logic. The

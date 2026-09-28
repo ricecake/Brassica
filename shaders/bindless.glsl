@@ -36,6 +36,10 @@ layout(set = 1, binding = 0) uniform texture2D uTextures2D[];
 layout(set = 1, binding = 1) uniform texture2DArray uTextureArrays[];
 layout(set = 1, binding = 2) uniform sampler uSamplers[];
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
+// Binding 5: a real 3D-volume sampled catalog, independently sized/counted from bindings 0/1
+// (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,
+// not a 2D-array pressed into service for a volume it was never shaped for.
+layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
 
 // Sampler catalog indices, written once by Engine::InitGlobalDescriptors and injected here via
 // Shader::RegisterConstant's [[NAME]] substitution -- GLSL and C++ read the same catalog by
@@ -62,5 +66,12 @@ layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
 
 #define SAMPLE_ARRAY_WRAP(idx, uvw)                                                                                    \
 	texture(sampler2DArray(uTextureArrays[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
+
+// idx is a bindless index into uTextures3D (NodeContext::Index<K>() on the C++ side, same as
+// SAMPLE_NEAREST/SAMPLE_LINEAR -- StorageIndex<K>() is a different catalog entirely, for
+// imageStore/imageLoad writers, not this). Same no-fallback-at-0 caveat as SAMPLE_ARRAY_WRAP:
+// depends on the caller having actually registered whatever it indexes.
+#define SAMPLE_3D_LINEAR(idx, uvw)                                                                                    \
+	texture(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
 
 #endif // BRASSICA_BINDLESS_GLSL

@@ -82,4 +82,54 @@ namespace brassica {
 
 	inline ExposureDataHost s_exposureData{};
 
+	// Copies only the fields QuickSettingsWidget's ImGui sliders expose (see LayerDataHost's
+	// field groups above) from src (s_exposureData, host-side) into dst (the mapped GPU buffer),
+	// deliberately skipping every field bloom_downsample.comp's update_layer_ae owns: statistics
+	// (minLuma/maxLuma/avgLuma/stdDevLuma), the EMAs, autoUchimura*, and histogram. Called every
+	// frame so slider changes take effect without resetting the shader's own accumulated
+	// auto-exposure/auto-tune state.
+	inline void SyncAutoExposureTunables(LayerDataHost& dst, const LayerDataHost& src) {
+		dst.targetLuminance = src.targetLuminance;
+		dst.minExposure = src.minExposure;
+		dst.maxExposure = src.maxExposure;
+		dst.useAutoExposure = src.useAutoExposure;
+		dst.centerWeightTightness = src.centerWeightTightness;
+		dst.focusPoint = src.focusPoint;
+		dst.histogramLowCutoff = src.histogramLowCutoff;
+		dst.histogramHighCutoff = src.histogramHighCutoff;
+		dst.speedUp = src.speedUp;
+		dst.speedDown = src.speedDown;
+
+		dst.autoTuneEnabled = src.autoTuneEnabled;
+		dst.minContrast = src.minContrast;
+		dst.maxContrast = src.maxContrast;
+		dst.targetBrightness = src.targetBrightness;
+
+		dst.uchimuraP = src.uchimuraP;
+		dst.uchimuraA = src.uchimuraA;
+		dst.uchimuraM = src.uchimuraM;
+		dst.uchimuraL = src.uchimuraL;
+		dst.uchimuraC = src.uchimuraC;
+		dst.uchimuraB = src.uchimuraB;
+		dst.toneMapMode = src.toneMapMode;
+		dst.toneMappingEnabled = src.toneMappingEnabled;
+
+		dst.cdlSlope = src.cdlSlope;
+		dst.cdlOffset = src.cdlOffset;
+		dst.cdlPower = src.cdlPower;
+		dst.cdlSaturation = src.cdlSaturation;
+
+		dst.whiteTemp = src.whiteTemp;
+		dst.whiteTint = src.whiteTint;
+
+		dst.ltmEnabled = src.ltmEnabled;
+		dst.ltmEvSpread = src.ltmEvSpread;
+		dst.ltmTarget = src.ltmTarget;
+		dst.ltmSigma = src.ltmSigma;
+		dst.ltmWeightContrast = src.ltmWeightContrast;
+		dst.ltmWeightSaturation = src.ltmWeightSaturation;
+		dst.ltmWeightExposedness = src.ltmWeightExposedness;
+		dst.ltmBoostLocalContrast = src.ltmBoostLocalContrast;
+	}
+
 } // namespace brassica

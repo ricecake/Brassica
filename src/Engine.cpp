@@ -8,6 +8,7 @@
 #include "cloud/ICloudManager.hpp"
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
+#include "types/AutoExposureData.hpp"
 
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
@@ -860,13 +861,19 @@ namespace brassica {
 
 		// Bindless set 0 (PhysicalRegistry.hpp's bindless index machinery, Engine::InitGlobalDescriptors):
 		// runtimeDescriptorArray + shaderSampledImageArrayNonUniformIndexing/
-		// shaderStorageImageArrayNonUniformIndexing let a shader index an unsized
-		// texture2D[]/image2D[] with nonuniformEXT; the two UpdateAfterBind bits let the registry
-		// write a new texture's descriptor without invalidating command buffers that reference the
-		// same set but a different index. Deliberately NOT requesting
-		// descriptorBindingAccelerationStructureUpdateAfterBind (the spottiest of this family) or
-		// descriptorBindingVariableDescriptorCount (unused -- see ShadingRateAttachmentDesc-style
-		// fixed-size arrays in InitGlobalDescriptors).
+		// shaderStorageImageArrayNonUniformIndexing/shaderStorageBufferArrayNonUniformIndexing let a
+		// shader index an unsized texture2D[]/image2D[]/buffer[] with nonuniformEXT; the matching
+		// UpdateAfterBind bits let the registry write a new resource's descriptor without
+		// invalidating command buffers that reference the same set but a different index. Each
+		// resource kind (sampled image, storage image, storage buffer) has its own independent pair
+		// of these two feature bits -- enabling one kind's doesn't imply another's, confirmed the
+		// hard way when storageBufferBinding (binding 6, PhysicalRegistry's bindless buffer arena)
+		// shipped without shaderStorageBufferArrayNonUniformIndexing/
+		// descriptorBindingStorageBufferUpdateAfterBind and every device that actually validates
+		// them (unlike this Mac's MoltenVK, which resolves them for free) rejected it. Deliberately
+		// NOT requesting descriptorBindingAccelerationStructureUpdateAfterBind (the spottiest of
+		// this family) or descriptorBindingVariableDescriptorCount (unused -- see
+		// ShadingRateAttachmentDesc-style fixed-size arrays in InitGlobalDescriptors).
 		VkPhysicalDeviceVulkan12Features features12{};
 		features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 		features12.descriptorIndexing = VK_TRUE;
@@ -875,8 +882,10 @@ namespace brassica {
 		features12.runtimeDescriptorArray = VK_TRUE;
 		features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
 		features12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+		features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
 		features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 		features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+		features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
 		features12.timelineSemaphore = VK_TRUE;
 		features12.bufferDeviceAddress = VK_TRUE;
 
@@ -1261,6 +1270,22 @@ namespace brassica {
 			vmaFlushAllocation(allocator, cloudUboAllocations[activeFrame], 0, sizeof(CloudUBO));
 		}
 
+		// Field-by-field, not a bulk memcpy: LayerData interleaves user-tunable fields (exposure,
+		// tone-mapping curve, CDL, white balance, LTM) with fields only bloom_downsample.comp's
+		// update_layer_ae ever writes (histogram, adaptedLuminance, EMAs, autoUchimura*) -- a full
+		// overwrite here would stomp the shader's own accumulated auto-exposure state every frame.
+		if (autoExposureMapped[activeFrame]) {
+			auto* mappedExposure = static_cast<ExposureDataHost*>(autoExposureMapped[activeFrame]);
+			SyncAutoExposureTunables(mappedExposure->layers[0], s_exposureData.layers[0]);
+			SyncAutoExposureTunables(mappedExposure->layers[1], s_exposureData.layers[1]);
+			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));
+		}
+		physicalRegistry.RegisterImportedBuffer<AutoExposureBuffer>(
+			autoExposureBuffers[activeFrame],
+			graph::StorageBufferDesc(sizeof(ExposureDataHost)),
+			true
+		);
+
 		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
 		if (lightsSSBOMapped[activeFrame]) {
 			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
@@ -1278,6 +1303,8 @@ namespace brassica {
 		bindlessBindings.samplerBinding = 2;
 		bindlessBindings.storageImageBinding = 3;
 		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.sampledImage3DBinding = 5;
+		bindlessBindings.storageBufferBinding = 6;
 		bindlessBindings.frameSet = frameDescriptorSets[activeFrame];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
@@ -1648,6 +1675,13 @@ namespace brassica {
 				autoExposureAllocations[i],
 				&autoExposureMapped[i]
 			);
+			// Seed sane defaults once, before any frame runs: nothing else ever writes this
+			// buffer's tunable fields for slot i until DrawFrame's per-frame sync below, and the
+			// compute shader's own histogram/adaptedLuminance/EMA accumulation only makes sense
+			// starting from s_exposureData's zeroed statistics, not whatever VMA handed back.
+			if (autoExposureMapped[i]) {
+				std::memcpy(autoExposureMapped[i], &s_exposureData, sizeof(ExposureDataHost));
+			}
 			createBufferHelper(
 				sizeof(CloudUBO),
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -1764,7 +1798,7 @@ namespace brassica {
 		if (bindlessSetLayout) {
 			return;
 		}
-		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		// Binding 0: uTextures2D
 		bindings[0]
 			.setBinding(0)
@@ -1795,13 +1829,29 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
 			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 5: uTextures3D
+		bindings[5]
+			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 6: bindless storage buffers (no single canonical GLSL declaration -- each
+		// consumer aliases its own struct at this binding, same idiom as uImagesRGBA32F's
+		// image2D/image2DArray/image3D aliases at binding 3)
+		bindings[6]
+			.setBinding(6)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(16)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 5> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 7> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
 		bindingFlagsInfo.setBindingFlags(bindingFlags);
@@ -1815,11 +1865,12 @@ namespace brassica {
 		// Single instance -- never duplicated per frame, unlike the frame set above: a
 		// resource's descriptor is written once at creation and read for the rest of its life,
 		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
-		std::array<vk::DescriptorPoolSize, 4> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64},
+		std::array<vk::DescriptorPoolSize, 5> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1882,6 +1933,8 @@ namespace brassica {
 		bindlessBindings.samplerBinding = 2;
 		bindlessBindings.storageImageBinding = 3;
 		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.sampledImage3DBinding = 5;
+		bindlessBindings.storageBufferBinding = 6;
 		bindlessBindings.frameSet = frameDescriptorSets[0];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);

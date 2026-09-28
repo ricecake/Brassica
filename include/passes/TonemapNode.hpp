@@ -57,7 +57,7 @@ namespace brassica {
 		using Resources = graph::Declares<
 			graph::Read<HdrColor>,
 			graph::Read<GBufferDepth>,
-			graph::Create<AutoExposureBuffer>,
+			graph::Modify<AutoExposureBuffer>,
 			graph::Create<BloomTextureMip0>,
 			graph::Create<BloomTextureMip1>,
 			graph::Create<BloomTextureMip2>,
@@ -80,7 +80,6 @@ namespace brassica {
 		ComputeShader            downsampleShader;
 		ComputeShader            ltmFuseShader;
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-		bool                     initializedBufferParams = false;
 		DownsamplePushConstants  downPush{};
 		LtmFusePushConstants     fusePush{};
 
@@ -160,33 +159,12 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
-			vk::Buffer aeBufferHandle{nullptr};
-			if (ctx.resources) {
-				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					if (auto physBuf = registry->GetBuffer<AutoExposureBuffer>()) {
-						aeBufferHandle = physBuf->GetBuffer();
-					}
-				}
-			}
-
-			if (aeBufferHandle && !initializedBufferParams) {
-				vkCmd.updateBuffer(
-					aeBufferHandle,
-					0,
-					sizeof(ExposureDataHost),
-					&s_exposureData
-				);
-				initializedBufferParams = true;
-
-				vk::MemoryBarrier2 barrier(
-					vk::PipelineStageFlagBits2::eTransfer,
-					vk::AccessFlagBits2::eTransferWrite,
-					vk::PipelineStageFlagBits2::eComputeShader,
-					vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
-				);
-				vk::DependencyInfo dep({}, 1, &barrier);
-				vkCmd.pipelineBarrier2(dep);
-			}
+			// AutoExposureBuffer is imported (Engine::DrawFrame's RegisterImportedBuffer, backed by
+			// the real Engine-owned autoExposureBuffers[activeFrame]), not graph-provisioned -- it's
+			// already seeded and kept in sync with s_exposureData's tunables every frame from there.
+			// No per-node init here: this used to update the frame graph's own transient
+			// AutoExposureBuffer allocation, a different buffer than the one this dispatch's
+			// ctx.frameSet descriptor actually points at, so the shader never saw it.
 
 			// Compute Downsample Pass
 			downPush.srcResolution = glm::vec2(ctx.width, ctx.height);
