@@ -120,6 +120,8 @@ namespace brassica::graph {
 			std::uint32_t           samplerBinding = 2;
 			std::uint32_t           storageImageBinding = 3;
 			std::uint32_t           accelerationStructureBinding = 4;
+			std::uint32_t           sampledImage3DBinding = 5;
+			std::uint32_t           storageBufferBinding = 6;
 
 			// The always-bound frame set (set 0) -- just the per-frame UBO. Genuinely varies by
 			// active frame index (Engine::DrawFrame rebuilds this every frame); this registry
@@ -196,6 +198,14 @@ namespace brassica::graph {
 			m_textures[resolvedId] = std::move(tex);
 		}
 
+		// Deliberately does not assign a bindless buffer index: every current caller (e.g.
+		// AutoExposureBuffer) already has its own fixed, dedicated descriptor binding and doesn't
+		// need one -- and unlike RegisterImportedTexture, a resource re-imported every frame with a
+		// *different* handle per FRAME_OVERLAP slot (this buffer's whole reason to use import at
+		// all) would otherwise burn a fresh bindless slot on every single frame forever, ping-
+		// ponging between slots with nothing to reclaim the old one. AssignAndWriteBindlessBufferIndex
+		// is for ProvisionBuffer's graph-owned resources instead, whose handle is stable once
+		// assigned.
 		void RegisterImportedBuffer(
 			ResourceId          id,
 			vk::Buffer          buffer,
@@ -286,6 +296,14 @@ namespace brassica::graph {
 		// under the interface every node's Execute actually has access to (a NodeContext, not a
 		// raw registry pointer).
 		[[nodiscard]] std::uint32_t StorageIndexOf(ResourceId id) const override { return GetStorageBindlessIndex(id); }
+
+		// ResourceServices: the lookup NodeContext::BufferIndex<K>() (Execution.hpp) calls through
+		// to -- the storage-buffer analogue of StorageIndexOf, since buffers have no sampled/
+		// storage duality to disambiguate (see AssignAndWriteBindlessBufferIndex's comment).
+		[[nodiscard]] std::uint32_t BufferIndexOf(ResourceId id) const override {
+			auto buf = GetBuffer(id);
+			return buf ? buf->GetBindlessIndex() : 0u;
+		}
 
 		void WaitIdle() override;
 
@@ -683,12 +701,23 @@ namespace brassica::graph {
 			std::vector<std::pair<std::uint64_t, std::uint32_t>> m_retiring;
 		};
 
-		void
-		WriteSampledImageDescriptor(std::uint32_t index, vk::ImageView view, vk::ImageLayout layout, bool isArray) {
+		enum class SampledImageKind { Plain2D, Array2D, Volume3D };
+
+		void WriteSampledImageDescriptor(
+			std::uint32_t     index,
+			vk::ImageView     view,
+			vk::ImageLayout   layout,
+			SampledImageKind  kind
+		) {
 			if (!m_bindless.set) {
 				return;
 			}
-			std::uint32_t binding = isArray ? m_bindless.sampledImage2DArrayBinding : m_bindless.sampledImage2DBinding;
+			std::uint32_t binding = m_bindless.sampledImage2DBinding;
+			if (kind == SampledImageKind::Array2D) {
+				binding = m_bindless.sampledImage2DArrayBinding;
+			} else if (kind == SampledImageKind::Volume3D) {
+				binding = m_bindless.sampledImage3DBinding;
+			}
 			if (binding == 0xFFFFFFFFu) {
 				return;
 			}
@@ -740,6 +769,43 @@ namespace brassica::graph {
 			m_device.updateDescriptorSets(write, {});
 		}
 
+		void WriteStorageBufferDescriptor(std::uint32_t index, vk::Buffer buffer, vk::DeviceSize size) {
+			if (!m_bindless.set || m_bindless.storageBufferBinding == 0xFFFFFFFFu) {
+				return;
+			}
+			vk::DescriptorBufferInfo bufferInfo{buffer, 0, size};
+			vk::WriteDescriptorSet   write{
+				m_bindless.set,
+				m_bindless.storageBufferBinding,
+				index,
+				1,
+				vk::DescriptorType::eStorageBuffer,
+				nullptr,
+				&bufferInfo,
+			};
+			m_device.updateDescriptorSets(write, {});
+		}
+
+		// Same shape as AssignAndWriteBindlessIndices, one arena instead of two: a buffer has no
+		// sampled/storage duality the way an image does (there is no "combined buffer sampler"),
+		// so eStorageBuffer usage is the only thing that ever grants a bindless slot here. Called
+		// exactly where a buffer's handle is actually settled -- ProvisionBuffer's replace path and
+		// RegisterImportedBuffer -- never on the "already provisioned, matching desc" early-return
+		// path, so a stable resource's index, once assigned, is never reassigned.
+		void AssignAndWriteBindlessBufferIndex(PhysicalBuffer& buf) {
+			if (!m_bindless.set) {
+				return;
+			}
+			const auto& desc = buf.GetDesc();
+			const auto  usage = desc.usageMask ? vk::BufferUsageFlags(desc.usageMask) : vk::BufferUsageFlags{};
+			if (!(usage & vk::BufferUsageFlagBits::eStorageBuffer)) {
+				return;
+			}
+			const std::uint32_t index = m_bufferArena.Allocate();
+			buf.SetBindlessIndex(index);
+			WriteStorageBufferDescriptor(index, buf.GetBuffer(), desc.byteSize);
+		}
+
 		// Assigns and writes whichever of the sampled/storage arrays this texture's usage calls
 		// for -- both, if it has both (see PhysicalTexture::GetSampledBindlessIndex's comment).
 		// No-ops entirely if SetGlobalDescriptorSet was never called, so a registry used the way
@@ -750,16 +816,21 @@ namespace brassica::graph {
 			}
 			const auto& desc = tex.GetDesc();
 			const auto  usage = desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{};
-			const bool  isArray = desc.layers > 1;
+			const bool  isVolume = desc.kind == ResourceDesc::Kind::Image3D;
+			const bool  isArray = !isVolume && desc.layers > 1;
+			const SampledImageKind sampledKind =
+				isVolume ? SampledImageKind::Volume3D : (isArray ? SampledImageKind::Array2D : SampledImageKind::Plain2D);
 
 			if (usage & vk::ImageUsageFlagBits::eSampled) {
-				// A plain-2D and a 2D-array texture write into two independently-sized Vulkan
-				// arrays (sampledImage2DBinding vs sampledImage2DArrayBinding) -- sharing one
-				// counter between them would let a 2D-array index grow past that binding's own
-				// (typically much smaller) descriptorCount and spill into whatever binding
-				// happens to sit next, which the validation layer reports as a descriptorType
-				// mismatch on the overflowed write, not as an out-of-range index.
-				BindlessArena&      arena = isArray ? m_sampledArrayArena : m_sampledArena;
+				// A plain-2D, a 2D-array, and a 3D-volume texture each write into an independently-
+				// sized Vulkan array (sampledImage2DBinding / sampledImage2DArrayBinding /
+				// sampledImage3DBinding) -- sharing one counter between them would let one kind's
+				// index grow past that binding's own (typically much smaller) descriptorCount and
+				// spill into whatever binding happens to sit next, which the validation layer
+				// reports as a descriptorType mismatch on the overflowed write, not as an
+				// out-of-range index.
+				BindlessArena& arena =
+					isVolume ? m_sampled3DArena : (isArray ? m_sampledArrayArena : m_sampledArena);
 				const std::uint32_t index = arena.Allocate();
 				tex.SetSampledBindlessIndex(index);
 				// Derived by the same function BarrierTranslator uses (ResourceState.hpp), so this
@@ -776,7 +847,7 @@ namespace brassica::graph {
 												   static_cast<vk::Format>(desc.formatCode)
 				)
 												   .layout;
-				WriteSampledImageDescriptor(index, tex.GetView(), layout, isArray);
+				WriteSampledImageDescriptor(index, tex.GetView(), layout, sampledKind);
 			}
 			if (usage & vk::ImageUsageFlagBits::eStorage) {
 				const std::uint32_t index = m_storageArena.Allocate();
@@ -793,7 +864,10 @@ namespace brassica::graph {
 				// Must route to the same arena AssignAndWriteBindlessIndices originally drew from
 				// -- recomputed from the desc rather than cached anywhere, since it's already the
 				// single source of truth for which array a texture's sampled index lives in.
-				BindlessArena& arena = tex.GetDesc().layers > 1 ? m_sampledArrayArena : m_sampledArena;
+				const auto&    texDesc = tex.GetDesc();
+				const bool     isVolume = texDesc.kind == ResourceDesc::Kind::Image3D;
+				BindlessArena& arena =
+					isVolume ? m_sampled3DArena : (texDesc.layers > 1 ? m_sampledArrayArena : m_sampledArena);
 				arena.Retire(tex.GetSampledBindlessIndex(), frameIndex);
 			}
 			if (tex.GetStorageBindlessIndex() != 0) {
@@ -827,7 +901,7 @@ namespace brassica::graph {
 				index,
 				m_fallbackTexture->GetView(),
 				vk::ImageLayout::eShaderReadOnlyOptimal,
-				false
+				SampledImageKind::Plain2D
 			);
 		}
 
@@ -979,9 +1053,13 @@ namespace brassica::graph {
 				// might still be referenced by a command buffer recorded before this replacement
 				// and not yet retired by the GPU -- same reason, same shape, as
 				// RetireBindlessIndices below.
+				if (existingIt->second->GetBindlessIndex() != 0) {
+					m_bufferArena.Retire(existingIt->second->GetBindlessIndex(), frameIndex);
+				}
 				RetireBuffer(existingIt->second, frameIndex);
 			}
 
+			AssignAndWriteBindlessBufferIndex(*newBuffer);
 			m_buffers[id] = std::move(newBuffer);
 		}
 
@@ -1019,7 +1097,9 @@ namespace brassica::graph {
 		BindlessBindings m_bindless{};
 		BindlessArena    m_sampledArena;      // sampledImage2DBinding
 		BindlessArena    m_sampledArrayArena; // sampledImage2DArrayBinding -- see AssignAndWriteBindlessIndices
+		BindlessArena    m_sampled3DArena;    // sampledImage3DBinding -- see AssignAndWriteBindlessIndices
 		BindlessArena    m_storageArena;
+		BindlessArena    m_bufferArena; // storageBufferBinding -- see AssignAndWriteBindlessBufferIndex
 		BindlessArena    m_accelStructArena;
 		std::shared_ptr<PhysicalTexture> m_fallbackTexture;
 		bool                             m_aliasingEnabled{true};

@@ -175,7 +175,6 @@ namespace brassica {
 				uint32_t groupY = (push.gridParams.w + 15) / 16;
 				uint32_t groupZ = push.gridParams.x;
 				vkCmd.dispatch(groupX, groupY, groupZ);
-				// forceRegeneration = false;
 			}
 
 			if (false && terrainAS) {

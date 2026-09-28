@@ -60,6 +60,7 @@ namespace brassica {
 			opts.appName = argManager.GetAppName();
 			opts.renderTerrainMap = argManager.GetRenderTerrainMap();
 			opts.terrainMapPath = argManager.GetTerrainMapPath();
+			opts.aggressiveValidation = argManager.GetAggressiveValidation();
 			if (opts.renderTerrainMap) {
 				opts.headless = true;
 			}
