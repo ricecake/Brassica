@@ -685,24 +685,41 @@ namespace brassica {
 		// Poll any completed async readback transfer
 		PollReadbackData();
 
+		// Compute LOD 0 texel offset corresponding to camera position
+		const auto& level0 = terrainClipmap.GetLevelInfo(0);
+		float texelSize0 = level0.texelSize;
+		glm::vec2 relPos = (glm::vec2(camera.position.x, camera.position.z) - level0.centerWorldPos) / texelSize0;
+		int camU = (static_cast<int>(std::floor(relPos.x)) + level0.gridOffset.x) % TERRAIN_MAP_DIM;
+		int camV = (static_cast<int>(std::floor(relPos.y)) + level0.gridOffset.y) % TERRAIN_MAP_DIM;
+		if (camU < 0) camU += TERRAIN_MAP_DIM;
+		if (camV < 0) camV += TERRAIN_MAP_DIM;
+
+		int minU = std::clamp(camU - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
+		int minV = std::clamp(camV - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
+
 		// Trigger new readback if clipmap image is available
 		if (terrainClipmap.GetImage()) {
 			TriggerImageRegionReadbackAsync(
 				terrainClipmap.GetImage(),
-				0, // LOD level 0
-				vk::Offset2D{TERRAIN_MAP_DIM / 2 - 2, TERRAIN_MAP_DIM / 2 - 2},
-				vk::Extent2D{4, 4},
+				0, // arrayLayer (LOD 0)
+				0, // mipLevel
+				vk::Offset2D{minU, minV},
+				vk::Extent2D{8, 8},
 				vk::ImageLayout::eGeneral
 			);
 		}
 
 		std::vector<glm::vec4> readbackData;
 		uint32_t rw = 0, rh = 0;
-		float minHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
+		float maxTerrainHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
 		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
-			// Find terrain height from center pixel in non-blocking async transfer buffer
-			minHeight = readbackData[readbackData.size() / 2].r + 2.0f;
+			// Find peak terrain height in non-blocking async transfer region around camera
+			for (const auto& sample : readbackData) {
+				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
+			}
 		}
+		// Apply camera height constraint with conservative padding (e.g., +4.0f) to prevent near-plane clipping
+		float minHeight = maxTerrainHeight + 4.0f;
 		if (camera.position.y < minHeight) {
 			camera.position.y = minHeight;
 		}
@@ -1812,7 +1829,8 @@ namespace brassica {
 
 	bool Engine::TriggerImageRegionReadbackAsync(
 		vk::Image image,
-		uint32_t lodLevel,
+		uint32_t arrayLayer,
+		uint32_t mipLevel,
 		vk::Offset2D offset,
 		vk::Extent2D extent,
 		vk::ImageLayout currentLayout
@@ -1847,9 +1865,9 @@ namespace brassica {
 		barrier1.setImage(image);
 		barrier1.setSubresourceRange(vk::ImageSubresourceRange{
 			vk::ImageAspectFlagBits::eColor,
-			lodLevel,
+			mipLevel,
 			1,
-			0,
+			arrayLayer,
 			1
 		});
 
@@ -1863,8 +1881,8 @@ namespace brassica {
 		copyRegion.setBufferImageHeight(extent.height);
 		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{
 			vk::ImageAspectFlagBits::eColor,
-			lodLevel,
-			0,
+			mipLevel,
+			arrayLayer,
 			1
 		});
 		copyRegion.setImageOffset(vk::Offset3D{offset.x, offset.y, 0});
@@ -1884,9 +1902,9 @@ namespace brassica {
 		barrier2.setImage(image);
 		barrier2.setSubresourceRange(vk::ImageSubresourceRange{
 			vk::ImageAspectFlagBits::eColor,
-			lodLevel,
+			mipLevel,
 			1,
-			0,
+			arrayLayer,
 			1
 		});
 

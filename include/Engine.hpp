@@ -204,7 +204,8 @@ namespace brassica {
 		// Async Image Region Readback methods
 		bool TriggerImageRegionReadbackAsync(
 			vk::Image image,
-			uint32_t lodLevel,
+			uint32_t arrayLayer,
+			uint32_t mipLevel,
 			vk::Offset2D offset,
 			vk::Extent2D extent,
 			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
