@@ -193,33 +193,35 @@ namespace brassica {
 			downPush.hdrColorIndex = ctx.Index<HdrColor>();
 			downPush.depthIndex = ctx.Index<GBufferDepth>();
 
-			downPush.outMip0Index = ctx.Index<BloomTextureMip0>();
-			downPush.outMip1Index = ctx.Index<BloomTextureMip1>();
-			downPush.outMip2Index = ctx.Index<BloomTextureMip2>();
-			downPush.outMip3Index = ctx.Index<BloomTextureMip3>();
-			downPush.outMip4Index = ctx.Index<BloomTextureMip4>();
+			downPush.outMip0Index = ctx.StorageIndex<BloomTextureMip0>();
+			downPush.outMip1Index = ctx.StorageIndex<BloomTextureMip1>();
+			downPush.outMip2Index = ctx.StorageIndex<BloomTextureMip2>();
+			downPush.outMip3Index = ctx.StorageIndex<BloomTextureMip3>();
+			downPush.outMip4Index = ctx.StorageIndex<BloomTextureMip4>();
 
-			downPush.outExpMip0Index = ctx.Index<LtmExpTextureMip0>();
-			downPush.outExpMip1Index = ctx.Index<LtmExpTextureMip1>();
-			downPush.outExpMip2Index = ctx.Index<LtmExpTextureMip2>();
-			downPush.outExpMip3Index = ctx.Index<LtmExpTextureMip3>();
-			downPush.outExpMip4Index = ctx.Index<LtmExpTextureMip4>();
+			downPush.outExpMip0Index = ctx.StorageIndex<LtmExpTextureMip0>();
+			downPush.outExpMip1Index = ctx.StorageIndex<LtmExpTextureMip1>();
+			downPush.outExpMip2Index = ctx.StorageIndex<LtmExpTextureMip2>();
+			downPush.outExpMip3Index = ctx.StorageIndex<LtmExpTextureMip3>();
+			downPush.outExpMip4Index = ctx.StorageIndex<LtmExpTextureMip4>();
 
-			downPush.outWgtMip0Index = ctx.Index<LtmWgtTextureMip0>();
-			downPush.outWgtMip1Index = ctx.Index<LtmWgtTextureMip1>();
-			downPush.outWgtMip2Index = ctx.Index<LtmWgtTextureMip2>();
-			downPush.outWgtMip3Index = ctx.Index<LtmWgtTextureMip3>();
-			downPush.outWgtMip4Index = ctx.Index<LtmWgtTextureMip4>();
+			downPush.outWgtMip0Index = ctx.StorageIndex<LtmWgtTextureMip0>();
+			downPush.outWgtMip1Index = ctx.StorageIndex<LtmWgtTextureMip1>();
+			downPush.outWgtMip2Index = ctx.StorageIndex<LtmWgtTextureMip2>();
+			downPush.outWgtMip3Index = ctx.StorageIndex<LtmWgtTextureMip3>();
+			downPush.outWgtMip4Index = ctx.StorageIndex<LtmWgtTextureMip4>();
 
+			std::array<vk::DescriptorSetLayout, 2> downSetLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> downPushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(DownsamplePushConstants)}
+			};
 			render::ComputePipelineRequest downRequest{
 				.shader = &downsampleShader,
-				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
-					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-				},
-				.pushConstantRanges = std::array<vk::PushConstantRange, 1>{
-					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(DownsamplePushConstants)}
-				},
+				.setLayouts = downSetLayouts,
+				.pushConstantRanges = downPushConstantRanges,
 			};
 			render::ResolvedPipeline downResolved = pipelineLibrary->ResolveCached(downRequest);
 
@@ -249,19 +251,21 @@ namespace brassica {
 			// Compute LTM Fuse Pass
 			fusePush.expTextureIndex = ctx.Index<LtmExpTextureMip0>();
 			fusePush.wgtTextureIndex = ctx.Index<LtmWgtTextureMip0>();
-			fusePush.outFusedIndex = ctx.Index<LtmFusedTexture>();
+			fusePush.outFusedIndex = ctx.StorageIndex<LtmFusedTexture>();
 			fusePush.startMip = 4;
 			fusePush.endMip = 0;
 
+			std::array<vk::DescriptorSetLayout, 2> fuseSetLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> fusePushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(LtmFusePushConstants)}
+			};
 			render::ComputePipelineRequest fuseRequest{
 				.shader = &ltmFuseShader,
-				.setLayouts = std::array<vk::DescriptorSetLayout, 2>{
-					static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-					static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-				},
-				.pushConstantRanges = std::array<vk::PushConstantRange, 1>{
-					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(LtmFusePushConstants)}
-				},
+				.setLayouts = fuseSetLayouts,
+				.pushConstantRanges = fusePushConstantRanges,
 			};
 			render::ResolvedPipeline fuseResolved = pipelineLibrary->ResolveCached(fuseRequest);
 

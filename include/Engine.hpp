@@ -47,6 +47,7 @@ namespace brassica {
 		std::string appName{"Sandbox"};
 		bool        renderTerrainMap{false};
 		std::string terrainMapPath{"terrain_map.png"};
+		bool        aggressiveValidation{false};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
 			ArgparseManager argManager;
@@ -60,6 +61,7 @@ namespace brassica {
 			opts.appName = argManager.GetAppName();
 			opts.renderTerrainMap = argManager.GetRenderTerrainMap();
 			opts.terrainMapPath = argManager.GetTerrainMapPath();
+			opts.aggressiveValidation = argManager.GetAggressiveValidation();
 			if (opts.renderTerrainMap) {
 				opts.headless = true;
 			}

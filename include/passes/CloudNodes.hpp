@@ -1,9 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vulkan/vulkan.hpp>
 
+#include "cloud/ICloudManager.hpp"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
@@ -11,6 +13,7 @@
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
+#include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 
@@ -185,8 +188,8 @@ namespace brassica {
 			};
 
 			CloudWeatherBakePushConstants pushW{
-				.outWeatherMapIdx = ctx.Index<CloudWeatherTexture>(),
-				.outMinMaxMapIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
+				.outWeatherMapIdx = ctx.StorageIndex<CloudWeatherTexture>(),
+				.outMinMaxMapIdx = ctx.StorageIndex<CloudWeatherMinMaxTexture>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesW{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudWeatherBakePushConstants)}
@@ -216,7 +219,7 @@ namespace brassica {
 			vkCmd.dispatch(64, 64, 1);
 
 			Cloud3DVolumeBakePushConstants pushV{
-				.outVolumeIdx = ctx.Index<Cloud3DVolumeTexture>(),
+				.outVolumeIdx = ctx.StorageIndex<Cloud3DVolumeTexture>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesV{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(Cloud3DVolumeBakePushConstants)}
@@ -287,7 +290,7 @@ namespace brassica {
 			CloudBoundingPushConstants pushB{
 				.depthTextureIdx = ctx.Index<GBufferDepth>(),
 				.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
-				.outBoundingMapIdx = ctx.Index<CloudBoundingTexture>(),
+				.outBoundingMapIdx = ctx.StorageIndex<CloudBoundingTexture>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesB{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudBoundingPushConstants)}
@@ -369,7 +372,7 @@ namespace brassica {
 
 			CloudShadowBakePushConstants pushS{
 				.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
-				.outShadowMapIdx = ctx.Index<CloudShadowMap>(),
+				.outShadowMapIdx = ctx.StorageIndex<CloudShadowMap>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesS{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudShadowBakePushConstants)}
@@ -400,6 +403,25 @@ namespace brassica {
 		}
 	};
 
+	// Mirrors cloud_tile_scheduler.comp's TileQueueHeader exactly (10 tightly-packed 4-byte
+	// fields, no vec/mat padding). CloudTileQueueSSBO is freshly provisioned by the frame graph
+	// with undefined content and has no other writer -- without this, the scheduler shader reads
+	// count/maxTiles/tileCols/tileRows out of uninitialized GPU memory and uses them as atomic
+	// counter bounds and an SSBO array index (uTileQueue[slot]), which is exactly the kind of
+	// out-of-bounds write that shows up as screen corruption followed by a GPU hang.
+	struct CloudTileQueueHeaderHost {
+		std::uint32_t count{0};
+		std::uint32_t maxTiles{0};
+		std::uint32_t spatialUpdateFrames{16};
+		std::uint32_t frameIndex{0};
+		float         minRefreshRate{0.0f};
+		float         maxRefreshRate{0.25f};
+		std::uint32_t tileCols{0};
+		std::uint32_t tileRows{0};
+		std::uint32_t totalTiles{0};
+		std::uint32_t padding{0};
+	};
+
 	struct CloudTileSchedulerNode : render::NodeRegistrar<CloudTileSchedulerNode> {
 		using Resources = graph::Declares<
 			graph::Read<CloudBoundingTexture>,
@@ -415,6 +437,8 @@ namespace brassica {
 		vk::DescriptorPool      cloudSsboPool{nullptr};
 		vk::DescriptorSet       cloudSsboSet{nullptr};
 		vk::Device              m_device{nullptr};
+		std::array<vk::Buffer, 2> m_cachedBuffers{};
+		std::uint32_t           m_frameIndex{0};
 
 		void Init(const render::NodeServices& services) {
 			m_device = services.device;
@@ -487,17 +511,69 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+
+			uint32_t tileCols = (ctx.width + 7) / 8;
+			uint32_t tileRows = (ctx.height + 7) / 8;
+			uint32_t totalTiles = tileCols * tileRows;
+
+			float         maxRefreshRate = 0.25f;
+			std::uint32_t spatialUpdateFrames = 16;
+			if (ServiceLocator::Instance().Has<ICloudManager>()) {
+				CloudState state = ServiceLocator::Instance().Get<ICloudManager>()->GetState();
+				maxRefreshRate = std::clamp(state.maxRefreshRate, 0.01f, 1.0f);
+				spatialUpdateFrames = static_cast<std::uint32_t>(std::max(1, state.spatialUpdateFrames));
+			}
+
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					auto tileQueueBuf = registry->GetBuffer<CloudTileQueueSSBO>();
 					auto indirectBuf = registry->GetBuffer<CloudIndirectDispatchSSBO>();
 					if (tileQueueBuf && indirectBuf) {
-						vk::DescriptorBufferInfo b0{tileQueueBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
-						vk::DescriptorBufferInfo b1{indirectBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
-						std::array<vk::WriteDescriptorSet, 2> writes{};
-						writes[0].setDstSet(cloudSsboSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
-						writes[1].setDstSet(cloudSsboSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b1);
-						m_device.updateDescriptorSets(writes, nullptr);
+						// Rebuilt from zero every frame: count/uDispatchCountX are atomic accumulators
+						// the shader builds up as it runs, and this SSBO has no other writer to reset
+						// them between frames.
+						CloudTileQueueHeaderHost header{
+							.count = 0,
+							.maxTiles = std::max(1u, static_cast<std::uint32_t>(static_cast<float>(totalTiles) * maxRefreshRate)),
+							.spatialUpdateFrames = spatialUpdateFrames,
+							.frameIndex = m_frameIndex++,
+							.minRefreshRate = 0.0f,
+							.maxRefreshRate = maxRefreshRate,
+							.tileCols = tileCols,
+							.tileRows = tileRows,
+							.totalTiles = totalTiles,
+							.padding = 0,
+						};
+						vkCmd.updateBuffer(tileQueueBuf->GetBuffer(), 0, sizeof(header), &header);
+						std::array<std::uint32_t, 3> zeroDispatch{0, 0, 0};
+						vkCmd.updateBuffer(indirectBuf->GetBuffer(), 0, sizeof(zeroDispatch), zeroDispatch.data());
+
+						vk::MemoryBarrier2 initBarrier(
+							vk::PipelineStageFlagBits2::eTransfer,
+							vk::AccessFlagBits2::eTransferWrite,
+							vk::PipelineStageFlagBits2::eComputeShader,
+							vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
+						);
+						vk::DependencyInfo initDep({}, 1, &initBarrier);
+						vkCmd.pipelineBarrier2(initDep);
+
+						std::array<vk::Buffer, 2> buffers{tileQueueBuf->GetBuffer(), indirectBuf->GetBuffer()};
+						// Cross-frame hazard, not same-frame: this set is single-buffered (not one per
+						// FRAME_OVERLAP slot), so an unconditional update every frame races the previous
+						// frame's still-pending command buffer (see ParticleDescriptorCache's fix for the
+						// same VUID). Skipping the update when the underlying buffer handles haven't
+						// changed -- true every frame in steady state, since the frame graph's aliasing
+						// pool reuses the same block for an unchanged desc -- avoids the race entirely.
+						if (buffers != m_cachedBuffers) {
+							vk::DescriptorBufferInfo b0{buffers[0], 0, VK_WHOLE_SIZE};
+							vk::DescriptorBufferInfo b1{buffers[1], 0, VK_WHOLE_SIZE};
+							std::array<vk::WriteDescriptorSet, 2> writes{};
+							writes[0].setDstSet(cloudSsboSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
+							writes[1].setDstSet(cloudSsboSet).setDstBinding(1).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b1);
+							m_device.updateDescriptorSets(writes, nullptr);
+							m_cachedBuffers = buffers;
+						}
 					}
 				}
 			}
@@ -510,7 +586,7 @@ namespace brassica {
 
 			CloudTileSchedulerPushConstants pushT{
 				.boundingMapIdx = ctx.Index<CloudBoundingTexture>(),
-				.outErrorMapIdx = ctx.Index<CloudErrorMap>(),
+				.outErrorMapIdx = ctx.StorageIndex<CloudErrorMap>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesT{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTileSchedulerPushConstants)}
@@ -523,7 +599,6 @@ namespace brassica {
 			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
-			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
 				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 			}
@@ -539,8 +614,6 @@ namespace brassica {
 
 			vkCmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTileSchedulerPushConstants), &pushT);
 
-			uint32_t tileCols = (ctx.width + 7) / 8;
-			uint32_t tileRows = (ctx.height + 7) / 8;
 			uint32_t gx = (tileCols + 7) / 8;
 			uint32_t gy = (tileRows + 7) / 8;
 			vkCmd.dispatch(gx, gy, 1);
@@ -566,6 +639,7 @@ namespace brassica {
 		vk::DescriptorPool      cloudSsboPool{nullptr};
 		vk::DescriptorSet       cloudSsboSet{nullptr};
 		vk::Device              m_device{nullptr};
+		vk::Buffer              m_cachedTileQueueBuffer{nullptr};
 
 		void Init(const render::NodeServices& services) {
 			m_device = services.device;
@@ -635,11 +709,15 @@ namespace brassica {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					auto tileQueueBuf = registry->GetBuffer<CloudTileQueueSSBO>();
-					if (tileQueueBuf) {
+					// See CloudTileSchedulerNode::Execute: skip the update when the buffer handle is
+					// unchanged to avoid updating this (single-buffered) set while the previous frame's
+					// command buffer may still have it pending.
+					if (tileQueueBuf && tileQueueBuf->GetBuffer() != m_cachedTileQueueBuffer) {
 						vk::DescriptorBufferInfo b0{tileQueueBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
 						std::array<vk::WriteDescriptorSet, 1> writes{};
 						writes[0].setDstSet(cloudSsboSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
 						m_device.updateDescriptorSets(writes, nullptr);
+						m_cachedTileQueueBuffer = tileQueueBuf->GetBuffer();
 					}
 				}
 			}
@@ -656,10 +734,10 @@ namespace brassica {
 				.weatherMinMaxIdx = ctx.Index<CloudWeatherMinMaxTexture>(),
 				.weatherTextureIdx = ctx.Index<CloudWeatherTexture>(),
 				.volume3DIdx = ctx.Index<Cloud3DVolumeTexture>(),
-				.outPackedColorIdx = ctx.Index<CloudPackedColor>(),
-				.outPackedDepthIdx = ctx.Index<CloudPackedDepth>(),
-				.outPackedVelocityIdx = ctx.Index<CloudPackedVelocity>(),
-				.outErrorMapIdx = ctx.Index<CloudErrorMap>(),
+				.outPackedColorIdx = ctx.StorageIndex<CloudPackedColor>(),
+				.outPackedDepthIdx = ctx.StorageIndex<CloudPackedDepth>(),
+				.outPackedVelocityIdx = ctx.StorageIndex<CloudPackedVelocity>(),
+				.outErrorMapIdx = ctx.StorageIndex<CloudErrorMap>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesR{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudRenderPushConstants)}
@@ -711,6 +789,7 @@ namespace brassica {
 		vk::DescriptorPool      cloudSsboPool{nullptr};
 		vk::DescriptorSet       cloudSsboSet{nullptr};
 		vk::Device              m_device{nullptr};
+		vk::Buffer              m_cachedTileQueueBuffer{nullptr};
 
 		void Init(const render::NodeServices& services) {
 			m_device = services.device;
@@ -773,11 +852,15 @@ namespace brassica {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					auto tileQueueBuf = registry->GetBuffer<CloudTileQueueSSBO>();
-					if (tileQueueBuf) {
+					// See CloudTileSchedulerNode::Execute: skip the update when the buffer handle is
+					// unchanged to avoid updating this (single-buffered) set while the previous frame's
+					// command buffer may still have it pending.
+					if (tileQueueBuf && tileQueueBuf->GetBuffer() != m_cachedTileQueueBuffer) {
 						vk::DescriptorBufferInfo b0{tileQueueBuf->GetBuffer(), 0, VK_WHOLE_SIZE};
 						std::array<vk::WriteDescriptorSet, 1> writes{};
 						writes[0].setDstSet(cloudSsboSet).setDstBinding(0).setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(b0);
 						m_device.updateDescriptorSets(writes, nullptr);
+						m_cachedTileQueueBuffer = tileQueueBuf->GetBuffer();
 					}
 				}
 			}
@@ -793,10 +876,10 @@ namespace brassica {
 				.packedDepthIdx = ctx.Index<CloudPackedDepth>(),
 				.packedVelocityIdx = ctx.Index<CloudPackedVelocity>(),
 				.boundingMapIdx = ctx.Index<CloudBoundingTexture>(),
-				.outColorIdx = ctx.Index<CloudTemporalColor>(),
-				.outDepthIdx = ctx.Index<CloudPackedDepth>(),
-				.outMomentsIdx = ctx.Index<CloudTemporalMoments>(),
-				.outErrorMapIdx = ctx.Index<CloudErrorMap>(),
+				.outColorIdx = ctx.StorageIndex<CloudTemporalColor>(),
+				.outDepthIdx = ctx.StorageIndex<CloudPackedDepth>(),
+				.outMomentsIdx = ctx.StorageIndex<CloudTemporalMoments>(),
+				.outErrorMapIdx = ctx.StorageIndex<CloudErrorMap>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesTemp{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudTemporalPushConstants)}
@@ -883,7 +966,7 @@ namespace brassica {
 				.cloudDepthIdx = ctx.Index<CloudPackedDepth>(),
 				.cloudMomentsIdx = ctx.Index<CloudTemporalMoments>(),
 				.errorMapIdx = ctx.Index<CloudErrorMap>(),
-				.outFilteredColorIdx = ctx.Index<CloudFilteredColor>(),
+				.outFilteredColorIdx = ctx.StorageIndex<CloudFilteredColor>(),
 			};
 			std::array<vk::PushConstantRange, 1> pushRangesFilter{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudSpatialFilterPushConstants)}

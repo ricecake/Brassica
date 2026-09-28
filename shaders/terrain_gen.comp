@@ -85,7 +85,7 @@ void main() {
 	float h_swap_y = subgroupQuadSwapVertical(h);
 	float h_swap_diag = subgroupQuadSwapDiagonal(h);
 
-	if (is_dirty) {
+	if (is_dirty || push.forceRegeneration) {
 		float cluster_min = subgroupClusteredMin(h, 16);
 		float cluster_max = subgroupClusteredMax(h, 16);
 

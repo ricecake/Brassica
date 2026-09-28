@@ -9,12 +9,18 @@ layout(push_constant) uniform Cloud3DVolumeBakePushConstants {
 	uint outVolumeIdx;
 } push;
 
-// Note: bindless 3D storage image write or volume image
-layout(set = 1, binding = 3, rgba16f) uniform image3D outVolume;
+// Aliases the same bindless storage-image binding bindless.glsl declares as image2D
+// uImagesRGBA32F[] -- same idiom terrain_gen.comp uses for image2DArray, just for image3D here.
+// Was previously declared as a single non-array image3D, which SPIR-V binds to array index 0
+// implicitly regardless of push.outVolumeIdx -- the shader always wrote to slot 0 no matter which
+// real slot the registry assigned Cloud3DVolumeTexture, leaving that real slot's descriptor
+// uninitialized (GPU-assisted validation: "(set = 1, binding = 3) Descriptor index 0 is
+// uninitialized").
+layout(set = 1, binding = 3, rgba16f) uniform image3D uImages3DRGBA16F[];
 
 void main() {
 	ivec3 voxel = ivec3(gl_GlobalInvocationID.xyz);
-	ivec3 size = imageSize(outVolume);
+	ivec3 size = imageSize(uImages3DRGBA16F[nonuniformEXT(push.outVolumeIdx)]);
 	if (voxel.x >= size.x || voxel.y >= size.y || voxel.z >= size.z) return;
 
 	vec3 p = vec3(voxel) / vec3(size);
@@ -24,5 +30,5 @@ void main() {
 	float worleyMedium = length(cross_noise_fbm(p * 8.0, 3.0, 0.0));
 	float worleySmall = length(cross_noise_fbm(p * 16.0, 2.0, 0.0));
 
-	imageStore(outVolume, voxel, vec4(noiseVal, worleyWide, worleyMedium, worleySmall));
+	imageStore(uImages3DRGBA16F[nonuniformEXT(push.outVolumeIdx)], voxel, vec4(noiseVal, worleyWide, worleyMedium, worleySmall));
 }

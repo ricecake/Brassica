@@ -799,6 +799,19 @@ namespace brassica {
 			}
 		}
 
+		// GPU-assisted validation catches out-of-bounds buffer/image access and use of
+		// uninitialized descriptors at the point they happen, naming the exact shader/binding --
+		// synchronization validation catches missing/incorrect barriers between passes. Both are
+		// expensive (GPU-AV instruments every shader), so this stays opt-in via --aggressive-
+		// validation rather than always on.
+		if (options.aggressiveValidation) {
+			spdlog::warn("Engine: --aggressive-validation enabled (GPU-assisted + synchronization "
+						 "validation) -- rendering will be significantly slower.");
+			builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
+				.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
+				.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
+		}
+
 		auto inst_res = builder.request_validation_layers(true).build();
 		if (!inst_res) {
 			auto fallback_res = builder.request_validation_layers(false).build();
