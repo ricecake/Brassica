@@ -112,7 +112,7 @@ std::vector<TectonicPlate> generate_tectonic_plates(int total_plates, int num_fr
 }
 
 int main() {
-	auto plates = generate_tectonic_plates(16, 2);
+	auto plates = generate_tectonic_plates(24, 2);
 	for (auto i : plates) {
 		fmt::println("TectonicPlate(vec3({}, {}, {}), {}, {}, vec3({}, {}, {})),", i.seed_dir.x, i.seed_dir.y, i.seed_dir.z, i.height, i.k, i.velocity.x, i.velocity.y, i.velocity.z);
 	}
