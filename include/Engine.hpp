@@ -47,6 +47,7 @@ namespace brassica {
 		std::string appName{"Sandbox"};
 		bool        renderTerrainMap{false};
 		std::string terrainMapPath{"terrain_map.png"};
+		bool        aggressiveValidation{false};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
 			ArgparseManager argManager;
