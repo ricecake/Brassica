@@ -15,6 +15,7 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
+#include "audio/AudioManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/AllNodes.hpp"
@@ -149,6 +150,10 @@ namespace brassica {
 
 		const LightningManager& GetLightningManager() const { return lightningManager; }
 
+		AudioManager& GetAudioManager() { return audioManager; }
+
+		const AudioManager& GetAudioManager() const { return audioManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -236,6 +241,7 @@ namespace brassica {
 
 		LightManager     lightManager;
 		LightningManager lightningManager;
+		AudioManager     audioManager;
 
 		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
 		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'
