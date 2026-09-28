@@ -685,8 +685,10 @@ namespace brassica {
 		// Poll any completed async readback transfer
 		PollReadbackData();
 
-		// Trigger new readback if clipmap image is initialized
-		if (terrainClipmap.GetImage() && terrainClipmap.GetNumLODs() > 0) {
+		// Trigger new readback if clipmap image is initialized and has been populated/transitioned in frame graph
+		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
+		if (clipmapTex && clipmapTex->GetImage() && terrainClipmap.GetNumLODs() > 0 &&
+		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
 			const auto& level0 = terrainClipmap.GetLevelInfo(0);
 			float texelSize0 = level0.texelSize > 0.0001f ? level0.texelSize : 0.5f;
 			glm::vec2 relPos = (glm::vec2(camera.position.x, camera.position.z) - level0.centerWorldPos) / texelSize0;
@@ -699,12 +701,12 @@ namespace brassica {
 			int minV = std::clamp(camV - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
 
 			TriggerImageRegionReadbackAsync(
-				terrainClipmap.GetImage(),
+				clipmapTex->GetImage(),
 				0, // arrayLayer (LOD 0)
 				0, // mipLevel
 				vk::Offset2D{minU, minV},
 				vk::Extent2D{8, 8},
-				vk::ImageLayout::eGeneral
+				clipmapTex->GetCurrentLayout()
 			);
 		}
 
