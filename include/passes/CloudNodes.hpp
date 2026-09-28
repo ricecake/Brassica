@@ -19,6 +19,16 @@
 
 namespace brassica {
 
+	// Master switch every cloud node's Setup() checks (CloudState::enabled's comment). Defaults to
+	// enabled when no ICloudManager is registered, matching every other cloud-state read in this
+	// file (e.g. CloudTileSchedulerNode::Execute's maxRefreshRate/spatialUpdateFrames fallback).
+	inline bool CloudsEnabled() {
+		if (!ServiceLocator::Instance().Has<ICloudManager>()) {
+			return true;
+		}
+		return ServiceLocator::Instance().Get<ICloudManager>()->GetState().enabled;
+	}
+
 	struct CloudWeatherBakePushConstants {
 		std::uint32_t outWeatherMapIdx{0};
 		std::uint32_t outMinMaxMapIdx{0};
@@ -157,7 +167,10 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = CloudsEnabled()};
+			if (!r.isActive) {
+				return r;
+			}
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudWeatherTexture>(),
@@ -274,7 +287,10 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = CloudsEnabled()};
+			if (!r.isActive) {
+				return r;
+			}
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudBoundingTexture>(),
@@ -355,7 +371,10 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& /*ctx*/) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = CloudsEnabled()};
+			if (!r.isActive) {
+				return r;
+			}
 			auto shadowDesc = graph::ComputeStorageImageDesc(512, 512, vk::Format::eR16Sfloat);
 			shadowDesc.layers = 8;
 			r.realizations.push_back(
@@ -456,7 +475,10 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = CloudsEnabled()};
+			if (!r.isActive) {
+				return r;
+			}
 			uint32_t tileCols = (ctx.width + 7) / 8;
 			uint32_t tileRows = (ctx.height + 7) / 8;
 
@@ -612,7 +634,10 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = CloudsEnabled()};
+			if (!r.isActive) {
+				return r;
+			}
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudPackedColor>(),
@@ -718,7 +743,10 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = CloudsEnabled()};
+			if (!r.isActive) {
+				return r;
+			}
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudTemporalColor>(),
@@ -815,7 +843,10 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = CloudsEnabled()};
+			if (!r.isActive) {
+				return r;
+			}
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudFilteredColor>(),

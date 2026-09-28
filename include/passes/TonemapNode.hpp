@@ -105,7 +105,10 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = s_tonemapComputePassEnabled};
+			if (!r.isActive) {
+				return r;
+			}
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<AutoExposureBuffer>(),

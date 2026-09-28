@@ -214,7 +214,7 @@ void main() {
 	}
 
 	float firstStepSize = 50.0;
-	int MAX_ITERATIONS = 1500;
+	int MAX_ITERATIONS = 500;
 
 	vec3 rgbExtinction = push.uCloudExtinctionColor * push.uCloudExtinction;
 	vec3 lightEnergy = vec3(0.0);

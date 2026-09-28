@@ -8,6 +8,7 @@ namespace brassica {
 	struct CloudStateReflected : public CloudState {
 		auto GetReflection() const {
 			return std::make_tuple(
+				MakeField("enabled", "Enable Cloud Rendering", &CloudStateReflected::enabled),
 				MakeField("renderScale", "Render Resolution Scale", &CloudStateReflected::renderScale, 0.1f, 1.0f, UIHint::Slider),
 				MakeField("worldScale", "World Scale Factor", &CloudStateReflected::worldScale, 0.01f, 10.0f, UIHint::Drag),
 

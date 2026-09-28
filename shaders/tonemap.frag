@@ -39,6 +39,10 @@ layout(push_constant) uniform TonemapPushConstants {
 	vec4 cdlSlope;
 	vec4 cdlOffset;
 	vec4 cdlPower;
+
+	// Appended last -- see TonemapPushConstants.hpp's comment on why this field specifically has
+	// to go here and nowhere else in this struct.
+	int  bloomEnabled;
 } params;
 
 // Planckian locus approximation for temperature to RGB
@@ -90,7 +94,7 @@ float calculateSkyAttenuation(vec3 rawHdrColor, float uchimuraM, float uchimuraL
 void main() {
 	vec3 sceneColor = SAMPLE_NEAREST(params.hdrColorIndex, inUV).rgb;
 	vec3 bloomColor = vec3(0.0);
-	if (params.bloomBlurIndex > 0u) {
+	if (params.bloomEnabled != 0 && params.bloomBlurIndex > 0u) {
 		bloomColor = SAMPLE_LINEAR(params.bloomBlurIndex, inUV).rgb;
 	}
 

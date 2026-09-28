@@ -110,6 +110,14 @@ namespace brassica::ui {
 			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Exposure & Tone Mapping:");
 			ImGui::SliderFloat("Exposure##Tone", &s_tonemapPush.exposure, 0.01f, 10.0f, "%.2f");
 
+			ImGui::Checkbox("Enable Bloom/Auto-Exposure Compute Pass##Tone", &s_tonemapComputePassEnabled);
+			if (s_tonemapComputePassEnabled) {
+				bool bloomEnabled = s_tonemapPush.bloomEnabled != 0;
+				if (ImGui::Checkbox("Enable Bloom##Tone", &bloomEnabled)) {
+					s_tonemapPush.bloomEnabled = bloomEnabled ? 1 : 0;
+				}
+			}
+
 			if (ImGui::BeginTabBar("AutoExposureTabs")) {
 				auto drawLayerSettings = [&](const char* label, LayerDataHost& layer, bool isScene) {
 					if (ImGui::BeginTabItem(label)) {
@@ -275,6 +283,16 @@ namespace brassica::ui {
 			if (ImGui::Checkbox("Enable Atmosphere##Quick", &m_enableAtmosphere)) {
 				if (cfg) {
 					cfg->SetAppSetting("enable_atmosphere", m_enableAtmosphere);
+				}
+				// Previously UI-only (persisted the setting, gated only whether these sliders were
+				// shown, never actually reached anything that renders) -- now the real master switch
+				// every cloud node's Setup() checks (CloudState::enabled, CloudsEnabled() in
+				// CloudNodes.hpp).
+				if (ServiceLocator::Instance().Has<ICloudManager>()) {
+					auto cloudMgr = ServiceLocator::Instance().Get<ICloudManager>();
+					auto state = cloudMgr->GetState();
+					state.enabled = m_enableAtmosphere;
+					cloudMgr->SetState(state);
 				}
 			}
 			if (m_enableAtmosphere) {

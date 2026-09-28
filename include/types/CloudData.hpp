@@ -6,6 +6,12 @@
 namespace brassica {
 
 	struct CloudState {
+		// Master switch: every cloud node's Setup() checks this and sets Recipe::isActive = false
+		// when off, skipping the whole layer's dispatches and resource provisioning for the frame
+		// (CloudNodes.hpp's CloudsEnabled() helper). Nothing outside the cloud system reads any
+		// cloud resource, so this is safe to flip with no other node needing its own guard.
+		bool enabled{true};
+
 		// Resolution & Scaling
 		float renderScale{1.0f};
 		float worldScale{1.0f};
