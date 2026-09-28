@@ -440,7 +440,7 @@ struct TectonicPlate2 {
 
 
 void evaluate_tectonics_geocentric(
-    vec3 p_local, int num_plates, float k_crumple,
+    vec3 p_local, float k_crumple,
     out float out_base_h, out vec3 out_grad_h,
     out float out_fault,  out vec3 out_grad_f, // Added missing outputs
     out vec3 out_vel,     out mat3 out_J_vel,
@@ -458,7 +458,7 @@ void evaluate_tectonics_geocentric(
     // Pass 1: Dual Log-Sum-Exp Trick
     float max_kd_macro = -1e20;
     float max_kd_crump = -1e20;
-    for(int i = 0; i < num_plates; i++) {
+    for(int i = 0; i < plates.length(); i++) {
         float d = dot(P_geo, plates[i].seed_dir);
         max_kd_macro = max(max_kd_macro, plates[i].k * d);
         max_kd_crump = max(max_kd_crump, k_crumple * d);
@@ -475,7 +475,7 @@ void evaluate_tectonics_geocentric(
     vec3 grad_w2_crump = vec3(0.0); // Squared weight gradient accumulator
 
     // Pass 2: Simultaneous Accumulation
-    for(int i = 0; i < num_plates; i++) {
+    for(int i = 0; i < plates.length(); i++) {
         vec3 S = plates[i].seed_dir;
         float d = dot(P_geo, S);
 
@@ -536,8 +536,8 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // -- PRE-WARP --
     // Jittering the input grid breaks up the mathematical linearity of the Voronoi cells
     vec3 warp_v = vec3(0.0);
-    float warp_s = psrdnoise(p_local / FAKE_PLANET_RADIUS, vec3(0.0), 0.0, warp_v);
-    vec3 p_tectonic = p_local + 20000.0 * warp_s * warp_v;
+    float warp_s = psrdnoise(4*p_local / FAKE_PLANET_RADIUS, vec3(0.0), 0.0, warp_v);
+    vec3 p_tectonic = p_local + 20000.0 * smoothstep(-0.5, 0.75, warp_s) * normalize(warp_v.zxx);
 
     // 1. Evaluate Dual-Temperature Tectonics
     float base_h, fault_mask;
@@ -546,9 +546,9 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
 
     // A low k_crumple (e.g., 8.0 - 15.0) spreads the fault_mask and velocity field
     // hundreds of kilometers wide, while coastlines remain sharp.
-    float k_crumple = 16.0;
+    float k_crumple = 15.0;
 
-    evaluate_tectonics_geocentric(p_tectonic, 16, k_crumple,
+    evaluate_tectonics_geocentric(p_tectonic, k_crumple,
         base_h, grad_base_h,
         fault_mask, grad_fault,
         vel, J_vel,
@@ -564,7 +564,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // Because k_crumple is such a low-frequency, ultra-smooth field, we can safely
     // treat the gradient of this specific uplift layer as near-zero to avoid
     // needing the Hessian of the Voronoi cells, without causing visible lighting errors.
-    float uplift = smoothstep(0.0, -1.5, I1) * 0.95;
+    float uplift = (1.0-smoothstep(-1.5, 0.0, I1)) * 1.75;
     base_h += uplift;
 
     // 3. Base Continent Topography (Rolling Hills & Plains)
@@ -574,7 +574,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     vec3 grad_base_noise;
     float base_noise = dot_noise_fbm(P_noise, 4, phase, grad_base_noise);
 
-    float base_noise_amp = 0.25;
+    float base_noise_amp = 0.95;
     float continent_h = base_noise * base_noise_amp;
     vec3 grad_continent_h = grad_base_noise * base_noise_amp;
 
