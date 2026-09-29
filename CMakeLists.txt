@@ -53,11 +53,27 @@ else()
     set(BRASSICA_LIB_TYPE STATIC)
 endif()
 
+add_compile_definitions(EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
+
 # 2. Dependency Discovery
 find_package(Vulkan REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Eigen3 QUIET)
+if(NOT EIGEN3_FOUND)
+    find_path(EIGEN3_INCLUDE_DIR NAMES Eigen/Core PATHS /usr/include/eigen3 /usr/local/include/eigen3)
+else()
+    set(EIGEN3_INCLUDE_DIR ${EIGEN3_INCLUDE_DIRS})
+endif()
 
 # 3. Submodule Configurations
+set(ozz_build_tools OFF CACHE BOOL "" FORCE)
+set(ozz_build_fbx OFF CACHE BOOL "" FORCE)
+set(ozz_build_gltf OFF CACHE BOOL "" FORCE)
+set(ozz_build_samples OFF CACHE BOOL "" FORCE)
+set(ozz_build_howtos OFF CACHE BOOL "" FORCE)
+set(ozz_build_tests OFF CACHE BOOL "" FORCE)
+set(ozz_build_msvc_rt_dll ON CACHE BOOL "" FORCE)
+set(GC_ALWAYS_DOWNLOAD_EIGEN OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "Disable submodule tests" FORCE)
 
 # JoltPhysics
@@ -102,6 +118,16 @@ add_subdirectory(external/VulkanMemoryAllocator)
 add_subdirectory(external/doctest)
 add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
+add_subdirectory(external/geometry-central)
+add_subdirectory(external/ozz-animation)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    if(TARGET geometry-central)
+        target_compile_options(geometry-central PRIVATE -march=native -ffast-math)
+        # Eigen's own C++ standard detection predates C++20 removing std::result_of; under
+        # CMAKE_CXX_STANDARD 23 libc++ no longer provides it, so force Eigen's pre-C++11 fallback.
+        target_compile_definitions(geometry-central PRIVATE EIGEN_HAS_STD_RESULT_OF=0)
+    endif()
+endif()
 
 # Prevent submodules (such as Jolt) from injecting global -Werror into CMAKE_CXX_FLAGS
 string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
@@ -139,7 +165,9 @@ file(GLOB_RECURSE LIB_SOURCES "src/*.cpp")
 add_library(brassica ${BRASSICA_LIB_TYPE} ${LIB_SOURCES})
 
 target_compile_definitions(brassica PUBLIC GLM_ENABLE_EXPERIMENTAL BRASSICA_BUILD_DIR="${CMAKE_BINARY_DIR}")
-target_compile_options(brassica PRIVATE -march=native -ffast-math)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(brassica PRIVATE -march=native -ffast-math)
+endif()
 
 target_include_directories(brassica
     PUBLIC
@@ -152,6 +180,9 @@ target_include_directories(brassica
         external/stb
         external/miniaudio
         external/imgui_entt_entity_editor
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/geometry-central/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/ozz-animation/include
+        external/eigen
 )
 
 target_link_libraries(brassica
@@ -173,6 +204,10 @@ target_link_libraries(brassica
         efsw-static
         FastNoise
         argparse
+        geometry-central
+        ozz_animation
+        ozz_animation_offline
+        ozz_geometry
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)
@@ -208,6 +243,20 @@ foreach(APP_DIR ${APP_DIRS})
             add_executable(${APP_NAME} ${APP_SOURCES})
             target_link_libraries(${APP_NAME} PRIVATE brassica)
             target_include_directories(${APP_NAME} PRIVATE "${APP_DIR}/include")
+        endif()
+    endif()
+endforeach()
+
+# 5. Apps & Executables
+file(GLOB TOOL_DIRS "tools/*")
+foreach(TOOL_DIR ${TOOL_DIRS})
+    if(IS_DIRECTORY ${TOOL_DIR})
+        get_filename_component(TOOL_NAME ${TOOL_DIR} NAME)
+        file(GLOB TOOL_SOURCES "${TOOL_DIR}/main.cpp" "${TOOL_DIR}/src/*.cpp")
+        if(TOOL_SOURCES)
+            add_executable(${TOOL_NAME} ${TOOL_SOURCES})
+            target_link_libraries(${TOOL_NAME} PRIVATE brassica)
+            target_include_directories(${TOOL_NAME} PRIVATE "${TOOL_DIR}/include")
         endif()
     endif()
 endforeach()

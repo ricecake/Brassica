@@ -7,6 +7,7 @@
 
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
+#include "types/AutoExposureData.hpp"
 
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
@@ -258,6 +259,16 @@ namespace brassica {
 	}
 
 	void Engine::Cleanup() {
+		// Must run before any handler->DestroyNode below: OzzCylinderNode::Destroy destroys its own
+		// descriptor pool (set2Pool), and vkDestroyDescriptorPool requires every command buffer that
+		// referenced a set allocated from it to have finished executing -- there's no such guarantee
+		// yet at this point in a normal shutdown, only after the GPU is confirmed idle. EntityNode's
+		// own Destroy (shader modules only) never needed this, which is why this wait wasn't already
+		// here before OzzCylinderNode existed.
+		if (device) {
+			device.waitIdle();
+		}
+
 		for (auto& handler : systemHandlers) {
 			if (handler) {
 				if (device) {
@@ -270,8 +281,7 @@ namespace brassica {
 		registry.clear();
 
 		if (device) {
-			device.waitIdle();
-
+			audioManager.Shutdown();
 			imguiManager.Shutdown();
 			shaderWatcher.StopWatching();
 
@@ -299,6 +309,8 @@ namespace brassica {
 				device.destroySemaphore(frameTimelineSemaphore);
 				frameTimelineSemaphore = nullptr;
 			}
+
+			CleanupAsyncTransferResources();
 
 			for (auto sem : swapchainRenderSemaphores) {
 				if (sem)
@@ -362,6 +374,7 @@ namespace brassica {
 		InitSwapchain();
 		InitCommands();
 		InitSyncStructures();
+		InitAsyncTransferResources();
 
 		std::random_device rd;
 		globalSeed = rd();
@@ -489,9 +502,17 @@ namespace brassica {
 		serviceLocator.Provide<ConfigManager>(std::shared_ptr<ConfigManager>(&configManager, [](ConfigManager*) {}));
 		serviceLocator.Provide<CameraData>(std::shared_ptr<CameraData>(&camera, [](CameraData*) {}));
 
+		audioManager.Initialize();
+		serviceLocator.Provide<IAudioManager>(std::shared_ptr<IAudioManager>(&audioManager, [](IAudioManager*) {}));
+		serviceLocator.Provide<AudioManager>(std::shared_ptr<AudioManager>(&audioManager, [](AudioManager*) {}));
+
 		lightManager.Initialize();
 		serviceLocator.Provide<ILightManager>(std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {}));
 		serviceLocator.Provide<LightManager>(std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {}));
+
+		materialManager.Initialize();
+		serviceLocator.Provide<IMaterialManager>(std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {}));
+		serviceLocator.Provide<MaterialManager>(std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {}));
 
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
@@ -512,6 +533,7 @@ namespace brassica {
 		);
 		serviceLocator.Provide<ImGuiManager>(std::shared_ptr<ImGuiManager>(&imguiManager, [](ImGuiManager*) {}));
 
+		audioManager.LoadState(configManager);
 		lightManager.LoadState(configManager);
 		terrainClipmap.LoadState(configManager);
 		terrainAS.LoadState(configManager);
@@ -699,6 +721,50 @@ namespace brassica {
 		}
 
 		camera.lastWrapOffset = wrapOffset;
+
+		// Non-blocking async transfer readback camera constraint demonstration:
+		// Poll any completed async readback transfer
+		PollReadbackData();
+
+		// Trigger new readback if clipmap image is initialized and has been populated/transitioned in frame graph
+		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
+		if (clipmapTex && clipmapTex->GetImage() && terrainClipmap.GetNumLODs() > 0 &&
+		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
+			const auto& level0 = terrainClipmap.GetLevelInfo(0);
+			float texelSize0 = level0.texelSize > 0.0001f ? level0.texelSize : 0.5f;
+			glm::vec2 relPos = (glm::vec2(camera.position.x, camera.position.z) - level0.centerWorldPos) / texelSize0;
+			int camU = (static_cast<int>(std::floor(relPos.x)) + level0.gridOffset.x) % TERRAIN_MAP_DIM;
+			int camV = (static_cast<int>(std::floor(relPos.y)) + level0.gridOffset.y) % TERRAIN_MAP_DIM;
+			if (camU < 0) camU += TERRAIN_MAP_DIM;
+			if (camV < 0) camV += TERRAIN_MAP_DIM;
+
+			int minU = std::clamp(camU - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
+			int minV = std::clamp(camV - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
+
+			TriggerImageRegionReadbackAsync(
+				clipmapTex->GetImage(),
+				0, // arrayLayer (LOD 0)
+				0, // mipLevel
+				vk::Offset2D{minU, minV},
+				vk::Extent2D{8, 8},
+				clipmapTex->GetCurrentLayout()
+			);
+		}
+
+		std::vector<glm::vec4> readbackData;
+		uint32_t rw = 0, rh = 0;
+		float maxTerrainHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
+		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
+			// Find peak terrain height in non-blocking async transfer region around camera
+			for (const auto& sample : readbackData) {
+				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
+			}
+		}
+		// Apply camera height constraint with conservative padding (e.g., +4.0f) to prevent near-plane clipping
+		float minHeight = maxTerrainHeight + 4.0f;
+		if (camera.position.y < minHeight) {
+			camera.position.y = minHeight;
+		}
 	}
 
 	bool Engine::InitVulkan() {
@@ -767,6 +833,19 @@ namespace brassica {
 			}
 		}
 
+		// GPU-assisted validation catches out-of-bounds buffer/image access and use of
+		// uninitialized descriptors at the point they happen, naming the exact shader/binding --
+		// synchronization validation catches missing/incorrect barriers between passes. Both are
+		// expensive (GPU-AV instruments every shader), so this stays opt-in via --aggressive-
+		// validation rather than always on.
+		if (options.aggressiveValidation) {
+			spdlog::warn("Engine: --aggressive-validation enabled (GPU-assisted + synchronization "
+						 "validation) -- rendering will be significantly slower.");
+			builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
+				.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
+				.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
+		}
+
 		auto inst_res = builder.request_validation_layers(true).build();
 		if (!inst_res) {
 			auto fallback_res = builder.request_validation_layers(false).build();
@@ -815,13 +894,19 @@ namespace brassica {
 
 		// Bindless set 0 (PhysicalRegistry.hpp's bindless index machinery, Engine::InitGlobalDescriptors):
 		// runtimeDescriptorArray + shaderSampledImageArrayNonUniformIndexing/
-		// shaderStorageImageArrayNonUniformIndexing let a shader index an unsized
-		// texture2D[]/image2D[] with nonuniformEXT; the two UpdateAfterBind bits let the registry
-		// write a new texture's descriptor without invalidating command buffers that reference the
-		// same set but a different index. Deliberately NOT requesting
-		// descriptorBindingAccelerationStructureUpdateAfterBind (the spottiest of this family) or
-		// descriptorBindingVariableDescriptorCount (unused -- see ShadingRateAttachmentDesc-style
-		// fixed-size arrays in InitGlobalDescriptors).
+		// shaderStorageImageArrayNonUniformIndexing/shaderStorageBufferArrayNonUniformIndexing let a
+		// shader index an unsized texture2D[]/image2D[]/buffer[] with nonuniformEXT; the matching
+		// UpdateAfterBind bits let the registry write a new resource's descriptor without
+		// invalidating command buffers that reference the same set but a different index. Each
+		// resource kind (sampled image, storage image, storage buffer) has its own independent pair
+		// of these two feature bits -- enabling one kind's doesn't imply another's, confirmed the
+		// hard way when storageBufferBinding (binding 6, PhysicalRegistry's bindless buffer arena)
+		// shipped without shaderStorageBufferArrayNonUniformIndexing/
+		// descriptorBindingStorageBufferUpdateAfterBind and every device that actually validates
+		// them (unlike this Mac's MoltenVK, which resolves them for free) rejected it. Deliberately
+		// NOT requesting descriptorBindingAccelerationStructureUpdateAfterBind (the spottiest of
+		// this family) or descriptorBindingVariableDescriptorCount (unused -- see
+		// ShadingRateAttachmentDesc-style fixed-size arrays in InitGlobalDescriptors).
 		VkPhysicalDeviceVulkan12Features features12{};
 		features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 		features12.descriptorIndexing = VK_TRUE;
@@ -830,8 +915,10 @@ namespace brassica {
 		features12.runtimeDescriptorArray = VK_TRUE;
 		features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
 		features12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+		features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
 		features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 		features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+		features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
 		features12.timelineSemaphore = VK_TRUE;
 		features12.bufferDeviceAddress = VK_TRUE;
 
@@ -1004,20 +1091,23 @@ namespace brassica {
 		if (options.headless || options.maxFrames > 0) {
 			auto props2 = chosenGPU.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
 			if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
-				spdlog::info("Mesa LLVMpipe software driver detected in headless mode; skipping GPU frame dispatches.");
+				spdlog::warn("Mesa LLVMpipe software driver detected; skipping GPU dispatches in headless mode.");
 				return;
 			}
-
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
-			for (uint32_t i = 0; i < targetFrames; ++i) {
+			for (uint32_t i = 0; i < targetFrames && !fatalErrorEncountered; ++i) {
 				DrawFrame();
 			}
-			spdlog::info("Completed {} frames.", targetFrames);
+			if (fatalErrorEncountered) {
+				spdlog::critical("Engine: stopped headless run early after a fatal frame error.");
+			} else {
+				spdlog::info("Completed {} frames.", targetFrames);
+			}
 			return;
 		}
 
-		while (window && !glfwWindowShouldClose(window)) {
+		while (window && !glfwWindowShouldClose(window) && !fatalErrorEncountered) {
 			glfwPollEvents();
 
 			// Wrap the frame in an enkiTS task so the main thread remains free
@@ -1026,6 +1116,10 @@ namespace brassica {
 
 			taskScheduler.AddTaskSetToPipe(&frameTask);
 			taskScheduler.WaitforTask(&frameTask);
+		}
+
+		if (fatalErrorEncountered) {
+			spdlog::critical("Engine: shutting down after a fatal frame error.");
 		}
 	}
 
@@ -1053,7 +1147,8 @@ namespace brassica {
 			RecreateSwapchain();
 			return;
 		} else if (acquireResult.result != vk::Result::eSuccess && acquireResult.result != vk::Result::eSuboptimalKHR) {
-			spdlog::error("Failed to acquire swapchain image!");
+			spdlog::critical("Failed to acquire swapchain image: {} -- shutting down.", vk::to_string(acquireResult.result));
+			fatalErrorEncountered = true;
 			return;
 		}
 		uint32_t swapchainImageIndex = acquireResult.value;
@@ -1111,6 +1206,20 @@ namespace brassica {
 		glm::vec3 previousCameraPosition = camera.position;
 		UpdateCamera(deltaTime);
 		previousCameraPosition += camera.lastWrapOffset;
+
+		AudioState audioState{};
+		audioState.listenerPos = camera.position;
+		audioState.listenerFront = camera.GetForward();
+		audioState.listenerUp = camera.GetUp();
+		audioState.listenerSpeed = camera.GetDisplayedSpeed();
+		audioState.listenerFov = glm::degrees(camera.fov);
+		audioState.altitude = std::max(0.0f, camera.position.y);
+		audioState.speed = camera.GetDisplayedSpeed();
+		audioState.windStrength = 0.5f;
+		audioState.windVelocity = glm::vec3(5.0f, 0.0f, 0.0f) * audioState.windStrength;
+		audioManager.UpdateState(audioState);
+		audioManager.Update(deltaTime);
+
 		lightManager.Update(deltaTime);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
@@ -1170,6 +1279,21 @@ namespace brassica {
 			std::memcpy(atmosphereUboMapped[activeFrame], &atmosphere, sizeof(AtmospherePushConstants));
 			vmaFlushAllocation(allocator, atmosphereUboAllocations[activeFrame], 0, sizeof(AtmospherePushConstants));
 		}
+		// Field-by-field, not a bulk memcpy: LayerData interleaves user-tunable fields (exposure,
+		// tone-mapping curve, CDL, white balance, LTM) with fields only bloom_downsample.comp's
+		// update_layer_ae ever writes (histogram, adaptedLuminance, EMAs, autoUchimura*) -- a full
+		// overwrite here would stomp the shader's own accumulated auto-exposure state every frame.
+		if (autoExposureMapped[activeFrame]) {
+			auto* mappedExposure = static_cast<ExposureDataHost*>(autoExposureMapped[activeFrame]);
+			SyncAutoExposureTunables(mappedExposure->layers[0], s_exposureData.layers[0]);
+			SyncAutoExposureTunables(mappedExposure->layers[1], s_exposureData.layers[1]);
+			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));
+		}
+		physicalRegistry.RegisterImportedBuffer<AutoExposureBuffer>(
+			autoExposureBuffers[activeFrame],
+			graph::StorageBufferDesc(sizeof(ExposureDataHost)),
+			true
+		);
 
 		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
 		if (lightsSSBOMapped[activeFrame]) {
@@ -1188,6 +1312,8 @@ namespace brassica {
 		bindlessBindings.samplerBinding = 2;
 		bindlessBindings.storageImageBinding = 3;
 		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.sampledImage3DBinding = 5;
+		bindlessBindings.storageBufferBinding = 6;
 		bindlessBindings.frameSet = frameDescriptorSets[activeFrame];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
@@ -1232,22 +1358,38 @@ namespace brassica {
 			std::sin(phi)
 		));
 
-		float     cosTheta = glm::dot(upRef, camNormal);
-		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
-		if (cosTheta < 0.99999f) {
-			if (cosTheta < -0.99999f) {
-				rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
-			} else {
-				glm::vec3 rotAxis = glm::cross(upRef, camNormal);
-				float     s = std::sqrt((1.0f + cosTheta) * 2.0f);
-				float     invs = 1.0f / s;
-				rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
-			}
-		}
+float theta = camera.position.x / FAKE_PLANET_RADIUS;
+float phi   = camera.position.z / FAKE_PLANET_RADIUS;
 
-		glm::quat invRotToCam = glm::inverse(rotToCam);
-		glm::vec3 sunDir = invRotToCam * sunDirGlobal;
-		glm::vec3 moonDir = invRotToCam * moonDirGlobal;
+// Local Up (your exact parameterization)
+glm::vec3 camUp = glm::normalize(glm::vec3(
+    std::sin(theta) * std::cos(phi),
+    std::cos(theta) * std::cos(phi),
+    std::sin(phi)
+));
+
+// Local Right (Tangent)
+// Derived from d/d(theta) of the Up vector, normalized.
+// At origin (0,0), this strictly evaluates to world +X (1, 0, 0).
+glm::vec3 camRight = glm::normalize(glm::vec3(
+    std::cos(theta),
+    -std::sin(theta),
+    0.0f
+));
+
+// Local Forward (Bitangent)
+// At origin (0,0), cross((1,0,0), (0,1,0)) strictly evaluates to world +Z (0, 0, 1).
+glm::vec3 camForward = glm::cross(camRight, camUp);
+
+// Construct rotation matrix directly from the basis vectors
+glm::mat3 tangentSpace(camRight, camUp, camForward);
+
+// Convert to quaternion for the push constants and inverse transformations
+glm::quat rotToCam = glm::quat_cast(tangentSpace);
+glm::quat invRotToCam = glm::inverse(rotToCam);
+
+glm::vec3 sunDir = invRotToCam * sunDirGlobal;
+glm::vec3 moonDir = invRotToCam * moonDirGlobal;
 
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,
@@ -1277,6 +1419,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		materialManager.RegisterBufferNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 		for (auto& handler : systemHandlers) {
 			if (handler) {
@@ -1300,7 +1443,14 @@ namespace brassica {
 			// this was already the migration plan's own recommendation before shipping true.
 			backend.Execute(frameGraph, ctx, graphCmd, false);
 		} catch (const std::exception& e) {
-			spdlog::error("Frame graph execution failed: {}", e.what());
+			// A frame graph compile/execute failure is a deterministic structural bug (a phase
+			// violation, a circular dependency, a missing producer), not a transient one -- next
+			// frame's graph is built the same way and throws the identical exception. Flagged fatal
+			// below so Run() stops calling DrawFrame instead of retrying and re-logging this every
+			// frame forever; the rest of this catch block still finishes cleaning up *this* frame's
+			// already-acquired swapchain image/semaphore before returning.
+			spdlog::critical("Frame graph execution failed: {} -- shutting down.", e.what());
+			fatalErrorEncountered = true;
 			frame.commandBuffer.end();
 
 			// backend.Execute throws before recording anything into frame.commandBuffer
@@ -1426,7 +1576,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1457,14 +1607,20 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 5: AutoExposureBuffer
+		bindings[5]
+			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 3 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2 * FRAME_OVERLAP}
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1545,15 +1701,29 @@ namespace brassica {
 				atmosphereUboAllocations[i],
 				&atmosphereUboMapped[i]
 			);
-
-			std::array<vk::DescriptorBufferInfo, 5> bufferDescs{};
+			createBufferHelper(
+				sizeof(ExposureDataHost),
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+				autoExposureBuffers[i],
+				autoExposureAllocations[i],
+				&autoExposureMapped[i]
+			);
+			// Seed sane defaults once, before any frame runs: nothing else ever writes this
+			// buffer's tunable fields for slot i until DrawFrame's per-frame sync below, and the
+			// compute shader's own histogram/adaptedLuminance/EMA accumulation only makes sense
+			// starting from s_exposureData's zeroed statistics, not whatever VMA handed back.
+			if (autoExposureMapped[i]) {
+				std::memcpy(autoExposureMapped[i], &s_exposureData, sizeof(ExposureDataHost));
+			}
+			std::array<vk::DescriptorBufferInfo, 6> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
 			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
 			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
+			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
 
-			std::array<vk::WriteDescriptorSet, 5> writes{};
+			std::array<vk::WriteDescriptorSet, 6> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -1579,6 +1749,11 @@ namespace brassica {
 				.setDstBinding(4)
 				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 				.setBufferInfo(bufferDescs[4]);
+			writes[5]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(5)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setBufferInfo(bufferDescs[5]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -1603,6 +1778,12 @@ namespace brassica {
 				atmosphereUboBuffers[i] = nullptr;
 				atmosphereUboAllocations[i] = nullptr;
 				atmosphereUboMapped[i] = nullptr;
+			}
+			if (autoExposureBuffers[i] && autoExposureAllocations[i]) {
+				vmaDestroyBuffer(allocator, autoExposureBuffers[i], autoExposureAllocations[i]);
+				autoExposureBuffers[i] = nullptr;
+				autoExposureAllocations[i] = nullptr;
+				autoExposureMapped[i] = nullptr;
 			}
 			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
 				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);
@@ -1630,7 +1811,7 @@ namespace brassica {
 		if (bindlessSetLayout) {
 			return;
 		}
-		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		// Binding 0: uTextures2D
 		bindings[0]
 			.setBinding(0)
@@ -1661,13 +1842,29 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
 			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 5: uTextures3D
+		bindings[5]
+			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 6: bindless storage buffers (no single canonical GLSL declaration -- each
+		// consumer aliases its own struct at this binding, same idiom as uImagesRGBA32F's
+		// image2D/image2DArray/image3D aliases at binding 3)
+		bindings[6]
+			.setBinding(6)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(16)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 5> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 7> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
 		bindingFlagsInfo.setBindingFlags(bindingFlags);
@@ -1681,11 +1878,12 @@ namespace brassica {
 		// Single instance -- never duplicated per frame, unlike the frame set above: a
 		// resource's descriptor is written once at creation and read for the rest of its life,
 		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
-		std::array<vk::DescriptorPoolSize, 4> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64},
+		std::array<vk::DescriptorPoolSize, 5> poolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1748,9 +1946,208 @@ namespace brassica {
 		bindlessBindings.samplerBinding = 2;
 		bindlessBindings.storageImageBinding = 3;
 		bindlessBindings.accelerationStructureBinding = 4;
+		bindlessBindings.sampledImage3DBinding = 5;
+		bindlessBindings.storageBufferBinding = 6;
 		bindlessBindings.frameSet = frameDescriptorSets[0];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
+	}
+
+	void Engine::InitAsyncTransferResources() {
+		if (!device) {
+			return;
+		}
+
+		vk::CommandPoolCreateInfo poolInfo{};
+		poolInfo.setQueueFamilyIndex(transferQueueFamily);
+		poolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+		asyncTransferCommandPool = device.createCommandPool(poolInfo);
+
+		vk::CommandBufferAllocateInfo allocInfo{};
+		allocInfo.setCommandPool(asyncTransferCommandPool);
+		allocInfo.setLevel(vk::CommandBufferLevel::ePrimary);
+		allocInfo.setCommandBufferCount(1);
+		asyncTransferCommandBuffer = device.allocateCommandBuffers(allocInfo).front();
+
+		vk::SemaphoreTypeCreateInfo typeInfo{};
+		typeInfo.setSemaphoreType(vk::SemaphoreType::eTimeline);
+		typeInfo.setInitialValue(0);
+
+		vk::SemaphoreCreateInfo semInfo{};
+		semInfo.setPNext(&typeInfo);
+		readbackTimelineSemaphore = device.createSemaphore(semInfo);
+
+		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		bufferInfo.size = 1024 * 1024 * 16; // 16MB max readback staging
+		bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		VmaAllocationCreateInfo allocCreateInfo{};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+		                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer       buf{VK_NULL_HANDLE};
+		VmaAllocationInfo allocationInfo{};
+		if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &buf, &readbackStagingAllocation, &allocationInfo) == VK_SUCCESS) {
+			readbackStagingBuffer = buf;
+			readbackStagingMapped = allocationInfo.pMappedData;
+		} else {
+			spdlog::error("Failed to allocate readback staging buffer.");
+		}
+	}
+
+	void Engine::CleanupAsyncTransferResources() {
+		if (device) {
+			if (readbackStagingBuffer && readbackStagingAllocation) {
+				vmaDestroyBuffer(allocator, readbackStagingBuffer, readbackStagingAllocation);
+				readbackStagingBuffer = nullptr;
+				readbackStagingAllocation = VK_NULL_HANDLE;
+				readbackStagingMapped = nullptr;
+			}
+			if (readbackTimelineSemaphore) {
+				device.destroySemaphore(readbackTimelineSemaphore);
+				readbackTimelineSemaphore = nullptr;
+			}
+			if (asyncTransferCommandPool) {
+				device.destroyCommandPool(asyncTransferCommandPool);
+				asyncTransferCommandPool = nullptr;
+			}
+		}
+	}
+
+	bool Engine::TriggerImageRegionReadbackAsync(
+		vk::Image image,
+		uint32_t arrayLayer,
+		uint32_t mipLevel,
+		vk::Offset2D offset,
+		vk::Extent2D extent,
+		vk::ImageLayout currentLayout
+	) {
+		if (!image || readbackInFlight || !readbackStagingBuffer) {
+			return false;
+		}
+
+		size_t requiredBytes = static_cast<size_t>(extent.width) * extent.height * sizeof(glm::vec4);
+		if (requiredBytes > 1024 * 1024 * 16) {
+			spdlog::warn("Requested image region readback size {} bytes exceeds staging capacity.", requiredBytes);
+			return false;
+		}
+
+		cachedReadbackWidth = extent.width;
+		cachedReadbackHeight = extent.height;
+
+		readbackSubmittedTimelineValue++;
+
+		asyncTransferCommandBuffer.reset();
+		asyncTransferCommandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+		vk::ImageMemoryBarrier2 barrier1{};
+		barrier1.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+		barrier1.setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead);
+		barrier1.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier1.setDstAccessMask(vk::AccessFlagBits2::eTransferRead);
+		barrier1.setOldLayout(currentLayout);
+		barrier1.setNewLayout(vk::ImageLayout::eTransferSrcOptimal);
+		barrier1.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier1.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier1.setImage(image);
+		barrier1.setSubresourceRange(vk::ImageSubresourceRange{
+			vk::ImageAspectFlagBits::eColor,
+			mipLevel,
+			1,
+			arrayLayer,
+			1
+		});
+
+		vk::DependencyInfo depInfo1{};
+		depInfo1.setImageMemoryBarriers(barrier1);
+		asyncTransferCommandBuffer.pipelineBarrier2(depInfo1);
+
+		vk::BufferImageCopy copyRegion{};
+		copyRegion.setBufferOffset(0);
+		copyRegion.setBufferRowLength(extent.width);
+		copyRegion.setBufferImageHeight(extent.height);
+		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{
+			vk::ImageAspectFlagBits::eColor,
+			mipLevel,
+			arrayLayer,
+			1
+		});
+		copyRegion.setImageOffset(vk::Offset3D{offset.x, offset.y, 0});
+		copyRegion.setImageExtent(vk::Extent3D{extent.width, extent.height, 1});
+
+		asyncTransferCommandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, readbackStagingBuffer, copyRegion);
+
+		vk::ImageMemoryBarrier2 barrier2{};
+		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
+		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferRead);
+		barrier2.setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+		barrier2.setDstAccessMask(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite);
+		barrier2.setOldLayout(vk::ImageLayout::eTransferSrcOptimal);
+		barrier2.setNewLayout(currentLayout);
+		barrier2.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier2.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+		barrier2.setImage(image);
+		barrier2.setSubresourceRange(vk::ImageSubresourceRange{
+			vk::ImageAspectFlagBits::eColor,
+			mipLevel,
+			1,
+			arrayLayer,
+			1
+		});
+
+		vk::DependencyInfo depInfo2{};
+		depInfo2.setImageMemoryBarriers(barrier2);
+		asyncTransferCommandBuffer.pipelineBarrier2(depInfo2);
+
+		asyncTransferCommandBuffer.end();
+
+		vk::SemaphoreSubmitInfo signalInfo{};
+		signalInfo.setSemaphore(readbackTimelineSemaphore);
+		signalInfo.setValue(readbackSubmittedTimelineValue);
+		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
+
+		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
+		cmdSubmitInfo.setCommandBuffer(asyncTransferCommandBuffer);
+
+		vk::SubmitInfo2 submitInfo{};
+		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
+		submitInfo.setSignalSemaphoreInfos(signalInfo);
+
+		transferQueue.submit2(submitInfo, nullptr);
+		readbackInFlight = true;
+
+		return true;
+	}
+
+	void Engine::PollReadbackData() {
+		if (!readbackInFlight || !readbackTimelineSemaphore) {
+			return;
+		}
+
+		uint64_t currentValue = device.getSemaphoreCounterValue(readbackTimelineSemaphore);
+		if (currentValue >= readbackSubmittedTimelineValue) {
+			readbackCompletedTimelineValue = currentValue;
+			readbackInFlight = false;
+
+			size_t pixelCount = static_cast<size_t>(cachedReadbackWidth) * cachedReadbackHeight;
+			cachedReadbackData.resize(pixelCount);
+			if (readbackStagingMapped) {
+				std::memcpy(cachedReadbackData.data(), readbackStagingMapped, pixelCount * sizeof(glm::vec4));
+			}
+			hasReadbackData = true;
+		}
+	}
+
+	bool Engine::GetLatestReadbackData(std::vector<glm::vec4>& outData, uint32_t& outWidth, uint32_t& outHeight) const {
+		if (!hasReadbackData) {
+			return false;
+		}
+		outData = cachedReadbackData;
+		outWidth = cachedReadbackWidth;
+		outHeight = cachedReadbackHeight;
+		return true;
 	}
 
 	void Engine::CleanupGlobalDescriptors() {

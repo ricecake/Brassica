@@ -154,7 +154,7 @@ namespace brassica {
 			.layers = numLODs,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
 			),
 		};
 	}
