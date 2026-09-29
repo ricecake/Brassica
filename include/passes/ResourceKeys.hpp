@@ -99,4 +99,6 @@ namespace brassica {
 
 	using BallIndirectBuffer = EntityIndirectBuffer<struct BallSystemHandlerTag>;
 
+	struct MaterialBuffer {};
+
 } // namespace brassica
