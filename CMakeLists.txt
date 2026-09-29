@@ -72,6 +72,7 @@ set(ozz_build_gltf OFF CACHE BOOL "" FORCE)
 set(ozz_build_samples OFF CACHE BOOL "" FORCE)
 set(ozz_build_howtos OFF CACHE BOOL "" FORCE)
 set(ozz_build_tests OFF CACHE BOOL "" FORCE)
+set(ozz_build_msvc_rt_dll ON CACHE BOOL "" FORCE)
 set(GC_ALWAYS_DOWNLOAD_EIGEN OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "Disable submodule tests" FORCE)
 
