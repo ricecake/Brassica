@@ -258,6 +258,12 @@ namespace brassica {
 		vk::Semaphore              frameTimelineSemaphore{nullptr};
 
 		bool       windowResized{false};
+		// Set by DrawFrame on an unrecoverable failure (frame graph compile/execute throwing, or a
+		// real swapchain acquire error -- not the routine eOutOfDateKHR/eSuboptimalKHR cases, which
+		// RecreateSwapchain already handles). These are deterministic bugs, not transient hiccups:
+		// retrying next frame just reproduces the identical failure and logs it again forever, so
+		// Run() checks this to stop cleanly instead of spamming the same error every frame.
+		bool       fatalErrorEncountered{false};
 		CameraData camera{};
 		double     lastFrameTime{0.0};
 		double     lastMouseX{0.0};

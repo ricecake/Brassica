@@ -1,0 +1,76 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+#include "common.glsl"
+#include "bindless.glsl"
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(max_vertices = 128, max_primitives = 256, triangles) out;
+
+struct TaskPayload {
+    vec4 positionAndScale;
+    vec4 color;
+    uvec4 params; // x = vertexCount, y = triangleCount
+};
+
+taskPayloadSharedEXT TaskPayload IN;
+
+layout(location = 0) out vec3 vWorldPos[];
+layout(location = 1) out vec3 vNormal[];
+layout(location = 2) out vec4 vColor[];
+
+struct CylinderVertex {
+    vec4 position; // xyz = position, w = 1.0
+    vec4 normal;   // xyz = normal, w = 0.0
+};
+
+layout(std430, set = 2, binding = 0) readonly buffer CylinderVertexSSBO {
+    CylinderVertex uVertices[];
+};
+
+layout(std430, set = 2, binding = 1) readonly buffer CylinderIndexSSBO {
+    uint uIndices[];
+};
+
+void main() {
+    vec3 center = IN.positionAndScale.xyz;
+    float scale = IN.positionAndScale.w;
+    vec4 color = IN.color;
+
+    uint vertexCount = IN.params.x;
+    uint triangleCount = IN.params.y;
+
+    if (vertexCount == 0u || triangleCount == 0u) {
+        SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+
+    SetMeshOutputsEXT(vertexCount, triangleCount);
+
+    uint tid = gl_LocalInvocationIndex;
+
+    // 1. Vertices
+    for (uint i = tid; i < vertexCount; i += 32u) {
+        vec3 localPos = uVertices[i].position.xyz * scale;
+        vec3 localNorm = normalize(uVertices[i].normal.xyz);
+
+        vec3 worldPos = center + localPos;
+
+        float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
+        worldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
+
+        gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(worldPos, 1.0);
+        vWorldPos[i] = worldPos;
+        vNormal[i] = localNorm;
+        vColor[i] = color;
+    }
+
+    // 2. Primitives / Triangles
+    for (uint t = tid; t < triangleCount; t += 32u) {
+        uint i0 = uIndices[t * 3u + 0u];
+        uint i1 = uIndices[t * 3u + 1u];
+        uint i2 = uIndices[t * 3u + 2u];
+
+        gl_PrimitiveTriangleIndicesEXT[t] = uvec3(i0, i1, i2);
+    }
+}

@@ -258,6 +258,16 @@ namespace brassica {
 	}
 
 	void Engine::Cleanup() {
+		// Must run before any handler->DestroyNode below: OzzCylinderNode::Destroy destroys its own
+		// descriptor pool (set2Pool), and vkDestroyDescriptorPool requires every command buffer that
+		// referenced a set allocated from it to have finished executing -- there's no such guarantee
+		// yet at this point in a normal shutdown, only after the GPU is confirmed idle. EntityNode's
+		// own Destroy (shader modules only) never needed this, which is why this wait wasn't already
+		// here before OzzCylinderNode existed.
+		if (device) {
+			device.waitIdle();
+		}
+
 		for (auto& handler : systemHandlers) {
 			if (handler) {
 				if (device) {
@@ -270,8 +280,6 @@ namespace brassica {
 		registry.clear();
 
 		if (device) {
-			device.waitIdle();
-
 			audioManager.Shutdown();
 			imguiManager.Shutdown();
 			shaderWatcher.StopWatching();
@@ -1061,14 +1069,18 @@ namespace brassica {
 			}
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
 			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
-			for (uint32_t i = 0; i < targetFrames; ++i) {
+			for (uint32_t i = 0; i < targetFrames && !fatalErrorEncountered; ++i) {
 				DrawFrame();
 			}
-			spdlog::info("Completed {} frames.", targetFrames);
+			if (fatalErrorEncountered) {
+				spdlog::critical("Engine: stopped headless run early after a fatal frame error.");
+			} else {
+				spdlog::info("Completed {} frames.", targetFrames);
+			}
 			return;
 		}
 
-		while (window && !glfwWindowShouldClose(window)) {
+		while (window && !glfwWindowShouldClose(window) && !fatalErrorEncountered) {
 			glfwPollEvents();
 
 			// Wrap the frame in an enkiTS task so the main thread remains free
@@ -1077,6 +1089,10 @@ namespace brassica {
 
 			taskScheduler.AddTaskSetToPipe(&frameTask);
 			taskScheduler.WaitforTask(&frameTask);
+		}
+
+		if (fatalErrorEncountered) {
+			spdlog::critical("Engine: shutting down after a fatal frame error.");
 		}
 	}
 
@@ -1104,7 +1120,8 @@ namespace brassica {
 			RecreateSwapchain();
 			return;
 		} else if (acquireResult.result != vk::Result::eSuccess && acquireResult.result != vk::Result::eSuboptimalKHR) {
-			spdlog::error("Failed to acquire swapchain image!");
+			spdlog::critical("Failed to acquire swapchain image: {} -- shutting down.", vk::to_string(acquireResult.result));
+			fatalErrorEncountered = true;
 			return;
 		}
 		uint32_t swapchainImageIndex = acquireResult.value;
@@ -1360,7 +1377,14 @@ namespace brassica {
 			// this was already the migration plan's own recommendation before shipping true.
 			backend.Execute(frameGraph, ctx, graphCmd, false);
 		} catch (const std::exception& e) {
-			spdlog::error("Frame graph execution failed: {}", e.what());
+			// A frame graph compile/execute failure is a deterministic structural bug (a phase
+			// violation, a circular dependency, a missing producer), not a transient one -- next
+			// frame's graph is built the same way and throws the identical exception. Flagged fatal
+			// below so Run() stops calling DrawFrame instead of retrying and re-logging this every
+			// frame forever; the rest of this catch block still finishes cleaning up *this* frame's
+			// already-acquired swapchain image/semaphore before returning.
+			spdlog::critical("Frame graph execution failed: {} -- shutting down.", e.what());
+			fatalErrorEncountered = true;
 			frame.commandBuffer.end();
 
 			// backend.Execute throws before recording anything into frame.commandBuffer
