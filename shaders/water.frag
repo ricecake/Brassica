@@ -40,8 +40,9 @@ void main() {
 	float localWaterLevel = params.waterLevel;
 	float terrainHeight = params.waterLevel - 100.0;
 	if (params.clipmapIndex > 0u && params.waterDataIndex > 0u) {
-		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, absWaterPos.xz, 0u, params.gridParams.w);
-		vec4 waterData = sampleTerrainWaterData(params.waterDataIndex, absWaterPos.xz, 0u, params.gridParams.w);
+		uint sampleLod = calculateTerrainLOD(absWaterPos.xz, params.gridParams.x);
+		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, absWaterPos.xz, sampleLod, params.gridParams.w);
+		vec4 waterData = sampleTerrainWaterData(params.waterDataIndex, absWaterPos.xz, sampleLod, params.gridParams.w);
 		terrainHeight = texSample.r;
 		localWaterLevel = max(params.waterLevel, terrainHeight + waterData.b);
 	}

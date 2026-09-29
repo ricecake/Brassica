@@ -18,20 +18,33 @@ float texelSize(
 	return baseTexelSize * getLODScale(float(level));
 }
 
+// Calculate clipmap LOD level based on Chebyshev distance from camera
+uint calculateTerrainLOD(vec2 sampleXZ, uint numLODs) {
+	vec2  dists = abs(sampleXZ - uCameraPosition.xz);
+	float maxDist = max(dists.x, dists.y);
+
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+	float baseRadius = 0.5 * 1088.0 * baseTexelSize;
+
+	if (maxDist < baseRadius) {
+		return 0u;
+	}
+
+	float lodFloat = ceil(log2(maxDist / baseRadius));
+	uint maxLOD = (numLODs > 0u) ? numLODs - 1u : 7u;
+	return uint(clamp(lodFloat, 0.0, float(maxLOD)));
+}
+
 // Toroidal UV mapping helper for terrain clipmap textures
 vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
 	float texelSize = baseTexelSize * getLODScale(float(level));
 	float dim = float((textureDim > 0u) ? textureDim : 1088u);
 
-	// Find the discrete world grid coordinate
 	vec2 worldGrid = floor(worldXZ / texelSize);
+	vec2 texelCoord = mod(mod(worldGrid, dim) + dim, dim);
 
-	// Map directly to the wrapped texture coordinate.
-	// The dim * 0.5 shift maintains the camera-centered local window.
-	vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
-
-	return texelCoord / dim;
+	return (texelCoord + 0.5) / dim;
 }
 
 // Sample terrain height (r) and normal (gba) from clipmap

@@ -133,8 +133,9 @@ void main() {
 	vec4 texSample = vec4(params.waterLevel, 0.0, 1.0, 0.0);
 	vec4 waterData = vec4(1.0, 0.0, max(0.0, params.waterLevel), 100.0);
 	if (params.clipmapIndex > 0u && params.waterDataIndex > 0u) {
-		texSample = sampleTerrainClipmap(params.clipmapIndex, worldXZ, ringLevel, params.gridParams.w);
-		waterData = sampleTerrainWaterData(params.waterDataIndex, worldXZ, ringLevel, params.gridParams.w);
+		uint sampleLod = calculateTerrainLOD(worldXZ, params.gridParams.x);
+		texSample = sampleTerrainClipmap(params.clipmapIndex, worldXZ, sampleLod, params.gridParams.w);
+		waterData = sampleTerrainWaterData(params.waterDataIndex, worldXZ, sampleLod, params.gridParams.w);
 	}
 	float terrainHeight = texSample.r;
 	vec2 flowDir = waterData.rg;
