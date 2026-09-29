@@ -106,7 +106,7 @@ void main() {
 	}
 
 	int isSky = 0;
-	if (rawDepth > 0.99999) {
+	if (rawDepth >= 1.0) {
 		isSky = 1;
 	}
 
