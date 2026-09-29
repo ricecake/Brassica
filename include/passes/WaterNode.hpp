@@ -29,29 +29,24 @@ namespace brassica {
 			constants::Class::Terrain::DefaultMaxLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,
-			0
-		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = unused
+			constants::Class::Terrain::MapDim
+		}; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 		glm::vec3     waterColor{0.05f, 0.45f, 0.85f};
 		float         waterLevel{0.0f};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t gNormalIndex{0};
 		std::uint32_t sceneColor{0};
+		std::uint32_t clipmapIndex{0};
+		std::uint32_t waterDataIndex{0};
 	};
 
-	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
-	// unification: no descriptor set, no pipeline layout boilerplate, no positional
-	// pipeline-creation call. Just a resource contract, a phase, a pipeline-state literal, and
-	// two shaders. Runs at Phase::Late so it composites over whatever DeferredNode already wrote
-	// -- both declare a plain Modify<Swapchain> with no version number between them, which is
-	// exactly what Phase (rather than a resource-version chain) is for: see Modify's own comment,
-	// graph/Declaration.hpp.
-	//
-	// The first real consumer of GraphicsPipelineState::enableBlend outside a synthetic test --
-	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
-	// so this is what actually proves the blend-state plumbing works for something real.
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
-		using Resources = graph::Declares<GBuffer<graph::Read>, graph::Modify<HdrColor>>;
+		using Resources = graph::Declares<
+			GBuffer<graph::Read>,
+			graph::Read<TerrainClipmapTexture>,
+			graph::Read<TerrainWaterDataTexture>,
+			graph::Modify<HdrColor>>;
 
 		// Was graph::Phase::Late (1000) -- the exact same numeric value ParticleSystemNode's outer
 		// wrapper also declared, which is what let the whole particle system (including the two
@@ -118,7 +113,7 @@ namespace brassica {
 				p.terrainGridParams.x,
 				p.terrainGridParams.y,
 				p.terrainGridParams.z,
-				0
+				constants::Class::Terrain::MapDim
 			);
 			push.waterColor = p.waterColor;
 			push.waterLevel = p.waterLevel;
@@ -148,6 +143,8 @@ namespace brassica {
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 			push.sceneColor = ctx.Index<HdrColor>();
+			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
+			push.waterDataIndex = ctx.Index<TerrainWaterDataTexture>();
 
 			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

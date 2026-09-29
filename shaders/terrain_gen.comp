@@ -16,6 +16,7 @@ layout(push_constant) uniform PushConstants {
 	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
 	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
 	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
+	uint  waterDataStorageIdx;  // storage image index for TerrainWaterDataTexture
 	bool forceRegeneration;
 } push;
 
@@ -104,9 +105,28 @@ void main() {
 
 		ivec3 storeCoord = ivec3(globalId.xy, lod);
 
+		// Calculate fluid flow direction along steepest descent gradient
+		vec2 downhill = -vec2(normal.x, normal.z);
+		vec2 flowDir = (length(downhill) > 0.001) ? normalize(downhill) : vec2(1.0, 0.0);
+
+		// Calculate water accumulation (sea level + lake basins)
+		float seaAccumulation = max(0.0, -h);
+		float depression = max(0.0, mean_h - h);
+		float lakeAccumulation = 0.0;
+		if (h >= 0.0) {
+			float valleyMask = smoothstep(0.98, 0.6, normal.y);
+			lakeAccumulation = clamp(depression * 3.0 + valleyMask * 10.0, 0.0, 40.0);
+		}
+		float accumulation = max(seaAccumulation, lakeAccumulation);
+
+		// Calculate shoreline distance (estimated distance to shoreline)
+		float tanSlope = max(length(normal.xz) / max(normal.y, 0.001), 0.02);
+		float shorelineDist = accumulation / tanSlope;
+
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(cluster_min, cluster_max, quad_min, quad_max));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, 1.0, land_mask));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.waterDataStorageIdx)], storeCoord, vec4(flowDir.x, flowDir.y, accumulation, shorelineDist));
 	}
 }

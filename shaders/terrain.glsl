@@ -78,6 +78,17 @@ float sampleTerrainTileVisibility(
 	return SAMPLE_ARRAY_WRAP(visIndex, vec3(uv, float(level))).r;
 }
 
+// Sample terrain water data map (rg = flow direction XZ, b = accumulation, a = shoreline distance)
+vec4 sampleTerrainWaterData(
+	uint  waterDataIndex,
+	vec2  worldXZ,
+	uint  level,
+	uint  textureDim
+) {
+	vec2 uv = sampleToroidalUV(worldXZ, level, textureDim);
+	return SAMPLE_ARRAY_WRAP(waterDataIndex, vec3(uv, float(level)));
+}
+
 // -----------------------------------------------------------------------------
 // EROSION FILTER
 // -----------------------------------------------------------------------------

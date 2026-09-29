@@ -430,6 +430,13 @@ namespace brassica {
 			vk::ImageLayout::eUndefined,
 			/*hasDefinedContents=*/false
 		);
+		physicalRegistry.RegisterImportedTexture<TerrainWaterDataTexture>(
+			terrainClipmap.GetWaterDataImage(),
+			terrainClipmap.GetWaterDataImageView(),
+			TerrainWaterDataDesc(terrainClipmap.GetNumLODs()),
+			vk::ImageLayout::eUndefined,
+			/*hasDefinedContents=*/false
+		);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 		physicalRegistry.RegisterImportedTexture<TerrainMinMaxTexture>(
 			terrainClipmap.GetMinMaxImage(),
@@ -1336,6 +1343,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+		frameGraph.Register<graph::Import<TerrainWaterDataTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		nodeRegistry.RegisterAllInto(frameGraph);
 		for (auto& handler : systemHandlers) {

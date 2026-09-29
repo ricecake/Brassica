@@ -79,6 +79,7 @@ namespace brassica {
 		std::vector<glm::vec4> minMaxMap;
 		std::vector<glm::vec4> biomeMap;
 		std::vector<glm::vec4> visibilityMap;
+		std::vector<glm::vec4> waterDataMap;
 	};
 
 	static TerrainRegionData GenerateTerrainRegionData(
@@ -96,6 +97,7 @@ namespace brassica {
 		data.minMaxMap.resize(size);
 		data.biomeMap.resize(size);
 		data.visibilityMap.resize(size);
+		data.waterDataMap.resize(size);
 
 		float texelSize = info.texelSize > 0.0f ? info.texelSize : 0.5f;
 		float halfExtent = 0.5f * static_cast<float>(TERRAIN_MAP_DIM) * texelSize;
@@ -209,6 +211,11 @@ namespace brassica {
 
 				glm::vec3 normal = glm::normalize(glm::vec3(hL - hR, 2.0f * eps, hD - hU));
 
+				glm::vec2 downhill = -glm::vec2(normal.x, normal.z);
+				glm::vec2 flow = (glm::length(downhill) > 0.001f) ? glm::normalize(downhill) : glm::vec2(1.0f, 0.0f);
+				float accum = std::max(0.0f, -h);
+				float shoreDist = accum / std::max(glm::length(glm::vec2(normal.x, normal.z)), 0.02f);
+
 				uint32_t destX = (width == TERRAIN_MAP_DIM) ? ((x + info.gridOffset.x) % TERRAIN_MAP_DIM) : x;
 				size_t   idx = destZ * width + destX;
 
@@ -216,6 +223,7 @@ namespace brassica {
 				data.minMaxMap[idx] = glm::vec4(minH, maxH, minH, maxH);
 				data.biomeMap[idx] = glm::vec4(biomeVal, variance, 1.0f, maskVal);
 				data.visibilityMap[idx] = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+				data.waterDataMap[idx] = glm::vec4(flow.x, flow.y, accum, shoreDist);
 			}
 		}
 
@@ -329,6 +337,7 @@ namespace brassica {
 			destroyArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 			destroyArrayImage(biomeImage, biomeImageView, biomeAllocation);
 			destroyArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+			destroyArrayImage(waterDataImage, waterDataImageView, waterDataAllocation);
 		}
 	}
 
@@ -368,6 +377,7 @@ namespace brassica {
 		createArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 		createArrayImage(biomeImage, biomeImageView, biomeAllocation);
 		createArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+		createArrayImage(waterDataImage, waterDataImageView, waterDataAllocation);
 	}
 
 	void TerrainClipmap::CreateSampler() {
@@ -408,7 +418,8 @@ namespace brassica {
 			.heightMap = std::move(region.heightMap),
 			.minMaxMap = std::move(region.minMaxMap),
 			.biomeMap = std::move(region.biomeMap),
-			.visibilityMap = std::move(region.visibilityMap)
+			.visibilityMap = std::move(region.visibilityMap),
+			.waterDataMap = std::move(region.waterDataMap)
 		};
 	}
 

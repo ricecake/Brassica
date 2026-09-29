@@ -1,6 +1,7 @@
 #version 460
 #include "bindless.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 #include "clustered_lighting.glsl"
 
 layout(location = 0) in vec3 inWorldPos;
@@ -16,6 +17,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
 	uint  sceneColorIndex;
+	uint  clipmapIndex;
+	uint  waterDataIndex;
 } params;
 
 void main() {
@@ -33,6 +36,19 @@ void main() {
 	vec3 relTerrainPos = SAMPLE_NEAREST(params.gPositionIndex, screenUV).rgb;
 	vec3 relWaterPos = inWorldPos;
 	vec3 absWaterPos = uCameraPosition.xyz + inWorldPos;
+
+	float localWaterLevel = params.waterLevel;
+	float terrainHeight = params.waterLevel - 100.0;
+	if (params.clipmapIndex > 0u && params.waterDataIndex > 0u) {
+		vec4 texSample = sampleTerrainClipmap(params.clipmapIndex, absWaterPos.xz, 0u, params.gridParams.w);
+		vec4 waterData = sampleTerrainWaterData(params.waterDataIndex, absWaterPos.xz, 0u, params.gridParams.w);
+		terrainHeight = texSample.r;
+		localWaterLevel = max(params.waterLevel, terrainHeight + waterData.b);
+	}
+
+	if (localWaterLevel <= terrainHeight + 0.01) {
+		discard;
+	}
 
 	float distToCamWater = length(relWaterPos);
 	float rayLengthThroughWater = 100.0;
@@ -65,12 +81,12 @@ void main() {
 			// Looking UP at the water surface from below
 			// The view ray travels entirely through the water volume from camera to surface
 			rayLengthThroughWater = distToCamWater;
-			depthBelowWater = params.waterLevel - uCameraPosition.y;
+			depthBelowWater = localWaterLevel - uCameraPosition.y;
 		}
 	} else {
 		// Sky background
 		rayLengthThroughWater = isAboveWater ? 100.0 : distToCamWater;
-		depthBelowWater = isAboveWater ? 100.0 : (params.waterLevel - uCameraPosition.y);
+		depthBelowWater = isAboveWater ? 100.0 : (localWaterLevel - uCameraPosition.y);
 	}
 
 	vec3 baseNormal = normalize(inNormal);

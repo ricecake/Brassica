@@ -8,6 +8,7 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
 #include "passes/WaterNode.hpp"
+#include "terrain/TerrainClipmap.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -29,6 +30,8 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
+			graph::Create<TerrainClipmapTexture>,
+			graph::Create<TerrainWaterDataTexture>,
 			graph::Create<HdrColor>>;
 
 		vk::Extent2D extent;
@@ -62,6 +65,20 @@ namespace {
 					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainClipmapTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = TerrainClipmapDesc(12),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWaterDataTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = TerrainWaterDataDesc(12),
 				}
 			);
 			r.realizations.push_back(

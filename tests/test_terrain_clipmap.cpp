@@ -150,6 +150,7 @@ TEST_CASE("Terrain Attribute Maps Generation") {
 	CHECK(levelData.minMaxMap.size() == expectedSize);
 	CHECK(levelData.biomeMap.size() == expectedSize);
 	CHECK(levelData.visibilityMap.size() == expectedSize);
+	CHECK(levelData.waterDataMap.size() == expectedSize);
 
 	size_t sampleIdx = expectedSize / 2;
 	glm::vec4 minMaxVal = levelData.minMaxMap[sampleIdx];
@@ -162,6 +163,9 @@ TEST_CASE("Terrain Attribute Maps Generation") {
 
 	glm::vec4 visVal = levelData.visibilityMap[sampleIdx];
 	CHECK(visVal.x == 1.0f);
+
+	glm::vec4 waterDataVal = levelData.waterDataMap[sampleIdx];
+	CHECK(glm::length(glm::vec2(waterDataVal.x, waterDataVal.y)) >= 0.0f);
 }
 
 TEST_CASE("Initial Camera Height and Raytrace AABB Bounds") {
