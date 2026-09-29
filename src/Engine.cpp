@@ -7,6 +7,7 @@
 
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
+#include "types/AutoExposureData.hpp"
 
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
@@ -1251,6 +1252,21 @@ namespace brassica {
 			std::memcpy(atmosphereUboMapped[activeFrame], &atmosphere, sizeof(AtmospherePushConstants));
 			vmaFlushAllocation(allocator, atmosphereUboAllocations[activeFrame], 0, sizeof(AtmospherePushConstants));
 		}
+		// Field-by-field, not a bulk memcpy: LayerData interleaves user-tunable fields (exposure,
+		// tone-mapping curve, CDL, white balance, LTM) with fields only bloom_downsample.comp's
+		// update_layer_ae ever writes (histogram, adaptedLuminance, EMAs, autoUchimura*) -- a full
+		// overwrite here would stomp the shader's own accumulated auto-exposure state every frame.
+		if (autoExposureMapped[activeFrame]) {
+			auto* mappedExposure = static_cast<ExposureDataHost*>(autoExposureMapped[activeFrame]);
+			SyncAutoExposureTunables(mappedExposure->layers[0], s_exposureData.layers[0]);
+			SyncAutoExposureTunables(mappedExposure->layers[1], s_exposureData.layers[1]);
+			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));
+		}
+		physicalRegistry.RegisterImportedBuffer<AutoExposureBuffer>(
+			autoExposureBuffers[activeFrame],
+			graph::StorageBufferDesc(sizeof(ExposureDataHost)),
+			true
+		);
 
 		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
 		if (lightsSSBOMapped[activeFrame]) {
@@ -1510,7 +1526,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 5> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1541,14 +1557,20 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 5: AutoExposureBuffer
+		bindings[5]
+			.setBinding(5)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 3 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2 * FRAME_OVERLAP}
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1629,15 +1651,29 @@ namespace brassica {
 				atmosphereUboAllocations[i],
 				&atmosphereUboMapped[i]
 			);
-
-			std::array<vk::DescriptorBufferInfo, 5> bufferDescs{};
+			createBufferHelper(
+				sizeof(ExposureDataHost),
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+				autoExposureBuffers[i],
+				autoExposureAllocations[i],
+				&autoExposureMapped[i]
+			);
+			// Seed sane defaults once, before any frame runs: nothing else ever writes this
+			// buffer's tunable fields for slot i until DrawFrame's per-frame sync below, and the
+			// compute shader's own histogram/adaptedLuminance/EMA accumulation only makes sense
+			// starting from s_exposureData's zeroed statistics, not whatever VMA handed back.
+			if (autoExposureMapped[i]) {
+				std::memcpy(autoExposureMapped[i], &s_exposureData, sizeof(ExposureDataHost));
+			}
+			std::array<vk::DescriptorBufferInfo, 6> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
 			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
 			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
+			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
 
-			std::array<vk::WriteDescriptorSet, 5> writes{};
+			std::array<vk::WriteDescriptorSet, 6> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -1663,6 +1699,11 @@ namespace brassica {
 				.setDstBinding(4)
 				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 				.setBufferInfo(bufferDescs[4]);
+			writes[5]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(5)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setBufferInfo(bufferDescs[5]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -1687,6 +1728,12 @@ namespace brassica {
 				atmosphereUboBuffers[i] = nullptr;
 				atmosphereUboAllocations[i] = nullptr;
 				atmosphereUboMapped[i] = nullptr;
+			}
+			if (autoExposureBuffers[i] && autoExposureAllocations[i]) {
+				vmaDestroyBuffer(allocator, autoExposureBuffers[i], autoExposureAllocations[i]);
+				autoExposureBuffers[i] = nullptr;
+				autoExposureAllocations[i] = nullptr;
+				autoExposureMapped[i] = nullptr;
 			}
 			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
 				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);
