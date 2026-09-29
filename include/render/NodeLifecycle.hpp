@@ -7,6 +7,7 @@
 
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include "constants.h"
 #include "graph/Graph.hpp"
@@ -52,6 +53,7 @@ namespace brassica::render {
 		glm::vec3  sunRadiance{3.0f, 2.94f, 2.76f};
 		glm::vec3  moonDir{0.0f, -1.0f, 0.0f};
 		glm::vec3  moonRadiance{0.1f, 0.12f, 0.16f};
+		glm::quat  rotToCam{1.0f, 0.0f, 0.0f, 0.0f};
 		float      time{0.0f};
 		float      worldScale{1.0f};
 		float      multiScatScale{1.0f};

@@ -1,5 +1,6 @@
 #version 460 core
 #include "bindless.glsl"
+#include "common.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -63,7 +64,6 @@ float hash1(uint n) {
 }
 
 void main() {
-	return;
 	uint idx = gl_GlobalInvocationID.x;
 
 	if (idx >= uPush.maxParticles) {
@@ -79,7 +79,7 @@ void main() {
 	uint pType = (idx % 2u == 0u) ? 0u : 1u;
 	uParticles[idx].type = pType;
 
-	float distToCam = length(uParticles[idx].position.xyz - camPos);
+	float distToCam = length(wrapShortestDistance(uParticles[idx].position.xyz - camPos));
 	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 250.0;
 
 	if (expired) {

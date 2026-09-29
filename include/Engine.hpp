@@ -19,6 +19,7 @@
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/AllNodes.hpp"
+#include "render/MaterialManager.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
@@ -159,6 +160,10 @@ namespace brassica {
 
 		const LightManager& GetLightManager() const { return lightManager; }
 
+		MaterialManager& GetMaterialManager() { return materialManager; }
+
+		const MaterialManager& GetMaterialManager() const { return materialManager; }
+
 		LightningManager& GetLightningManager() { return lightningManager; }
 
 		const LightningManager& GetLightningManager() const { return lightningManager; }
@@ -275,6 +280,7 @@ namespace brassica {
 		LightManager     lightManager;
 		LightningManager lightningManager;
 		AudioManager     audioManager;
+		MaterialManager  materialManager;
 
 		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
 		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'

@@ -510,6 +510,10 @@ namespace brassica {
 		serviceLocator.Provide<ILightManager>(std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {}));
 		serviceLocator.Provide<LightManager>(std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {}));
 
+		materialManager.Initialize();
+		serviceLocator.Provide<IMaterialManager>(std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {}));
+		serviceLocator.Provide<MaterialManager>(std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {}));
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -695,6 +699,28 @@ namespace brassica {
 		if (camera.position.y < -1024.0f) {
 			camera.position.y = -1024.0f;
 		}
+
+		constexpr float R_max = FAKE_PLANET_HALF_PERIMETER;
+		constexpr float L = FAKE_PLANET_PERIMETER;
+
+		glm::vec3 wrapOffset{0.0f};
+		if (camera.position.x > R_max) {
+			camera.position.x -= L;
+			wrapOffset.x = -L;
+		} else if (camera.position.x < -R_max) {
+			camera.position.x += L;
+			wrapOffset.x = +L;
+		}
+
+		if (camera.position.z > R_max) {
+			camera.position.z -= L;
+			wrapOffset.z = -L;
+		} else if (camera.position.z < -R_max) {
+			camera.position.z += L;
+			wrapOffset.z = +L;
+		}
+
+		camera.lastWrapOffset = wrapOffset;
 
 		// Non-blocking async transfer readback camera constraint demonstration:
 		// Poll any completed async readback transfer
@@ -1179,6 +1205,7 @@ namespace brassica {
 
 		glm::vec3 previousCameraPosition = camera.position;
 		UpdateCamera(deltaTime);
+		previousCameraPosition += camera.lastWrapOffset;
 
 		AudioState audioState{};
 		audioState.listenerPos = camera.position;
@@ -1291,7 +1318,7 @@ namespace brassica {
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 
-		terrainClipmap.UpdateCameraPosition(camera.position);
+		terrainClipmap.UpdateCameraPosition(camera.position, camera.lastWrapOffset);
 
 		uint32_t lods = terrainClipmap.GetNumLODs();
 		uint32_t meshletsPerRow = constants::Class::Terrain::MeshletsPerRow;
@@ -1323,25 +1350,43 @@ namespace brassica {
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
 		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
-		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
-		glm::vec3 camNormal = glm::normalize(camera.position - planetCenter);
+		float theta = camera.position.x / FAKE_PLANET_RADIUS;
+		float phi = camera.position.z / FAKE_PLANET_RADIUS;
+		glm::vec3 camNormal = glm::normalize(glm::vec3(
+			std::sin(theta) * std::cos(phi),
+			std::cos(theta) * std::cos(phi),
+			std::sin(phi)
+		));
 
-		float     cosTheta = glm::dot(upRef, camNormal);
-		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
-		if (cosTheta < 0.99999f) {
-			if (cosTheta < -0.99999f) {
-				rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
-			} else {
-				glm::vec3 rotAxis = glm::cross(upRef, camNormal);
-				float     s = std::sqrt((1.0f + cosTheta) * 2.0f);
-				float     invs = 1.0f / s;
-				rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
-			}
-		}
+// Local Up (your exact parameterization)
+glm::vec3 camUp = glm::normalize(glm::vec3(
+    std::sin(theta) * std::cos(phi),
+    std::cos(theta) * std::cos(phi),
+    std::sin(phi)
+));
 
-		glm::quat invRotToCam = glm::inverse(rotToCam);
-		glm::vec3 sunDir = invRotToCam * sunDirGlobal;
-		glm::vec3 moonDir = invRotToCam * moonDirGlobal;
+// Local Right (Tangent)
+// Derived from d/d(theta) of the Up vector, normalized.
+// At origin (0,0), this strictly evaluates to world +X (1, 0, 0).
+glm::vec3 camRight = glm::normalize(glm::vec3(
+    std::cos(theta),
+    -std::sin(theta),
+    0.0f
+));
+
+// Local Forward (Bitangent)
+// At origin (0,0), cross((1,0,0), (0,1,0)) strictly evaluates to world +Z (0, 0, 1).
+glm::vec3 camForward = glm::cross(camRight, camUp);
+
+// Construct rotation matrix directly from the basis vectors
+glm::mat3 tangentSpace(camRight, camUp, camForward);
+
+// Convert to quaternion for the push constants and inverse transformations
+glm::quat rotToCam = glm::quat_cast(tangentSpace);
+glm::quat invRotToCam = glm::inverse(rotToCam);
+
+glm::vec3 sunDir = invRotToCam * sunDirGlobal;
+glm::vec3 moonDir = invRotToCam * moonDirGlobal;
 
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,
@@ -1354,6 +1399,7 @@ namespace brassica {
 			.sunRadiance = sunRadiance,
 			.moonDir = moonDir,
 			.moonRadiance = moonRadiance,
+			.rotToCam = rotToCam,
 			.time = ubo.time,
 			.worldScale = 1.0f,
 			.multiScatScale = 1.0f,
@@ -1370,6 +1416,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		materialManager.RegisterBufferNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 		for (auto& handler : systemHandlers) {
 			if (handler) {

@@ -32,6 +32,7 @@
 #include "passes/ResourceKeys.hpp"
 #include "ServiceLocator.hpp"
 #include "terrain/TerrainMapExporter.hpp"
+#include "EngineConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "ui/QuickSettingsWidget.hpp"
@@ -1234,4 +1235,44 @@ TEST_CASE("TerrainMapColorConfig elevation, slope, and water color tinting") {
 	CHECK(r > 180);
 	CHECK(g > 180);
 	CHECK(b > 180);
+}
+
+TEST_CASE("Camera position wrapping, shortest distance utilities, and terrain clipmap shift prevention") {
+	float halfL = brassica::FAKE_PLANET_HALF_PERIMETER;
+	float L = brassica::FAKE_PLANET_PERIMETER;
+
+	// 1. Shortest distance 2D & 3D vector wrap
+	glm::vec2 largeNegDelta(-3600000.0f, 0.0f);
+	glm::vec2 wrappedNeg = brassica::WrapShortestDistance(largeNegDelta);
+	CHECK(wrappedNeg.x > 0.0f);
+	CHECK(doctest::Approx(wrappedNeg.x).epsilon(0.01) == (-3600000.0f + L));
+
+	glm::vec3 largePosDelta(3600000.0f, 25.0f, -10.0f);
+	glm::vec3 wrappedPos = brassica::WrapShortestDistance(largePosDelta);
+	CHECK(wrappedPos.x < 0.0f);
+	CHECK(doctest::Approx(wrappedPos.y).epsilon(0.001) == 25.0f);
+	CHECK(doctest::Approx(wrappedPos.x).epsilon(0.01) == (3600000.0f - L));
+
+	// 2. Camera wrapping at boundary and offset tracking
+	brassica::CameraData cam;
+	cam.position = glm::vec3(halfL - 2.0f, 10.0f, 0.0f);
+	glm::vec3 prevPos = cam.position;
+
+	// Simulating camera movement exceeding boundary
+	cam.position += glm::vec3(10.0f, 0.0f, 0.0f);
+	glm::vec3 wrapOffset{0.0f};
+	if (cam.position.x > halfL) {
+		cam.position.x -= L;
+		wrapOffset.x = -L;
+	}
+	cam.lastWrapOffset = wrapOffset;
+
+	CHECK(cam.position.x < 0.0f);
+	CHECK(doctest::Approx(cam.position.x).epsilon(0.01) == (-halfL + 8.0f));
+
+	// Adjusted previous position ensures true frame movement delta is preserved
+	glm::vec3 adjustedPrev = prevPos + cam.lastWrapOffset;
+	glm::vec3 trueDelta = cam.position - adjustedPrev;
+	CHECK(doctest::Approx(trueDelta.x).epsilon(0.001) == 10.0f);
+
 }

@@ -62,11 +62,14 @@ void main() {
 
         vec3 worldPos = center + norm * radius;
 
-        float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
-        worldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
+        vec2 relXZ = wrapShortestDistance(worldPos.xz - uCameraPosition.xz);
+        vec3 effectiveWorldPos = vec3(uCameraPosition.x + relXZ.x, worldPos.y, uCameraPosition.z + relXZ.y);
 
-        gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(worldPos, 1.0);
-        vWorldPos[i] = worldPos;
+        float distSq = dot(relXZ, relXZ);
+        effectiveWorldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
+
+        gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(effectiveWorldPos, 1.0);
+        vWorldPos[i] = effectiveWorldPos;
         vNormal[i] = norm;
         vColor[i] = color;
     }
