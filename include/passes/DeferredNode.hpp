@@ -55,6 +55,8 @@ namespace brassica {
 			graph::Read<TerrainTLAS>,
 			graph::Create<HdrColor>>;
 
+		static constexpr graph::Phase kPhase = SubPhase::DeferredShading;
+
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 		};

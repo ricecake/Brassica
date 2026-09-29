@@ -376,12 +376,66 @@ namespace brassica::graph {
 			ResourceId  key;
 		};
 
-		// One edge per (producer, consumer, key) triple where consumer.consumes contains key
-		// and producer.produces contains it too. Self-edges (Modify<K>, a node both consuming
-		// and producing K) are skipped -- otherwise leveling would treat a node as depending on
-		// itself.
+		// A node "self-modifies" key K when K itself (not some VersionOf<K,N>) appears in both its
+		// own consumes and produces -- exactly the shape Declaration.hpp's unversioned Modify<K>
+		// produces (Consumes = Produces = K, no version at all). Two or more such nodes at the
+		// *same* phase, self-modifying the *same* key, is exactly what an unversioned Modify<K> is
+		// meant to convey: "run against whatever's there, hand it to whoever's next" -- neither
+		// node names or knows about the other. Left to the generic pairing below, every member of
+		// such a group would connect to every *other* member (each looks like a producer of the
+		// exact key the others consume), which Compile() would then have to reject as a real
+		// bidirectional cycle for any group of two or more -- this is the bug OzzCylinderNode and
+		// EntityNode hit registering into the same frame graph (see
+		// project-brassica-ozz-cylinder-debugging in memory). Resolved by ordering each (phase,
+		// key) group by registration index -- this vector's order, i.e. Setup()/Register() call
+		// order, deterministic frame to frame -- and adding only that chain's adjacent forward
+		// edges, so N same-phase self-modifiers become a real N-1-edge order instead of a cycle. A
+		// node using an explicit Modify<K, Version> never matches this (its consumes/produces are
+		// different VersionOf<K,*> ids, not the same K), so hand-picked version chains elsewhere
+		// (e.g. the particle system's GBufferDepth versions) are completely unaffected.
 		static std::vector<Edge> CollectEdges(const std::vector<NodeDescriptor>& nodes) {
+			// True self-modify: this exact node both consumes AND produces key (Modify<K,0>'s
+			// shape). Distinct from "produces key" alone, which every producer in the generic loop
+			// below already satisfies by construction -- conflating the two here would make
+			// alreadyChained (below) vacuously true for every producer/consumer pair, since the
+			// generic loop only ever calls it once it already knows the producer produces key.
+			auto isSelfModifyMember = [](const NodeDescriptor& node, ResourceId key) {
+				return std::find(node.consumes.begin(), node.consumes.end(), key) != node.consumes.end() &&
+					std::find(node.produces.begin(), node.produces.end(), key) != node.produces.end();
+			};
+
+			std::vector<std::pair<std::pair<Phase, ResourceId>, std::vector<std::size_t>>> selfModifyGroups;
+			auto                                                                           groupFor =
+				[&](Phase phase, ResourceId key) -> std::vector<std::size_t>& {
+				for (auto& [phaseKey, members] : selfModifyGroups) {
+					if (phaseKey.first == phase && phaseKey.second == key) {
+						return members;
+					}
+				}
+				selfModifyGroups.push_back({{phase, key}, {}});
+				return selfModifyGroups.back().second;
+			};
+
+			for (std::size_t i = 0; i < nodes.size(); ++i) {
+				for (ResourceId key : nodes[i].consumes) {
+					if (isSelfModifyMember(nodes[i], key)) {
+						groupFor(nodes[i].phase, key).push_back(i);
+					}
+				}
+			}
+
 			std::vector<Edge> edges;
+			for (const auto& [phaseKey, members] : selfModifyGroups) {
+				for (std::size_t m = 1; m < members.size(); ++m) {
+					edges.push_back(Edge{members[m - 1], members[m], phaseKey.second});
+				}
+			}
+
+			auto alreadyChained = [&](std::size_t producer, std::size_t consumer, ResourceId key) {
+				return nodes[producer].phase == nodes[consumer].phase && isSelfModifyMember(nodes[producer], key) &&
+					isSelfModifyMember(nodes[consumer], key);
+			};
+
 			for (std::size_t consumer = 0; consumer < nodes.size(); ++consumer) {
 				for (ResourceId key : nodes[consumer].consumes) {
 					for (std::size_t producer = 0; producer < nodes.size(); ++producer) {
@@ -389,9 +443,16 @@ namespace brassica::graph {
 							continue;
 						}
 						const auto& produces = nodes[producer].produces;
-						if (std::find(produces.begin(), produces.end(), key) != produces.end()) {
-							edges.push_back(Edge{producer, consumer, key});
+						if (std::find(produces.begin(), produces.end(), key) == produces.end()) {
+							continue;
 						}
+						// Same-phase self-modify pairs on this exact key were already chained
+						// above, in registration order -- skip the generic pairing here so it
+						// doesn't reintroduce the cycle chaining exists to avoid.
+						if (alreadyChained(producer, consumer, key)) {
+							continue;
+						}
+						edges.push_back(Edge{producer, consumer, key});
 					}
 				}
 			}

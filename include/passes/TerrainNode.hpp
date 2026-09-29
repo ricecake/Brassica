@@ -43,6 +43,8 @@ namespace brassica {
 		std::uint32_t visibilityIndex{0};
 	};
 
+	static_assert(sizeof(TerrainPushConstants) == 32, "TerrainPushConstants size must be 32 bytes");
+
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
 	// every sampled input is a bindless index, resolved through NodeContext::Index<K>() below.

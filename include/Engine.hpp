@@ -15,6 +15,7 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
+#include "audio/AudioManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/AllNodes.hpp"
@@ -46,6 +47,7 @@ namespace brassica {
 		std::string appName{"Sandbox"};
 		bool        renderTerrainMap{false};
 		std::string terrainMapPath{"terrain_map.png"};
+		bool        aggressiveValidation{false};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
 			ArgparseManager argManager;
@@ -59,6 +61,7 @@ namespace brassica {
 			opts.appName = argManager.GetAppName();
 			opts.renderTerrainMap = argManager.GetRenderTerrainMap();
 			opts.terrainMapPath = argManager.GetTerrainMapPath();
+			opts.aggressiveValidation = argManager.GetAggressiveValidation();
 			if (opts.renderTerrainMap) {
 				opts.headless = true;
 			}
@@ -98,6 +101,17 @@ namespace brassica {
 		vk::PhysicalDevice GetPhysicalDevice() const { return chosenGPU; }
 
 		vk::Device GetDevice() const { return device; }
+
+		vk::Queue GetGraphicsQueue() const { return graphicsQueue; }
+		uint32_t  GetGraphicsQueueFamily() const { return graphicsQueueFamily; }
+
+		vk::Queue GetComputeQueue() const { return computeQueue; }
+		uint32_t  GetComputeQueueFamily() const { return computeQueueFamily; }
+
+		vk::Queue GetTransferQueue() const { return transferQueue; }
+		uint32_t  GetTransferQueueFamily() const { return transferQueueFamily; }
+
+		const graph::QueueSet& GetQueueSet() const { return queueSet; }
 
 		VmaAllocator GetAllocator() const { return allocator; }
 
@@ -149,6 +163,10 @@ namespace brassica {
 
 		const LightningManager& GetLightningManager() const { return lightningManager; }
 
+		AudioManager& GetAudioManager() { return audioManager; }
+
+		const AudioManager& GetAudioManager() const { return audioManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -190,6 +208,20 @@ namespace brassica {
 
 		const graph::PhysicalResourceRegistry& GetPhysicalRegistry() const { return physicalRegistry; }
 
+		// Async Image Region Readback methods
+		bool TriggerImageRegionReadbackAsync(
+			vk::Image image,
+			uint32_t arrayLayer,
+			uint32_t mipLevel,
+			vk::Offset2D offset,
+			vk::Extent2D extent,
+			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
+		);
+
+		void PollReadbackData();
+
+		bool GetLatestReadbackData(std::vector<glm::vec4>& outData, uint32_t& outWidth, uint32_t& outHeight) const;
+
 	private:
 		void InitWindow();
 		bool InitVulkan();
@@ -226,6 +258,12 @@ namespace brassica {
 		vk::Semaphore              frameTimelineSemaphore{nullptr};
 
 		bool       windowResized{false};
+		// Set by DrawFrame on an unrecoverable failure (frame graph compile/execute throwing, or a
+		// real swapchain acquire error -- not the routine eOutOfDateKHR/eSuboptimalKHR cases, which
+		// RecreateSwapchain already handles). These are deterministic bugs, not transient hiccups:
+		// retrying next frame just reproduces the identical failure and logs it again forever, so
+		// Run() checks this to stop cleanly instead of spamming the same error every frame.
+		bool       fatalErrorEncountered{false};
 		CameraData camera{};
 		double     lastFrameTime{0.0};
 		double     lastMouseX{0.0};
@@ -236,6 +274,7 @@ namespace brassica {
 
 		LightManager     lightManager;
 		LightningManager lightningManager;
+		AudioManager     audioManager;
 
 		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
 		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'
@@ -276,6 +315,10 @@ namespace brassica {
 		vk::Buffer    clusterGridBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation clusterGridAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 
+		vk::Buffer    autoExposureBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation autoExposureAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         autoExposureMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
 		void InitFrameSet();
@@ -307,6 +350,25 @@ namespace brassica {
 
 		entt::registry                              registry;
 		std::vector<std::shared_ptr<SystemHandler>> systemHandlers;
+
+		// Async Readback Transfer Queue Resources
+		vk::CommandPool   asyncTransferCommandPool{nullptr};
+		vk::CommandBuffer asyncTransferCommandBuffer{nullptr};
+		vk::Buffer        readbackStagingBuffer{nullptr};
+		VmaAllocation     readbackStagingAllocation{VK_NULL_HANDLE};
+		void*             readbackStagingMapped{nullptr};
+		vk::Semaphore     readbackTimelineSemaphore{nullptr};
+		uint64_t          readbackSubmittedTimelineValue{0};
+		uint64_t          readbackCompletedTimelineValue{0};
+		bool              readbackInFlight{false};
+
+		std::vector<glm::vec4> cachedReadbackData;
+		uint32_t               cachedReadbackWidth{0};
+		uint32_t               cachedReadbackHeight{0};
+		bool                   hasReadbackData{false};
+
+		void InitAsyncTransferResources();
+		void CleanupAsyncTransferResources();
 	};
 
 } // namespace brassica
