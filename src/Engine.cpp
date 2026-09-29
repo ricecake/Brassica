@@ -1358,9 +1358,6 @@ namespace brassica {
 			std::sin(phi)
 		));
 
-float theta = camera.position.x / FAKE_PLANET_RADIUS;
-float phi   = camera.position.z / FAKE_PLANET_RADIUS;
-
 // Local Up (your exact parameterization)
 glm::vec3 camUp = glm::normalize(glm::vec3(
     std::sin(theta) * std::cos(phi),
