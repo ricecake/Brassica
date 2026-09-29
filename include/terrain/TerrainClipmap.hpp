@@ -79,6 +79,7 @@ namespace brassica {
 			std::vector<glm::vec4> minMaxMap;
 			std::vector<glm::vec4> biomeMap;
 			std::vector<glm::vec4> visibilityMap;
+			std::vector<glm::vec4> waterDataMap;
 		};
 
 		std::vector<glm::vec4> GenerateLevelMap(uint32_t levelIndex) const;
@@ -106,6 +107,10 @@ namespace brassica {
 		vk::Image GetVisibilityImage() const { return visibilityImage; }
 
 		vk::ImageView GetVisibilityImageView() const { return visibilityImageView; }
+
+		vk::Image GetWaterDataImage() const { return waterDataImage; }
+
+		vk::ImageView GetWaterDataImageView() const { return waterDataImageView; }
 
 		vk::Sampler GetSampler() const { return sampler; }
 
@@ -136,6 +141,10 @@ namespace brassica {
 		vk::Image     visibilityImage{nullptr};
 		vk::ImageView visibilityImageView{nullptr};
 		VmaAllocation visibilityAllocation{VK_NULL_HANDLE};
+
+		vk::Image     waterDataImage{nullptr};
+		vk::ImageView waterDataImageView{nullptr};
+		VmaAllocation waterDataAllocation{VK_NULL_HANDLE};
 
 		vk::Sampler sampler{nullptr};
 
@@ -168,6 +177,10 @@ namespace brassica {
 	}
 
 	inline graph::ResourceDesc TerrainTileVisibilityDesc(std::uint32_t numLODs) {
+		return TerrainClipmapDesc(numLODs);
+	}
+
+	inline graph::ResourceDesc TerrainWaterDataDesc(std::uint32_t numLODs) {
 		return TerrainClipmapDesc(numLODs);
 	}
 

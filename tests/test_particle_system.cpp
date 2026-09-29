@@ -91,7 +91,9 @@ TEST_CASE("Underwater and AboveWater particle render nodes schedule before and a
 		UnderwaterParticleAliveBuffer,
 		UnderwaterParticleIndirectBuffer,
 		AboveWaterParticleAliveBuffer,
-		AboveWaterParticleIndirectBuffer>>();
+		AboveWaterParticleIndirectBuffer,
+		TerrainClipmapTexture,
+		TerrainWaterDataTexture>>();
 
 	WaterNode                   waterNode;
 	UnderwaterParticleRenderNode underwaterRenderNode;
@@ -390,19 +392,25 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		uboWrite.setBufferInfo(frameBufferDescInfo);
 		vkDevice.updateDescriptorSets(uboWrite, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 2> globalLayoutBindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 3> globalLayoutBindings{};
 		globalLayoutBindings[0]
 			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(8)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		globalLayoutBindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		globalLayoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 2> globalBindingFlags{
+		std::array<vk::DescriptorBindingFlags, 3> globalBindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 		};
@@ -410,14 +418,14 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		globalBindingFlagsInfo.setBindingFlags(globalBindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo globalLayoutInfo{};
-		globalLayoutInfo.setBindingCount(2);
+		globalLayoutInfo.setBindingCount(3);
 		globalLayoutInfo.setBindings(globalLayoutBindings);
 		globalLayoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		globalLayoutInfo.pNext = &globalBindingFlagsInfo;
 		vk::DescriptorSetLayout globalLayout = vkDevice.createDescriptorSetLayout(globalLayoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 2> globalPoolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 16},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
 		};
 		vk::DescriptorPoolCreateInfo globalPoolInfo{};
@@ -453,6 +461,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 				.set = globalSet,
 				.layout = globalLayout,
 				.sampledImage2DBinding = 0,
+				.sampledImage2DArrayBinding = 1,
 				.samplerBinding = 2,
 				.frameSet = frameSet,
 				.frameSetLayout = frameLayout,

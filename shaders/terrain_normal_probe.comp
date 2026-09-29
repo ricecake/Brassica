@@ -11,6 +11,7 @@
 // duplicating evaluate_terrain_normal's own math.
 
 #include "common.glsl"
+#include "terrain/generation.glsl"
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 

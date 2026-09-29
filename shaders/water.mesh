@@ -10,13 +10,15 @@ layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
+	uint  sceneColorIndex;
+	uint  clipmapIndex;
+	uint  waterDataIndex;
 }
 params;
 
@@ -34,7 +36,16 @@ float getWaterRingScale(float ring) {
 	return pow(2.0, ring);
 }
 
-vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
+vec3 calculateGerstnerOffsetAndNormal(
+	vec2  uv,
+	float time,
+	float distToCam,
+	float ringLevel,
+	vec2  flowDir,
+	float shorelineDist,
+	float accumulation,
+	out vec3 normal
+) {
 	if (ringLevel >= 8.0) {
 		normal = vec3(0.0, 1.0, 0.0);
 		return vec3(0.0);
@@ -42,10 +53,18 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 
 	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y);
 	mat3 grad;
-	float amplitude = 10.0 * (1.0 - smoothstep(3000.0, 20000.0, distToCam));
+
+	// Adjust wave magnitude based on shoreline distance and water depth/accumulation:
+	// Near shore (shorelineDist < 30.0 or accumulation < 5.0), damp wave amplitude smoothly.
+	float shoreDampening = smoothstep(0.0, 30.0, shorelineDist) * smoothstep(0.0, 5.0, accumulation);
+	float amplitude = 10.0 * (1.0 - smoothstep(3000.0, 20000.0, distToCam)) * shoreDampening;
 	float frequency = 0.004;
 
-	vec3 sinGrad = amplitude * cross_noise_fbm((inWorldPos) * frequency + abs(dot_noise(inWorldPos * 0.0025, time * 0.5)), 4, time * 0.25, grad);
+	// Guide wave direction by fluid flow direction
+	vec2 flowOffset = flowDir * time * 2.0;
+	vec3 sampledPos = inWorldPos + vec3(flowOffset.x, 0.0, flowOffset.y);
+
+	vec3 sinGrad = amplitude * cross_noise_fbm(sampledPos * frequency + abs(dot_noise(sampledPos * 0.0025, time * 0.5)), 4, time * 0.25, grad);
 
 	vec3 dX = grad[0] * amplitude * frequency;
 	vec3 dZ = grad[2] * amplitude * frequency;
@@ -111,13 +130,36 @@ void main() {
 
 	vec2 worldXZ = uCameraPosition.xz + relMorphedXZ;
 
+	vec4 texSample = vec4(params.waterLevel, 0.0, 1.0, 0.0);
+	vec4 waterData = vec4(1.0, 0.0, max(0.0, params.waterLevel), 100.0);
+	if (params.clipmapIndex > 0u && params.waterDataIndex > 0u) {
+		uint sampleLod = calculateTerrainLOD(worldXZ, params.gridParams.x);
+		texSample = sampleTerrainClipmap(params.clipmapIndex, worldXZ, sampleLod, params.gridParams.w);
+		waterData = sampleTerrainWaterData(params.waterDataIndex, worldXZ, sampleLod, params.gridParams.w);
+	}
+	float terrainHeight = texSample.r;
+	vec2 flowDir = waterData.rg;
+	float accumulation = waterData.b;
+	float shorelineDist = waterData.a;
+
+	float localWaterLevel = max(params.waterLevel, terrainHeight + accumulation);
+
 	vec3 waveNormal;
-	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, length(relMorphedXZ), float(ringLevel), waveNormal);
+	vec3 waveOffset = calculateGerstnerOffsetAndNormal(
+		worldXZ,
+		uTime,
+		length(relMorphedXZ),
+		float(ringLevel),
+		flowDir,
+		shorelineDist,
+		accumulation,
+		waveNormal
+	);
 
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 
-	vec3 relWorldPos = vec3(relMorphedXZ.x, params.waterLevel - uCameraPosition.y, relMorphedXZ.y) + waveOffset - vec3(0.0, dropOff, 0.0);
+	vec3 relWorldPos = vec3(relMorphedXZ.x, localWaterLevel - uCameraPosition.y, relMorphedXZ.y) + waveOffset - vec3(0.0, dropOff, 0.0);
 
 	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
@@ -170,6 +212,10 @@ void main() {
 			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
 				cullQuad = true;
 			}
+		}
+
+		if (localWaterLevel <= terrainHeight + 0.01) {
+			cullQuad = true;
 		}
 
 		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;

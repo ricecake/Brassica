@@ -32,6 +32,7 @@ namespace brassica {
 		std::uint32_t minMaxStorageIdx{0};
 		std::uint32_t biomeStorageIdx{0};
 		std::uint32_t visibilityStorageIdx{0};
+		std::uint32_t waterDataStorageIdx{0};
 		bool forceRegeneration = true;
 	};
 
@@ -41,6 +42,7 @@ namespace brassica {
 			graph::Modify<TerrainMinMaxTexture>,
 			graph::Modify<TerrainBiomeTexture>,
 			graph::Modify<TerrainTileVisibilityTexture>,
+			graph::Modify<TerrainWaterDataTexture>,
 			graph::Modify<TerrainTLAS>>;
 
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
@@ -87,7 +89,7 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(5);
+			r.realizations.reserve(6);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainClipmapTexture>(),
@@ -118,6 +120,13 @@ namespace brassica {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWaterDataTexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = TerrainWaterDataDesc(push.gridParams.x),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainTLAS>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = graph::AccelerationStructureDesc(),
@@ -141,6 +150,7 @@ namespace brassica {
 				push.minMaxStorageIdx = ctx.StorageIndex<TerrainMinMaxTexture>();
 				push.biomeStorageIdx = ctx.StorageIndex<TerrainBiomeTexture>();
 				push.visibilityStorageIdx = ctx.StorageIndex<TerrainTileVisibilityTexture>();
+				push.waterDataStorageIdx = ctx.StorageIndex<TerrainWaterDataTexture>();
 				push.forceRegeneration = forceRegeneration;
 
 				std::array<vk::PushConstantRange, 1> pushConstantRanges{

@@ -116,12 +116,12 @@ namespace brassica::graph {
 			vk::DescriptorSet       set{};
 			vk::DescriptorSetLayout layout{}; // needed at pipeline-creation time, not just bind time
 			std::uint32_t           sampledImage2DBinding = 0;
-			std::uint32_t           sampledImage2DArrayBinding = 1;
-			std::uint32_t           samplerBinding = 2;
-			std::uint32_t           storageImageBinding = 3;
-			std::uint32_t           accelerationStructureBinding = 4;
-			std::uint32_t           sampledImage3DBinding = 5;
-			std::uint32_t           storageBufferBinding = 6;
+			std::uint32_t           sampledImage2DArrayBinding = ~0u;
+			std::uint32_t           samplerBinding = ~0u;
+			std::uint32_t           storageImageBinding = ~0u;
+			std::uint32_t           accelerationStructureBinding = ~0u;
+			std::uint32_t           sampledImage3DBinding = ~0u;
+			std::uint32_t           storageBufferBinding = ~0u;
 
 			// The always-bound frame set (set 0) -- just the per-frame UBO. Genuinely varies by
 			// active frame index (Engine::DrawFrame rebuilds this every frame); this registry
