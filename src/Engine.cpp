@@ -510,6 +510,10 @@ namespace brassica {
 		serviceLocator.Provide<ILightManager>(std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {}));
 		serviceLocator.Provide<LightManager>(std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {}));
 
+		materialManager.Initialize();
+		serviceLocator.Provide<IMaterialManager>(std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {}));
+		serviceLocator.Provide<MaterialManager>(std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {}));
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -1370,6 +1374,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		materialManager.RegisterBufferNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 		for (auto& handler : systemHandlers) {
 			if (handler) {
