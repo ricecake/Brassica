@@ -196,20 +196,26 @@ namespace {
 		uboWrite.setBufferInfo(frameBufferDescInfo);
 		device.updateDescriptorSets(uboWrite, nullptr);
 
-		// -- Bindless set (set 1): sampled 2D + sampler catalog --
-		std::array<vk::DescriptorSetLayoutBinding, 2> layoutBindings{};
+		// -- Bindless set (set 1): sampled 2D + sampled 2D array + sampler catalog --
+		std::array<vk::DescriptorSetLayoutBinding, 3> layoutBindings{};
 		layoutBindings[0]
 			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(8)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		layoutBindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		layoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 2> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 		};
@@ -217,14 +223,14 @@ namespace {
 		bindingFlagsInfo.setBindingFlags(bindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindingCount(2);
+		layoutInfo.setBindingCount(3);
 		layoutInfo.setBindings(layoutBindings);
 		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		layoutInfo.pNext = &bindingFlagsInfo;
 		result.layout = device.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 16},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
@@ -257,6 +263,7 @@ namespace {
 		result.bindings.set = set;
 		result.bindings.layout = result.layout;
 		result.bindings.sampledImage2DBinding = 0;
+		result.bindings.sampledImage2DArrayBinding = 1;
 		result.bindings.samplerBinding = 2;
 		result.bindings.frameSet = frameSet;
 		result.bindings.frameSetLayout = result.frameLayout;
