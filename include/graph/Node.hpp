@@ -11,10 +11,15 @@
 
 namespace brassica::graph {
 
-	// Forward-declared only, same reason as HistoryTargetIdOf's forward inversions elsewhere in
-	// this seam: the real definition lives in PhysicalResource.hpp (Vulkan-aware), resolved at
-	// link time -- this file itself stays Vulkan-free.
-	ResourceDesc StagedStorageBufferDesc(std::uint64_t byteSize);
+	// Inline definition for Vulkan-free graph nodes (e.g. PredefinedBufferNode).
+	inline ResourceDesc StagedStorageBufferDesc(std::uint64_t byteSize) {
+		return ResourceDesc{
+			.kind = ResourceDesc::Kind::Buffer,
+			.usageMask = 0x22u, // eStorageBuffer | eTransferDst
+			.byteSize = byteSize,
+			.hostAccess = HostAccess::Staged,
+		};
+	}
 
 	// Forward-declared only: Node.hpp needs to hand back a pointer to a node's inner Graph
 	// (for recursive rendering, see Dot.hpp) without depending on Graph.hpp, which itself

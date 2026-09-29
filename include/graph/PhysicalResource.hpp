@@ -954,11 +954,6 @@ namespace brassica::graph {
 		return desc;
 	}
 
-	inline ResourceDesc StagedStorageBufferDesc(std::uint64_t byteSize) {
-		ResourceDesc desc = StorageBufferDesc(byteSize);
-		desc.hostAccess = HostAccess::Staged;
-		return desc;
-	}
 
 	inline ResourceDesc MappedUniformBufferDesc(std::uint64_t byteSize) {
 		ResourceDesc desc = UniformBufferDesc(byteSize);
