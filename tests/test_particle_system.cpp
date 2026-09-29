@@ -91,7 +91,9 @@ TEST_CASE("Underwater and AboveWater particle render nodes schedule before and a
 		UnderwaterParticleAliveBuffer,
 		UnderwaterParticleIndirectBuffer,
 		AboveWaterParticleAliveBuffer,
-		AboveWaterParticleIndirectBuffer>>();
+		AboveWaterParticleIndirectBuffer,
+		TerrainClipmapTexture,
+		TerrainWaterDataTexture>>();
 
 	WaterNode                   waterNode;
 	UnderwaterParticleRenderNode underwaterRenderNode;

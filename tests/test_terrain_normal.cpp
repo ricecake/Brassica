@@ -134,8 +134,15 @@ TEST_CASE("evaluate_terrain_normal's horizontal tilt matches the real height gra
 		}
 		vkDevice.updateDescriptorSets(writes, nullptr);
 
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
 		brassica::ComputeShader shader;
 		REQUIRE(shader.CompileComputeFromFile(vkDevice, "shaders/terrain_normal_probe.comp"));
+
+		brassica::Shader::ClearConstants();
 
 		vk::PushConstantRange pcRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ProbePushConstants)};
 
