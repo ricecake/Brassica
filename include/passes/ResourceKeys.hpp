@@ -90,6 +90,10 @@ namespace brassica {
 
 	using ParticleIndirectBuffer = AboveWaterParticleIndirectBuffer;
 
+	struct CylinderVertexBuffer {};
+
+	struct CylinderIndexBuffer {};
+
 	template <typename Tag = struct DefaultEntityTag>
 	struct EntityIndirectBuffer {};
 
