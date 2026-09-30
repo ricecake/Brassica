@@ -177,7 +177,7 @@ namespace brassica {
 				vkCmd.dispatch(groupX, groupY, groupZ);
 			}
 
-			if (false && terrainAS) {
+			if (terrainAS) {
 				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 				terrainAS->BuildOrUpdate(
 					vkCmd,
@@ -190,7 +190,9 @@ namespace brassica {
 					boundSets[1],
 					setLayouts[0],
 					setLayouts[1],
-					push.gridParams
+					push.gridParams,
+					push.clipmapStorageIdx,
+					push.minMaxStorageIdx
 				);
 				if (physicalRegistry && terrainAS->GetTLAS()) {
 					physicalRegistry->RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS->GetTLAS());

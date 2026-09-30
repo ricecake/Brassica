@@ -13,7 +13,8 @@ namespace brassica {
 
 	struct TerrainAABBPushConstants {
 		glm::uvec2 aabbBufferAddr;
-		glm::uvec2 padding{0, 0};
+		std::uint32_t clipmapStorageIdx{0};
+		std::uint32_t minMaxStorageIdx{0};
 		glm::uvec4 gridParams;
 	};
 
@@ -212,7 +213,9 @@ namespace brassica {
 		vk::DescriptorSet        globalSet,
 		vk::DescriptorSetLayout  frameSetLayout,
 		vk::DescriptorSetLayout  globalSetLayout,
-		const glm::uvec4&        gridParams
+		const glm::uvec4&        gridParams,
+		std::uint32_t            clipmapID,
+		std::uint32_t            minmaxID
 	) {
 		(void)baseTexelSize;
 		if (allocator == VK_NULL_HANDLE || !pipelineLibrary || !aabbShader)
@@ -274,7 +277,8 @@ namespace brassica {
 				static_cast<uint32_t>(aabbBuffer.deviceAddress & 0xFFFFFFFFu),
 				static_cast<uint32_t>(aabbBuffer.deviceAddress >> 32u)
 			),
-			.padding = glm::uvec2(0),
+			.clipmapStorageIdx = clipmapID,
+			.minMaxStorageIdx = minmaxID,
 			.gridParams = gridParams
 		};
 		cmd.pushConstants(

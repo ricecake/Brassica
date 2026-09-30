@@ -160,7 +160,9 @@ namespace brassica {
 	}
 
 	inline graph::ResourceDesc TerrainMinMaxDesc(std::uint32_t numLODs) {
-		return TerrainClipmapDesc(numLODs);
+		auto desc = TerrainClipmapDesc(numLODs);
+		// desc.mips = 4;
+		return desc;
 	}
 
 	inline graph::ResourceDesc TerrainBiomeDesc(std::uint32_t numLODs) {

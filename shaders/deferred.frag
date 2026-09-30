@@ -39,20 +39,30 @@ uint calculateRayLOD(vec2 sampleXZ) {
 	return uint(clamp(lodFloat, 0.0, 7.0));
 }
 
-// Update the intersection function to use dynamic LODs
-bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
-	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
-	int   numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
+// Add this helper for shadow jitter
+float interleavedGradientNoise(vec2 screenPos) {
+	vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+	return fract(magic.z * fract(dot(screenPos, magic.xy)));
+}
 
-	float rayLength = 500.0;
+// Updated intersection function
+bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
+	// return true;
+	float stepSize = clamp(camDistToShaded * 0.01, 0.1250, 15.0);
+	int   numSteps = int(clamp(200.0 / stepSize, 5.0, 150.0));
+	float rayLength = 1000.0; // Consider clamping this dynamically based on atmosphere ceiling
+
 	for (int i = 1; i <= numSteps; ++i) {
 		float t = (float(i) / float(numSteps)) * rayLength;
 		vec3  samplePos = rayOrigin + rayDir * t;
 
-		uint stepLod = calculateRayLOD(samplePos.xz);
+		uint stepLod = 2+calculateRayLOD(samplePos.xz);
 
 		vec2  flatXZ = samplePos.xz - uCameraPosition.xz;
 		float dropOff = dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
+
+		// Adjust the test altitude by the curvature dropoff
+		float testAlt = samplePos.y + dropOff;
 
 		if (params.minMaxIndex > 0u) {
 			vec2 minMax = sampleTerrainMinMax(
@@ -61,7 +71,9 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 				stepLod,
 				params.gridParams.w
 			);
-			if (samplePos.y > minMax.y - dropOff + 1.0) {
+
+			// minMax.g (or .y) contains the cluster_max from your terrain_gen pass
+			if (testAlt > minMax.y-1.0) {
 				continue;
 			}
 		}
@@ -72,9 +84,8 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 			stepLod,
 			params.gridParams.w
 		);
-		float terrainHeight = texSample.r - dropOff;
 
-		if (samplePos.y <= terrainHeight) {
+		if (testAlt <= texSample.r) {
 			hitT = t;
 			return true;
 		}
@@ -82,6 +93,61 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 	hitT = 0.0;
 	return false;
 }
+
+float rayQueryShadow(vec3 pos, vec3 norm) {
+	vec3 lightDir = -uLights[0].direction;
+
+	// Early out for rays originating high up and pointing into the sky
+	if (pos.y > 2500.0 && lightDir.y > 0.0) {
+		return 1.0;
+	}
+
+	// 1. Normal-scaled bias replaces the expensive LOD0 clipmap fetch
+	float biasAmount = 0.15;
+	vec3 rayOrigin = pos + (norm * biasAmount);
+
+	// 2. Add IGN jitter to tMin to break up Moire banding across LOD morphs
+	float noise = interleavedGradientNoise(gl_FragCoord.xy);
+	float tMin = 0.05 + (noise * 0.2);
+
+	float shadowRayTMax = 10000.0;
+
+	// 3. Add TerminateOnFirstHitEXT and SkipClosestHitShaderEXT
+	uint rayFlags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
+
+	rayQueryEXT rq;
+	rayQueryInitializeEXT(
+		rq,
+		uTLAS[nonuniformEXT(params.tlasIndex)],
+		rayFlags,
+		0xFF,
+		rayOrigin,
+		tMin,
+		lightDir,
+		shadowRayTMax
+	);
+
+	float camDistToShaded = length(pos);
+
+	while (rayQueryProceedEXT(rq)) {
+		uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);
+		if (candidateType == gl_RayQueryCandidateIntersectionAABBEXT) {
+			float hitT;
+			if (checkTerrainAABBIntersection(rayOrigin, lightDir, camDistToShaded, hitT)) {
+				// Because gl_RayFlagsTerminateOnFirstHitEXT is active,
+				// this instantly commits the hit and terminates the while loop.
+				rayQueryGenerateIntersectionEXT(rq, hitT);
+			}
+		}
+	}
+
+	float shadowFactor = 1.0;
+	if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+		shadowFactor = 0.2;
+	}
+	return shadowFactor;
+}
+
 
 void main() {
 	vec4  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
@@ -101,10 +167,9 @@ void main() {
 		float roughness = normalSample.a > 0.0 ? normalSample.a : 0.7;
 		Material material = Material(albedo.rgb, roughness, 0.0, 1.0);
 
-		// Aerial perspective / underwater extinction is no longer applied here: it happens
-		// uniformly for every pixel (this one included) in AtmosphereCompositeNode, which runs
-		// after this pass at SubPhase::Atmosphere -- see shaders/atmosphere/composite.frag.
-		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material).color;
+		float shadowFactor = rayQueryShadow(pos, norm);
+
+		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material, shadowFactor).color;
 	}
 
 	outColor = vec4(hdrColor, 1.0);

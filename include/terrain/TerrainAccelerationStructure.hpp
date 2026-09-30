@@ -89,7 +89,9 @@ namespace brassica {
 			vk::DescriptorSet        globalSet,
 			vk::DescriptorSetLayout  frameSetLayout,
 			vk::DescriptorSetLayout  globalSetLayout,
-			const glm::uvec4&        gridParams
+			const glm::uvec4&        gridParams,
+			std::uint32_t            clipmapID,
+			std::uint32_t            minmaxID
 		);
 
 		void DestroyAccelerationStructures();
