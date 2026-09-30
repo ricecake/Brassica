@@ -10,25 +10,6 @@
 #include "Shader.hpp"
 #include "render/PipelineLibrary.hpp"
 
-// evaluate_terrain_normal (shaders/common.glsl) is suspected of a sign error: sgreenhusted
-// reported terrain lighting looking like the light is coming from the wrong direction on slopes.
-// Deriving the standard height-field normal by hand (Tx x Tz for a surface (x, H(x,z), z)) gives
-// normalize(-dH/dx, C, -dH/dz); the function currently builds normalize(grad.x, 2*eps, grad.z)
-// with grad.x/grad.z proportional to +dH/dx, +dH/dz (the tetrahedron-gradient identity sum_i
-// e_i (e_i . grad f) = 4*grad f for these 4 unit vectors, verified by hand), i.e. missing the
-// negation on both horizontal components.
-//
-// This test proves that empirically against the real function (not a hand-derived symbolic
-// re-implementation) by comparing evaluate_terrain_normal's output to an independent
-// central-difference estimate of dH/dx, dH/dz computed via evaluate_terrain directly, dispatched
-// through shaders/terrain_normal_probe.comp on a real device via MinimalDevice -- this needs no
-// mesh shader/ray query/AS, so it runs for real on this Mac's MoltenVK, not just a stub.
-//
-// This is written to assert the CORRECT convention, so it is expected to FAIL against
-// evaluate_terrain_normal before the sign fix lands, and PASS after -- see the terrain_gen.comp
-// call site (`normal = evaluate_terrain_normal(...)`) for where this feeds real per-vertex
-// terrain normals and, from there, the deferred lighting N.L term.
-
 namespace {
 
 	struct ProbePushConstants {
@@ -134,8 +115,15 @@ TEST_CASE("evaluate_terrain_normal's horizontal tilt matches the real height gra
 		}
 		vkDevice.updateDescriptorSets(writes, nullptr);
 
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
 		brassica::ComputeShader shader;
-		REQUIRE(shader.CompileComputeFromFile(vkDevice, "shaders/terrain_normal_probe.comp"));
+		bool compiled = shader.CompileComputeFromFile(vkDevice, "shaders/terrain_normal_probe.comp");
+		brassica::Shader::ClearConstants();
+		REQUIRE(compiled);
 
 		vk::PushConstantRange pcRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ProbePushConstants)};
 
@@ -163,14 +151,6 @@ TEST_CASE("evaluate_terrain_normal's horizontal tilt matches the real height gra
 			.ridge_weight = 0.14f,
 			.biome_bleed = 0.5f,
 			.phase = 0.0f,
-			// 0 here, not the production call site's 0.75: the anisotropic domain warp
-			// (p_warped = p + (S*p)*warp_strength inside evaluate_terrain) makes the height field
-			// locally anisotropic enough that an axis-aligned central difference and the
-			// tetrahedron's diagonal-offset gradient can genuinely disagree in sign at a handful of
-			// points, independent of evaluate_terrain_normal's own sign convention -- confirmed by
-			// hand while building this test, not a hypothesis. Keeping warp_strength at 0 isolates
-			// the specific invariant this test checks (grad.x/grad.z's sign relative to the real
-			// height gradient) from that separate, expected property of the warp technique.
 			.warp_strength = 0.0f,
 			.eps = 0.005f,
 		};
@@ -202,8 +182,6 @@ TEST_CASE("evaluate_terrain_normal's horizontal tilt matches the real height gra
 
 			CHECK(ny > 0.0f); // up-facing regardless of horizontal tilt direction
 
-			// Correct up-facing height-field normal is normalize(-dH/dx, C, -dH/dz): the normal's
-			// horizontal component must have the OPPOSITE sign of the height gradient along that axis.
 			if (std::abs(dHdx) > 1e-4f) {
 				INFO("point ", i, " dHdx=", dHdx, " nx=", nx);
 				CHECK((nx > 0.0f) != (dHdx > 0.0f));
@@ -215,8 +193,6 @@ TEST_CASE("evaluate_terrain_normal's horizontal tilt matches the real height gra
 				++checksPerformed;
 			}
 		}
-		// Guards against every point silently landing on a degenerate flat spot, which would make
-		// the CHECKs above vacuously pass without exercising anything.
 		REQUIRE(checksPerformed >= static_cast<int>(numPoints));
 
 		vkDevice.destroyPipeline(resolved.pipeline);

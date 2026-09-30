@@ -20,7 +20,6 @@ layout(push_constant) uniform SkyPushConstants {
 const float solar_flare_speed = 0.25;
 const float solar_flare_scale = 0.35;
 const float solar_flare_strength = 0.25;
-const float cirrusOpacity = 0.01250;
 
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
@@ -209,46 +208,7 @@ void main() {
 	vec3 moonTransmittance = max(getTransmittance(r, moonDir.y), vec3(0.001));
 	vec3 moonDisc = moonRadiance * phasedMask * moonTransmittance * moonFade;
 
-	// 5. Cirrus Cloud Layer
-	vec3 cirrusColor = vec3(0.0);
-	if (true) {
-		float cirrusAlt = 10.0; // 10 km altitude
-		float cloudRadius = planetRadius + cirrusAlt;
-
-		float b = 2.0 * r * worldRay.y;
-		float c = (r * r) - (cloudRadius * cloudRadius);
-		float det = (b * b) - (4.0 * c);
-
-		if (det > 0.0) {
-			float sqrtDet = sqrt(det);
-			float t1 = (-b - sqrtDet) * 0.5;
-			float t2 = (-b + sqrtDet) * 0.5;
-
-			float t_cirrus = (t1 > 0.0) ? t1 : t2;
-
-			if (t_cirrus > 0.0) {
-				vec3 p_cirrus = uCameraPosition.xyz + worldRay * (t_cirrus * 1000.0 * worldScale);
-
-				vec3 advect = vec3(1.0, 0.0, 1.0) * uTime * 0.5;
-				vec2 uv_cirrus = (p_cirrus.xz + advect.xz) * (0.00005 / worldScale);
-
-				float n = (fbm_astral(vec3(uv_cirrus * 2.0, uTime * 0.01)) + 1.0) * 0.5;
-				float n2 = (fbm_astral(vec3(uv_cirrus * 5.0, uTime * 0.02 + 10.0)) + 1.0) * 0.5;
-				float noise = smoothstep(0.3, 0.8, n * n2);
-
-				vec3 T_cirrus = max(getTransmittance(planetRadius + cirrusAlt, sunDir.y), vec3(0.001));
-				float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
-
-				vec3 cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);
-				cirrusColor = cirrusLighting * noise * cirrusOpacity * 15.0;
-
-				float opticalDepthFade = exp(-t_cirrus * 0.0025);
-				cirrusColor *= opticalDepthFade;
-			}
-		}
-	}
-
-	vec3 finalColor = skyRadiance + sunDisc + moonDisc + cirrusColor + spaceBackground;
+	vec3 finalColor = skyRadiance + sunDisc + moonDisc + spaceBackground;
 
 	outColor = vec4(finalColor, 1.0);
 }
