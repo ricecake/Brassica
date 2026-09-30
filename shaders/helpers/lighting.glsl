@@ -46,13 +46,24 @@ void calculateLightContribution(
 		}
 	} else if (type == LIGHT_TYPE_DIRECTIONAL) {
 		light_dir = normalize(-light_dir_param);
-		float planetRadius = 600000.0;
+		float planetRadius = FAKE_PLANET_RADIUS;
 		vec3 planetCenter = vec3(0.0, -planetRadius, 0.0);
-		vec3 fragToCenter = planetCenter - frag_pos;
+		vec3 fragToCenter = frag_pos - planetCenter;
 		float distToCenter = length(fragToCenter);
-		vec3 surfaceNormal = -fragToCenter / max(0.001, distToCenter);
-		float NdotL = dot(surfaceNormal, light_dir);
+		vec3 normalPlanet = fragToCenter / max(0.001, distToCenter);
+		float NdotL = dot(normalPlanet, light_dir);
 		attenuation = smoothstep(-0.05, 0.05, NdotL);
+		if (NdotL <= -0.01) {
+			attenuation = 0.0;
+		} else {
+			float t_closest = -dot(fragToCenter, light_dir);
+			if (t_closest > 0.0) {
+				float d2 = dot(fragToCenter, fragToCenter) - t_closest * t_closest;
+				if (d2 < (planetRadius * planetRadius - 100.0)) {
+					attenuation = 0.0;
+				}
+			}
+		}
 	} else if (type == LIGHT_TYPE_SPOT) {
 		light_dir = normalize(light_pos - frag_pos);
 		float distance = length(light_pos - frag_pos);
@@ -91,6 +102,82 @@ void calculateLightContribution(
  * Spatial Ambient SH probes integration point.
  * Evaluates global SH irradiance or per-chunk ambient probes.
  */
+/**
+ * Planet Horizon & Curvature Shadowing:
+ * Evaluates whether a world-space point is shadowed by the curvature of the planet body relative to the sun direction.
+ */
+float calculatePlanetHorizonShadow(vec3 fragWorldPos, vec3 lightDir) {
+	float planetRadius = FAKE_PLANET_RADIUS;
+	vec3 planetCenter = vec3(0.0, -planetRadius, 0.0);
+	vec3 fragToCenter = fragWorldPos - planetCenter;
+	float distToCenter = length(fragToCenter);
+	vec3 normalPlanet = fragToCenter / max(0.001, distToCenter);
+
+	float NdotL = dot(normalPlanet, lightDir);
+	if (NdotL <= -0.01) {
+		return 0.0; // Beyond planet horizon
+	}
+
+	float t_closest = -dot(fragToCenter, lightDir);
+	if (t_closest > 0.0) {
+		float d2 = dot(fragToCenter, fragToCenter) - t_closest * t_closest;
+		if (d2 < (planetRadius * planetRadius - 100.0)) {
+			return 0.0; // Ray to sun passes through planet body
+		}
+	}
+
+	return smoothstep(-0.01, 0.05, NdotL);
+}
+
+/**
+ * Cascaded Shadow Map sampling and PCF evaluation.
+ */
+float evaluateCascadedShadow(vec3 fragWorldPos, float camDist) {
+	float horizonFactor = calculatePlanetHorizonShadow(fragWorldPos, uSunDirection.xyz);
+	if (horizonFactor <= 0.0) {
+		return 0.0;
+	}
+
+	if (uShadowMapIndex == 0u) {
+		return horizonFactor;
+	}
+
+	uint cascadeIdx = 3u;
+	if (camDist < uCascadeSplits.x) cascadeIdx = 0u;
+	else if (camDist < uCascadeSplits.y) cascadeIdx = 1u;
+	else if (camDist < uCascadeSplits.z) cascadeIdx = 2u;
+	else if (camDist > uCascadeSplits.w) return horizonFactor;
+
+	vec4 lightPos = uCascadeViewProj[cascadeIdx] * vec4(fragWorldPos, 1.0);
+	vec3 shadowCoords = lightPos.xyz / max(0.00001, lightPos.w);
+	vec2 shadowUV = shadowCoords.xy * 0.5 + 0.5;
+
+	if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0) {
+		return horizonFactor;
+	}
+
+	float currentDepth = shadowCoords.z;
+	if (currentDepth < 0.0 || currentDepth > 1.0) {
+		return horizonFactor;
+	}
+
+	float shadow = 0.0;
+	vec2 texelSize = vec2(1.0 / 1024.0);
+	float bias = uShadowBias * (1.0 + float(cascadeIdx) * 0.5);
+
+	for (int x = -1; x <= 1; ++x) {
+		for (int y = -1; y <= 1; ++y) {
+			vec2 sampleUV = shadowUV + vec2(x, y) * texelSize;
+			vec4 texSample = SAMPLE_ARRAY_WRAP(uShadowMapIndex, vec3(sampleUV, float(cascadeIdx)));
+			float sampledDepth = texSample.r;
+			shadow += (currentDepth - bias <= sampledDepth) ? 1.0 : 0.0;
+		}
+	}
+	shadow /= 9.0;
+
+	return shadow * horizonFactor;
+}
+
 #ifndef SPATIAL_AMBIENT_SH_DEFINED
 #define SPATIAL_AMBIENT_SH_DEFINED
 vec3 getSpatialAmbientSH(vec3 worldPos, vec3 N) {

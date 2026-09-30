@@ -11,6 +11,7 @@
 // adding one #include line here -- nothing else in Engine.hpp/.cpp needs to change.
 
 #include "passes/AtmosphereCompositeNode.hpp"
+#include "passes/CascadedShadowNode.hpp"
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"

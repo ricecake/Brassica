@@ -26,6 +26,16 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	uint  uFrameRandom;
 };
 
+layout(std140, set = 0, binding = 6) uniform CascadedShadowUBO {
+	mat4  uCascadeViewProj[4];
+	vec4  uCascadeSplits; // x = split0, y = split1, z = split2, w = split3
+	vec4  uSunDirection;  // xyz = normalized light direction
+	uint  uShadowMapIndex;
+	uint  uShadowMapStorageIdx;
+	float uShadowBias;
+	uint  uNumCascades;
+};
+
 // Bindless resource catalog in Set 1 (bindings 0..4). One descriptor set instance -- never
 // duplicated per frame, since a resource's descriptor is written once at creation and read for
 // the rest of its life.

@@ -57,7 +57,9 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 			);
 
 			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
-			evaluate_brdf(N, V, L, material, radiance, 1.0, result);
+			float camDist = length(uCameraPosition.xyz - frag_pos);
+			float shadow = (i == 0u) ? evaluateCascadedShadow(frag_pos, camDist) : 1.0;
+			evaluate_brdf(N, V, L, material, radiance, shadow, result);
 		}
 	}
 
