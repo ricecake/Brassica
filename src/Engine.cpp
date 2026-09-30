@@ -560,6 +560,19 @@ namespace brassica {
 	}
 
 	void Engine::UpdateCamera(float deltaTime) {
+		// Poll GPU readback data first
+		PollReadbackData();
+
+		std::vector<glm::vec4> readbackData;
+		uint32_t rw = 0, rh = 0;
+		float maxTerrainHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
+		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
+			// Find peak terrain height in non-blocking async transfer region around camera
+			for (const auto& sample : readbackData) {
+				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
+			}
+		}
+
 		auto* defaultHandler = dynamic_cast<DefaultInputHandler*>(inputHandler.get());
 
 		if (defaultHandler) {
@@ -578,9 +591,7 @@ namespace brassica {
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_EQUAL)) {
 				camera.CycleMode();
 				if (camera.mode == CameraMode::FirstPerson) {
-					float texelSize = terrainClipmap.GetBaseTexelSize() > 0.0001f ? terrainClipmap.GetBaseTexelSize() : 0.5f;
-					float terrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, texelSize).r;
-					float groundSurfaceHeight = std::max(terrainHeight, 0.0f);
+					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
@@ -596,9 +607,7 @@ namespace brassica {
 					camera.mode = CameraMode::Accelerated;
 				} else {
 					camera.mode = CameraMode::FirstPerson;
-					float texelSize = terrainClipmap.GetBaseTexelSize() > 0.0001f ? terrainClipmap.GetBaseTexelSize() : 0.5f;
-					float terrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, texelSize).r;
-					float groundSurfaceHeight = std::max(terrainHeight, 0.0f);
+					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
@@ -677,8 +686,7 @@ namespace brassica {
 		}
 
 		if (camera.mode == CameraMode::FirstPerson) {
-			float texelSize = terrainClipmap.GetBaseTexelSize() > 0.0001f ? terrainClipmap.GetBaseTexelSize() : 0.5f;
-			float terrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, texelSize).r;
+			float terrainHeight = maxTerrainHeight;
 			bool isUnderwater = (camera.position.y < 0.0f) && (terrainHeight < 0.0f);
 
 			bool isCtrlHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_CONTROL) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
@@ -828,11 +836,7 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
-		// Non-blocking async transfer readback camera constraint demonstration:
-		// Poll any completed async readback transfer
-		PollReadbackData();
-
-		// Trigger new readback if clipmap image is initialized and has been populated/transitioned in frame graph
+		// Trigger new readback for next frame if clipmap image is initialized and has been populated/transitioned in frame graph
 		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
 		if (clipmapTex && clipmapTex->GetImage() && terrainClipmap.GetNumLODs() > 0 &&
 		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
@@ -857,15 +861,6 @@ namespace brassica {
 			);
 		}
 
-		std::vector<glm::vec4> readbackData;
-		uint32_t rw = 0, rh = 0;
-		float maxTerrainHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
-		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
-			// Find peak terrain height in non-blocking async transfer region around camera
-			for (const auto& sample : readbackData) {
-				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
-			}
-		}
 		// Apply camera height constraint with conservative padding (e.g., +4.0f) for free-fly modes
 		if (camera.mode != CameraMode::FirstPerson) {
 			float minHeight = maxTerrainHeight + 4.0f;
