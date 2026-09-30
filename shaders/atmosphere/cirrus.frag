@@ -30,6 +30,16 @@ void main() {
 	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, inUV);
 	vec3 relPos = SAMPLE_NEAREST(push.gPositionIndex, inUV).rgb;
 
+	float worldScale = max(0.001, push.worldScale);
+	float waterLevelKM = u_waterLevel / 1000.0;
+	float camAltKM = uCameraPosition.y / (1000.0 * worldScale);
+
+	// When submerged underwater, skip cirrus cloud layer rendering
+	if (camAltKM < waterLevelKM) {
+		outColor = vec4(currentRadiance, 1.0);
+		return;
+	}
+
 	bool  hasSurface = albedo.a >= 0.01;
 	float surfaceDistKM = hasSurface ? (length(relPos) / 1000.0) : 1e9;
 
@@ -38,9 +48,8 @@ void main() {
 	vec3 viewDir = viewRay4.xyz / viewRay4.w;
 	vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
 
-	float worldScale = max(0.001, push.worldScale);
 	float planetRadius = FAKE_PLANET_RADIUS / 1000.0;
-	float r = planetRadius + uCameraPosition.y / (1000.0 * worldScale);
+	float r = planetRadius + camAltKM;
 	r = max(planetRadius + 0.001, r);
 
 	float cirrusAlt = push.cirrusAlt > 0.0 ? push.cirrusAlt : 10.0;

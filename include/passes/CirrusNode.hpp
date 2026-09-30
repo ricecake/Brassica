@@ -38,6 +38,8 @@ namespace brassica {
 	// Renders a thin, lower atmospheric cirrus cloud layer at ~10km altitude.
 	// Serves as a weather indicator and daytime skybox layer, blending over HdrColor
 	// with dual-sided visibility and camera proximity transparency fading.
+	// Runs at Phase 1250, immediately after WaterNode (Phase 1200), so water surfaces
+	// do not cover the cirrus cloud layer.
 	struct CirrusNode: render::NodeRegistrar<CirrusNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
@@ -45,7 +47,7 @@ namespace brassica {
 			graph::Read<SkyViewLUT>,
 			graph::Modify<HdrColor>>;
 
-		static constexpr graph::Phase kPhase = graph::Phase(950);
+		static constexpr graph::Phase kPhase = graph::Phase(1250);
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,

@@ -13,6 +13,61 @@
 
 using namespace brassica;
 
+namespace {
+
+	struct FakeSceneProducer {
+		using Resources = graph::Declares<
+			graph::Create<GBufferPosition>,
+			graph::Create<GBufferAlbedo>,
+			graph::Create<GBufferNormal>,
+			graph::Create<GBufferDepth>,
+			graph::Create<HdrColor>>;
+
+		graph::Recipe Setup(const graph::FrameContext& ctx) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferPosition>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferAlbedo>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferNormal>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferDepth>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<HdrColor>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext&) {}
+	};
+
+} // namespace
+
 TEST_CASE("CirrusNode renders through PhysicalExecutionBackend with no validation errors, across two frames") {
 	brassica::Engine        engine;
 	brassica::EngineOptions opts;
@@ -58,6 +113,7 @@ TEST_CASE("CirrusNode renders through PhysicalExecutionBackend with no validatio
 
 		for (std::uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex) {
 			graph::Graph graph;
+			graph.Register<FakeSceneProducer>(FakeSceneProducer{});
 			graph.RegisterRef(transNode);
 			graph.RegisterRef(multiNode);
 			graph.RegisterRef(skyViewNode);
