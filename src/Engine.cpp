@@ -1269,12 +1269,6 @@ namespace brassica {
 			vmaFlushAllocation(allocator, frameUboAllocations[activeFrame], 0, sizeof(FrameUBO));
 		}
 
-		LightingUBO lightingUbo = lightManager.GetLightingUBO();
-		if (lightingUboMapped[activeFrame]) {
-			std::memcpy(lightingUboMapped[activeFrame], &lightingUbo, sizeof(LightingUBO));
-			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));
-		}
-
 		if (atmosphereUboMapped[activeFrame]) {
 			std::memcpy(atmosphereUboMapped[activeFrame], &atmosphere, sizeof(AtmospherePushConstants));
 			vmaFlushAllocation(allocator, atmosphereUboAllocations[activeFrame], 0, sizeof(AtmospherePushConstants));
@@ -1294,12 +1288,6 @@ namespace brassica {
 			graph::StorageBufferDesc(sizeof(ExposureDataHost)),
 			true
 		);
-
-		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
-		if (lightsSSBOMapped[activeFrame]) {
-			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
-			vmaFlushAllocation(allocator, lightsSSBOAllocations[activeFrame], 0, sizeof(LightsSSBOData));
-		}
 
 		// bindlessBindings.set/layout (set 1) never change frame to frame -- only frameSet
 		// actually varies here, since it's the only piece that's genuinely double-buffered. This
@@ -1349,44 +1337,51 @@ namespace brassica {
 		glm::vec3   moonRadiance = (lights.size() > 1) ? (lights[1].color * lights[1].intensity)
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
-		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
 		float theta = camera.position.x / FAKE_PLANET_RADIUS;
 		float phi = camera.position.z / FAKE_PLANET_RADIUS;
-		glm::vec3 camNormal = glm::normalize(glm::vec3(
+
+		glm::vec3 camUp = glm::normalize(glm::vec3(
 			std::sin(theta) * std::cos(phi),
 			std::cos(theta) * std::cos(phi),
 			std::sin(phi)
 		));
 
-// Local Up (your exact parameterization)
-glm::vec3 camUp = glm::normalize(glm::vec3(
-    std::sin(theta) * std::cos(phi),
-    std::cos(theta) * std::cos(phi),
-    std::sin(phi)
-));
+		glm::vec3 camRight = glm::normalize(glm::vec3(
+			std::cos(theta),
+			-std::sin(theta),
+			0.0f
+		));
 
-// Local Right (Tangent)
-// Derived from d/d(theta) of the Up vector, normalized.
-// At origin (0,0), this strictly evaluates to world +X (1, 0, 0).
-glm::vec3 camRight = glm::normalize(glm::vec3(
-    std::cos(theta),
-    -std::sin(theta),
-    0.0f
-));
+		glm::vec3 camForward = glm::cross(camRight, camUp);
 
-// Local Forward (Bitangent)
-// At origin (0,0), cross((1,0,0), (0,1,0)) strictly evaluates to world +Z (0, 0, 1).
-glm::vec3 camForward = glm::cross(camRight, camUp);
+		glm::mat3 tangentSpace(camRight, camUp, camForward);
 
-// Construct rotation matrix directly from the basis vectors
-glm::mat3 tangentSpace(camRight, camUp, camForward);
+		glm::quat rotToCam = glm::quat_cast(tangentSpace);
+		glm::quat invRotToCam = glm::inverse(rotToCam);
 
-// Convert to quaternion for the push constants and inverse transformations
-glm::quat rotToCam = glm::quat_cast(tangentSpace);
-glm::quat invRotToCam = glm::inverse(rotToCam);
+		glm::vec3 sunDir = invRotToCam * sunDirGlobal;
+		glm::vec3 moonDir = invRotToCam * moonDirGlobal;
 
-glm::vec3 sunDir = invRotToCam * sunDirGlobal;
-glm::vec3 moonDir = invRotToCam * moonDirGlobal;
+		float localTime = ILightManager::GetLocalTime(lightManager.GetDayNightCycle().time, camera.position.x);
+
+		LightingUBO lightingUbo = lightManager.GetLightingUBO();
+		lightingUbo.dayTime = localTime;
+		if (lightingUboMapped[activeFrame]) {
+			std::memcpy(lightingUboMapped[activeFrame], &lightingUbo, sizeof(LightingUBO));
+			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));
+		}
+
+		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
+		if (lightsSSBO.count >= 1) {
+			lightsSSBO.lights[0].direction = -sunDir;
+		}
+		if (lightsSSBO.count >= 2) {
+			lightsSSBO.lights[1].direction = -moonDir;
+		}
+		if (lightsSSBOMapped[activeFrame]) {
+			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
+			vmaFlushAllocation(allocator, lightsSSBOAllocations[activeFrame], 0, sizeof(LightsSSBOData));
+		}
 
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,

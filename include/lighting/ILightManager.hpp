@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include "constants.h"
+#include "EngineConstants.hpp"
 #include "IManager.hpp"
 #include "lighting/Light.hpp"
 #include "types/ubo/LightingUBO.hpp"
@@ -126,6 +127,20 @@ namespace brassica {
 
 		virtual DayNightCycle&       GetDayNightCycle() = 0;
 		virtual const DayNightCycle& GetDayNightCycle() const = 0;
+
+		static float GetLocalTime(float globalTime, float camX) {
+			constexpr float L = FAKE_PLANET_PERIMETER;
+			float localTime = std::fmod(globalTime + (camX / L) * 24.0f, 24.0f);
+			if (localTime < 0.0f) localTime += 24.0f;
+			return localTime;
+		}
+
+		static float GetGlobalTimeFromLocal(float localTime, float camX) {
+			constexpr float L = FAKE_PLANET_PERIMETER;
+			float globalTime = std::fmod(localTime - (camX / L) * 24.0f, 24.0f);
+			if (globalTime < 0.0f) globalTime += 24.0f;
+			return globalTime;
+		}
 
 		virtual std::vector<Light*> GetShadowCastingLights() = 0;
 		virtual int                 GetShadowCastingLightCount() const = 0;

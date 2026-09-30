@@ -319,4 +319,34 @@ namespace brassica {
 		CHECK(doctest::Approx(normPlusBoundary.y).epsilon(0.001) == -1.0f);
 	}
 
+	TEST_CASE("Camera Local Solar Time and Bidirectional Conversion") {
+		float L = FAKE_PLANET_PERIMETER;
+		float globalTime = 12.0f; // Global noon
+
+		// At x = 0 (Prime Meridian), local time equals global time
+		float tOrigin = ILightManager::GetLocalTime(globalTime, 0.0f);
+		CHECK(doctest::Approx(tOrigin).epsilon(0.001) == 12.0f);
+		CHECK(doctest::Approx(ILightManager::GetGlobalTimeFromLocal(tOrigin, 0.0f)).epsilon(0.001) == globalTime);
+
+		// Moving 90 deg East (x = L / 4) adds +6.0 hours local time (18:00 Sunset)
+		float tEast90 = ILightManager::GetLocalTime(globalTime, L * 0.25f);
+		CHECK(doctest::Approx(tEast90).epsilon(0.001) == 18.0f);
+		CHECK(doctest::Approx(ILightManager::GetGlobalTimeFromLocal(tEast90, L * 0.25f)).epsilon(0.001) == globalTime);
+
+		// Moving 90 deg West (x = -L / 4) subtracts 6.0 hours local time (06:00 Sunrise)
+		float tWest90 = ILightManager::GetLocalTime(globalTime, -L * 0.25f);
+		CHECK(doctest::Approx(tWest90).epsilon(0.001) == 6.0f);
+		CHECK(doctest::Approx(ILightManager::GetGlobalTimeFromLocal(tWest90, -L * 0.25f)).epsilon(0.001) == globalTime);
+
+		// Moving 180 deg East (x = L / 2) corresponds to midnight (00:00 / 24:00)
+		float tAntipode = ILightManager::GetLocalTime(globalTime, L * 0.5f);
+		CHECK(doctest::Approx(tAntipode).epsilon(0.001) == 0.0f);
+		CHECK(doctest::Approx(ILightManager::GetGlobalTimeFromLocal(tAntipode, L * 0.5f)).epsilon(0.001) == globalTime);
+
+		// Seamless continuity across coordinate wrap line (+L / 2 vs -L / 2)
+		float tPlusWrap = ILightManager::GetLocalTime(globalTime, L * 0.5f);
+		float tMinusWrap = ILightManager::GetLocalTime(globalTime, -L * 0.5f);
+		CHECK(doctest::Approx(tPlusWrap).epsilon(0.001) == tMinusWrap);
+	}
+
 } // namespace brassica

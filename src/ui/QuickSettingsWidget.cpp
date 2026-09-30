@@ -74,10 +74,15 @@ namespace brassica::ui {
 
 			// Day/Night cycle
 			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Day/Night Cycle:");
+			float camX = 0.0f;
+			if (ServiceLocator::Instance().Has<CameraData>()) {
+				camX = ServiceLocator::Instance().Get<CameraData>()->position.x;
+			}
+
 			if (ServiceLocator::Instance().Has<LightManager>()) {
 				auto  lightMgr = ServiceLocator::Instance().Get<LightManager>();
 				auto& cycle = lightMgr->GetDayNightCycle();
-				m_timeOfDay = cycle.time;
+				m_timeOfDay = ILightManager::GetLocalTime(cycle.time, camX);
 				m_timePaused = cycle.paused;
 			}
 
@@ -85,7 +90,7 @@ namespace brassica::ui {
 				if (ServiceLocator::Instance().Has<LightManager>()) {
 					auto  lightMgr = ServiceLocator::Instance().Get<LightManager>();
 					auto& cycle = lightMgr->GetDayNightCycle();
-					cycle.time = m_timeOfDay;
+					cycle.time = ILightManager::GetGlobalTimeFromLocal(m_timeOfDay, camX);
 				}
 				if (cfg) {
 					cfg->SetAppSetting("quick_day_night_time", m_timeOfDay);
