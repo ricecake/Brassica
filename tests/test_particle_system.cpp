@@ -40,7 +40,9 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>>;
+			graph::Create<HdrColor>,
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<TerrainHorizonTexture>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Default;
 
@@ -51,6 +53,34 @@ namespace {
 					.key = graph::IdOf<HdrColor>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainMinMaxTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ResourceDesc{
+						.kind = graph::ResourceDesc::Kind::Image2D,
+						.width = 4,
+						.height = 4,
+						.layers = 2,
+						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+					},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainHorizonTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ResourceDesc{
+						.kind = graph::ResourceDesc::Kind::Image2D,
+						.width = 4,
+						.height = 4,
+						.layers = 2,
+						.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+					},
 				}
 			);
 			return r;

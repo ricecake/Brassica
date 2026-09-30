@@ -30,7 +30,8 @@ namespace {
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
 			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>>;
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<TerrainHorizonTexture>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -86,6 +87,20 @@ namespace {
 						.height = 4,
 						.layers = 2,
 						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+					},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainHorizonTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ResourceDesc{
+						.kind = graph::ResourceDesc::Kind::Image2D,
+						.width = 4,
+						.height = 4,
+						.layers = 2,
+						.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
 						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
 					},
 				}
