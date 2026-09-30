@@ -25,6 +25,43 @@ vec3 getTransmittance(float r, float mu) {
 	return SAMPLE_LINEAR(push.transmittanceIndex, uv).rgb;
 }
 
+vec3 calculateCirrusColor(
+	float t_cirrus,
+	vec3  worldRay,
+	float worldScale,
+	float planetRadius,
+	float cirrusAlt,
+	vec3  sunDir,
+	vec3  sunRadiance,
+	vec3  skyRadiance
+) {
+	vec3 p_cirrus = uCameraPosition.xyz + worldRay * (t_cirrus * 1000.0 * worldScale);
+
+	vec3 advect = vec3(1.0, 0.0, 1.0) * uTime * 0.5;
+	vec2 uv_cirrus = (p_cirrus.xz + advect.xz) * (0.00005 / worldScale);
+
+	float n = (fbm_astral(vec3(uv_cirrus * 2.0, uTime * 0.01)) + 1.0) * 0.5;
+	float n2 = (fbm_astral(vec3(uv_cirrus * 5.0, uTime * 0.02 + 10.0)) + 1.0) * 0.5;
+	float noise = smoothstep(0.3, 0.8, n * n2);
+
+	vec3  T_cirrus = max(getTransmittance(planetRadius + cirrusAlt, sunDir.y), vec3(0.001));
+	float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
+
+	float opacity = push.cirrusOpacity > 0.0 ? push.cirrusOpacity : 0.0125;
+	vec3  cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);
+	vec3  cirrusColor = cirrusLighting * noise * opacity * 15.0;
+
+	float opticalDepthFade = exp(-t_cirrus * 0.0025);
+	cirrusColor *= opticalDepthFade;
+
+	// Proximity fade: As the camera gets closer to the layer, the area near the camera becomes transparent
+	// to avoid directly seeing how thin the clouds are when passing through.
+	float proximityFade = smoothstep(0.1, 3.0, t_cirrus);
+	cirrusColor *= proximityFade;
+
+	return cirrusColor;
+}
+
 void main() {
 	vec3 currentRadiance = SAMPLE_NEAREST(push.hdrColorIndex, inUV).rgb;
 	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, inUV);
@@ -59,50 +96,32 @@ void main() {
 	float c = (r * r) - (cloudRadius * cloudRadius);
 	float det = (b * b) - (4.0 * c);
 
-	vec3 cirrusColor = vec3(0.0);
-
 	if (det > 0.0) {
 		float sqrtDet = sqrt(det);
 		float t1 = (-b - sqrtDet) * 0.5;
 		float t2 = (-b + sqrtDet) * 0.5;
 
-		float t_cirrus = -1.0;
-		if (t1 > 0.0) {
-			t_cirrus = t1;
-		} else if (t2 > 0.0) {
-			t_cirrus = t2;
+		vec3 sunDir = normalize(push.sunDir.xyz);
+		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
+		vec3 skyRadiance = sampleSkyView(push.skyViewIndex, worldRay);
+
+		// If camera is above the cloud layer (r > cloudRadius), check far intersection (t2) first, then near (t1).
+		// If camera is below or inside, only t2 is forward (t1 <= 0).
+		if (t2 > 0.0 && t2 < surfaceDistKM) {
+			// If camera is above cloud layer, t2 represents the far limb intersection
+			if (r > cloudRadius) {
+				currentRadiance += calculateCirrusColor(t2, worldRay, worldScale, planetRadius, cirrusAlt, sunDir, sunRadiance, skyRadiance);
+			} else if (t1 <= 0.0) {
+				// Camera below cloud layer, t2 is the single forward intersection looking up
+				currentRadiance += calculateCirrusColor(t2, worldRay, worldScale, planetRadius, cirrusAlt, sunDir, sunRadiance, skyRadiance);
+			}
 		}
 
-		// Draw cirrus clouds if intersection exists and is in front of opaque scene geometry
-		if (t_cirrus > 0.0 && t_cirrus < surfaceDistKM) {
-			vec3 p_cirrus = uCameraPosition.xyz + worldRay * (t_cirrus * 1000.0 * worldScale);
-
-			vec3 advect = vec3(1.0, 0.0, 1.0) * uTime * 0.5;
-			vec2 uv_cirrus = (p_cirrus.xz + advect.xz) * (0.00005 / worldScale);
-
-			float n = (fbm_astral(vec3(uv_cirrus * 2.0, uTime * 0.01)) + 1.0) * 0.5;
-			float n2 = (fbm_astral(vec3(uv_cirrus * 5.0, uTime * 0.02 + 10.0)) + 1.0) * 0.5;
-			float noise = smoothstep(0.3, 0.8, n * n2);
-
-			vec3  sunDir = normalize(push.sunDir.xyz);
-			vec3  sunRadiance = push.sunRadianceAndSkyExp.xyz;
-			vec3  skyRadiance = sampleSkyView(push.skyViewIndex, worldRay);
-			vec3  T_cirrus = max(getTransmittance(planetRadius + cirrusAlt, sunDir.y), vec3(0.001));
-			float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
-
-			float opacity = push.cirrusOpacity > 0.0 ? push.cirrusOpacity : 0.0125;
-			vec3  cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);
-			cirrusColor = cirrusLighting * noise * opacity * 15.0;
-
-			float opticalDepthFade = exp(-t_cirrus * 0.0025);
-			cirrusColor *= opticalDepthFade;
-
-			// Proximity fade: As the camera gets closer to the layer, the area near the camera becomes transparent
-			// to avoid directly seeing how thin the clouds are when passing through.
-			float proximityFade = smoothstep(0.1, 3.0, t_cirrus);
-			cirrusColor *= proximityFade;
+		if (t1 > 0.0 && t1 < surfaceDistKM) {
+			// Near intersection (top side when camera is above, or entry point)
+			currentRadiance += calculateCirrusColor(t1, worldRay, worldScale, planetRadius, cirrusAlt, sunDir, sunRadiance, skyRadiance);
 		}
 	}
 
-	outColor = vec4(currentRadiance + cirrusColor, 1.0);
+	outColor = vec4(currentRadiance, 1.0);
 }
