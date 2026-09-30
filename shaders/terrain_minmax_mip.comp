@@ -1,0 +1,41 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+	uvec4 gridParams;    // x = numLODs, w = textureDim
+	uint  srcMipIndex;   // sampled texture index for reading src mip
+	uint  dstStorageIdx;  // storage image index for writing dst mip
+	uint  srcMip;        // source mip level number
+	uint  dstDim;        // output mip resolution
+} push;
+
+void main() {
+	uvec3 globalId = gl_GlobalInvocationID;
+	uint lod = globalId.z;
+	uint dim = push.dstDim;
+
+	if (globalId.x >= dim || globalId.y >= dim || lod >= push.gridParams.x) {
+		return;
+	}
+
+	ivec2 dstCoord = ivec2(globalId.xy);
+	ivec2 srcCoord00 = dstCoord * 2;
+	ivec2 srcCoord10 = dstCoord * 2 + ivec2(1, 0);
+	ivec2 srcCoord01 = dstCoord * 2 + ivec2(0, 1);
+	ivec2 srcCoord11 = dstCoord * 2 + ivec2(1, 1);
+
+	vec4 s00 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord00, lod), int(push.srcMip));
+	vec4 s10 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord10, lod), int(push.srcMip));
+	vec4 s01 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord01, lod), int(push.srcMip));
+	vec4 s11 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord11, lod), int(push.srcMip));
+
+	float minH = min(min(s00.r, s10.r), min(s01.r, s11.r));
+	float maxH = max(max(s00.g, s10.g), max(s01.g, s11.g));
+
+	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.dstStorageIdx)], ivec3(dstCoord, lod), vec4(minH, maxH, minH, maxH));
+}

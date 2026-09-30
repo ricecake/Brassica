@@ -32,7 +32,14 @@ uint getClusterIndex(vec3 frag_pos) {
  * should start from materialDefault() (material.glsl) and override what they know, rather than a
  * separate defaults-filling wrapper.
  */
-LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+LightingResult evaluateClusteredLightContributionPBR(
+	vec3 frag_pos,
+	vec3 normal,
+	Material material,
+	uint horizonMapIndex,
+	uint clipmapIndex,
+	uvec4 gridParams
+) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
 
@@ -56,8 +63,13 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 				attenuation
 			);
 
+			float shadow = 1.0;
+			if (horizonMapIndex > 0u) {
+				shadow = calculateTerrainHorizonShadow(frag_pos, L, horizonMapIndex, clipmapIndex, gridParams);
+			}
+
 			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
-			evaluate_brdf(N, V, L, material, radiance, 1.0, result);
+			evaluate_brdf(N, V, L, material, radiance, shadow, result);
 		}
 	}
 
@@ -88,8 +100,13 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 
 		if (attenuation <= 0.0) continue;
 
+		float shadow = 1.0;
+		if (uLights[light_index].type == LIGHT_TYPE_DIRECTIONAL && horizonMapIndex > 0u) {
+			shadow = calculateTerrainHorizonShadow(frag_pos, L, horizonMapIndex, clipmapIndex, gridParams);
+		}
+
 		vec3 radiance = uLights[light_index].color * (uLights[light_index].intensity * PBR_INTENSITY_BOOST) * attenuation;
-		evaluate_brdf(N, V, L, material, radiance, 1.0, result);
+		evaluate_brdf(N, V, L, material, radiance, shadow, result);
 	}
 
 	uint cluster_index = getClusterIndex(frag_pos);
@@ -120,8 +137,13 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 
 		if (attenuation <= 0.0) continue;
 
+		float shadow = 1.0;
+		if (uLights[light_index].type == LIGHT_TYPE_DIRECTIONAL && horizonMapIndex > 0u) {
+			shadow = calculateTerrainHorizonShadow(frag_pos, L, horizonMapIndex, clipmapIndex, gridParams);
+		}
+
 		vec3 radiance = uLights[light_index].color * (uLights[light_index].intensity * PBR_INTENSITY_BOOST) * attenuation;
-		evaluate_brdf(N, V, L, material, radiance, 1.0, result);
+		evaluate_brdf(N, V, L, material, radiance, shadow, result);
 	}
 
 	float terrainOcc = calculateTerrainOcclusion(frag_pos, N);
@@ -129,6 +151,10 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 	result.color += spatialSHAmbient * uAmbientLight.rgb * material.albedo * (material.ao * terrainOcc);
 
 	return result;
+}
+
+LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u, uvec4(0));
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL

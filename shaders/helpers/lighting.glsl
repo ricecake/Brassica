@@ -110,6 +110,55 @@ float calculateTerrainOcclusion(vec3 worldPos, vec3 normal) {
 #endif
 
 /**
+ * Calculate directional light shadow using terrain horizon map.
+ */
+#ifndef CALCULATE_TERRAIN_HORIZON_SHADOW_DEFINED
+#define CALCULATE_TERRAIN_HORIZON_SHADOW_DEFINED
+float calculateTerrainHorizonShadow(vec3 frag_pos, vec3 light_dir, uint horizonMapIndex, uint clipmapIndex, uvec4 gridParams) {
+	if (horizonMapIndex == 0u) {
+		return 1.0;
+	}
+
+	vec2 dists = abs(frag_pos.xz - uCameraPosition.xz);
+	float maxDist = max(dists.x, dists.y);
+	float baseRadius = 272.0;
+	uint lod = 0u;
+	uint maxLODs = (gridParams.x > 0u) ? gridParams.x : 12u;
+	if (maxDist >= baseRadius) {
+		lod = uint(clamp(ceil(log2(maxDist / baseRadius)), 0.0, float(maxLODs - 1u)));
+	}
+
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+	float texelSize = baseTexelSize * pow(2.0, float(lod));
+	float dim = float((gridParams.w > 0u) ? gridParams.w : 1088u);
+
+	vec2 worldGrid = floor(frag_pos.xz / texelSize);
+	vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
+	vec2 uv = texelCoord / dim;
+
+	// Sample horizon map slopes: r = +X, g = -X, b = +Z, a = -Z
+	vec4 horizonSlopes = SAMPLE_ARRAY_WRAP(horizonMapIndex, vec3(uv, float(lod)));
+
+	vec2 horizL = normalize(light_dir.xz);
+	float sunSlope = light_dir.y / max(0.0001, length(light_dir.xz));
+
+	float horizonSlope = 0.0;
+	if (horizL.x > 0.0) {
+		horizonSlope += horizL.x * horizonSlopes.r;
+	} else {
+		horizonSlope += (-horizL.x) * horizonSlopes.g;
+	}
+	if (horizL.y > 0.0) {
+		horizonSlope += horizL.y * horizonSlopes.b;
+	} else {
+		horizonSlope += (-horizL.y) * horizonSlopes.a;
+	}
+
+	return smoothstep(horizonSlope - 0.05, horizonSlope + 0.05, sunSlope);
+}
+#endif
+
+/**
  * Relative luminance calculation.
  */
 float get_luminance(vec3 color) {
