@@ -42,8 +42,8 @@ struct LayerData {
 	float autoUchimuraL;
 	float autoUchimuraC;
 	float autoUchimuraB;
-	float _pad0;
-	float _pad1;
+	float exposureTime;
+	float iso;
 
 	// Manual Uchimura parameters
 	float uchimuraP;
@@ -64,7 +64,7 @@ struct LayerData {
 	// White Balance
 	float whiteTemp;
 	float whiteTint;
-	float _pad2;
+	float aperture;
 
 	// Local Tone Mapping (Exposure Fusion)
 	int   ltmEnabled;

@@ -51,9 +51,15 @@ namespace brassica {
 		// needs no padding in either language, so this is the only structurally safe place to add a
 		// new scalar without either an explicit alignas or auditing every offset by hand again.
 		std::int32_t bloomEnabled{1};
+
+		// Same reasoning as bloomEnabled just above -- appended after it, another trailing
+		// scalar with nothing after it needing bigger alignment. Count of enabled entries in
+		// CdlGradingLayers (cdl_grading.glsl, frameSet binding 6) to iterate for scene (isSky == 0)
+		// depth-based grading.
+		std::int32_t numCdlEntries{1};
 	};
 
-	static_assert(sizeof(TonemapPushConstants) == 148, "TonemapPushConstants size must be 148 bytes -- must match tonemap.frag's push_constant block exactly");
+	static_assert(sizeof(TonemapPushConstants) == 152, "TonemapPushConstants size must be 152 bytes -- must match tonemap.frag's push_constant block exactly");
 
 	inline TonemapPushConstants s_tonemapPush{};
 

@@ -325,6 +325,10 @@ namespace brassica {
 		VmaAllocation autoExposureAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*         autoExposureMapped[FRAME_OVERLAP]{nullptr, nullptr};
 
+		vk::Buffer    cdlGradingBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation cdlGradingAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         cdlGradingMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
 		void InitFrameSet();

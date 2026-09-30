@@ -41,8 +41,8 @@ namespace brassica {
 		float     autoUchimuraL{0.4f};
 		float     autoUchimuraC{1.33f};
 		float     autoUchimuraB{0.0f};
-		float     _pad0{0.0f};
-		float     _pad1{0.0f};
+		float     exposureTime{0.008f}; // 1/125s default
+		float     iso{100.0f};
 
 		float     uchimuraP{1.0f};
 		float     uchimuraA{1.0f};
@@ -60,7 +60,7 @@ namespace brassica {
 
 		float     whiteTemp{6500.0f};
 		float     whiteTint{0.0f};
-		float     _pad2{0.0f};
+		float     aperture{8.0f};
 
 		std::int32_t ltmEnabled{1};
 		float     ltmEvSpread{2.0f};
@@ -93,6 +93,9 @@ namespace brassica {
 		dst.minExposure = src.minExposure;
 		dst.maxExposure = src.maxExposure;
 		dst.useAutoExposure = src.useAutoExposure;
+		dst.exposureTime = src.exposureTime;
+		dst.iso = src.iso;
+		dst.aperture = src.aperture;
 		dst.centerWeightTightness = src.centerWeightTightness;
 		dst.focusPoint = src.focusPoint;
 		dst.histogramLowCutoff = src.histogramLowCutoff;
