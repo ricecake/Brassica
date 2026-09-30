@@ -560,6 +560,19 @@ namespace brassica {
 	}
 
 	void Engine::UpdateCamera(float deltaTime) {
+		// Poll GPU readback data first
+		PollReadbackData();
+
+		std::vector<glm::vec4> readbackData;
+		uint32_t rw = 0, rh = 0;
+		float maxTerrainHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
+		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
+			// Find peak terrain height in non-blocking async transfer region around camera
+			for (const auto& sample : readbackData) {
+				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
+			}
+		}
+
 		auto* defaultHandler = dynamic_cast<DefaultInputHandler*>(inputHandler.get());
 
 		if (defaultHandler) {
@@ -577,9 +590,31 @@ namespace brassica {
 
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_EQUAL)) {
 				camera.CycleMode();
+				if (camera.mode == CameraMode::FirstPerson) {
+					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
+					camera.position.y = groundSurfaceHeight + 3.0f;
+					camera.velocity = glm::vec3(0.0f);
+				}
 				spdlog::info(
 					"Camera mode switched to: {}",
-					camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant"
+					camera.mode == CameraMode::FirstPerson ? "FirstPerson" :
+					(camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
+				);
+			}
+
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_MINUS)) {
+				if (camera.mode == CameraMode::FirstPerson) {
+					camera.mode = CameraMode::Accelerated;
+				} else {
+					camera.mode = CameraMode::FirstPerson;
+					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
+					camera.position.y = groundSurfaceHeight + 3.0f;
+					camera.velocity = glm::vec3(0.0f);
+				}
+				spdlog::info(
+					"Camera mode switched to: {}",
+					camera.mode == CameraMode::FirstPerson ? "FirstPerson" :
+					(camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
 				);
 			}
 
@@ -650,7 +685,108 @@ namespace brassica {
 			lastMouseY = my;
 		}
 
-		if (camera.mode == CameraMode::Accelerated) {
+		if (camera.mode == CameraMode::FirstPerson) {
+			float terrainHeight = maxTerrainHeight;
+			bool isUnderwater = (camera.position.y < 0.0f) && (terrainHeight < 0.0f);
+
+			bool isCtrlHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_CONTROL) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
+			bool isShiftHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT));
+			bool isSpacePressed = defaultHandler && defaultHandler->IsKeyPressed(GLFW_KEY_SPACE);
+
+			if (isUnderwater) {
+				// Ignore gravity and move in 3D direction for swimming
+				float targetMaxSpeed = 5.0f; // Swimming speed ~5 m/s (~twice peak swimmer)
+				glm::vec3 targetVelocity{0.0f};
+				if (glm::length(moveDir) > 0.0001f) {
+					targetVelocity = glm::normalize(moveDir) * targetMaxSpeed;
+				}
+
+				if (glm::length(targetVelocity) > 0.0001f) {
+					float blend = 1.0f - std::exp(-camera.accelerationRate * deltaTime);
+					camera.velocity = glm::mix(camera.velocity, targetVelocity, blend);
+				} else {
+					float blend = 1.0f - std::exp(-camera.decelerationRate * deltaTime);
+					camera.velocity = glm::mix(camera.velocity, glm::vec3(0.0f), blend);
+				}
+
+				camera.currentSpeed = glm::length(camera.velocity);
+				camera.position += camera.velocity * deltaTime;
+			} else {
+				// On land / in air
+				float targetMaxSpeed = 12.0f; // Standard run (~12 m/s)
+				if (isCtrlHeld) {
+					targetMaxSpeed = 4.0f; // Brisk walk (~4 m/s)
+				} else if (isShiftHeld) {
+					targetMaxSpeed = 24.0f; // Hard sprint (~24 m/s)
+				}
+
+				float targetEyeHeight = isCtrlHeld ? 1.5f : 3.0f; // Crouching vs standing height
+				float groundSurfaceHeight = std::max(terrainHeight, 0.0f);
+				float groundLevel = groundSurfaceHeight + targetEyeHeight;
+
+				// Horizontal movement directions
+				glm::vec3 fwd = camera.GetForward();
+				glm::vec3 fwdXZ = (glm::length(glm::vec2(fwd.x, fwd.z)) > 0.0001f)
+					? glm::normalize(glm::vec3(fwd.x, 0.0f, fwd.z))
+					: glm::vec3(0.0f, 0.0f, -1.0f);
+
+				glm::vec3 right = camera.GetRight();
+				glm::vec3 rightXZ = (glm::length(glm::vec2(right.x, right.z)) > 0.0001f)
+					? glm::normalize(glm::vec3(right.x, 0.0f, right.z))
+					: glm::vec3(1.0f, 0.0f, 0.0f);
+
+				glm::vec3 horizMoveDir{0.0f};
+				if (camera.isCaptured && defaultHandler) {
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_W)) horizMoveDir += fwdXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_S)) horizMoveDir -= fwdXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_D)) horizMoveDir += rightXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_A)) horizMoveDir -= rightXZ;
+				}
+
+				glm::vec3 targetHorizVel{0.0f};
+				if (glm::length(horizMoveDir) > 0.0001f) {
+					targetHorizVel = glm::normalize(horizMoveDir) * targetMaxSpeed;
+				}
+
+				glm::vec3 currentHorizVel{camera.velocity.x, 0.0f, camera.velocity.z};
+				if (glm::length(targetHorizVel) > 0.0001f) {
+					float blend = 1.0f - std::exp(-camera.accelerationRate * deltaTime);
+					currentHorizVel = glm::mix(currentHorizVel, targetHorizVel, blend);
+				} else {
+					float blend = 1.0f - std::exp(-camera.decelerationRate * deltaTime);
+					currentHorizVel = glm::mix(currentHorizVel, glm::vec3(0.0f), blend);
+				}
+
+				camera.velocity.x = currentHorizVel.x;
+				camera.velocity.z = currentHorizVel.z;
+
+				bool isGrounded = (camera.position.y <= groundLevel + 0.1f);
+				if (isGrounded) {
+					if (camera.isCaptured && isSpacePressed) {
+						camera.velocity.y = 9.5f; // Jump impulse (~9.5 m/s)
+					} else {
+						camera.velocity.y = 0.0f;
+						camera.position.y = groundLevel;
+					}
+				} else {
+					// Earth gravity acceleration
+					camera.velocity.y -= 9.81f * deltaTime;
+				}
+
+				camera.position += camera.velocity * deltaTime;
+
+				// Collision check with ground
+				if (camera.position.y <= groundLevel) {
+					camera.position.y = groundLevel;
+					camera.velocity.y = 0.0f;
+				}
+
+				camera.currentSpeed = glm::length(camera.velocity);
+			}
+
+			float speedRatio = std::clamp(camera.currentSpeed / 24.0f, 0.0f, 1.0f);
+			camera.fov = camera.baseFov + speedRatio * camera.maxFovBoost;
+		} else if (camera.mode == CameraMode::Accelerated) {
 			glm::vec3 targetVelocity{0.0f};
 			if (glm::length(moveDir) > 0.0001f) {
 				targetVelocity = glm::normalize(moveDir) * camera.speed;
@@ -700,11 +836,7 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
-		// Non-blocking async transfer readback camera constraint demonstration:
-		// Poll any completed async readback transfer
-		PollReadbackData();
-
-		// Trigger new readback if clipmap image is initialized and has been populated/transitioned in frame graph
+		// Trigger new readback for next frame if clipmap image is initialized and has been populated/transitioned in frame graph
 		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
 		if (clipmapTex && clipmapTex->GetImage() && terrainClipmap.GetNumLODs() > 0 &&
 		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
@@ -729,19 +861,12 @@ namespace brassica {
 			);
 		}
 
-		std::vector<glm::vec4> readbackData;
-		uint32_t rw = 0, rh = 0;
-		float maxTerrainHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
-		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
-			// Find peak terrain height in non-blocking async transfer region around camera
-			for (const auto& sample : readbackData) {
-				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
+		// Apply camera height constraint with conservative padding (e.g., +4.0f) for free-fly modes
+		if (camera.mode != CameraMode::FirstPerson) {
+			float minHeight = maxTerrainHeight + 4.0f;
+			if (camera.position.y < minHeight) {
+				camera.position.y = minHeight;
 			}
-		}
-		// Apply camera height constraint with conservative padding (e.g., +4.0f) to prevent near-plane clipping
-		float minHeight = maxTerrainHeight + 4.0f;
-		if (camera.position.y < minHeight) {
-			camera.position.y = minHeight;
 		}
 	}
 

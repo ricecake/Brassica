@@ -101,10 +101,169 @@ TEST_CASE("Camera Controls: Mode Cycle with Equal Key") {
 	engine.UpdateCamera(0.016f);
 	CHECK(engine.GetCamera().mode == brassica::CameraMode::Accelerated);
 
+	// Press '=' key to cycle to First Person mode
+	handler->OnKey(nullptr, GLFW_KEY_EQUAL, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+	CHECK(engine.GetCamera().mode == brassica::CameraMode::FirstPerson);
+
 	// Press '=' key again to cycle back to Instant mode
 	handler->OnKey(nullptr, GLFW_KEY_EQUAL, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.016f);
 	CHECK(engine.GetCamera().mode == brassica::CameraMode::Instant);
+}
+
+TEST_CASE("Camera Controls: Minus Key Toggles First Person Mode") {
+	brassica::Engine engine;
+	auto handler = std::make_shared<brassica::DefaultInputHandler>();
+	engine.SetInputHandler(handler);
+
+	engine.GetCamera().mode = brassica::CameraMode::Accelerated;
+
+	// Press '-' key to enable FirstPerson mode
+	handler->OnKey(nullptr, GLFW_KEY_MINUS, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+	CHECK(engine.GetCamera().mode == brassica::CameraMode::FirstPerson);
+
+	// Press '-' key again to return to Accelerated mode
+	handler->OnKey(nullptr, GLFW_KEY_MINUS, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+	CHECK(engine.GetCamera().mode == brassica::CameraMode::Accelerated);
+}
+
+TEST_CASE("First Person Camera: Standing Height, Crouching Height, and Speeds") {
+	brassica::Engine engine;
+	auto handler = std::make_shared<brassica::DefaultInputHandler>();
+	engine.SetInputHandler(handler);
+
+	// Press '-' key to enable First Person mode and capture
+	handler->OnKey(nullptr, GLFW_KEY_MINUS, 0, GLFW_PRESS, 0);
+	handler->OnKey(nullptr, GLFW_KEY_0, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+	REQUIRE(engine.GetCamera().mode == brassica::CameraMode::FirstPerson);
+	REQUIRE(engine.GetCamera().isCaptured);
+
+	float sampledTerrain = brassica::TerrainClipmap::SampleTerrain(engine.GetCamera().position.x, engine.GetCamera().position.z, 0.5f).r;
+	float expectedStandingGroundLevel = std::max(sampledTerrain, 0.0f) + 3.0f;
+
+	// Ground snapping check: standing camera height should be about 3 units above ground
+	CHECK(engine.GetCamera().position.y == doctest::Approx(expectedStandingGroundLevel).epsilon(0.01));
+
+	// Test Normal Run (W forward)
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_PRESS, 0);
+	for (int i = 0; i < 20; ++i) {
+		engine.UpdateCamera(0.05f);
+	}
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_RELEASE, 0);
+
+	// Speed should accelerate towards superhero running speed (~12 m/s)
+	CHECK(engine.GetCamera().currentSpeed > 10.0f);
+	CHECK(engine.GetCamera().currentSpeed <= 12.001f);
+
+	// Test Crouching (Left Ctrl)
+	handler->OnKey(nullptr, GLFW_KEY_LEFT_CONTROL, 0, GLFW_PRESS, 0);
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_PRESS, 0);
+	for (int i = 0; i < 30; ++i) {
+		engine.UpdateCamera(0.05f);
+	}
+	float expectedCrouchGroundLevel = std::max(sampledTerrain, 0.0f) + 1.5f;
+	// Height should lower to ~1.5 units above ground
+	CHECK(engine.GetCamera().position.y == doctest::Approx(expectedCrouchGroundLevel).epsilon(0.01));
+	// Speed should cap at brisk walking speed (~4.0 m/s)
+	CHECK(engine.GetCamera().currentSpeed <= 4.2f);
+
+	handler->OnKey(nullptr, GLFW_KEY_LEFT_CONTROL, 0, GLFW_RELEASE, 0);
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_RELEASE, 0);
+
+	// Test Sprinting (Left Shift + W)
+	handler->OnKey(nullptr, GLFW_KEY_LEFT_SHIFT, 0, GLFW_PRESS, 0);
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_PRESS, 0);
+	for (int i = 0; i < 30; ++i) {
+		engine.UpdateCamera(0.05f);
+	}
+	handler->OnKey(nullptr, GLFW_KEY_LEFT_SHIFT, 0, GLFW_RELEASE, 0);
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_RELEASE, 0);
+
+	// Speed should accelerate towards hard sprint speed (~24 m/s)
+	CHECK(engine.GetCamera().currentSpeed > 20.0f);
+	CHECK(engine.GetCamera().currentSpeed <= 24.001f);
+}
+
+TEST_CASE("First Person Camera: Earth Gravity and Jump Physics") {
+	brassica::Engine engine;
+	auto handler = std::make_shared<brassica::DefaultInputHandler>();
+	engine.SetInputHandler(handler);
+
+	// Press '-' key to enable First Person mode and capture
+	handler->OnKey(nullptr, GLFW_KEY_MINUS, 0, GLFW_PRESS, 0);
+	handler->OnKey(nullptr, GLFW_KEY_0, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+	REQUIRE(engine.GetCamera().mode == brassica::CameraMode::FirstPerson);
+
+	float sampledTerrain = brassica::TerrainClipmap::SampleTerrain(engine.GetCamera().position.x, engine.GetCamera().position.z, 0.5f).r;
+	float groundLevel = std::max(sampledTerrain, 0.0f) + 3.0f;
+
+	// Initial position is grounded
+	CHECK(engine.GetCamera().position.y == doctest::Approx(groundLevel).epsilon(0.01));
+
+	// Trigger Jump with Space key
+	handler->OnKey(nullptr, GLFW_KEY_SPACE, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.05f); // Takeoff!
+	handler->OnKey(nullptr, GLFW_KEY_SPACE, 0, GLFW_RELEASE, 0);
+
+	// Camera should be in air above ground
+	float peakHeight = engine.GetCamera().position.y;
+	CHECK(peakHeight > groundLevel);
+	CHECK(engine.GetCamera().velocity.y > 0.0f);
+
+	// Advance time to top of jump trajectory under Earth gravity (9.81 m/s^2)
+	for (int i = 0; i < 15; ++i) {
+		engine.UpdateCamera(0.05f);
+		peakHeight = std::max(peakHeight, engine.GetCamera().position.y);
+	}
+
+	// Peak jump height should be superhero jump height (~4-5 units above ground level)
+	CHECK(peakHeight >= groundLevel + 3.5f);
+
+	// Continue advancing time until falling back to ground
+	for (int i = 0; i < 25; ++i) {
+		engine.UpdateCamera(0.05f);
+	}
+
+	// Camera lands back on ground level
+	CHECK(engine.GetCamera().position.y == doctest::Approx(groundLevel).epsilon(0.01));
+	CHECK(engine.GetCamera().velocity.y == doctest::Approx(0.0f));
+}
+
+TEST_CASE("First Person Camera: Underwater Zero-Gravity Swimming") {
+	brassica::Engine engine;
+	auto handler = std::make_shared<brassica::DefaultInputHandler>();
+	engine.SetInputHandler(handler);
+
+	engine.GetCamera().mode = brassica::CameraMode::FirstPerson;
+	// Position camera underwater in ocean region where terrain is underwater (< 0.0)
+	engine.GetCamera().position = glm::vec3(1000.0f, -10.0f, 1000.0f);
+
+	handler->OnKey(nullptr, GLFW_KEY_0, 0, GLFW_PRESS, 0);
+	engine.UpdateCamera(0.016f);
+
+	float sampledTerrain = brassica::TerrainClipmap::SampleTerrain(engine.GetCamera().position.x, engine.GetCamera().position.z, 0.5f).r;
+	if (sampledTerrain < 0.0f) {
+		glm::vec3 underwaterPos = engine.GetCamera().position;
+
+		// No key pressed -> no gravity falling underwater
+		engine.UpdateCamera(0.1f);
+		CHECK(engine.GetCamera().position.y == doctest::Approx(underwaterPos.y));
+
+		// Move forward underwater
+		handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_PRESS, 0);
+		for (int i = 0; i < 20; ++i) {
+			engine.UpdateCamera(0.05f);
+		}
+		handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_RELEASE, 0);
+
+		// Speed caps at swimming speed (~5.0 m/s)
+		CHECK(engine.GetCamera().currentSpeed <= 5.001f);
+	}
 }
 
 TEST_CASE("Camera Controls: Speed Adjustment (PageUp, PageDown, Home, End)") {
