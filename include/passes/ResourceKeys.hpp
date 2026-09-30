@@ -101,4 +101,6 @@ namespace brassica {
 
 	struct MaterialBuffer {};
 
+	struct CascadedShadowMapArray {};
+
 } // namespace brassica

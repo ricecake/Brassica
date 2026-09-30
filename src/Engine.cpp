@@ -8,6 +8,7 @@
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
+#include "types/ubo/CascadedShadowUBO.hpp"
 
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
@@ -1319,6 +1320,80 @@ namespace brassica {
 		const auto& lights = lightManager.GetLights();
 		glm::vec3   sunDirGlobal = (lights.size() > 0) ? glm::normalize(-lights[0].direction)
 													   : glm::vec3(0.0f, 1.0f, 0.0f);
+
+		CascadedShadowUBO shadowUbo{};
+		shadowUbo.sunDirection = glm::vec4(sunDirGlobal, 0.0f);
+		shadowUbo.shadowMapIndex = physicalRegistry.GetBindlessIndex<CascadedShadowMapArray>();
+		shadowUbo.shadowMapStorageIdx = physicalRegistry.GetStorageBindlessIndex<CascadedShadowMapArray>();
+
+		auto calculateCascadeViewProj = [&](float splitNear, float splitFar) -> glm::mat4 {
+			float fov = camera.fov;
+			float aspect = camera.aspectRatio;
+			float tanHalfFov = std::tan(fov * 0.5f);
+			float nearH = tanHalfFov * splitNear;
+			float nearW = nearH * aspect;
+			float farH  = tanHalfFov * splitFar;
+			float farW  = farH * aspect;
+
+			std::array<glm::vec3, 8> frustumCornersCam{
+				glm::vec3(-nearW,  nearH, -splitNear),
+				glm::vec3( nearW,  nearH, -splitNear),
+				glm::vec3(-nearW, -nearH, -splitNear),
+				glm::vec3( nearW, -nearH, -splitNear),
+				glm::vec3(-farW,   farH,  -splitFar),
+				glm::vec3( farW,   farH,  -splitFar),
+				glm::vec3(-farW,  -farH,  -splitFar),
+				glm::vec3( farW,  -farH,  -splitFar)
+			};
+
+			glm::vec3 centerWorld(0.0f);
+			std::array<glm::vec3, 8> frustumCornersWorld{};
+			for (size_t i = 0; i < 8; ++i) {
+				glm::vec4 worldPos = camera.invViewMatrix * glm::vec4(frustumCornersCam[i], 1.0f);
+				frustumCornersWorld[i] = glm::vec3(worldPos) / worldPos.w;
+				centerWorld += frustumCornersWorld[i];
+			}
+			centerWorld /= 8.0f;
+
+			glm::vec3 up = std::abs(sunDirGlobal.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
+			glm::mat4 lightView = glm::lookAt(centerWorld - sunDirGlobal * 1000.0f, centerWorld, up);
+
+			float minX = std::numeric_limits<float>::max();
+			float maxX = std::numeric_limits<float>::lowest();
+			float minY = std::numeric_limits<float>::max();
+			float maxY = std::numeric_limits<float>::lowest();
+			float minZ = std::numeric_limits<float>::max();
+			float maxZ = std::numeric_limits<float>::lowest();
+
+			for (size_t i = 0; i < 8; ++i) {
+				glm::vec4 lightPos = lightView * glm::vec4(frustumCornersWorld[i], 1.0f);
+				minX = std::min(minX, lightPos.x);
+				maxX = std::max(maxX, lightPos.x);
+				minY = std::min(minY, lightPos.y);
+				maxY = std::max(maxY, lightPos.y);
+				minZ = std::min(minZ, lightPos.z);
+				maxZ = std::max(maxZ, lightPos.z);
+			}
+
+			minZ -= 1000.0f;
+			maxZ += 1000.0f;
+
+			glm::mat4 lightProj = glm::ortho(minX, maxX, minY, maxY, minZ, maxZ);
+			lightProj[1][1] *= -1.0f;
+
+			return lightProj * lightView;
+		};
+
+		shadowUbo.cascadeSplits = glm::vec4(50.0f, 200.0f, 800.0f, 3200.0f);
+		shadowUbo.cascadeViewProj[0] = calculateCascadeViewProj(camera.nearPlane, 50.0f);
+		shadowUbo.cascadeViewProj[1] = calculateCascadeViewProj(50.0f, 200.0f);
+		shadowUbo.cascadeViewProj[2] = calculateCascadeViewProj(200.0f, 800.0f);
+		shadowUbo.cascadeViewProj[3] = calculateCascadeViewProj(800.0f, 3200.0f);
+
+		if (cascadedShadowUboMapped[activeFrame]) {
+			std::memcpy(cascadedShadowUboMapped[activeFrame], &shadowUbo, sizeof(CascadedShadowUBO));
+			vmaFlushAllocation(allocator, cascadedShadowUboAllocations[activeFrame], 0, sizeof(CascadedShadowUBO));
+		}
 		glm::vec3   sunRadiance = (lights.size() > 0) ? (lights[0].color * lights[0].intensity)
 													  : glm::vec3(3.0f, 2.94f, 2.76f);
 		glm::vec3   moonDirGlobal = (lights.size() > 1) ? glm::normalize(-lights[1].direction)
@@ -1531,7 +1606,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1568,13 +1643,19 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 6: CascadedShadowUBO
+		bindings[6]
+			.setBinding(6)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
 		frameSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 5 * FRAME_OVERLAP},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
@@ -1663,6 +1744,13 @@ namespace brassica {
 				autoExposureAllocations[i],
 				&autoExposureMapped[i]
 			);
+			createBufferHelper(
+				sizeof(CascadedShadowUBO),
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				cascadedShadowUboBuffers[i],
+				cascadedShadowUboAllocations[i],
+				&cascadedShadowUboMapped[i]
+			);
 			// Seed sane defaults once, before any frame runs: nothing else ever writes this
 			// buffer's tunable fields for slot i until DrawFrame's per-frame sync below, and the
 			// compute shader's own histogram/adaptedLuminance/EMA accumulation only makes sense
@@ -1670,15 +1758,16 @@ namespace brassica {
 			if (autoExposureMapped[i]) {
 				std::memcpy(autoExposureMapped[i], &s_exposureData, sizeof(ExposureDataHost));
 			}
-			std::array<vk::DescriptorBufferInfo, 6> bufferDescs{};
+			std::array<vk::DescriptorBufferInfo, 7> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
 			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
 			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
 			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
+			bufferDescs[6].setBuffer(cascadedShadowUboBuffers[i]).setOffset(0).setRange(sizeof(CascadedShadowUBO));
 
-			std::array<vk::WriteDescriptorSet, 6> writes{};
+			std::array<vk::WriteDescriptorSet, 7> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -1709,6 +1798,11 @@ namespace brassica {
 				.setDstBinding(5)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[5]);
+			writes[6]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(6)
+				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+				.setBufferInfo(bufferDescs[6]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -1739,6 +1833,12 @@ namespace brassica {
 				autoExposureBuffers[i] = nullptr;
 				autoExposureAllocations[i] = nullptr;
 				autoExposureMapped[i] = nullptr;
+			}
+			if (cascadedShadowUboBuffers[i] && cascadedShadowUboAllocations[i]) {
+				vmaDestroyBuffer(allocator, cascadedShadowUboBuffers[i], cascadedShadowUboAllocations[i]);
+				cascadedShadowUboBuffers[i] = nullptr;
+				cascadedShadowUboAllocations[i] = nullptr;
+				cascadedShadowUboMapped[i] = nullptr;
 			}
 			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
 				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);

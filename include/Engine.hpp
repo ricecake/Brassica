@@ -325,6 +325,10 @@ namespace brassica {
 		VmaAllocation autoExposureAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*         autoExposureMapped[FRAME_OVERLAP]{nullptr, nullptr};
 
+		vk::Buffer    cascadedShadowUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
+		VmaAllocation cascadedShadowUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
+		void*         cascadedShadowUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
 		void InitFrameSet();
