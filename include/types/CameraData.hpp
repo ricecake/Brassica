@@ -11,7 +11,8 @@ namespace brassica {
 
 	enum class CameraMode {
 		Instant,
-		Accelerated
+		Accelerated,
+		FirstPerson
 	};
 
 	struct CameraData {
@@ -50,11 +51,17 @@ namespace brassica {
 		bool isCaptured{false};
 
 		void CycleMode() {
-			mode = (mode == CameraMode::Instant) ? CameraMode::Accelerated : CameraMode::Instant;
+			if (mode == CameraMode::Instant) {
+				mode = CameraMode::Accelerated;
+			} else if (mode == CameraMode::Accelerated) {
+				mode = CameraMode::FirstPerson;
+			} else {
+				mode = CameraMode::Instant;
+			}
 		}
 
 		[[nodiscard]] float GetDisplayedSpeed() const {
-			return (mode == CameraMode::Accelerated) ? currentSpeed : speed;
+			return (mode == CameraMode::Accelerated || mode == CameraMode::FirstPerson) ? currentSpeed : speed;
 		}
 
 		// Computed Matrices and Frustum Planes
