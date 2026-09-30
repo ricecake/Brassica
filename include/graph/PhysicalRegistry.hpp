@@ -958,6 +958,19 @@ namespace brassica::graph {
 					}
 					m_textures[base] = pair[parity];
 					m_textures[historyId] = pair[1 - parity];
+					// pair[parity] (this frame's *base*/write-target key) is about to be fully
+					// overwritten by whatever node declared this Modify<K>/History<K> pair -- unlike
+					// pair[1-parity] (this frame's *history* key), which genuinely has no writer yet
+					// on a freshly-created pair's first frame and needs ZeroInitializeUndefinedReads'
+					// real clear. Without this, pair[parity]->HasDefinedContents() stays false (only
+					// the zero-init path ever sets it true) even after the owning node's own real
+					// imageStore writes fill it -- so next frame, when parity flips and this same
+					// physical texture becomes the *history* key, ZeroInitializeUndefinedReads sees
+					// "undefined" and clears it, silently destroying one frame's worth of real
+					// accumulated history with zeros. Only matters on this pair's very first
+					// creation (frameIndex here, whatever it is) -- every pair member gets flagged
+					// true by one path or the other after that, by induction.
+					pair[parity]->SetHasDefinedContents(true);
 				}
 			}
 		}

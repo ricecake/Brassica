@@ -901,8 +901,16 @@ namespace brassica::graph {
 			.width = width,
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
+			// eTransferDst: same reasoning as ColorAttachmentDesc's own copy of this comment -- a
+			// History<K> pair (PhysicalRegistry::ProvisionTemporalPairs) built on this desc needs
+			// ZeroInitializeUndefinedReads (PhysicalExecutionBackend.hpp) to be able to
+			// clearColorImage its first frame's undefined slot, which requires this bit on the
+			// destination image regardless of what else it's used for. Confirmed missing the hard
+			// way: the first real (non-test) pairing of History<K> with this desc produced exactly
+			// the validation errors this bit prevents, cascading into a real GPU hang.
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
 	}

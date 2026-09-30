@@ -79,6 +79,13 @@ namespace brassica::testing {
 			VkPhysicalDeviceFeatures features1{};
 			features1.shaderInt64 = VK_TRUE;
 			features1.fragmentStoresAndAtomics = VK_TRUE;
+			// Mirrors Engine.cpp's own formatless-storage-image feature request (see its features1
+			// comment) -- test_physical_backend.cpp's formatless-storage-image round-trip case
+			// needs this actually enabled on the device, not just declared in a GLSL layout
+			// qualifier, or it would validation-error for the wrong reason (missing device feature)
+			// rather than prove anything about the declaration itself.
+			features1.shaderStorageImageReadWithoutFormat = VK_TRUE;
+			features1.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
 			selector.set_minimum_version(1, 3)

@@ -916,6 +916,19 @@ namespace brassica {
 		VkPhysicalDeviceFeatures features1{};
 		features1.shaderInt64 = VK_TRUE;
 		features1.fragmentStoresAndAtomics = VK_TRUE;
+		// Formatless bindless storage-image *writes* (bindless.glsl's uImagesGenericWrite/
+		// uImageArraysGenericWrite/uImages3DGenericWrite): lets a shader imageStore a storage image
+		// declared with no format qualifier, so its real format doesn't have to match whatever the
+		// declaration happens to hardcode -- see bindless.glsl's comment for the validation-error
+		// history this fixes, and why there's no formatless *read* counterpart yet (this glslang
+		// version's GLSL frontend only accepts formatless for writeonly, confirmed empirically, not
+		// a choice). Requesting Read too even though nothing can express it in GLSL yet -- harmless
+		// to have enabled, and removes one thing to revisit if that ever changes. Both optional
+		// core Vulkan 1.0 features, near-universal on desktop GPUs (confirmed true via vulkaninfo
+		// even on this Mac's MoltenVK); set_required_features below will fail device selection
+		// loudly if a target GPU genuinely lacks one, not silently misbehave.
+		features1.shaderStorageImageReadWithoutFormat = VK_TRUE;
+		features1.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
@@ -1182,6 +1195,7 @@ namespace brassica {
 		}
 
 		glm::vec3 previousCameraPosition = camera.position;
+		glm::mat4 previousViewProjMatrix = camera.viewProjMatrix;
 		UpdateCamera(deltaTime);
 
 		AudioState audioState{};
@@ -1232,6 +1246,7 @@ namespace brassica {
 		ubo.invViewProjMatrix = camera.invViewProjMatrix;
 		ubo.cameraPosition = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
 		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
+		ubo.previousViewProjMatrix = previousViewProjMatrix;
 		ubo.time = static_cast<float>(currentTime);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
