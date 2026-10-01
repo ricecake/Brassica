@@ -119,7 +119,7 @@ jobs:
       - name: Run Sandbox App in Headless Mode
         if: steps.filter.outputs.core == 'true' || steps.filter.outputs.shaders == 'true' || github.event_name == 'workflow_dispatch'
         shell: bash
-        run: "${{ steps.strings.outputs.build-output-dir }}/bin/sandbox" --headless 10
+        run: "${{ steps.strings.outputs.build-output-dir }}/bin/sandbox --headless 10"
 
       - name: Prepare Release Artifacts (Linux)
         if: always() && startsWith(matrix.os, 'ubuntu')
