@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 #include <stdexcept>
 
@@ -18,11 +19,7 @@ namespace brassica {
 		Update(0.0f);
 	}
 
-	SkinnedCylinder::~SkinnedCylinder() {
-		m_skeleton.reset();
-		m_geometry.reset();
-		m_mesh.reset();
-	}
+	SkinnedCylinder::~SkinnedCylinder() = default;
 
 	void SkinnedCylinder::GenerateGeometryCentralMesh(const Parameters& params) {
 		std::vector<geometrycentral::Vector3> positions;
@@ -83,11 +80,7 @@ namespace brassica {
 		m_geometry.reset();
 		m_mesh.reset();
 
-		auto manifoldMesh = std::make_unique<geometrycentral::surface::ManifoldSurfaceMesh>(polygons);
-		auto geometry = std::make_unique<geometrycentral::surface::VertexPositionGeometry>(*manifoldMesh);
-		for (auto v : manifoldMesh->vertices()) {
-			geometry->vertexPositions[v] = positions[v.getIndex()];
-		}
+		auto [manifoldMesh, geometry] = geometrycentral::surface::makeManifoldSurfaceMeshAndGeometry(polygons, positions);
 
 		m_mesh = std::move(manifoldMesh);
 		m_geometry = std::move(geometry);
