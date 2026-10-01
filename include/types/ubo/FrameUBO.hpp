@@ -25,8 +25,16 @@ namespace brassica {
 		uint32_t frameIndex{0};
 		uint32_t globalSeed{0};
 		uint32_t frameRandom{0};
+
+		// Last frame's viewProjMatrix, captured in Engine::DrawFrame before camera.UpdateMatrices()
+		// overwrites it for this frame -- same "capture before this frame's update" idiom as
+		// previousCameraPosition above. For any future reprojection/motion-vector consumer that
+		// needs to project a world-space point into last frame's screen space (temporal AA,
+		// volumetric reprojection, etc.) without threading its own copy through per-node push
+		// constants.
+		glm::mat4 previousViewProjMatrix{1.0f};
 	};
 
-	static_assert(sizeof(FrameUBO) == 448, "FrameUBO struct size must be 448 bytes");
+	static_assert(sizeof(FrameUBO) == 512, "FrameUBO struct size must be 512 bytes");
 
 } // namespace brassica

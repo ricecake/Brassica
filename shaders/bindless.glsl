@@ -24,6 +24,10 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	uint  uFrameIndex;
 	uint  uGlobalSeed;
 	uint  uFrameRandom;
+
+	// Last frame's uViewProjMatrix -- see FrameUBO.hpp's previousViewProjMatrix for why. Available
+	// to any shader that needs to reproject a world-space point into last frame's screen space.
+	mat4  uPreviousViewProjMatrix;
 };
 
 // Bindless resource catalog in Set 1 (bindings 0..4). One descriptor set instance -- never
@@ -36,6 +40,42 @@ layout(set = 1, binding = 0) uniform texture2D uTextures2D[];
 layout(set = 1, binding = 1) uniform texture2DArray uTextureArrays[];
 layout(set = 1, binding = 2) uniform sampler uSamplers[];
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
+// Formatless *write* aliases of the same binding 3 storage-image catalog, for a resource whose
+// real format isn't R32G32B32A32_SFLOAT. Vulkan requires a storage image's declared SPIR-V
+// format to match its bound VkImageView's real format unless the shader declares it with no
+// format qualifier at all -- gated on shaderStorageImageWriteWithoutFormat (Engine::InitVulkan's
+// features1), enabled. Confirmed via real hardware validation: prior to this, every non-RGBA32F
+// storage image written through uImagesRGBA32F[] above (most of them -- CloudPackedColor et al.
+// are R16G16B16A16_SFLOAT, CloudShadowMap was R16_SFLOAT, etc.) produced a "Format operand
+// Rgba32f ... doesn't match the VkImageView format ... undefined values" validation warning on
+// every access. AssignAndWriteBindlessIndices/WriteStorageImageDescriptor (PhysicalRegistry.hpp)
+// don't care which of these a resource's index ends up written through -- they just write
+// whatever real VkImageView the resource has, so switching an imageStore call site from
+// uImagesRGBA32F to one of these needs no C++-side change, only a different GLSL declaration
+// name at the call site.
+//
+// writeonly, deliberately -- not a bidirectional or readonly declaration. Confirmed via a real
+// glslang compile error ("image variables not declared 'writeonly' and without a format layout
+// qualifier ... not supported") that this glslang/shaderc version's GLSL frontend only accepts
+// formatless for a writeonly image, full stop -- shaderStorageImageReadWithoutFormat being an
+// enabled *device* feature doesn't mean the *language* lets you declare a formatless readonly or
+// read-write image; every readonly variant tried failed to compile regardless. Not a problem in
+// practice: every current cloud resource with a mismatched format is only ever written via
+// imageStore -- everything that reads one back does so through the separate *sampled* catalog
+// (SAMPLE_LINEAR/SAMPLE_NEAREST/texture2D, binding 0) rather than imageLoad, so a formatless read
+// alias has no real caller yet. If a future resource genuinely needs imageLoad on a formatless
+// image, that needs its own investigation (a different Vulkan/SPIR-V target version, an
+// explicit per-resource format hint, or restructuring the read through the sampled catalog
+// instead) -- don't assume this same writeonly-only fix covers it.
+//
+// Same alias-the-same-binding idiom terrain_gen.comp (image2DArray) and
+// cloud_3d_volume_bake.comp (image3D) already use for *dimensionality* -- centralized here for
+// discoverability instead of each shader re-declaring its own local alias, which is exactly how
+// a real cascaded-shadow-map port went wrong: the array-alias convention already existed, but
+// nothing about it was visible enough for that shader's author to find.
+layout(set = 1, binding = 3) writeonly uniform image2D uImagesGenericWrite[];
+layout(set = 1, binding = 3) writeonly uniform image2DArray uImageArraysGenericWrite[];
+layout(set = 1, binding = 3) writeonly uniform image3D uImages3DGenericWrite[];
 // Binding 5: a real 3D-volume sampled catalog, independently sized/counted from bindings 0/1
 // (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,
 // not a 2D-array pressed into service for a volume it was never shaped for.

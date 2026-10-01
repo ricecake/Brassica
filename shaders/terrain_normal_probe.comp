@@ -10,6 +10,7 @@
 // computed central-difference height gradient, so the test can compare their signs without
 // duplicating evaluate_terrain_normal's own math.
 
+#include "terrain/generation.glsl"
 #include "common.glsl"
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;

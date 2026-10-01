@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <array>
 #include <cstring>
 
 #include "doctest/doctest.h"
@@ -15,6 +16,7 @@
 #include "graph/TypeList.hpp"
 #include "graph/Validation.hpp"
 #include "MinimalDevice.hpp"
+#include "Shader.hpp"
 
 using namespace brassica::graph;
 
@@ -1673,6 +1675,241 @@ TEST_CASE("ProvisionBuffer provisions a real Mapped ring with the correct shape,
 		CHECK(oldBuf.use_count() == 1);
 
 		vkDevice.destroyCommandPool(pool);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+// -- Formatless bindless storage-image write (bindless.glsl's uImagesGenericWrite/
+// uImageArraysGenericWrite/uImages3DGenericWrite aliases) ---------------------------------------
+// The regression this closes: bindless.glsl's original storage-image catalog was one
+// hardcoded-rgba32f alias (uImagesRGBA32F[]), so any real resource backed by a different format
+// (most cloud resources: R16G16B16A16Sfloat, R16Sfloat, etc.) produced a real "Format operand
+// Rgba32f ... doesn't match the VkImageView format ... undefined values" validation warning on
+// every imageStore through it. This proves the fix -- a writeonly, no-format-qualifier alias at
+// the same binding, gated on shaderStorageImageWriteWithoutFormat -- actually round-trips a real
+// non-RGBA32F image on real hardware, not just that it compiles (glslangValidator already proved
+// that much in isolation; see the bindless.glsl comment for why only writeonly compiles at all in
+// this toolchain). Deliberately hand-rolled (own image/descriptor set/pipeline, no
+// PhysicalRegistry/Graph involvement) -- this isolates the GLSL-declaration/device-feature
+// interaction from the bindless index-allocation machinery, which the "Bindless indices are
+// assigned distinctly..." case above already covers on its own.
+TEST_CASE(
+	"A formatless writeonly storage-image alias correctly writes a non-RGBA32F image format on "
+	"real hardware, with no validation errors"
+) {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device   vkDevice = device.GetDevice();
+	VmaAllocator allocator = device.GetAllocator();
+
+	constexpr std::uint32_t kWidth = 4;
+	constexpr std::uint32_t kHeight = 4;
+	// Deliberately not eR32G32B32A32Sfloat -- the whole point is a format the old hardcoded
+	// uImagesRGBA32F[] alias would have mismatched.
+	constexpr vk::Format kFormat = vk::Format::eR16G16B16A16Sfloat;
+
+	{
+		vk::ImageCreateInfo imageInfo{};
+		imageInfo.setImageType(vk::ImageType::e2D)
+			.setFormat(kFormat)
+			.setExtent(vk::Extent3D{kWidth, kHeight, 1})
+			.setMipLevels(1)
+			.setArrayLayers(1)
+			.setSamples(vk::SampleCountFlagBits::e1)
+			.setTiling(vk::ImageTiling::eOptimal)
+			.setUsage(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc)
+			.setInitialLayout(vk::ImageLayout::eUndefined);
+		VkImageCreateInfo rawImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
+
+		VmaAllocationCreateInfo imageAllocInfo{};
+		imageAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+		VkImage       rawImage{};
+		VmaAllocation imageAllocation{};
+		REQUIRE(
+			vmaCreateImage(allocator, &rawImageInfo, &imageAllocInfo, &rawImage, &imageAllocation, nullptr) ==
+			VK_SUCCESS
+		);
+		vk::Image image{rawImage};
+
+		vk::ImageViewCreateInfo viewInfo{};
+		viewInfo.setImage(image)
+			.setViewType(vk::ImageViewType::e2D)
+			.setFormat(kFormat)
+			.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+		vk::ImageView view = vkDevice.createImageView(viewInfo);
+
+		// A minimal one-binding layout mirroring bindless.glsl's binding=3 storage-image catalog
+		// shape (unbounded array, partially-bound/update-after-bind) -- not the real 6-binding
+		// catalog, since bindless index allocation itself is out of scope here.
+		vk::DescriptorSetLayoutBinding binding{};
+		binding.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eCompute);
+
+		vk::DescriptorBindingFlags                    bindingFlags = vk::DescriptorBindingFlagBits::ePartiallyBound;
+		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+		bindingFlagsInfo.setBindingFlags(bindingFlags);
+
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.setBindings(binding);
+		layoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
+		layoutInfo.pNext = &bindingFlagsInfo;
+		vk::DescriptorSetLayout setLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
+
+		vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eStorageImage, 1};
+		vk::DescriptorPoolCreateInfo poolInfo{};
+		poolInfo.setPoolSizes(poolSize).setMaxSets(1).setFlags(vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind);
+		vk::DescriptorPool pool = vkDevice.createDescriptorPool(poolInfo);
+
+		vk::DescriptorSetAllocateInfo setAllocInfo{};
+		setAllocInfo.setDescriptorPool(pool).setSetLayouts(setLayout);
+		vk::DescriptorSet set = vkDevice.allocateDescriptorSets(setAllocInfo).front();
+
+		vk::DescriptorImageInfo imageDescInfo{};
+		imageDescInfo.setImageView(view).setImageLayout(vk::ImageLayout::eGeneral);
+
+		vk::WriteDescriptorSet write{};
+		write.setDstSet(set)
+			.setDstBinding(0)
+			.setDescriptorCount(1)
+			.setDescriptorType(vk::DescriptorType::eStorageImage)
+			.setImageInfo(imageDescInfo);
+		vkDevice.updateDescriptorSets(write, {});
+
+		// Exactly the alias declaration bindless.glsl uses (uImagesGenericWrite), just at this
+		// test's own binding 0 instead of the real catalog's binding 3 -- the capability under
+		// test is the formatless qualifier + shaderStorageImageWriteWithoutFormat device feature,
+		// not which binding index the real catalog happens to occupy.
+		static constexpr const char* kShaderSource = R"(
+			#version 460
+			#extension GL_EXT_nonuniform_qualifier : require
+			layout(local_size_x = 1, local_size_y = 1) in;
+			layout(set = 0, binding = 0) writeonly uniform image2D uImagesGenericWrite[];
+			void main() {
+				imageStore(uImagesGenericWrite[0], ivec2(gl_GlobalInvocationID.xy), vec4(0.25, 0.5, 0.75, 1.0));
+			}
+		)";
+
+		brassica::ComputeShader shader;
+		REQUIRE(
+			shader.CompileFromSource(vkDevice, kShaderSource, shaderc_glsl_compute_shader, "test_formatless_storage_image")
+		);
+
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
+		pipelineLayoutInfo.setSetLayouts(setLayout);
+		vk::PipelineLayout pipelineLayout = vkDevice.createPipelineLayout(pipelineLayoutInfo);
+
+		vk::ComputePipelineCreateInfo pipelineInfo{};
+		pipelineInfo.setStage(shader.GetStageCreateInfo()).setLayout(pipelineLayout);
+		vk::Pipeline pipeline = vkDevice.createComputePipelines(vk::PipelineCache{}, pipelineInfo).value.front();
+
+		// Readback target: host-visible, big enough for kWidth*kHeight R16G16B16A16Sfloat texels
+		// (2 bytes/channel * 4 channels).
+		constexpr vk::DeviceSize kBufferSize = vk::DeviceSize{kWidth} * kHeight * 4 * sizeof(std::uint16_t);
+
+		vk::BufferCreateInfo bufferInfo{};
+		bufferInfo.setSize(kBufferSize).setUsage(vk::BufferUsageFlagBits::eTransferDst);
+		VkBufferCreateInfo rawBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
+
+		VmaAllocationCreateInfo bufAllocInfo{};
+		bufAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		bufAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer          rawBuffer{};
+		VmaAllocation     bufAllocation{};
+		VmaAllocationInfo bufAllocResultInfo{};
+		REQUIRE(
+			vmaCreateBuffer(allocator, &rawBufferInfo, &bufAllocInfo, &rawBuffer, &bufAllocation, &bufAllocResultInfo) ==
+			VK_SUCCESS
+		);
+		vk::Buffer readbackBuffer{rawBuffer};
+
+		vk::CommandPool cmdPool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
+		);
+		vk::CommandBuffer cmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{cmdPool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+
+		cmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+		// Undefined -> General: first use of this image, so a pure layout transition with no real
+		// hazard to describe via srcAccessMask.
+		vk::ImageMemoryBarrier2 toGeneral{};
+		toGeneral.setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe)
+			.setSrcAccessMask({})
+			.setDstStageMask(vk::PipelineStageFlagBits2::eComputeShader)
+			.setDstAccessMask(vk::AccessFlagBits2::eShaderStorageWrite)
+			.setOldLayout(vk::ImageLayout::eUndefined)
+			.setNewLayout(vk::ImageLayout::eGeneral)
+			.setImage(image)
+			.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+		vk::DependencyInfo toGeneralDep{};
+		toGeneralDep.setImageMemoryBarriers(toGeneral);
+		cmd.pipelineBarrier2(toGeneralDep);
+
+		cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
+		cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout, 0, set, {});
+		cmd.dispatch(kWidth, kHeight, 1);
+
+		// Compute-write -> transfer-read, staying in General throughout -- a legal source layout
+		// for vkCmdCopyImageToBuffer, not just the *SrcOptimal ones.
+		vk::ImageMemoryBarrier2 toTransferRead{};
+		toTransferRead.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader)
+			.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite)
+			.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer)
+			.setDstAccessMask(vk::AccessFlagBits2::eTransferRead)
+			.setOldLayout(vk::ImageLayout::eGeneral)
+			.setNewLayout(vk::ImageLayout::eGeneral)
+			.setImage(image)
+			.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+		vk::DependencyInfo toTransferReadDep{};
+		toTransferReadDep.setImageMemoryBarriers(toTransferRead);
+		cmd.pipelineBarrier2(toTransferReadDep);
+
+		vk::BufferImageCopy copyRegion{};
+		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+			.setImageExtent(vk::Extent3D{kWidth, kHeight, 1});
+		cmd.copyImageToBuffer(image, vk::ImageLayout::eGeneral, readbackBuffer, copyRegion);
+
+		cmd.end();
+
+		vk::SubmitInfo submitInfo{};
+		submitInfo.setCommandBuffers(cmd);
+		device.GetQueue().submit(submitInfo);
+		device.GetQueue().waitIdle();
+
+		// Read back texel (0,0) as 4 half-floats and compare bit patterns against what main()
+		// stored -- the real proof the write landed correctly in this image's actual
+		// R16G16B16A16Sfloat storage, not silently reinterpreted the way a hardcoded rgba32f
+		// alias would have. All four values (0.25/0.5/0.75/1.0) are exactly representable in
+		// half precision, so a literal bit-pattern compare is safe -- no rounding ambiguity.
+		std::array<std::uint16_t, 4> texel{};
+		std::memcpy(texel.data(), bufAllocResultInfo.pMappedData, sizeof(texel));
+
+		CHECK(texel[0] == 0x3400); // 0.25
+		CHECK(texel[1] == 0x3800); // 0.5
+		CHECK(texel[2] == 0x3A00); // 0.75
+		CHECK(texel[3] == 0x3C00); // 1.0
+
+		vkDevice.destroyCommandPool(cmdPool);
+		vmaDestroyBuffer(allocator, rawBuffer, bufAllocation);
+		vkDevice.destroyPipeline(pipeline);
+		vkDevice.destroyPipelineLayout(pipelineLayout);
+		shader.Destroy(vkDevice);
+		vkDevice.destroyDescriptorPool(pool);
+		vkDevice.destroyDescriptorSetLayout(setLayout);
+		vkDevice.destroyImageView(view);
+		vmaDestroyImage(allocator, rawImage, imageAllocation);
 	}
 
 	CHECK(device.GetValidationErrorCount() == 0);

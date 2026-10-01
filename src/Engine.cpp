@@ -8,6 +8,7 @@
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
+#include "types/CdlGradingData.hpp"
 
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
@@ -510,6 +511,10 @@ namespace brassica {
 		serviceLocator.Provide<ILightManager>(std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {}));
 		serviceLocator.Provide<LightManager>(std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {}));
 
+		materialManager.Initialize();
+		serviceLocator.Provide<IMaterialManager>(std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {}));
+		serviceLocator.Provide<MaterialManager>(std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {}));
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -556,6 +561,19 @@ namespace brassica {
 	}
 
 	void Engine::UpdateCamera(float deltaTime) {
+		// Poll GPU readback data first
+		PollReadbackData();
+
+		std::vector<glm::vec4> readbackData;
+		uint32_t rw = 0, rh = 0;
+		float maxTerrainHeight = -1024.0f; // Default terrain floor fallback if no readback has arrived yet
+		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
+			// Find peak terrain height in non-blocking async transfer region around camera
+			for (const auto& sample : readbackData) {
+				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
+			}
+		}
+
 		auto* defaultHandler = dynamic_cast<DefaultInputHandler*>(inputHandler.get());
 
 		if (defaultHandler) {
@@ -573,9 +591,31 @@ namespace brassica {
 
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_EQUAL)) {
 				camera.CycleMode();
+				if (camera.mode == CameraMode::FirstPerson) {
+					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
+					camera.position.y = groundSurfaceHeight + 3.0f;
+					camera.velocity = glm::vec3(0.0f);
+				}
 				spdlog::info(
 					"Camera mode switched to: {}",
-					camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant"
+					camera.mode == CameraMode::FirstPerson ? "FirstPerson" :
+					(camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
+				);
+			}
+
+			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_MINUS)) {
+				if (camera.mode == CameraMode::FirstPerson) {
+					camera.mode = CameraMode::Accelerated;
+				} else {
+					camera.mode = CameraMode::FirstPerson;
+					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
+					camera.position.y = groundSurfaceHeight + 3.0f;
+					camera.velocity = glm::vec3(0.0f);
+				}
+				spdlog::info(
+					"Camera mode switched to: {}",
+					camera.mode == CameraMode::FirstPerson ? "FirstPerson" :
+					(camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
 				);
 			}
 
@@ -646,7 +686,108 @@ namespace brassica {
 			lastMouseY = my;
 		}
 
-		if (camera.mode == CameraMode::Accelerated) {
+		if (camera.mode == CameraMode::FirstPerson) {
+			float terrainHeight = maxTerrainHeight;
+			bool isUnderwater = (camera.position.y < 0.0f) && (terrainHeight < 0.0f);
+
+			bool isCtrlHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_CONTROL) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
+			bool isShiftHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT));
+			bool isSpacePressed = defaultHandler && defaultHandler->IsKeyPressed(GLFW_KEY_SPACE);
+
+			if (isUnderwater) {
+				// Ignore gravity and move in 3D direction for swimming
+				float targetMaxSpeed = 5.0f; // Swimming speed ~5 m/s (~twice peak swimmer)
+				glm::vec3 targetVelocity{0.0f};
+				if (glm::length(moveDir) > 0.0001f) {
+					targetVelocity = glm::normalize(moveDir) * targetMaxSpeed;
+				}
+
+				if (glm::length(targetVelocity) > 0.0001f) {
+					float blend = 1.0f - std::exp(-camera.accelerationRate * deltaTime);
+					camera.velocity = glm::mix(camera.velocity, targetVelocity, blend);
+				} else {
+					float blend = 1.0f - std::exp(-camera.decelerationRate * deltaTime);
+					camera.velocity = glm::mix(camera.velocity, glm::vec3(0.0f), blend);
+				}
+
+				camera.currentSpeed = glm::length(camera.velocity);
+				camera.position += camera.velocity * deltaTime;
+			} else {
+				// On land / in air
+				float targetMaxSpeed = 12.0f; // Standard run (~12 m/s)
+				if (isCtrlHeld) {
+					targetMaxSpeed = 4.0f; // Brisk walk (~4 m/s)
+				} else if (isShiftHeld) {
+					targetMaxSpeed = 24.0f; // Hard sprint (~24 m/s)
+				}
+
+				float targetEyeHeight = isCtrlHeld ? 1.5f : 3.0f; // Crouching vs standing height
+				float groundSurfaceHeight = std::max(terrainHeight, 0.0f);
+				float groundLevel = groundSurfaceHeight + targetEyeHeight;
+
+				// Horizontal movement directions
+				glm::vec3 fwd = camera.GetForward();
+				glm::vec3 fwdXZ = (glm::length(glm::vec2(fwd.x, fwd.z)) > 0.0001f)
+					? glm::normalize(glm::vec3(fwd.x, 0.0f, fwd.z))
+					: glm::vec3(0.0f, 0.0f, -1.0f);
+
+				glm::vec3 right = camera.GetRight();
+				glm::vec3 rightXZ = (glm::length(glm::vec2(right.x, right.z)) > 0.0001f)
+					? glm::normalize(glm::vec3(right.x, 0.0f, right.z))
+					: glm::vec3(1.0f, 0.0f, 0.0f);
+
+				glm::vec3 horizMoveDir{0.0f};
+				if (camera.isCaptured && defaultHandler) {
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_W)) horizMoveDir += fwdXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_S)) horizMoveDir -= fwdXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_D)) horizMoveDir += rightXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_A)) horizMoveDir -= rightXZ;
+				}
+
+				glm::vec3 targetHorizVel{0.0f};
+				if (glm::length(horizMoveDir) > 0.0001f) {
+					targetHorizVel = glm::normalize(horizMoveDir) * targetMaxSpeed;
+				}
+
+				glm::vec3 currentHorizVel{camera.velocity.x, 0.0f, camera.velocity.z};
+				if (glm::length(targetHorizVel) > 0.0001f) {
+					float blend = 1.0f - std::exp(-camera.accelerationRate * deltaTime);
+					currentHorizVel = glm::mix(currentHorizVel, targetHorizVel, blend);
+				} else {
+					float blend = 1.0f - std::exp(-camera.decelerationRate * deltaTime);
+					currentHorizVel = glm::mix(currentHorizVel, glm::vec3(0.0f), blend);
+				}
+
+				camera.velocity.x = currentHorizVel.x;
+				camera.velocity.z = currentHorizVel.z;
+
+				bool isGrounded = (camera.position.y <= groundLevel + 0.1f);
+				if (isGrounded) {
+					if (camera.isCaptured && isSpacePressed) {
+						camera.velocity.y = 9.5f; // Jump impulse (~9.5 m/s)
+					} else {
+						camera.velocity.y = 0.0f;
+						camera.position.y = groundLevel;
+					}
+				} else {
+					// Earth gravity acceleration
+					camera.velocity.y -= 9.81f * deltaTime;
+				}
+
+				camera.position += camera.velocity * deltaTime;
+
+				// Collision check with ground
+				if (camera.position.y <= groundLevel) {
+					camera.position.y = groundLevel;
+					camera.velocity.y = 0.0f;
+				}
+
+				camera.currentSpeed = glm::length(camera.velocity);
+			}
+
+			float speedRatio = std::clamp(camera.currentSpeed / 24.0f, 0.0f, 1.0f);
+			camera.fov = camera.baseFov + speedRatio * camera.maxFovBoost;
+		} else if (camera.mode == CameraMode::Accelerated) {
 			glm::vec3 targetVelocity{0.0f};
 			if (glm::length(moveDir) > 0.0001f) {
 				targetVelocity = glm::normalize(moveDir) * camera.speed;
@@ -696,11 +837,7 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
-		// Non-blocking async transfer readback camera constraint demonstration:
-		// Poll any completed async readback transfer
-		PollReadbackData();
-
-		// Trigger new readback if clipmap image is initialized and has been populated/transitioned in frame graph
+		// Trigger new readback for next frame if clipmap image is initialized and has been populated/transitioned in frame graph
 		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
 		if (clipmapTex && clipmapTex->GetImage() && terrainClipmap.GetNumLODs() > 0 &&
 		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
@@ -725,19 +862,12 @@ namespace brassica {
 			);
 		}
 
-		std::vector<glm::vec4> readbackData;
-		uint32_t rw = 0, rh = 0;
-		float maxTerrainHeight = -100.0f; // Default terrain floor fallback if no readback has arrived yet
-		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
-			// Find peak terrain height in non-blocking async transfer region around camera
-			for (const auto& sample : readbackData) {
-				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
+		// Apply camera height constraint with conservative padding (e.g., +4.0f) for free-fly modes
+		if (camera.mode != CameraMode::FirstPerson) {
+			float minHeight = maxTerrainHeight + 4.0f;
+			if (camera.position.y < minHeight) {
+				camera.position.y = minHeight;
 			}
-		}
-		// Apply camera height constraint with conservative padding (e.g., +4.0f) to prevent near-plane clipping
-		float minHeight = maxTerrainHeight + 4.0f;
-		if (camera.position.y < minHeight) {
-			camera.position.y = minHeight;
 		}
 	}
 
@@ -912,6 +1042,19 @@ namespace brassica {
 		VkPhysicalDeviceFeatures features1{};
 		features1.shaderInt64 = VK_TRUE;
 		features1.fragmentStoresAndAtomics = VK_TRUE;
+		// Formatless bindless storage-image *writes* (bindless.glsl's uImagesGenericWrite/
+		// uImageArraysGenericWrite/uImages3DGenericWrite): lets a shader imageStore a storage image
+		// declared with no format qualifier, so its real format doesn't have to match whatever the
+		// declaration happens to hardcode -- see bindless.glsl's comment for the validation-error
+		// history this fixes, and why there's no formatless *read* counterpart yet (this glslang
+		// version's GLSL frontend only accepts formatless for writeonly, confirmed empirically, not
+		// a choice). Requesting Read too even though nothing can express it in GLSL yet -- harmless
+		// to have enabled, and removes one thing to revisit if that ever changes. Both optional
+		// core Vulkan 1.0 features, near-universal on desktop GPUs (confirmed true via vulkaninfo
+		// even on this Mac's MoltenVK); set_required_features below will fail device selection
+		// loudly if a target GPU genuinely lacks one, not silently misbehave.
+		features1.shaderStorageImageReadWithoutFormat = VK_TRUE;
+		features1.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
@@ -1178,6 +1321,7 @@ namespace brassica {
 		}
 
 		glm::vec3 previousCameraPosition = camera.position;
+		glm::mat4 previousViewProjMatrix = camera.viewProjMatrix;
 		UpdateCamera(deltaTime);
 
 		AudioState audioState{};
@@ -1228,6 +1372,7 @@ namespace brassica {
 		ubo.invViewProjMatrix = camera.invViewProjMatrix;
 		ubo.cameraPosition = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
 		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
+		ubo.previousViewProjMatrix = previousViewProjMatrix;
 		ubo.time = static_cast<float>(currentTime);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
@@ -1258,6 +1403,9 @@ namespace brassica {
 		// overwrite here would stomp the shader's own accumulated auto-exposure state every frame.
 		if (autoExposureMapped[activeFrame]) {
 			auto* mappedExposure = static_cast<ExposureDataHost*>(autoExposureMapped[activeFrame]);
+			// Snapshot this slot's current contents before overwriting -- see s_exposureReadback's
+			// comment (AutoExposureData.hpp) for why this is already safe without extra fencing.
+			std::memcpy(&s_exposureReadback, mappedExposure, sizeof(ExposureDataHost));
 			SyncAutoExposureTunables(mappedExposure->layers[0], s_exposureData.layers[0]);
 			SyncAutoExposureTunables(mappedExposure->layers[1], s_exposureData.layers[1]);
 			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));
@@ -1267,6 +1415,14 @@ namespace brassica {
 			graph::StorageBufferDesc(sizeof(ExposureDataHost)),
 			true
 		);
+
+		// CdlGradingLayers (frameSet binding 6, cdl_grading.glsl) has no shader-owned state to
+		// preserve -- unlike ExposureDataHost, nothing on the GPU ever writes it, so a full
+		// overwrite here is safe every frame.
+		if (cdlGradingMapped[activeFrame]) {
+			std::memcpy(cdlGradingMapped[activeFrame], &s_cdlGradingLayers, sizeof(CdlGradingLayersHost));
+			vmaFlushAllocation(allocator, cdlGradingAllocations[activeFrame], 0, sizeof(CdlGradingLayersHost));
+		}
 
 		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
 		if (lightsSSBOMapped[activeFrame]) {
@@ -1370,6 +1526,7 @@ namespace brassica {
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		materialManager.RegisterBufferNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 		for (auto& handler : systemHandlers) {
 			if (handler) {
@@ -1526,7 +1683,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1563,6 +1720,12 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 6: CdlGradingLayers
+		bindings[6]
+			.setBinding(6)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
@@ -1570,7 +1733,7 @@ namespace brassica {
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 3 * FRAME_OVERLAP}
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 4 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -1665,15 +1828,26 @@ namespace brassica {
 			if (autoExposureMapped[i]) {
 				std::memcpy(autoExposureMapped[i], &s_exposureData, sizeof(ExposureDataHost));
 			}
-			std::array<vk::DescriptorBufferInfo, 6> bufferDescs{};
+			createBufferHelper(
+				sizeof(CdlGradingLayersHost),
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+				cdlGradingBuffers[i],
+				cdlGradingAllocations[i],
+				&cdlGradingMapped[i]
+			);
+			if (cdlGradingMapped[i]) {
+				std::memcpy(cdlGradingMapped[i], &s_cdlGradingLayers, sizeof(CdlGradingLayersHost));
+			}
+			std::array<vk::DescriptorBufferInfo, 7> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
 			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
 			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
 			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
+			bufferDescs[6].setBuffer(cdlGradingBuffers[i]).setOffset(0).setRange(sizeof(CdlGradingLayersHost));
 
-			std::array<vk::WriteDescriptorSet, 6> writes{};
+			std::array<vk::WriteDescriptorSet, 7> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -1704,6 +1878,11 @@ namespace brassica {
 				.setDstBinding(5)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[5]);
+			writes[6]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(6)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setBufferInfo(bufferDescs[6]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -1734,6 +1913,12 @@ namespace brassica {
 				autoExposureBuffers[i] = nullptr;
 				autoExposureAllocations[i] = nullptr;
 				autoExposureMapped[i] = nullptr;
+			}
+			if (cdlGradingBuffers[i] && cdlGradingAllocations[i]) {
+				vmaDestroyBuffer(allocator, cdlGradingBuffers[i], cdlGradingAllocations[i]);
+				cdlGradingBuffers[i] = nullptr;
+				cdlGradingAllocations[i] = nullptr;
+				cdlGradingMapped[i] = nullptr;
 			}
 			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
 				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);

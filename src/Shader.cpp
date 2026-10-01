@@ -370,6 +370,11 @@ namespace brassica {
 		options.SetTargetSpirv(shaderc_spirv_version_1_5);
 		options.AddMacroDefinition("BRASSICA_PERFORMANCE_OPTIMIZED", "1");
 		options.SetIncluder(std::make_unique<CustomIncluder>(includedFiles));
+		// OpLine/OpSource survive shaderc's own optimization passes (nothing here runs a separate
+		// strip-debug-info pass) -- worth the small SPIR-V size increase so a Vulkan validation
+		// error reports "file:line" instead of an opaque SPIR-V instruction index a developer has
+		// to manually map back to source by hand.
+		options.SetGenerateDebugInfo();
 
 		auto result = compiler.CompileGlslToSpv(source, kind, name, options);
 		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
@@ -428,6 +433,7 @@ namespace brassica {
 		options.SetTargetSpirv(shaderc_spirv_version_1_5);
 		options.AddMacroDefinition("BRASSICA_PERFORMANCE_OPTIMIZED", "1");
 		options.SetIncluder(std::make_unique<CustomIncluder>(newIncludedFiles));
+		options.SetGenerateDebugInfo();
 
 		auto result = compiler.CompileGlslToSpv(newSource, shaderKind, filePath.c_str(), options);
 		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {

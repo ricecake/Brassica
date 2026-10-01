@@ -19,7 +19,13 @@ namespace brassica {
 		float intensity{0.075f};
 		float minIntensity{0.05f};
 		float maxIntensity{0.15f};
-		float exposure{1.0f};
+		// Formerly a flat manual-exposure override (now handled per-layer via the restored
+		// ISO/aperture/shutter fields on LayerData); kept as padding rather than removed outright
+		// -- deleting a scalar here shifts every field after it in C++ with no compensating
+		// padding, while GLSL's push-constant rules silently reinsert padding to keep the trailing
+		// vec4s 16-byte aligned, and that exact mismatch has bitten this struct before (see
+		// bloomEnabled's comment below).
+		float _pad0{0.0f};
 
 		float contrast{1.0f};
 		float saturation{1.0f};
@@ -51,9 +57,15 @@ namespace brassica {
 		// needs no padding in either language, so this is the only structurally safe place to add a
 		// new scalar without either an explicit alignas or auditing every offset by hand again.
 		std::int32_t bloomEnabled{1};
+
+		// Same reasoning as bloomEnabled just above -- appended after it, another trailing
+		// scalar with nothing after it needing bigger alignment. Count of enabled entries in
+		// CdlGradingLayers (cdl_grading.glsl, frameSet binding 6) to iterate for scene (isSky == 0)
+		// depth-based grading.
+		std::int32_t numCdlEntries{1};
 	};
 
-	static_assert(sizeof(TonemapPushConstants) == 148, "TonemapPushConstants size must be 148 bytes -- must match tonemap.frag's push_constant block exactly");
+	static_assert(sizeof(TonemapPushConstants) == 152, "TonemapPushConstants size must be 152 bytes -- must match tonemap.frag's push_constant block exactly");
 
 	inline TonemapPushConstants s_tonemapPush{};
 

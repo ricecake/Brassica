@@ -1098,6 +1098,9 @@ TEST_CASE("CameraData default state and mode cycling") {
 	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(0.0f));
 
 	cam.CycleMode();
+	CHECK(cam.mode == brassica::CameraMode::FirstPerson);
+
+	cam.CycleMode();
 	CHECK(cam.mode == brassica::CameraMode::Instant);
 	CHECK(cam.GetDisplayedSpeed() == doctest::Approx(10.0f));
 

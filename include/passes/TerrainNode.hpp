@@ -41,9 +41,10 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
+		float         waterLevel{0.0f};
 	};
 
-	static_assert(sizeof(TerrainPushConstants) == 32, "TerrainPushConstants size must be 32 bytes");
+	static_assert(sizeof(TerrainPushConstants) == 36, "TerrainPushConstants size must be 36 bytes");
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
@@ -112,6 +113,7 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.gridParams = p.terrainGridParams;
+			push.waterLevel = p.waterLevel;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {

@@ -7,6 +7,7 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "helpers/culling.glsl"
 
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
@@ -14,6 +15,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	float waterLevel;
 }
 params;
 
@@ -25,40 +27,6 @@ struct TaskPayload {
 };
 
 taskPayloadSharedEXT TaskPayload payload;
-
-// Check AABB against frustum planes in camera-relative space
-bool isAABBVisible(vec3 relMinB, vec3 relMaxB, mat4 vp) {
-	// Camera origin (0,0,0) containment check with safety margin
-	vec3 margin = vec3(100.0, 300.0, 100.0);
-	if (relMinB.x <= margin.x && relMaxB.x >= -margin.x &&
-	    relMinB.z <= margin.z && relMaxB.z >= -margin.z &&
-	    relMinB.y <= margin.y && relMaxB.y >= -margin.y) {
-		return true;
-	}
-
-	vec4 planes[6];
-	planes[0] = vec4(vp[0][3] + vp[0][0], vp[1][3] + vp[1][0], vp[2][3] + vp[2][0], vp[3][3] + vp[3][0]); // Left
-	planes[1] = vec4(vp[0][3] - vp[0][0], vp[1][3] - vp[1][0], vp[2][3] - vp[2][0], vp[3][3] - vp[3][0]); // Right
-	planes[2] = vec4(vp[0][3] + vp[0][1], vp[1][3] + vp[1][1], vp[2][3] + vp[2][1], vp[3][3] + vp[3][1]); // Bottom
-	planes[3] = vec4(vp[0][3] - vp[0][1], vp[1][3] - vp[1][1], vp[2][3] - vp[2][1], vp[3][3] - vp[3][1]); // Top
-	planes[4] = vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]); // Near (Vulkan 0 <= z <= w)
-	planes[5] = vec4(vp[0][3] - vp[0][2], vp[1][3] - vp[1][2], vp[2][3] - vp[2][2], vp[3][3] - vp[3][2]); // Far
-
-	for (int i = 0; i < 6; i++) {
-		vec3 pVertex = relMinB;
-		if (planes[i].x >= 0.0) pVertex.x = relMaxB.x;
-		if (planes[i].y >= 0.0) pVertex.y = relMaxB.y;
-		if (planes[i].z >= 0.0) pVertex.z = relMaxB.z;
-
-		float len = length(planes[i].xyz);
-		vec4 normPlane = (len > 0.0001) ? planes[i] / len : planes[i];
-
-		if (dot(normPlane.xyz, pVertex) + normPlane.w < -200.0) {
-			return false;
-		}
-	}
-	return true;
-}
 
 shared uint meshletCount;
 
@@ -113,7 +81,8 @@ void main() {
 		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
 		relMinB.y -= maxDropOff;
 
-		if (lodLevel <= 1 || max(maxRel.x, maxRel.y) < meshletSize * 2.5) {
+		bool skipHorizonCull = (lodLevel <= 1 || max(maxRel.x, maxRel.y) < meshletSize * 2.5);
+		if (skipHorizonCull) {
 			relMinB.y = min(relMinB.y, -1000.0 - uCameraPosition.y);
 			relMaxB.y = max(relMaxB.y, 3000.0 - uCameraPosition.y);
 		}
@@ -121,7 +90,21 @@ void main() {
 		mat4 viewRel = mat4(mat3(uViewMatrix));
 		mat4 viewProjRel = uProjMatrix * viewRel;
 
-		visible = isAABBVisible(relMinB, relMaxB, viewProjRel);
+		visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(100.0, 300.0, 100.0), -200.0);
+
+		// Gentle horizon cull: skip it for the near/low-LOD tiles above, whose Y bounds were
+		// just artificially widened to a fixed [-1000,3000] band -- feeding that fabricated
+		// height into the horizon test would produce a meaningless result.
+		if (visible && !skipHorizonCull) {
+			vec2  closestXZ = clamp(vec2(0.0), relMinB.xz, relMaxB.xz);
+			float tileDist = length(closestXZ);
+			float camAltitude = uCameraPosition.y - params.waterLevel;
+			float tileMaxYAboveRef = (relMaxB.y + uCameraPosition.y) - params.waterLevel;
+			float slack = meshletSize * 4.0 + 500.0;
+			if (isBeyondHorizon(tileDist, tileMaxYAboveRef, camAltitude, slack)) {
+				visible = false;
+			}
+		}
 
 		if (visible && lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));

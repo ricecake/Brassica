@@ -10,13 +10,14 @@ layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
 layout(triangles, max_vertices = 141, max_primitives = 240) out;
 
 layout(push_constant) uniform WaterPushConstants {
-	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = unused
+	uvec4 gridParams; // x = numRings, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	vec3  waterColor;
 	float waterLevel;
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
-	uint  padding;
+	uint  sceneColor;
+	uint  minMaxIndex;
 }
 params;
 
@@ -40,9 +41,11 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 		return vec3(0.0);
 	}
 
-	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y);
+	vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, uv, uint(ringLevel), params.gridParams.w);
+
+	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y) * mix(vec3(10, 1.0, 10), vec3(1, 1.0, 1), 1.0-smoothstep(-100.0, 0.0, minMax.x) );
 	mat3 grad;
-	float amplitude = 10.0 * (1.0 - smoothstep(3000.0, 20000.0, distToCam));
+	vec3 amplitude = mix(vec3(1, 0.75, 1), vec3(1, 10.0, 1), 1.0-smoothstep(-200.0, 0.0, minMax.x) )* (1.0 - smoothstep(3000.0, 20000.0, distToCam));
 	float frequency = 0.004;
 
 	vec3 sinGrad = amplitude * cross_noise_fbm((inWorldPos) * frequency + abs(dot_noise(inWorldPos * 0.0025, time * 0.5)), 4, time * 0.25, grad);
