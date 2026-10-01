@@ -8,6 +8,7 @@
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/CirrusNode.hpp"
 #include "passes/SkyBackgroundNode.hpp"
+#include "passes/TerrainBiomeNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 
@@ -21,7 +22,8 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>>;
+			graph::Create<HdrColor>,
+			graph::Create<TerrainWeatherBiomeTexture>>;
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -58,6 +60,13 @@ namespace {
 					.key = graph::IdOf<HdrColor>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = WeatherBiomeImageDesc(256),
 				}
 			);
 			return r;

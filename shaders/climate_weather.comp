@@ -85,11 +85,14 @@ void main() {
 	float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
 
 	float effectiveMoisture = clamp(moisture - rainShadow * 0.3, 0.0, 1.0);
+	float cloudDensity = clamp(effectiveMoisture * 0.6 + precipProb * 0.5 + severity * 0.3, 0.0, 1.0);
+	float rainfall = precipProb;
+	uint packedWind = packHalf2x16(wind);
 
-	// Store final output: r = advected temperature, g = advected moisture, b = severity, a = rain shadow
+	// Store final output: r = temperature, g = cloud density / moisture, b = rainfall / severity, a = packed wind vector
 	imageStore(
 		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
 		coord,
-		vec4(temp, effectiveMoisture, severity, rainShadow)
+		vec4(temp, cloudDensity, rainfall, uintBitsToFloat(packedWind))
 	);
 }

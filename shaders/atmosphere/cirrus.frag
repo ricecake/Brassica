@@ -2,6 +2,7 @@
 #include "bindless.glsl"
 #include "lighting.glsl"
 #include "common.glsl"
+#include "helpers/octahedral.glsl"
 #include "helpers/astral.glsl"
 
 layout(location = 0) in vec2 inUV;
@@ -18,6 +19,7 @@ layout(push_constant) uniform CirrusPushConstants {
 	uint  skyViewIndex;
 	float cirrusAlt;
 	float cirrusOpacity;
+	uint  weatherBiomeIndex;
 } push;
 
 vec3 getTransmittance(float r, float mu) {
@@ -37,18 +39,50 @@ vec3 calculateCirrusColor(
 ) {
 	vec3 p_cirrus = uCameraPosition.xyz + worldRay * (t_cirrus * 1000.0 * worldScale);
 
-	vec3 advect = vec3(1.0, 0.0, 1.0) * uTime * 0.5;
-	vec2 uv_cirrus = (p_cirrus.xz + advect.xz) * (0.00005 / worldScale);
+	vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
+	vec3 surfaceDir = normalize(p_cirrus - planetCenter);
+	vec2 weatherUV = directionToOctahedralUV(surfaceDir);
+
+	float weatherCloudDensity = 0.5;
+	float rainfall = 0.0;
+	vec2 windVector = vec2(0.01, 0.01);
+
+	if (push.weatherBiomeIndex > 0u) {
+		vec4 weatherSample = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV);
+		weatherCloudDensity = clamp(weatherSample.g, 0.0, 1.0);
+		rainfall = clamp(weatherSample.b, 0.0, 1.0);
+		windVector = unpackHalf2x16(floatBitsToUint(weatherSample.a));
+	}
+
+	// Advect cirrus clouds with local wind map vector field
+	vec3 up = abs(surfaceDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 eastTang = normalize(cross(up, surfaceDir));
+	vec3 northTang = normalize(cross(surfaceDir, eastTang));
+	vec3 windDir3D = eastTang * windVector.x + northTang * windVector.y;
+
+	vec3 advect3D = windDir3D * (uTime * 15000.0) + vec3(1.0, 0.0, 1.0) * (uTime * 0.2);
+	vec2 uv_cirrus = (p_cirrus.xz + advect3D.xz) * (0.00005 / worldScale);
 
 	float n = (fbm_astral(vec3(uv_cirrus * 2.0, uTime * 0.01)) + 1.0) * 0.5;
 	float n2 = (fbm_astral(vec3(uv_cirrus * 5.0, uTime * 0.02 + 10.0)) + 1.0) * 0.5;
-	float noise = smoothstep(0.3, 0.8, n * n2);
+
+	// Modulate noise threshold and coverage by weather system cloud density
+	float noiseCutoff = mix(0.65, 0.15, weatherCloudDensity);
+	float noise = smoothstep(noiseCutoff, noiseCutoff + 0.35, n * n2);
+	noise *= smoothstep(0.02, 0.25, weatherCloudDensity);
 
 	vec3  T_cirrus = max(getTransmittance(planetRadius + cirrusAlt, sunDir.y), vec3(0.001));
 	float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
 
-	float opacity = push.cirrusOpacity > 0.0 ? push.cirrusOpacity : 0.0125;
+	float baseOpacity = push.cirrusOpacity > 0.0 ? push.cirrusOpacity : 0.0125;
+	float opacity = baseOpacity * (0.2 + 1.8 * weatherCloudDensity);
+
 	vec3  cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);
+
+	// Darken clouds where there is rainfall
+	float rainDarkening = mix(1.0, 0.2, rainfall);
+	cirrusLighting *= rainDarkening;
+
 	vec3  cirrusColor = cirrusLighting * noise * opacity * 15.0;
 
 	float opticalDepthFade = exp(-t_cirrus * 0.0025);
