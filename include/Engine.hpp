@@ -242,21 +242,21 @@ namespace brassica {
 		FrameData   frames[FRAME_OVERLAP]; // brassica::FRAME_OVERLAP, EngineConstants.hpp
 
 		// Vulkan Core
-		vkb::Instance              vkbInst;
-		vkb::Device                vkbDevice;
-		vk::Instance               instance;
-		vk::PhysicalDevice         chosenGPU;
-		vk::Device                 device;
+		vkb::Instance              vkbInst{};
+		vkb::Device                vkbDevice{};
+		vk::Instance               instance{nullptr};
+		vk::PhysicalDevice         chosenGPU{nullptr};
+		vk::Device                 device{nullptr};
 		vk::PipelineCache          pipelineCache{nullptr};
-		vk::SurfaceKHR             surface;
-		vk::Queue                  graphicsQueue;
+		vk::SurfaceKHR             surface{nullptr};
+		vk::Queue                  graphicsQueue{nullptr};
 		uint32_t                   graphicsQueueFamily{0};
-		vk::Queue                  computeQueue;
+		vk::Queue                  computeQueue{nullptr};
 		uint32_t                   computeQueueFamily{0};
-		vk::Queue                  transferQueue;
+		vk::Queue                  transferQueue{nullptr};
 		uint32_t                   transferQueueFamily{0};
 		graph::QueueSet            queueSet{};
-		vkb::Swapchain             vkbSwapchain;
+		vkb::Swapchain             vkbSwapchain{};
 		std::vector<vk::Image>     swapchainImages;
 		std::vector<vk::ImageView> swapchainImageViews;
 		std::vector<vk::Semaphore> swapchainRenderSemaphores;
