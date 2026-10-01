@@ -88,38 +88,42 @@ jobs:
           echo "build-output-dir=$WORKSPACE_DIR/build" >> "$GITHUB_OUTPUT"
           echo "workspace-dir=$WORKSPACE_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Setup MSVC Command Prompt (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Configure CMake
-        shell: bash
+        shell: pwsh
         run: |
-          cmake -G Ninja -B "${{ steps.strings.outputs.build-output-dir }}" \
-            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
-            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
-            -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache_variant }} \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache_variant }} \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTING=ON \
+          cmake -G Ninja -B "${{ steps.strings.outputs.build-output-dir }}" `
+            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} `
+            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} `
+            -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache_variant }} `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache_variant }} `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_TESTING=ON `
             -S "${{ steps.strings.outputs.workspace-dir }}"
 
-      - name: Build
-        shell: bash
-        run: |
-          cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config Release --parallel 2
+      - name: Build Core
+        shell: pwsh
+        run: cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config Release --parallel 2
 
-          if [[ "${{ steps.filter.outputs.core }}" == "true" || "${{ steps.filter.outputs.tests }}" == "true" \vert{}\vert{} "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "Building tests..."
-            cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config Release --target tests --parallel 2
-          fi
+      - name: Build Tests
+        if: steps.filter.outputs.core == 'true' || steps.filter.outputs.tests == 'true' || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config Release --target tests --parallel 2
 
       - name: Run CTest
         if: steps.filter.outputs.core == 'true' || steps.filter.outputs.tests == 'true' || github.event_name == 'workflow_dispatch'
         working-directory: "${{ steps.strings.outputs.build-output-dir }}"
-        shell: bash
+        shell: pwsh
         run: ctest --build-config Release --output-on-failure
 
       - name: Run Sandbox App in Headless Mode
         if: steps.filter.outputs.core == 'true' || steps.filter.outputs.shaders == 'true' || github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: "${{ steps.strings.outputs.build-output-dir }}/bin/sandbox --headless 10"
+        shell: pwsh
+        run: |
+         & "${{ steps.strings.outputs.build-output-dir }}/bin/sandbox" --headless 10
 
       - name: Prepare Release Artifacts (Linux)
         if: always() && startsWith(matrix.os, 'ubuntu')
@@ -143,11 +147,11 @@ jobs:
           $binDir = Join-Path $buildDir "bin"
 
           if (Test-Path $binDir) {
-            Get-ChildItem -Path $binDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } \vert{} Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+            Get-ChildItem -Path $binDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
           } elseif (Test-Path $releaseDir) {
-            Get-ChildItem -Path $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } \vert{} Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+            Get-ChildItem -Path $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
           } elseif (Test-Path $buildDir) {
-            Get-ChildItem -Path $buildDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } \vert{} Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
+            Get-ChildItem -Path $buildDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } | Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
           }
 
           if (Test-Path "${{ steps.strings.outputs.workspace-dir }}/shaders") {
