@@ -60,9 +60,19 @@ find_package(Vulkan REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Eigen3 QUIET)
 if(NOT EIGEN3_FOUND)
-    find_path(EIGEN3_INCLUDE_DIR NAMES Eigen/Core PATHS /usr/include/eigen3 /usr/local/include/eigen3)
+    find_path(EIGEN3_INCLUDE_DIR NAMES Eigen/Core PATHS ${CMAKE_CURRENT_SOURCE_DIR}/external/eigen /usr/include/eigen3 /usr/local/include/eigen3)
+    if(EIGEN3_INCLUDE_DIR)
+        set(EIGEN3_FOUND TRUE)
+    endif()
 else()
     set(EIGEN3_INCLUDE_DIR ${EIGEN3_INCLUDE_DIRS})
+endif()
+
+if(NOT TARGET Eigen3::Eigen AND EIGEN3_INCLUDE_DIR)
+    add_library(eigen_interface INTERFACE)
+    add_library(Eigen3::Eigen ALIAS eigen_interface)
+    target_include_directories(eigen_interface INTERFACE ${EIGEN3_INCLUDE_DIR})
+    target_compile_definitions(eigen_interface INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
 endif()
 
 # 3. Submodule Configurations
@@ -120,12 +130,13 @@ add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
 add_subdirectory(external/geometry-central)
 add_subdirectory(external/ozz-animation)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    if(TARGET geometry-central)
+if(TARGET eigen)
+    target_compile_definitions(eigen INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
+endif()
+if(TARGET geometry-central)
+    target_compile_definitions(geometry-central PUBLIC EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN EIGEN_HAS_STD_RESULT_OF=0)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(geometry-central PRIVATE -march=native -ffast-math)
-        # Eigen's own C++ standard detection predates C++20 removing std::result_of; under
-        # CMAKE_CXX_STANDARD 23 libc++ no longer provides it, so force Eigen's pre-C++11 fallback.
-        target_compile_definitions(geometry-central PRIVATE EIGEN_HAS_STD_RESULT_OF=0)
     endif()
 endif()
 
@@ -230,6 +241,14 @@ add_custom_target(sync_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/external/lygia
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/lygia
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/external/lygia
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/external/lygia
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/lygia
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/external/lygia
     COMMENT "Syncing assets/shaders to the runtime output directory"
 )
 

@@ -69,6 +69,66 @@ namespace brassica {
 			return "";
 		}
 
+		std::string resolveIncludePath(
+			const std::filesystem::path& requestingPath,
+			const std::string&           includePath,
+			std::vector<std::string>&    attemptedPaths
+		) {
+			namespace fs = std::filesystem;
+
+			std::vector<fs::path> baseCandidates;
+			if (!requestingPath.empty() && requestingPath.has_parent_path()) {
+				baseCandidates.push_back(requestingPath.parent_path() / includePath);
+			}
+			baseCandidates.push_back(fs::path("shaders") / includePath);
+			baseCandidates.push_back(fs::path("external") / includePath);
+			baseCandidates.push_back(fs::path("shaders") / "external" / includePath);
+			baseCandidates.push_back(fs::path(includePath));
+
+			std::vector<std::string> fallbacks = {
+				"",
+				"bin/",
+				std::string(BRASSICA_BUILD_DIR) + "/bin/",
+				std::string(BRASSICA_BUILD_DIR) + "/",
+				std::string(BRASSICA_BUILD_DIR) + "/../"
+			};
+
+			std::string foundPath = "";
+
+			for (const auto& base : baseCandidates) {
+				std::string baseStr = base.string();
+				std::replace(baseStr.begin(), baseStr.end(), '\\', '/');
+
+				for (const auto& prefix : fallbacks) {
+					std::string candidatePath = prefix + baseStr;
+
+					if (std::find(attemptedPaths.begin(), attemptedPaths.end(), candidatePath) == attemptedPaths.end()) {
+						attemptedPaths.push_back(candidatePath);
+					}
+
+					try {
+						fs::path p(candidatePath);
+						if (fs::exists(p) && !fs::is_directory(p)) {
+							foundPath = candidatePath;
+							break;
+						}
+					} catch (...) {
+					}
+
+					if (!loadFileRaw(candidatePath).empty()) {
+						foundPath = candidatePath;
+						break;
+					}
+				}
+
+				if (!foundPath.empty()) {
+					break;
+				}
+			}
+
+			return foundPath;
+		}
+
 		class CustomIncluder: public shaderc::CompileOptions::IncluderInterface {
 		public:
 			explicit CustomIncluder(std::set<std::string>& includedFiles)
@@ -84,58 +144,51 @@ namespace brassica {
 				(void)type;
 				(void)include_depth;
 
-				fs::path    requestingPath(requesting_source ? requesting_source : "");
-				std::string includePath(requested_source);
+				fs::path                 requestingPath(requesting_source ? requesting_source : "");
+				std::string              includePath(requested_source);
+				std::vector<std::string> attemptedPaths;
 
-				std::vector<fs::path> searchPaths;
-				if (!requesting_source || std::string(requesting_source).empty()) {
-					searchPaths.push_back(fs::path(includePath));
-				} else {
-					searchPaths.push_back(requestingPath.parent_path() / includePath);
-				}
-				searchPaths.push_back(fs::path("shaders") / includePath);
-				searchPaths.push_back(fs::path("external") / includePath);
-				searchPaths.push_back(fs::path(includePath));
+				std::string fullPathStr = resolveIncludePath(requestingPath, includePath, attemptedPaths);
 
-				std::string fullPathStr = "";
-				for (const auto& candidate : searchPaths) {
-					if (fs::exists(candidate) && !fs::is_directory(candidate)) {
-						fullPathStr = candidate.string();
-						break;
-					} else if (!loadFileRaw(candidate.string()).empty()) {
-						fullPathStr = candidate.string();
-						break;
+				if (fullPathStr.empty()) {
+					std::string attemptedLog = "";
+					for (const auto& pathTried : attemptedPaths) {
+						attemptedLog += "  - " + pathTried + "\n";
 					}
+					spdlog::error(
+						"Shader #include error: file '{}' not found (requested in '{}').\nSearch paths tried:\n{}",
+						includePath,
+						requestingPath.string(),
+						attemptedLog
+					);
+					throw std::runtime_error(
+						"Shader #include error: file '" + includePath + "' not found (requested in '" +
+						requestingPath.string() + "')."
+					);
 				}
 
 				auto* result = new shaderc_include_result();
 				auto* container = new IncludeContainer();
 
-				if (fullPathStr.empty()) {
-					container->source_name = requested_source;
-					container->content = "Shader #include error: file not found: " + includePath;
-					spdlog::error("Shader #include error: file not found for {}", includePath);
+				std::string normalized = normalizePath(fullPathStr);
+				container->source_name = normalized;
+
+				if (m_includedFiles.count(normalized)) {
+					// Include guard safety boundary: return empty content to avoid duplicate definition
+					container->content = "";
 				} else {
-					std::string normalized = normalizePath(fullPathStr);
-					container->source_name = normalized;
+					m_includedFiles.insert(normalized);
+					std::string raw = loadFileRaw(normalized);
 
-					if (m_includedFiles.count(normalized)) {
-						// Include guard safety boundary: return empty content to avoid duplicate definition
-						container->content = "";
-					} else {
-						m_includedFiles.insert(normalized);
-						std::string raw = loadFileRaw(normalized);
-
-						// Perform macro replacements
-						for (auto const& [placeholder, value] : Shader::GetReplacements()) {
-							size_t pos = 0;
-							while ((pos = raw.find(placeholder, pos)) != std::string::npos) {
-								raw.replace(pos, placeholder.length(), value);
-								pos += value.length();
-							}
+					// Perform macro replacements
+					for (auto const& [placeholder, value] : Shader::GetReplacements()) {
+						size_t pos = 0;
+						while ((pos = raw.find(placeholder, pos)) != std::string::npos) {
+							raw.replace(pos, placeholder.length(), value);
+							pos += value.length();
 						}
-						container->content = std::move(raw);
 					}
+					container->content = std::move(raw);
 				}
 
 				result->source_name = container->source_name.c_str();
@@ -217,24 +270,8 @@ namespace brassica {
 					if (firstQuote != std::string::npos && lastQuote != std::string::npos && firstQuote < lastQuote) {
 						std::string includePath = line.substr(firstQuote + 1, lastQuote - firstQuote - 1);
 
-						std::vector<fs::path> searchPaths;
-						if (includePath != path) {
-							searchPaths.push_back(p.parent_path() / includePath);
-						}
-						searchPaths.push_back(fs::path("shaders") / includePath);
-						searchPaths.push_back(fs::path("external") / includePath);
-						searchPaths.push_back(fs::path(includePath));
-
-						std::string fullPathStr = "";
-						for (const auto& candidate : searchPaths) {
-							if (fs::exists(candidate) && !fs::is_directory(candidate)) {
-								fullPathStr = candidate.string();
-								break;
-							} else if (!loadFileRaw(candidate.string()).empty()) {
-								fullPathStr = candidate.string();
-								break;
-							}
-						}
+						std::vector<std::string> attemptedPaths;
+						std::string fullPathStr = resolveIncludePath(p, includePath, attemptedPaths);
 
 						if (!fullPathStr.empty()) {
 							std::string includedSource = loadShaderSourceInternal(fullPathStr, includedFiles);
@@ -257,7 +294,20 @@ namespace brassica {
 								preVersionContent += block;
 							}
 						} else {
-							spdlog::error("Shader #include error: file not found for {}", includePath);
+							std::string attemptedLog = "";
+							for (const auto& pathTried : attemptedPaths) {
+								attemptedLog += "  - " + pathTried + "\n";
+							}
+							spdlog::error(
+								"Shader #include error: file '{}' not found (requested in '{}').\nSearch paths tried:\n{}",
+								includePath,
+								normalizedPath,
+								attemptedLog
+							);
+							throw std::runtime_error(
+								"Shader #include error: file '" + includePath + "' not found (requested in '" +
+								normalizedPath + "')."
+							);
 						}
 						continue;
 					}
