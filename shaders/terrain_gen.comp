@@ -80,6 +80,36 @@ void main() {
 	// eval_terrain(p, con, h, normal);
 	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal);
 
+	float ny = max(0.0001, normal.y);
+	vec3 heightAndSlope = vec3(h, -normal.x / ny, -normal.z / ny);
+	float ridgeMap = 0.0;
+	float substrate = 0.0;
+	float debugVal = 0.0;
+
+	vec4 erosionDelta = ErosionFilter(
+		worldXZ,
+		heightAndSlope,
+		0.0,                      // fadeTarget
+		0.05,                     // strength
+		0.5,                      // gullyWeight
+		1.0,                      // detail
+		vec4(0.5, 0.5, 1.0, 1.0), // rounding
+		vec4(1.0, 1.0, 1.0, 1.0), // onset
+		vec2(1.0, 0.0),           // assumedSlope
+		0.01,                     // scale
+		4,                        // octaves
+		2.0,                      // lacunarity
+		0.5,                      // gain
+		1.0,                      // cellScale
+		1.0,                      // normalization
+		ridgeMap,
+		substrate,
+		debugVal
+	);
+
+	h += erosionDelta.x;
+	vec2 newSlope = heightAndSlope.yz + erosionDelta.yz;
+	normal = normalize(vec3(-newSlope.x, 1.0, -newSlope.y));
 
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
 	float h_swap_y = subgroupQuadSwapVertical(h);
