@@ -1,0 +1,121 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+layout(set = 1, binding = 3) writeonly uniform image2DArray uImageArraysGenericWrite[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+	uvec4 gridParams;        // x = numLODs, w = textureDim (1088)
+	uint  clipmapIdx;        // sampled texture index for TerrainClipmapTexture
+	uint  minMaxIdx;         // sampled texture index for TerrainMinMaxTexture
+	uint  horizonStorageIdx; // storage image index for TerrainHorizonTexture
+	bool  forceRegeneration;
+} push;
+
+float getLODScale(float lod) {
+	return pow(2.0, lod);
+}
+
+bool isHorizonDirty(ivec2 originCoord, ivec2 gridOffset, ivec2 delta, int dimVal) {
+	if (push.forceRegeneration || uFrameIndex == 0 || abs(delta.x) >= dimVal || abs(delta.y) >= dimVal) return true;
+	if (delta.x == 0 && delta.y == 0) return false;
+
+	int colIdx = (originCoord.x - gridOffset.x + dimVal) % dimVal;
+	int rowIdx = (originCoord.y - gridOffset.y + dimVal) % dimVal;
+
+	int margin = 32;
+
+	bool dirtyX = false;
+	if (delta.x > 0) {
+		int minCol = dimVal - delta.x - margin;
+		dirtyX = (colIdx >= minCol) || (colIdx < margin);
+	} else if (delta.x < 0) {
+		int maxCol = -delta.x - 1 + margin;
+		dirtyX = (colIdx <= maxCol) || (colIdx >= dimVal - margin);
+	}
+
+	bool dirtyZ = false;
+	if (delta.y > 0) {
+		int minRow = dimVal - delta.y - margin;
+		dirtyZ = (rowIdx >= minRow) || (rowIdx < margin);
+	} else if (delta.y < 0) {
+		int maxRow = -delta.y - 1 + margin;
+		dirtyZ = (rowIdx <= maxRow) || (rowIdx >= dimVal - margin);
+	}
+
+	return dirtyX || dirtyZ;
+}
+
+void main() {
+	uvec3 globalId = gl_GlobalInvocationID;
+	uint lod = globalId.z;
+	uint dim = push.gridParams.w;
+
+	if (globalId.x >= dim || globalId.y >= dim || lod >= push.gridParams.x) {
+		return;
+	}
+
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+	float texelSize = baseTexelSize * getLODScale(float(lod));
+	int dimInt = int(dim);
+
+	vec2 camGrid = floor(uCameraPosition.xz / texelSize);
+	ivec2 gridOffset = ivec2(mod(camGrid, vec2(dimInt)));
+
+	vec2 prevCamGrid = floor(uPreviousCameraPosition.xz / texelSize);
+	ivec2 delta = ivec2(camGrid) - ivec2(prevCamGrid);
+
+	if (!push.forceRegeneration && uFrameIndex > 0 && delta.x == 0 && delta.y == 0) {
+		return;
+	}
+
+	ivec2 originCoord = ivec2(globalId.xy);
+
+	if (!isHorizonDirty(originCoord, gridOffset, delta, dimInt)) {
+		return;
+	}
+
+	float h0 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.clipmapIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(originCoord, lod), 0).r;
+
+	ivec2 directions[4] = ivec2[](
+		ivec2(1, 0),  // +X (Channel R)
+		ivec2(-1, 0), // -X (Channel G)
+		ivec2(0, 1),  // +Z (Channel B)
+		ivec2(0, -1)  // -Z (Channel A)
+	);
+
+	vec4 maxSlopes = vec4(0.0);
+
+	for (int d = 0; d < 4; ++d) {
+		ivec2 dir = directions[d];
+		float maxSlope = -10.0;
+
+		int maxSteps = 32;
+
+		for (int s = 1; s <= maxSteps; ++s) {
+			int stepTexels = s <= 8 ? s : (s - 8) * 4 + 8;
+			ivec2 sampleCoord = (originCoord + dir * stepTexels + ivec2(dim)) % ivec2(dim);
+			float dist = float(stepTexels) * texelSize;
+
+			int mip = clamp(int(log2(float(stepTexels))), 0, 5);
+			if (push.minMaxIdx > 0u && mip > 0) {
+				ivec2 mipCoord = (sampleCoord >> mip);
+				float maxMipH = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.minMaxIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(mipCoord, lod), mip).g;
+				float maxPossibleSlope = (maxMipH - h0) / max(0.001, dist);
+				if (maxPossibleSlope <= maxSlope) {
+					continue;
+				}
+			}
+
+			float sampleH = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.clipmapIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(sampleCoord, lod), 0).r;
+			float slope = (sampleH - h0) / max(0.001, dist);
+			maxSlope = max(maxSlope, slope);
+		}
+
+		maxSlopes[d] = max(0.0, maxSlope);
+	}
+
+	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.horizonStorageIdx)], ivec3(originCoord, lod), maxSlopes);
+}

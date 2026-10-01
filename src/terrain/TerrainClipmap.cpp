@@ -324,21 +324,32 @@ namespace brassica {
 					alloc = VK_NULL_HANDLE;
 				}
 			};
+			for (auto view : minmaxMipViews) {
+				if (view) {
+					device.destroyImageView(view);
+				}
+			}
+			minmaxMipViews.clear();
 			destroyArrayImage(image, imageView, allocation);
 			destroyArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 			destroyArrayImage(biomeImage, biomeImageView, biomeAllocation);
 			destroyArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+			destroyArrayImage(horizonImage, horizonImageView, horizonAllocation);
 		}
 	}
 
 	void TerrainClipmap::CreateTextureArrays() {
-		auto createArrayImage = [&](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc) {
+		auto createArrayImage = [&](vk::Image&       img,
+		                            vk::ImageView&   view,
+		                            VmaAllocation&   alloc,
+		                            uint32_t         mips = 1,
+		                            vk::Format       format = vk::Format::eR32G32B32A32Sfloat) {
 			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 			imageInfo.imageType = VK_IMAGE_TYPE_2D;
 			imageInfo.extent = VkExtent3D{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 1};
-			imageInfo.mipLevels = 1;
+			imageInfo.mipLevels = mips;
 			imageInfo.arrayLayers = numLODs;
-			imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+			imageInfo.format = static_cast<VkFormat>(format);
 			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 			imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -358,15 +369,27 @@ namespace brassica {
 			vk::ImageViewCreateInfo viewInfo{};
 			viewInfo.setImage(img);
 			viewInfo.setViewType(vk::ImageViewType::e2DArray);
-			viewInfo.setFormat(vk::Format::eR32G32B32A32Sfloat);
-			viewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, numLODs));
+			viewInfo.setFormat(format);
+			viewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, mips, 0, numLODs));
 			view = device.createImageView(viewInfo);
 		};
 
-		createArrayImage(image, imageView, allocation);
-		createArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
-		createArrayImage(biomeImage, biomeImageView, biomeAllocation);
-		createArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
+		createArrayImage(image, imageView, allocation, 1, vk::Format::eR32G32B32A32Sfloat);
+		createArrayImage(minmaxImage, minmaxImageView, minmaxAllocation, GetClipmapMipLevels(TERRAIN_MAP_DIM), vk::Format::eR32G32B32A32Sfloat);
+		createArrayImage(biomeImage, biomeImageView, biomeAllocation, 1, vk::Format::eR32G32B32A32Sfloat);
+		createArrayImage(visibilityImage, visibilityImageView, visibilityAllocation, 1, vk::Format::eR32G32B32A32Sfloat);
+		createArrayImage(horizonImage, horizonImageView, horizonAllocation, 1, vk::Format::eR16G16B16A16Sfloat);
+
+		uint32_t mips = GetClipmapMipLevels(TERRAIN_MAP_DIM);
+		minmaxMipViews.resize(mips);
+		for (uint32_t m = 0; m < mips; ++m) {
+			vk::ImageViewCreateInfo mipViewInfo{};
+			mipViewInfo.setImage(minmaxImage);
+			mipViewInfo.setViewType(vk::ImageViewType::e2DArray);
+			mipViewInfo.setFormat(vk::Format::eR32G32B32A32Sfloat);
+			mipViewInfo.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, m, 1, 0, numLODs));
+			minmaxMipViews[m] = device.createImageView(mipViewInfo);
+		}
 	}
 
 	void TerrainClipmap::CreateSampler() {

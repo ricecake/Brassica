@@ -440,6 +440,35 @@ namespace brassica {
 			vk::ImageLayout::eUndefined,
 			/*hasDefinedContents=*/false
 		);
+
+#define REGISTER_MINMAX_MIP(M) \
+		physicalRegistry.RegisterImportedTexture<TerrainMinMaxMip##M>( \
+			terrainClipmap.GetMinMaxImage(), \
+			terrainClipmap.GetMinMaxMipImageView(M), \
+			TerrainMinMaxMipDesc(M, terrainClipmap.GetNumLODs()), \
+			vk::ImageLayout::eUndefined, \
+			/*hasDefinedContents=*/false \
+		)
+
+		REGISTER_MINMAX_MIP(0);
+		REGISTER_MINMAX_MIP(1);
+		REGISTER_MINMAX_MIP(2);
+		REGISTER_MINMAX_MIP(3);
+		REGISTER_MINMAX_MIP(4);
+		REGISTER_MINMAX_MIP(5);
+		REGISTER_MINMAX_MIP(6);
+		REGISTER_MINMAX_MIP(7);
+		REGISTER_MINMAX_MIP(8);
+		REGISTER_MINMAX_MIP(9);
+		REGISTER_MINMAX_MIP(10);
+#undef REGISTER_MINMAX_MIP
+		physicalRegistry.RegisterImportedTexture<TerrainHorizonTexture>(
+			terrainClipmap.GetHorizonImage(),
+			terrainClipmap.GetHorizonImageView(),
+			TerrainHorizonDesc(terrainClipmap.GetNumLODs()),
+			vk::ImageLayout::eUndefined,
+			/*hasDefinedContents=*/false
+		);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 		physicalRegistry.RegisterImportedTexture<TerrainMinMaxTexture>(
 			terrainClipmap.GetMinMaxImage(),
@@ -1523,8 +1552,20 @@ namespace brassica {
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
 		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip0>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip1>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip2>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip3>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip4>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip5>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip6>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip7>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip8>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip9>>();
+		frameGraph.Register<graph::Import<TerrainMinMaxMip10>>();
 		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+		frameGraph.Register<graph::Import<TerrainHorizonTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);

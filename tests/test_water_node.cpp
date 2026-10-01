@@ -29,8 +29,7 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>>;
+			graph::Create<HdrColor>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -72,20 +71,43 @@ namespace {
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext&) {}
+	};
+
+	struct FakeTerrainProducer {
+		using Resources = graph::Declares<
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<TerrainHorizonTexture>>;
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainMinMaxTexture>(),
 					.access = graph::AccessKind::Write,
-					// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainClipmap.hpp), which also
-					// requests eStorage for terrain_gen.comp's writer -- this fixture only needs
-					// WaterNode's read side, and this bindless set (below) declares no storage-image
-					// binding to write that second descriptor into.
 					.desc = graph::ResourceDesc{
 						.kind = graph::ResourceDesc::Kind::Image2D,
 						.width = 4,
 						.height = 4,
 						.layers = 2,
 						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+					},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainHorizonTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ResourceDesc{
+						.kind = graph::ResourceDesc::Kind::Image2D,
+						.width = 4,
+						.height = 4,
+						.layers = 2,
+						.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
 						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
 					},
 				}
@@ -214,7 +236,7 @@ namespace {
 		layoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
-			.setDescriptorCount(1)
+			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
@@ -234,7 +256,7 @@ namespace {
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 12},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -254,13 +276,15 @@ namespace {
 		samplerInfo.setAddressModeV(vk::SamplerAddressMode::eClampToEdge);
 		result.sampler = device.createSampler(samplerInfo);
 
-		vk::DescriptorImageInfo samplerImageInfo{};
-		samplerImageInfo.setSampler(result.sampler);
+		std::array<vk::DescriptorImageInfo, 4> samplerInfos{};
+		for (uint32_t i = 0; i < 4; ++i) {
+			samplerInfos[i].setSampler(result.sampler);
+		}
 		vk::WriteDescriptorSet samplerWrite{};
 		samplerWrite.setDstSet(set);
 		samplerWrite.setDstBinding(2);
 		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
-		samplerWrite.setImageInfo(samplerImageInfo);
+		samplerWrite.setImageInfo(samplerInfos);
 		device.updateDescriptorSets(samplerWrite, {});
 
 		result.bindings.set = set;
@@ -346,6 +370,7 @@ TEST_CASE(
 
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{.extent = {256, 256}, .swapchainFormat = kSwapchainFormat});
+		graph.Register<FakeTerrainProducer>();
 		graph.RegisterRef(waterNode);
 
 		graph::FrameContext ctx{.width = 256, .height = 256};

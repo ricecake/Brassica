@@ -63,10 +63,23 @@ namespace brassica {
 	struct TerrainClipmapTexture {};
 
 	struct TerrainMinMaxTexture {};
+	struct TerrainMinMaxMip0 {};
+	struct TerrainMinMaxMip1 {};
+	struct TerrainMinMaxMip2 {};
+	struct TerrainMinMaxMip3 {};
+	struct TerrainMinMaxMip4 {};
+	struct TerrainMinMaxMip5 {};
+	struct TerrainMinMaxMip6 {};
+	struct TerrainMinMaxMip7 {};
+	struct TerrainMinMaxMip8 {};
+	struct TerrainMinMaxMip9 {};
+	struct TerrainMinMaxMip10 {};
 
 	struct TerrainBiomeTexture {};
 
 	struct TerrainTileVisibilityTexture {};
+
+	struct TerrainHorizonTexture {};
 
 	struct TransmittanceLUT {};
 

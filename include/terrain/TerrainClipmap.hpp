@@ -24,6 +24,10 @@ namespace brassica {
 		}
 	}
 
+	inline uint32_t GetClipmapMipLevels(uint32_t dim = TERRAIN_MAP_DIM) {
+		return static_cast<uint32_t>(std::floor(std::log2(dim))) + 1;
+	}
+
 	struct ClipmapLevelInfo {
 		uint32_t   level{0};
 		float      baseTexelSize{0.5f};
@@ -99,6 +103,10 @@ namespace brassica {
 
 		vk::ImageView GetMinMaxImageView() const { return minmaxImageView; }
 
+		vk::ImageView GetMinMaxMipImageView(uint32_t m) const {
+			return (m < minmaxMipViews.size()) ? minmaxMipViews[m] : minmaxImageView;
+		}
+
 		vk::Image GetBiomeImage() const { return biomeImage; }
 
 		vk::ImageView GetBiomeImageView() const { return biomeImageView; }
@@ -106,6 +114,10 @@ namespace brassica {
 		vk::Image GetVisibilityImage() const { return visibilityImage; }
 
 		vk::ImageView GetVisibilityImageView() const { return visibilityImageView; }
+
+		vk::Image GetHorizonImage() const { return horizonImage; }
+
+		vk::ImageView GetHorizonImageView() const { return horizonImageView; }
 
 		vk::Sampler GetSampler() const { return sampler; }
 
@@ -125,9 +137,10 @@ namespace brassica {
 		vk::ImageView imageView{nullptr};
 		VmaAllocation allocation{VK_NULL_HANDLE};
 
-		vk::Image     minmaxImage{nullptr};
-		vk::ImageView minmaxImageView{nullptr};
-		VmaAllocation minmaxAllocation{VK_NULL_HANDLE};
+		vk::Image                  minmaxImage{nullptr};
+		vk::ImageView              minmaxImageView{nullptr};
+		std::vector<vk::ImageView> minmaxMipViews;
+		VmaAllocation              minmaxAllocation{VK_NULL_HANDLE};
 
 		vk::Image     biomeImage{nullptr};
 		vk::ImageView biomeImageView{nullptr};
@@ -136,6 +149,10 @@ namespace brassica {
 		vk::Image     visibilityImage{nullptr};
 		vk::ImageView visibilityImageView{nullptr};
 		VmaAllocation visibilityAllocation{VK_NULL_HANDLE};
+
+		vk::Image     horizonImage{nullptr};
+		vk::ImageView horizonImageView{nullptr};
+		VmaAllocation horizonAllocation{VK_NULL_HANDLE};
 
 		vk::Sampler sampler{nullptr};
 
@@ -159,8 +176,47 @@ namespace brassica {
 		};
 	}
 
+	inline graph::ResourceDesc TerrainMinMaxMipDesc(std::uint32_t mip, std::uint32_t numLODs) {
+		std::uint32_t dim = std::max(1u, TERRAIN_MAP_DIM >> mip);
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = dim,
+			.height = dim,
+			.mips = 1,
+			.layers = numLODs,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
+			),
+		};
+	}
+
 	inline graph::ResourceDesc TerrainMinMaxDesc(std::uint32_t numLODs) {
-		return TerrainClipmapDesc(numLODs);
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = TERRAIN_MAP_DIM,
+			.height = TERRAIN_MAP_DIM,
+			.mips = GetClipmapMipLevels(TERRAIN_MAP_DIM),
+			.layers = numLODs,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
+			),
+		};
+	}
+
+	inline graph::ResourceDesc TerrainHorizonDesc(std::uint32_t numLODs) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = TERRAIN_MAP_DIM,
+			.height = TERRAIN_MAP_DIM,
+			.mips = 1,
+			.layers = numLODs,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
+			),
+		};
 	}
 
 	inline graph::ResourceDesc TerrainBiomeDesc(std::uint32_t numLODs) {

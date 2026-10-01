@@ -1,0 +1,109 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+	uvec4 gridParams;         // x = numLODs, w = textureDim
+	uint  srcMipIndex;        // sampled texture index for reading src mip
+	uint  dstStorageIdx;       // storage image index for writing dst mip
+	uint  srcMip;             // source mip level number
+	uint  dstDim;             // output mip resolution
+	bool  forceRegeneration;
+} push;
+
+float getLODScale(float lod) {
+	return pow(2.0, lod);
+}
+
+bool isIntervalDirtyX(int x_start, int x_end, int gridOffset_x, int delta_x, int dim_val) {
+	if (push.forceRegeneration || uFrameIndex == 0 || abs(delta_x) >= dim_val) return true;
+	if (delta_x == 0) return false;
+
+	int col0 = (x_start - gridOffset_x + dim_val) % dim_val;
+	int col1 = (x_end - gridOffset_x + dim_val) % dim_val;
+
+	int dirtyMin = (delta_x > 0) ? (dim_val - delta_x) : 0;
+	int dirtyMax = (delta_x > 0) ? (dim_val - 1) : (-delta_x - 1);
+
+	if (col0 <= col1) {
+		return (col0 <= dirtyMax && col1 >= dirtyMin);
+	} else {
+		return (col0 <= dirtyMax || col1 >= dirtyMin);
+	}
+}
+
+bool isIntervalDirtyZ(int y_start, int y_end, int gridOffset_y, int delta_z, int dim_val) {
+	if (push.forceRegeneration || uFrameIndex == 0 || abs(delta_z) >= dim_val) return true;
+	if (delta_z == 0) return false;
+
+	int row0 = (y_start - gridOffset_y + dim_val) % dim_val;
+	int row1 = (y_end - gridOffset_y + dim_val) % dim_val;
+
+	int dirtyMin = (delta_z > 0) ? (dim_val - delta_z) : 0;
+	int dirtyMax = (delta_z > 0) ? (dim_val - 1) : (-delta_z - 1);
+
+	if (row0 <= row1) {
+		return (row0 <= dirtyMax && row1 >= dirtyMin);
+	} else {
+		return (row0 <= dirtyMax || row1 >= dirtyMin);
+	}
+}
+
+void main() {
+	uvec3 globalId = gl_GlobalInvocationID;
+	uint lod = globalId.z;
+	uint dim = push.dstDim;
+
+	if (globalId.x >= dim || globalId.y >= dim || lod >= push.gridParams.x) {
+		return;
+	}
+
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+	float texelSize = baseTexelSize * getLODScale(float(lod));
+	int dimInt = int(push.gridParams.w);
+
+	vec2 camGrid = floor(uCameraPosition.xz / texelSize);
+	ivec2 gridOffset = ivec2(mod(camGrid, vec2(dimInt)));
+
+	vec2 prevCamGrid = floor(uPreviousCameraPosition.xz / texelSize);
+	ivec2 delta = ivec2(camGrid) - ivec2(prevCamGrid);
+	int deltaX = delta.x;
+	int deltaZ = delta.y;
+
+	if (!push.forceRegeneration && uFrameIndex > 0 && deltaX == 0 && deltaZ == 0) {
+		return;
+	}
+
+	ivec2 dstCoord = ivec2(globalId.xy);
+	int step = 1 << (int(push.srcMip) + 1);
+	int x0 = dstCoord.x * step;
+	int x1 = x0 + step - 1;
+	int y0 = dstCoord.y * step;
+	int y1 = y0 + step - 1;
+
+	bool is_dirty = isIntervalDirtyX(x0, x1, gridOffset.x, deltaX, dimInt) ||
+	                isIntervalDirtyZ(y0, y1, gridOffset.y, deltaZ, dimInt);
+
+	if (!is_dirty) {
+		return;
+	}
+
+	ivec2 srcCoord00 = dstCoord * 2;
+	ivec2 srcCoord10 = dstCoord * 2 + ivec2(1, 0);
+	ivec2 srcCoord01 = dstCoord * 2 + ivec2(0, 1);
+	ivec2 srcCoord11 = dstCoord * 2 + ivec2(1, 1);
+
+	vec4 s00 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord00, lod), int(push.srcMip));
+	vec4 s10 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord10, lod), int(push.srcMip));
+	vec4 s01 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord01, lod), int(push.srcMip));
+	vec4 s11 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.srcMipIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(srcCoord11, lod), int(push.srcMip));
+
+	float minH = min(min(s00.r, s10.r), min(s01.r, s11.r));
+	float maxH = max(max(s00.g, s10.g), max(s01.g, s11.g));
+
+	imageStore(uImageArraysRGBA32F[nonuniformEXT(push.dstStorageIdx)], ivec3(dstCoord, lod), vec4(minH, maxH, minH, maxH));
+}

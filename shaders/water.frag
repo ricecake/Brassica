@@ -16,6 +16,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
 	uint  sceneColorIndex;
+	uint  minMaxIndex;
+	uint  horizonMapIndex;
 } params;
 
 void main() {
@@ -150,7 +152,14 @@ void main() {
 	// carries the surface's visual roughness.
 	Material waterMaterial = Material(vec3(0.0), 0.05, 0.0, 1.0);
 	vec3     shineColor =
-		isAboveWater ? evaluateClusteredLightContributionPBR(absWaterPos, waveNormal, waterMaterial).color : vec3(0.0);
+		isAboveWater ? evaluateClusteredLightContributionPBR(
+			absWaterPos,
+			waveNormal,
+			waterMaterial,
+			params.horizonMapIndex,
+			0u,
+			params.gridParams
+		).color : vec3(0.0);
 
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
 	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);
