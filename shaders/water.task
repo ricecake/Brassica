@@ -119,7 +119,7 @@ void main() {
 				}
 			}
 
-			float dryLandMargin = 5.0;
+			float dryLandMargin = 50.0;
 			if (tileMinHeight > params.waterLevel + maxWaveAmp + dryLandMargin) {
 				visible = false;
 			}
