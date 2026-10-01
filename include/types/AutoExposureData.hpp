@@ -72,8 +72,24 @@ namespace brassica {
 		float     ltmWeightExposedness{1.0f};
 		float     ltmBoostLocalContrast{0.0f};
 
+		float     gamma{2.2f};
+		// std430 rounds an array-of-structs element stride up to a multiple of 16 -- see
+		// autoexposure.glsl's matching padding and the static_assert below.
+		float     _pad0{0.0f};
+		float     _pad1{0.0f};
+		float     _pad2{0.0f};
+
 		std::uint32_t histogram[256]{0};
 	};
+
+	// bloom_downsample.comp indexes `layers[2]` as a std430 array of LayerData; std430 rounds an
+	// array-of-structs element stride up to a multiple of 16 regardless of the struct's own
+	// natural size, so if this ever stops being a multiple of 16, C++'s layers[1] and
+	// workgroupCounter land at a different byte offset than the GPU actually uses (confirmed via
+	// spirv-dis: adding a single unpadded float here once shifted workgroupCounter's real offset
+	// to 2592 while C++ still computed 2568). Keep LayerDataHost's tail padded rather than
+	// trusting the two languages' rounding to silently agree.
+	static_assert(sizeof(LayerDataHost) % 16 == 0, "LayerDataHost size must be a multiple of 16 bytes -- see comment above");
 
 	struct ExposureDataHost {
 		LayerDataHost layers[2];
@@ -133,6 +149,19 @@ namespace brassica {
 		dst.ltmWeightSaturation = src.ltmWeightSaturation;
 		dst.ltmWeightExposedness = src.ltmWeightExposedness;
 		dst.ltmBoostLocalContrast = src.ltmBoostLocalContrast;
+
+		dst.gamma = src.gamma;
 	}
+
+	// Snapshot of the GPU-owned fields (statistics, EMAs, autoUchimura*, histogram) that
+	// bloom_downsample.comp's update_layer_ae writes -- s_exposureData never reflects these since
+	// SyncAutoExposureTunables deliberately skips them. Engine::DrawFrame populates this every
+	// frame by copying autoExposureMapped[activeFrame]'s current contents just before overwriting
+	// it with this frame's tunables: by construction that memory was last written by the compute
+	// dispatch FRAME_OVERLAP frames ago, and frame-overlap fencing already guarantees that
+	// dispatch has retired by the time its buffer slot comes back around for reuse, so this read
+	// needs no extra synchronization of its own. A settings UI wanting live stats/histogram
+	// display should read from here, not from s_exposureData.
+	inline ExposureDataHost s_exposureReadback{};
 
 } // namespace brassica

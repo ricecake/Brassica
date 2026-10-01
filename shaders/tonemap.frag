@@ -20,7 +20,7 @@ layout(push_constant) uniform TonemapPushConstants {
 	float intensity;
 	float minIntensity;
 	float maxIntensity;
-	float exposure;
+	float _pad0; // see TonemapPushConstants.hpp's comment on this field
 
 	float contrast;
 	float saturation;
@@ -298,8 +298,9 @@ void main() {
 		result = max(vec3(0.0), mix(vec3(luma), result, satVal));
 	}
 
-	// 8. Gamma Correction (sRGB gamma ~ 2.2)
-	vec3 ldr = pow(clamp(result, 0.0, 1.0), vec3(1.0 / 2.2));
+	// 8. Gamma Correction
+	float gammaVal = layers[isSky].gamma > 0.0 ? layers[isSky].gamma : 2.2;
+	vec3  ldr = pow(clamp(result, 0.0, 1.0), vec3(1.0 / gammaVal));
 
 	outColor = vec4(ldr, 1.0);
 }

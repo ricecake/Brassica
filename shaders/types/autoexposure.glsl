@@ -77,6 +77,15 @@ struct LayerData {
 	float ltmWeightExposedness;
 	float ltmBoostLocalContrast;
 
+	float gamma;
+	// std430 rounds an array-of-structs element stride up to a multiple of 16 -- padding the
+	// struct itself out to that boundary keeps this an explicit, checkable size instead of
+	// relying on the two languages' rounding rules to silently agree. See LayerDataHost's
+	// static_assert (AutoExposureData.hpp) for what breaks if this drifts.
+	float _pad0;
+	float _pad1;
+	float _pad2;
+
 	uint  histogram[256];
 };
 

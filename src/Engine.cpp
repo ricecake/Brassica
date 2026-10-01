@@ -1403,6 +1403,9 @@ namespace brassica {
 		// overwrite here would stomp the shader's own accumulated auto-exposure state every frame.
 		if (autoExposureMapped[activeFrame]) {
 			auto* mappedExposure = static_cast<ExposureDataHost*>(autoExposureMapped[activeFrame]);
+			// Snapshot this slot's current contents before overwriting -- see s_exposureReadback's
+			// comment (AutoExposureData.hpp) for why this is already safe without extra fencing.
+			std::memcpy(&s_exposureReadback, mappedExposure, sizeof(ExposureDataHost));
 			SyncAutoExposureTunables(mappedExposure->layers[0], s_exposureData.layers[0]);
 			SyncAutoExposureTunables(mappedExposure->layers[1], s_exposureData.layers[1]);
 			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));

@@ -19,7 +19,13 @@ namespace brassica {
 		float intensity{0.075f};
 		float minIntensity{0.05f};
 		float maxIntensity{0.15f};
-		float exposure{1.0f};
+		// Formerly a flat manual-exposure override (now handled per-layer via the restored
+		// ISO/aperture/shutter fields on LayerData); kept as padding rather than removed outright
+		// -- deleting a scalar here shifts every field after it in C++ with no compensating
+		// padding, while GLSL's push-constant rules silently reinsert padding to keep the trailing
+		// vec4s 16-byte aligned, and that exact mismatch has bitten this struct before (see
+		// bloomEnabled's comment below).
+		float _pad0{0.0f};
 
 		float contrast{1.0f};
 		float saturation{1.0f};

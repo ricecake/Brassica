@@ -28,6 +28,27 @@ namespace brassica {
 	struct CdlGradingLayersHost {
 		std::array<CdlEntryHost, kMaxCdlEntries> entries{};
 		std::int32_t                             numEntries{1};
+
+		// entries[0] is always the isMain entry (see s_cdlGradingLayers below); depth-scoped
+		// layers only ever live in entries[1..numEntries-1].
+		bool AddEntry() {
+			if (static_cast<std::size_t>(numEntries) >= kMaxCdlEntries) {
+				return false;
+			}
+			entries[static_cast<std::size_t>(numEntries)] = CdlEntryHost{};
+			++numEntries;
+			return true;
+		}
+
+		void RemoveEntry(std::size_t index) {
+			if (index == 0 || index >= static_cast<std::size_t>(numEntries)) {
+				return;
+			}
+			for (std::size_t i = index; i + 1 < static_cast<std::size_t>(numEntries); ++i) {
+				entries[i] = entries[i + 1];
+			}
+			--numEntries;
+		}
 	};
 
 	// Scene (isSky == 0) depth-based multi-layer CDL grading, uploaded to the CdlGradingLayers
