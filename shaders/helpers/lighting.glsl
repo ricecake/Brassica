@@ -95,7 +95,8 @@ void calculateLightContribution(
 #define SPATIAL_AMBIENT_SH_DEFINED
 vec3 getSpatialAmbientSH(vec3 worldPos, vec3 N) {
 	// Fallback to evaluating ambient diffuse from normal
-	return vec3(0.15); // Will be driven by LightingUBO ambient / SH coefficients
+	// return vec3(0.0015); // Will be driven by LightingUBO ambient / SH coefficients
+	return vec3(0.0010, 0.0023, 0.0014);
 }
 #endif
 
