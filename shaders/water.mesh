@@ -94,7 +94,10 @@ void main() {
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec2 relBaseXZ = relMeshletMinXZ + localPos;
 
-	vec2 offsetDist = abs(relBaseXZ);
+	// Measure from this ring's own camera-grid-snap center (relCameraSnap, matching the
+	// boundary water.task culls against), not from the raw camera origin, or the morph
+	// trigger drifts by up to one meshletSize per axis.
+	vec2 offsetDist = abs(relBaseXZ - relCameraSnap);
 	float distToCam = max(offsetDist.x, offsetDist.y);
 	float outerDist = (float(meshletsPerRow) * 0.5) * meshletSize;
 	vec2 relMorphedXZ = relBaseXZ;
