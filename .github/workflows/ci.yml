@@ -42,7 +42,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            cmake build-essential libvulkan-dev vulkan-tools \
+            cmake ninja-build build-essential libvulkan-dev vulkan-tools \
             vulkan-validationlayers mesa-vulkan-drivers libgl1-mesa-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
             libxi-dev libwayland-dev wayland-protocols libxkbcommon-dev
@@ -91,7 +91,7 @@ jobs:
       - name: Configure CMake
         shell: bash
         run: |
-          cmake -B "${{ steps.strings.outputs.build-output-dir }}" \
+          cmake -G Ninja -B "${{ steps.strings.outputs.build-output-dir }}" \
             -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
             -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
             -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache_variant }} \
@@ -139,8 +139,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path release/brassica-${{ matrix.artifact_name }}
           $buildDir = "${{ steps.strings.outputs.build-output-dir }}"
-          $releaseDir = Join-Path$buildDir "Release"
-          $binDir = Join-Path$buildDir "bin"
+          $releaseDir = Join-Path $buildDir "Release"
+          $binDir = Join-Path $buildDir "bin"
 
           if (Test-Path $binDir) {
             Get-ChildItem -Path $binDir -Filter "*.exe" | Where-Object { $_.Name -notlike "test_*" } \vert{} Copy-Item -Destination "release/brassica-${{ matrix.artifact_name }}/"
