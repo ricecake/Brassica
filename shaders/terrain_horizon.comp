@@ -11,10 +11,41 @@ layout(push_constant) uniform PushConstants {
 	uint  clipmapIdx;        // sampled texture index for TerrainClipmapTexture
 	uint  minMaxIdx;         // sampled texture index for TerrainMinMaxTexture
 	uint  horizonStorageIdx; // storage image index for TerrainHorizonTexture
+	bool  forceRegeneration;
 } push;
 
 float getLODScale(float lod) {
 	return pow(2.0, lod);
+}
+
+bool isHorizonDirty(ivec2 originCoord, ivec2 gridOffset, ivec2 delta, int dimVal) {
+	if (push.forceRegeneration || uFrameIndex == 0 || abs(delta.x) >= dimVal || abs(delta.y) >= dimVal) return true;
+	if (delta.x == 0 && delta.y == 0) return false;
+
+	int colIdx = (originCoord.x - gridOffset.x + dimVal) % dimVal;
+	int rowIdx = (originCoord.y - gridOffset.y + dimVal) % dimVal;
+
+	int margin = 32;
+
+	bool dirtyX = false;
+	if (delta.x > 0) {
+		int minCol = dimVal - delta.x - margin;
+		dirtyX = (colIdx >= minCol) || (colIdx < margin);
+	} else if (delta.x < 0) {
+		int maxCol = -delta.x - 1 + margin;
+		dirtyX = (colIdx <= maxCol) || (colIdx >= dimVal - margin);
+	}
+
+	bool dirtyZ = false;
+	if (delta.y > 0) {
+		int minRow = dimVal - delta.y - margin;
+		dirtyZ = (rowIdx >= minRow) || (rowIdx < margin);
+	} else if (delta.y < 0) {
+		int maxRow = -delta.y - 1 + margin;
+		dirtyZ = (rowIdx <= maxRow) || (rowIdx >= dimVal - margin);
+	}
+
+	return dirtyX || dirtyZ;
 }
 
 void main() {
@@ -26,9 +57,25 @@ void main() {
 		return;
 	}
 
-	ivec2 originCoord = ivec2(globalId.xy);
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
 	float texelSize = baseTexelSize * getLODScale(float(lod));
+	int dimInt = int(dim);
+
+	vec2 camGrid = floor(uCameraPosition.xz / texelSize);
+	ivec2 gridOffset = ivec2(mod(camGrid, vec2(dimInt)));
+
+	vec2 prevCamGrid = floor(uPreviousCameraPosition.xz / texelSize);
+	ivec2 delta = ivec2(camGrid) - ivec2(prevCamGrid);
+
+	if (!push.forceRegeneration && uFrameIndex > 0 && delta.x == 0 && delta.y == 0) {
+		return;
+	}
+
+	ivec2 originCoord = ivec2(globalId.xy);
+
+	if (!isHorizonDirty(originCoord, gridOffset, delta, dimInt)) {
+		return;
+	}
 
 	float h0 = texelFetch(sampler2DArray(uTextureArrays[nonuniformEXT(push.clipmapIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), ivec3(originCoord, lod), 0).r;
 

@@ -41,6 +41,7 @@ namespace brassica {
 		std::uint32_t dstStorageIdx{0};
 		std::uint32_t srcMip{0};
 		std::uint32_t dstDim{0};
+		bool          forceRegeneration = true;
 	};
 
 	struct TerrainHorizonPushConstants {
@@ -48,6 +49,7 @@ namespace brassica {
 		std::uint32_t clipmapIdx{0};
 		std::uint32_t minMaxIdx{0};
 		std::uint32_t horizonStorageIdx{0};
+		bool          forceRegeneration = true;
 	};
 
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {
@@ -339,6 +341,7 @@ namespace brassica {
 					mipPush.dstStorageIdx = dstMipStorageIndices[dstMip];
 					mipPush.srcMip = dstMip - 1;
 					mipPush.dstDim = dstDim;
+					mipPush.forceRegeneration = forceRegeneration;
 
 					if (mipResolved.pipeline) {
 						vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, mipResolved.pipeline);
@@ -373,6 +376,7 @@ namespace brassica {
 				horizonPush.clipmapIdx = ctx.Index<TerrainClipmapTexture>();
 				horizonPush.minMaxIdx = ctx.Index<TerrainMinMaxTexture>();
 				horizonPush.horizonStorageIdx = ctx.StorageIndex<TerrainHorizonTexture>();
+				horizonPush.forceRegeneration = forceRegeneration;
 
 				std::array<vk::PushConstantRange, 1> horizonPushRanges{
 					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainHorizonPushConstants)}
