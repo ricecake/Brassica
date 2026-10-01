@@ -22,7 +22,7 @@ float texelSize(
 vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
 	float texelSize = baseTexelSize * getLODScale(float(level));
-	float dim = float((textureDim > 0u) ? textureDim : 1088u);
+	float dim = float((textureDim > 0u) ? textureDim : 1024u);
 
 	// Find the discrete world grid coordinate
 	vec2 worldGrid = floor(worldXZ / texelSize);

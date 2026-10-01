@@ -174,7 +174,7 @@ namespace brassica {
 				constexpr int   SkirtVertices = (BaseMeshletDimension - 1) * 4;                    // 40
 				constexpr int   TotalMeshletVertices = VerticesPerMeshlet + SkirtVertices;          // 161
 				constexpr int   DefaultMaxLODs = 14;
-				constexpr int   MapDim = 1088;                                                     // 1024 + 64 grid cell padding
+				constexpr int   MapDim = 1024;                                                     // 1024 + 64 grid cell padding
 				constexpr float BaseTexelSize = 0.5f;
 				constexpr int   MeshletsPerRow = 16;                                               // 16x16 grid of meshlets per LOD
 				constexpr int   MeshletGridSizePerLOD = 4;                                          // 4x4
