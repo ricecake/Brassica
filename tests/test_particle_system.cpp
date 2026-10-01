@@ -429,7 +429,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		globalLayoutBindings[1]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
-			.setDescriptorCount(1)
+			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		std::array<vk::DescriptorBindingFlags, 2> globalBindingFlags{
@@ -448,7 +448,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 
 		std::array<vk::DescriptorPoolSize, 2> globalPoolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 		};
 		vk::DescriptorPoolCreateInfo globalPoolInfo{};
 		globalPoolInfo.setPoolSizes(globalPoolSizes);
@@ -749,7 +749,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		globalLayoutBindings[1]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
-			.setDescriptorCount(1)
+			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		std::array<vk::DescriptorBindingFlags, 2> globalBindingFlags{
@@ -768,7 +768,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 
 		std::array<vk::DescriptorPoolSize, 2> globalPoolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 		};
 		vk::DescriptorPoolCreateInfo globalPoolInfo{};
 		globalPoolInfo.setPoolSizes(globalPoolSizes);

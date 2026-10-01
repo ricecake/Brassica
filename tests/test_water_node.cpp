@@ -229,7 +229,7 @@ namespace {
 		layoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
-			.setDescriptorCount(1)
+			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		std::array<vk::DescriptorBindingFlags, 3> bindingFlags{
@@ -249,7 +249,7 @@ namespace {
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 12},
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -269,13 +269,15 @@ namespace {
 		samplerInfo.setAddressModeV(vk::SamplerAddressMode::eClampToEdge);
 		result.sampler = device.createSampler(samplerInfo);
 
-		vk::DescriptorImageInfo samplerImageInfo{};
-		samplerImageInfo.setSampler(result.sampler);
+		std::array<vk::DescriptorImageInfo, 4> samplerInfos{};
+		for (uint32_t i = 0; i < 4; ++i) {
+			samplerInfos[i].setSampler(result.sampler);
+		}
 		vk::WriteDescriptorSet samplerWrite{};
 		samplerWrite.setDstSet(set);
 		samplerWrite.setDstBinding(2);
 		samplerWrite.setDescriptorType(vk::DescriptorType::eSampler);
-		samplerWrite.setImageInfo(samplerImageInfo);
+		samplerWrite.setImageInfo(samplerInfos);
 		device.updateDescriptorSets(samplerWrite, {});
 
 		result.bindings.set = set;
