@@ -29,9 +29,7 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>,
-			graph::Create<TerrainHorizonTexture>>;
+			graph::Create<HdrColor>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -73,14 +71,23 @@ namespace {
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext&) {}
+	};
+
+	struct FakeTerrainProducer {
+		using Resources = graph::Declares<
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<TerrainHorizonTexture>>;
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainMinMaxTexture>(),
 					.access = graph::AccessKind::Write,
-					// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainClipmap.hpp), which also
-					// requests eStorage for terrain_gen.comp's writer -- this fixture only needs
-					// WaterNode's read side, and this bindless set (below) declares no storage-image
-					// binding to write that second descriptor into.
 					.desc = graph::ResourceDesc{
 						.kind = graph::ResourceDesc::Kind::Image2D,
 						.width = 4,
@@ -363,6 +370,7 @@ TEST_CASE(
 
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{.extent = {256, 256}, .swapchainFormat = kSwapchainFormat});
+		graph.Register<FakeTerrainProducer>();
 		graph.RegisterRef(waterNode);
 
 		graph::FrameContext ctx{.width = 256, .height = 256};
