@@ -230,6 +230,14 @@ add_custom_target(sync_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/external/lygia
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/lygia
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/external/lygia
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/external/lygia
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/lygia
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/external/lygia
     COMMENT "Syncing assets/shaders to the runtime output directory"
 )
 

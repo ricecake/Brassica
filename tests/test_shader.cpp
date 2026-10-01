@@ -215,6 +215,46 @@ TEST_CASE("Atmosphere Sky Shaders Load and Compile") {
 	brassica::Shader::ClearConstants();
 }
 
+TEST_CASE("External Lygia Shader Include Resolution") {
+	std::filesystem::path testDir = std::filesystem::current_path() / "test_lygia_includes";
+	std::filesystem::create_directories(testDir);
+
+	std::filesystem::path testShaderPath = testDir / "test_lygia.vert";
+	{
+		std::ofstream out(testShaderPath);
+		out << "#version 460\n";
+		out << "#include \"lygia/generative/psrdnoise.glsl\"\n";
+		out << "#include \"external/lygia/color/hueShift.glsl\"\n";
+		out << "void main() {}\n";
+	}
+
+	brassica::Shader shader;
+	CHECK(shader.LoadFromFile(testShaderPath.string()));
+	std::string source = shader.GetSource();
+	CHECK(!source.empty());
+	CHECK(source.find("#version 460") != std::string::npos);
+
+	std::filesystem::remove_all(testDir);
+}
+
+TEST_CASE("Missing Shader Include Throws Exception and Logs Search Paths") {
+	std::filesystem::path testDir = std::filesystem::current_path() / "test_missing_include";
+	std::filesystem::create_directories(testDir);
+
+	std::filesystem::path testShaderPath = testDir / "test_missing.vert";
+	{
+		std::ofstream out(testShaderPath);
+		out << "#version 460\n";
+		out << "#include \"nonexistent_dir/nonexistent_file.glsl\"\n";
+		out << "void main() {}\n";
+	}
+
+	brassica::Shader shader;
+	CHECK_THROWS_AS(shader.LoadFromFile(testShaderPath.string()), std::runtime_error);
+
+	std::filesystem::remove_all(testDir);
+}
+
 TEST_CASE("GLSL 4.6 Mesh Shader Compilation with Shaderc") {
 	std::string meshSource = R"(#version 460
 #extension GL_EXT_mesh_shader : require
