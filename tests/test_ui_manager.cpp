@@ -94,7 +94,7 @@ namespace brassica {
 	TEST_CASE("TonemapPushConstants Post-Processing and CDL Parameters") {
 		TonemapPushConstants push{};
 		CHECK(push.toneMapMode == 5); // Default Uchimura
-		CHECK(push._pad0 == 0.0f);
+		CHECK(push.exposure == 1.0f);
 		CHECK(push.cdlSlope == glm::vec4(1.0f));
 		CHECK(push.cdlOffset == glm::vec4(0.0f));
 		CHECK(push.cdlPower == glm::vec4(1.0f));

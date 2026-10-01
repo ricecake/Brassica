@@ -16,6 +16,7 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gAlbedoIndex;
 	uint  gNormalIndex;
 	uint  sceneColorIndex;
+	uint  minMaxIndex;
 } params;
 
 void main() {
