@@ -22,8 +22,7 @@ namespace {
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>,
-			graph::Create<TerrainWeatherBiomeTexture>>;
+			graph::Create<HdrColor>>;
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
@@ -62,6 +61,18 @@ namespace {
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext&) {}
+	};
+
+	struct FakeWeatherProducer {
+		using Resources = graph::Declares<
+			graph::Create<TerrainWeatherBiomeTexture>>;
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
@@ -123,6 +134,7 @@ TEST_CASE("CirrusNode renders through PhysicalExecutionBackend with no validatio
 		for (std::uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex) {
 			graph::Graph graph;
 			graph.Register<FakeSceneProducer>(FakeSceneProducer{});
+			graph.Register<FakeWeatherProducer>(FakeWeatherProducer{});
 			graph.RegisterRef(transNode);
 			graph.RegisterRef(multiNode);
 			graph.RegisterRef(skyViewNode);
