@@ -294,6 +294,7 @@ namespace brassica {
 			terrainAS.DestroyAccelerationStructures();
 
 			terrainClipmap.Cleanup();
+			terrainUploader.Cleanup();
 
 			pipelineLibrary.Reset();
 			render::EngineNodeRegistry::Instance().DestroyAll(device);
