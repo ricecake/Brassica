@@ -2,6 +2,7 @@
 #include "bindless.glsl"
 #include "helpers/tonemapping.glsl"
 #include "types/autoexposure.glsl"
+#include "types/cdl_grading.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -19,7 +20,7 @@ layout(push_constant) uniform TonemapPushConstants {
 	float intensity;
 	float minIntensity;
 	float maxIntensity;
-	float exposure;
+	float _pad0; // see TonemapPushConstants.hpp's comment on this field
 
 	float contrast;
 	float saturation;
@@ -43,6 +44,10 @@ layout(push_constant) uniform TonemapPushConstants {
 	// Appended last -- see TonemapPushConstants.hpp's comment on why this field specifically has
 	// to go here and nowhere else in this struct.
 	int  bloomEnabled;
+
+	// Same reasoning -- appended after bloomEnabled, another trailing scalar with nothing after
+	// it needing bigger alignment.
+	int  numCdlEntries;
 } params;
 
 // Planckian locus approximation for temperature to RGB
@@ -89,6 +94,31 @@ float calculateSkyAttenuation(vec3 rawHdrColor, float uchimuraM, float uchimuraL
 	float overdrive = max(0.0, luma - shoulderStart);
 	float multiplier = 1.0 / (1.0 + rolloffStrength * overdrive);
 	return multiplier;
+}
+
+float linearizeDepth(float depth) {
+	float z = depth * 2.0 - 1.0;
+	return (2.0 * uNearPlane * uFarPlane) / (uFarPlane + uNearPlane - z * (uFarPlane - uNearPlane));
+}
+
+// Simulates the scotopic rod shift in mesopic lighting conditions
+vec3 ApplyPurkinjeShift(vec3 exposedLinearColor, float avgLuminance, vec3 scotopicTint) {
+	float scotopicMin = 0.001;
+	float photopicMax = 3.0;
+
+	// Calculate logarithmic blend factor
+	float logAvg = log(max(avgLuminance, 1e-5));
+	float logMin = log(scotopicMin);
+	float logMax = log(photopicMax);
+
+	float photopicWeight = clamp((logAvg - logMin) / (logMax - logMin), 0.0, 1.0);
+	photopicWeight = smoothstep(0.0, 1.0, photopicWeight);
+
+	// Calculate scene luminance using Rec. 709 luma
+	float pixelLuminance = dot(exposedLinearColor, vec3(0.2126, 0.7152, 0.0722));
+	vec3 scotopicColor = pixelLuminance * scotopicTint;
+
+	return mix(scotopicColor, exposedLinearColor, photopicWeight);
 }
 
 void main() {
@@ -181,9 +211,12 @@ void main() {
 
 		result *= autoExposure;
 	} else {
-		float expVal = params.exposure > 0.0 ? params.exposure : 1.0;
-		result *= expVal;
+		result *= (layers[isSky].iso / 100.0) * (1.0 / (layers[isSky].aperture * layers[isSky].aperture)) * layers[isSky].exposureTime;
 	}
+
+	// Darkness eye adaptation: blend toward a desaturated scotopic tint as adapted luminance drops
+	vec3 scotopicTint = isSky == 1 ? vec3(0.15, 0.3, 0.6) : (result * vec3(0.70, 0.80, 0.90));
+	result = ApplyPurkinjeShift(result, layers[isSky].adaptedLuminance, scotopicTint);
 
 	// Accumulate Bloom
 	float activeIntensity = params.intensity > 0.0 ? params.intensity : params.bloomIntensity;
@@ -201,10 +234,35 @@ void main() {
 	}
 
 	// 5. ASC CDL Color Grading
-	vec3 slope = layers[isSky].cdlSlope.rgb != vec3(0.0) ? layers[isSky].cdlSlope.rgb : (params.cdlSlope.rgb != vec3(0.0) ? params.cdlSlope.rgb : vec3(1.0));
-	vec3 offset = layers[isSky].cdlOffset.rgb != vec3(0.0) ? layers[isSky].cdlOffset.rgb : params.cdlOffset.rgb;
-	vec3 power = layers[isSky].cdlPower.rgb != vec3(0.0) ? layers[isSky].cdlPower.rgb : (params.cdlPower.rgb != vec3(0.0) ? params.cdlPower.rgb : vec3(1.0));
-	result = pow(max(result * slope + offset, vec3(0.0)), power);
+	if (isSky == 1) {
+		vec3 slope = layers[1].cdlSlope.rgb != vec3(0.0) ? layers[1].cdlSlope.rgb : (params.cdlSlope.rgb != vec3(0.0) ? params.cdlSlope.rgb : vec3(1.0));
+		vec3 offset = layers[1].cdlOffset.rgb != vec3(0.0) ? layers[1].cdlOffset.rgb : params.cdlOffset.rgb;
+		vec3 power = layers[1].cdlPower.rgb != vec3(0.0) ? layers[1].cdlPower.rgb : (params.cdlPower.rgb != vec3(0.0) ? params.cdlPower.rgb : vec3(1.0));
+		result = pow(max(result * slope + offset, vec3(0.0)), power);
+	} else {
+		// Multi-layer depth-based CDL grading (scene only). Each isMain entry always applies at
+		// full weight; every other entry blends in based on how close its targetDepth is to this
+		// pixel's linearized depth, falling off over falloffWidth at falloffRate.
+		float linearZ = linearizeDepth(rawDepth);
+		for (int i = 0; i < params.numCdlEntries; ++i) {
+			CdlEntry entry = cdlEntries[i];
+			if (entry.enabled == 0) continue;
+
+			float weight = 1.0;
+			if (entry.isMain == 0) {
+				float dist = abs(linearZ - entry.targetDepth);
+				float x = clamp(dist / max(entry.falloffWidth, 0.0001), 0.0, 1.0);
+				weight = pow(1.0 - x, entry.falloffRate);
+			}
+
+			if (weight > 0.0) {
+				vec3 graded = pow(max(result * entry.cdlSlope.rgb + entry.cdlOffset.rgb, 0.0), entry.cdlPower.rgb);
+				float layerLuma = dot(graded, vec3(0.2126, 0.7152, 0.0722));
+				graded = layerLuma + entry.cdlSaturation * (graded - layerLuma);
+				result = mix(result, graded, weight);
+			}
+		}
+	}
 
 	// 6. Tonemapping
 	if (layers[isSky].toneMappingEnabled != 0) {
@@ -233,13 +291,16 @@ void main() {
 		}
 	}
 
-	// 7. Saturation adjustment
-	float satVal = layers[isSky].cdlSaturation > 0.0 ? layers[isSky].cdlSaturation : (params.saturation >= 0.0 ? params.saturation : (params.cdlSaturation >= 0.0 ? params.cdlSaturation : 1.0));
-	float luma = dot(result, vec3(0.2126, 0.7152, 0.0722));
-	result = max(vec3(0.0), mix(vec3(luma), result, satVal));
+	// 7. Saturation adjustment (sky only -- scene saturation is handled per-entry in step 5 above)
+	if (isSky == 1) {
+		float satVal = layers[1].cdlSaturation > 0.0 ? layers[1].cdlSaturation : (params.saturation >= 0.0 ? params.saturation : (params.cdlSaturation >= 0.0 ? params.cdlSaturation : 1.0));
+		float luma = dot(result, vec3(0.2126, 0.7152, 0.0722));
+		result = max(vec3(0.0), mix(vec3(luma), result, satVal));
+	}
 
-	// 8. Gamma Correction (sRGB gamma ~ 2.2)
-	vec3 ldr = pow(clamp(result, 0.0, 1.0), vec3(1.0 / 2.2));
+	// 8. Gamma Correction
+	float gammaVal = layers[isSky].gamma > 0.0 ? layers[isSky].gamma : 2.2;
+	vec3  ldr = pow(clamp(result, 0.0, 1.0), vec3(1.0 / gammaVal));
 
 	outColor = vec4(ldr, 1.0);
 }

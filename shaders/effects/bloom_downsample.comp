@@ -27,6 +27,9 @@ layout(push_constant) uniform DownsamplePushConstants {
 	int   numMips;
 	float threshold;
 	float deltaTime;
+	float softness;
+	float karisDampening;
+	float maxPoolingFactor;
 } push;
 
 shared vec3 s_mip[16][16];
@@ -35,7 +38,7 @@ shared vec3 s_ltmWgt[16][16];
 
 // Constants for histogram
 const float MIN_LOG_LUMA = -10.0;
-const float MAX_LOG_LUMA = 2.0;
+const float MAX_LOG_LUMA = 14.0; // Expanded to perfectly cover up to 100k+ lux physical light levels
 
 // Calculates a safe multiplier to prevent sky luminance from blowing out the Uchimura shoulder
 float calculateSkyAttenuation(vec3 rawHdrColor, float uchimuraM, float uchimuraL, float rolloffStrength) {
@@ -206,6 +209,12 @@ void main() {
 			float dist = distance(uv, layers[isSky].focusPoint);
 			float weight = exp(-dist * layers[isSky].centerWeightTightness);
 
+			if (isSky == 1) {
+				// Raise the floor: ignore/down-weight sky pixels near or below the horizon
+				// This prevents dark sub-horizon values from dragging down the luminance.
+				weight *= smoothstep(-0.05, 0.1, worldDir.y);
+			}
+
 			// Map logLuma to histogram bin
 			float normalizedLogLuma = clamp((logLuma - MIN_LOG_LUMA) / (MAX_LOG_LUMA - MIN_LOG_LUMA), 0.0, 1.0);
 			int bin = int(normalizedLogLuma * 255.0);
@@ -214,13 +223,13 @@ void main() {
 			atomicAdd(layers[isSky].histogram[bin], uint(weight * 1024.0));
 		}
 
-		// LTM generation for Mip 0 (Currently Scene only)
-		if (layers[0].ltmEnabled != 0 && isSky == 0) {
-			float exposure = layers[0].targetLuminance / max(layers[0].avgLuma, 0.0001);
+		// LTM generation for Mip 0 (Scene and Sky)
+		if (layers[isSky].ltmEnabled != 0) {
+			float exposure = layers[isSky].targetLuminance / max(layers[isSky].avgLuma, 0.0001);
 
-			vec3 c1 = centerSample * exposure * exp2(layers[0].ltmEvSpread);
+			vec3 c1 = centerSample * exposure * exp2(layers[isSky].ltmEvSpread);
 			vec3 c2 = centerSample * exposure;
-			vec3 c3 = centerSample * exposure * exp2(-layers[0].ltmEvSpread);
+			vec3 c3 = centerSample * exposure * exp2(-layers[isSky].ltmEvSpread);
 
 			vec3 tc1 = aces(c1);
 			vec3 tc2 = aces(c2);
@@ -234,9 +243,9 @@ void main() {
 
 			// Weights
 			vec3 e;
-			e.x = exp(-0.5 * (l1 - layers[0].ltmTarget) * (l1 - layers[0].ltmTarget) / (layers[0].ltmSigma * layers[0].ltmSigma));
-			e.y = exp(-0.5 * (l2 - layers[0].ltmTarget) * (l2 - layers[0].ltmTarget) / (layers[0].ltmSigma * layers[0].ltmSigma));
-			e.z = exp(-0.5 * (l3 - layers[0].ltmTarget) * (l3 - layers[0].ltmTarget) / (layers[0].ltmSigma * layers[0].ltmSigma));
+			e.x = exp(-0.5 * (l1 - layers[isSky].ltmTarget) * (l1 - layers[isSky].ltmTarget) / (layers[isSky].ltmSigma * layers[isSky].ltmSigma));
+			e.y = exp(-0.5 * (l2 - layers[isSky].ltmTarget) * (l2 - layers[isSky].ltmTarget) / (layers[isSky].ltmSigma * layers[isSky].ltmSigma));
+			e.z = exp(-0.5 * (l3 - layers[isSky].ltmTarget) * (l3 - layers[isSky].ltmTarget) / (layers[isSky].ltmSigma * layers[isSky].ltmSigma));
 
 			vec3 s;
 			s.x = get_saturation(tc1);
@@ -244,7 +253,7 @@ void main() {
 			s.z = get_saturation(tc3);
 
 			// Combine weights
-			ltmWeights = pow(max(e, vec3(0.0001)), vec3(layers[0].ltmWeightExposedness)) * pow(max(s, vec3(0.0001)), vec3(layers[0].ltmWeightSaturation));
+			ltmWeights = pow(max(e, vec3(0.0001)), vec3(layers[isSky].ltmWeightExposedness)) * pow(max(s, vec3(0.0001)), vec3(layers[isSky].ltmWeightSaturation));
 
 			float weightSum = ltmWeights.x + ltmWeights.y + ltmWeights.z;
 			ltmWeights /= max(weightSum, 0.00001);
@@ -253,39 +262,75 @@ void main() {
 			imageStore(uImagesRGBA32F[nonuniformEXT(push.outWgtMip0Index)], id, vec4(ltmWeights, 1.0));
 		}
 
-		// 9-tap Dual Kawase-style filter from srcTexture for bloom
-		bloomColor = centerSample * 4.0;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(-1.0, -1.0) * texelSize).rgb;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(1.0, -1.0) * texelSize).rgb;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(-1.0, 1.0) * texelSize).rgb;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(1.0, 1.0) * texelSize).rgb;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(0.0, -2.0) * texelSize).rgb * 0.5;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(0.0, 2.0) * texelSize).rgb * 0.5;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(-2.0, 0.0) * texelSize).rgb * 0.5;
-		bloomColor += SAMPLE_NEAREST(push.hdrColorIndex, uv + vec2(2.0, 0.0) * texelSize).rgb * 0.5;
-		bloomColor /= 10.0;
-
-		// 2. Exposure
-		float exposure = layers[isSky].targetLuminance / max(layers[isSky].adaptedLuminance, 0.0001);
-		exposure = clamp(exposure, layers[isSky].minExposure, layers[isSky].maxExposure);
+		// 2. Exposure calculation
+		float exposure = 1.0;
 		if (layers[isSky].useAutoExposure != 0) {
+			exposure = layers[isSky].targetLuminance / max(layers[isSky].adaptedLuminance, 0.0001);
+			exposure = clamp(exposure, layers[isSky].minExposure, layers[isSky].maxExposure);
+
 			if (isSky == 1) {
-				float attenuation = calculateSkyAttenuation(bloomColor * exposure, layers[1].autoUchimuraM, layers[1].autoUchimuraL, 1.20);
+				float attenuation = calculateSkyAttenuation(centerSample * exposure, layers[1].autoUchimuraM, layers[1].autoUchimuraL, 1.20);
 				float mask = smoothstep(-3.14 * 0.125, 0.5 * 1.5707, asin(worldDir.y));
 				attenuation = mix(attenuation, 1.0, mask);
 				exposure *= attenuation;
 			}
-
-			bloomColor *= exposure;
+		} else {
+			exposure = (layers[isSky].iso / 100.0) * (1.0 / (layers[isSky].aperture * layers[isSky].aperture)) * layers[isSky].exposureTime;
 		}
 
-		// Apply Bright Pass Threshold relative to scene exposure (layer 0)
-		float effectiveThreshold = push.threshold / max(exposure, 0.0001);
-		float brightness = dot(bloomColor, vec3(0.2126, 0.7152, 0.0722));
-		if (brightness <= effectiveThreshold) {
-			bloomColor = vec3(0.0);
+		// Smoothly scale the maximum allowed bloom energy based on scene adaptation
+		float nightCap = 10.0; // Max post-exposure energy at night
+		float dayCap = 500.0;  // Max post-exposure energy in daylight
+		float dynMaxLuma = mix(nightCap, dayCap, smoothstep(0.01, 1000.0, layers[isSky].adaptedLuminance));
+
+		float knee = max(push.threshold * push.softness, 0.0001);
+		float kneeLower = push.threshold - knee;
+		float kneeUpper = knee * 2.0;
+		float kneeRecip = 0.25 / knee;
+
+		float spatialWeights[9] = float[9](4.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5);
+		vec2 offsets[9] = vec2[9](
+			vec2(0.0, 0.0), vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0),
+			vec2(1.0, 1.0), vec2(0.0, -2.0), vec2(0.0, 2.0), vec2(-2.0, 0.0), vec2(2.0, 0.0)
+		);
+
+		vec3 weightedColorSum = vec3(0.0);
+		float totalWeight = 0.0;
+		vec3 maxExtractedColor = vec3(0.0);
+
+		// 9-tap Dual Kawase-style filter with Karis average filtering in post-exposure space
+		for (int i = 0; i < 9; ++i) {
+			vec3 sRaw = (i == 0) ? centerSample : SAMPLE_NEAREST(push.hdrColorIndex, uv + offsets[i] * texelSize).rgb;
+
+			// A. Apply Exposure
+			vec3 tapColor = sRaw * exposure;
+			float tapLuma = dot(tapColor, vec3(0.2126, 0.7152, 0.0722));
+
+			// B. Soft-Knee Threshold
+			float rq = clamp(tapLuma - kneeLower, 0.0, kneeUpper);
+			rq = kneeRecip * rq * rq;
+			float brightPassWeight = max(rq, tapLuma - push.threshold) / max(tapLuma, 0.0001);
+
+			vec3 extractedColor = tapColor * brightPassWeight;
+			float extractedLuma = tapLuma * brightPassWeight;
+
+			// C. Adaptive Luma-Preserving Clamp
+			float clampScale = min(1.0, dynMaxLuma / max(extractedLuma, 0.0001));
+			extractedColor *= clampScale;
+			float finalLuma = extractedLuma * clampScale;
+
+			maxExtractedColor = max(maxExtractedColor, extractedColor);
+
+			// D. Karis Average (Using the finalized bloom luminance with dampening factor)
+			float karisWeight = 1.0 / (1.0 + push.karisDampening * finalLuma);
+			float w = spatialWeights[i] * karisWeight;
+
+			weightedColorSum += extractedColor * w;
+			totalWeight += w;
 		}
 
+		vec3 avgBloom = weightedColorSum / max(totalWeight, 0.0001);
+		bloomColor = max(avgBloom, maxExtractedColor * push.maxPoolingFactor);
 		imageStore(uImagesRGBA32F[nonuniformEXT(push.outMip0Index)], id, vec4(bloomColor, 1.0));
 	}
 
@@ -325,7 +370,7 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (layers[0].ltmEnabled != 0) {
+		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
 			ltmExposures = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 1][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 1] +
@@ -358,7 +403,7 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (layers[0].ltmEnabled != 0) {
+		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
 			ltmExposures = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 2][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 2] +
@@ -391,7 +436,7 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (layers[0].ltmEnabled != 0) {
+		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
 			ltmExposures = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 4][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 4] +
@@ -423,7 +468,7 @@ void main() {
 			imageStore(uImagesRGBA32F[nonuniformEXT(push.outMip4Index)], outId, vec4(bloomColor, 1.0));
 		}
 
-		if (layers[0].ltmEnabled != 0) {
+		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
 			ltmExposures = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 8][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 8] +

@@ -17,33 +17,11 @@
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
 #include "types/AutoExposureData.hpp"
+#include "types/BloomPushConstants.hpp"
+#include "types/CdlGradingData.hpp"
 #include "types/TonemapPushConstants.hpp"
 
 namespace brassica {
-
-	struct DownsamplePushConstants {
-		glm::vec2     srcResolution{0.0f, 0.0f};
-		std::uint32_t hdrColorIndex{0};
-		std::uint32_t depthIndex{0};
-		std::uint32_t outMip0Index{0};
-		std::uint32_t outMip1Index{0};
-		std::uint32_t outMip2Index{0};
-		std::uint32_t outMip3Index{0};
-		std::uint32_t outMip4Index{0};
-		std::uint32_t outExpMip0Index{0};
-		std::uint32_t outExpMip1Index{0};
-		std::uint32_t outExpMip2Index{0};
-		std::uint32_t outExpMip3Index{0};
-		std::uint32_t outExpMip4Index{0};
-		std::uint32_t outWgtMip0Index{0};
-		std::uint32_t outWgtMip1Index{0};
-		std::uint32_t outWgtMip2Index{0};
-		std::uint32_t outWgtMip3Index{0};
-		std::uint32_t outWgtMip4Index{0};
-		std::int32_t  numMips{5};
-		float         threshold{1.0f};
-		float         deltaTime{0.016f};
-	};
 
 	struct LtmFusePushConstants {
 		std::uint32_t expTextureIndex{0};
@@ -77,15 +55,18 @@ namespace brassica {
 
 		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
 
-		ComputeShader            downsampleShader;
-		ComputeShader            ltmFuseShader;
-		render::PipelineLibrary* pipelineLibrary = nullptr;
-		DownsamplePushConstants  downPush{};
-		LtmFusePushConstants     fusePush{};
+		ComputeShader               downsampleShader;
+		ComputeShader               upsampleShader;
+		ComputeShader               ltmFuseShader;
+		render::PipelineLibrary*    pipelineLibrary = nullptr;
+		DownsamplePushConstants     downPush{};
+		BloomUpsamplePushConstants  upPush{};
+		LtmFusePushConstants        fusePush{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			downsampleShader.CompileComputeFromFile(services.device, "shaders/effects/bloom_downsample.comp");
+			upsampleShader.CompileComputeFromFile(services.device, "shaders/effects/bloom_upsample.comp");
 			ltmFuseShader.CompileComputeFromFile(services.device, "shaders/effects/ltm_fuse.comp");
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
@@ -96,11 +77,13 @@ namespace brassica {
 
 		void RegisterShaders(ShaderWatcher& watcher) {
 			watcher.RegisterShader(&downsampleShader);
+			watcher.RegisterShader(&upsampleShader);
 			watcher.RegisterShader(&ltmFuseShader);
 		}
 
 		void Destroy(vk::Device device) {
 			downsampleShader.Destroy(device);
+			upsampleShader.Destroy(device);
 			ltmFuseShader.Destroy(device);
 		}
 
@@ -170,6 +153,7 @@ namespace brassica {
 			// ctx.frameSet descriptor actually points at, so the shader never saw it.
 
 			// Compute Downsample Pass
+			downPush = s_bloomDownsamplePush;
 			downPush.srcResolution = glm::vec2(ctx.width, ctx.height);
 			downPush.hdrColorIndex = ctx.Index<HdrColor>();
 			downPush.depthIndex = ctx.Index<GBufferDepth>();
@@ -227,6 +211,84 @@ namespace brassica {
 				);
 				vk::DependencyInfo dep({}, 1, &barrier);
 				vkCmd.pipelineBarrier2(dep);
+			}
+
+			// Compute Bloom Upsample Pass -- progressively tent-filters each mip up into the next
+			// finer one and additively accumulates it there, coarsest (numMips-1) down to Mip0, so
+			// Mip0 ends up holding the fully composited wide-radius bloom TonemapNode reads later.
+			// Sequential by construction: each iteration's destination is the next iteration's
+			// source, so it can't be collapsed into a single dispatch.
+			std::array<std::uint32_t, 5> bloomMipReadIndex{
+				ctx.Index<BloomTextureMip0>(),
+				ctx.Index<BloomTextureMip1>(),
+				ctx.Index<BloomTextureMip2>(),
+				ctx.Index<BloomTextureMip3>(),
+				ctx.Index<BloomTextureMip4>()
+			};
+			std::array<std::uint32_t, 5> bloomMipWriteIndex{
+				downPush.outMip0Index,
+				downPush.outMip1Index,
+				downPush.outMip2Index,
+				downPush.outMip3Index,
+				downPush.outMip4Index
+			};
+			std::array<glm::vec2, 5> bloomMipResolution{
+				glm::vec2(std::max(1u, ctx.width / 2), std::max(1u, ctx.height / 2)),
+				glm::vec2(std::max(1u, ctx.width / 4), std::max(1u, ctx.height / 4)),
+				glm::vec2(std::max(1u, ctx.width / 8), std::max(1u, ctx.height / 8)),
+				glm::vec2(std::max(1u, ctx.width / 16), std::max(1u, ctx.height / 16)),
+				glm::vec2(std::max(1u, ctx.width / 32), std::max(1u, ctx.height / 32))
+			};
+
+			std::array<vk::DescriptorSetLayout, 2> upSetLayouts{
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
+			};
+			std::array<vk::PushConstantRange, 1> upPushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(BloomUpsamplePushConstants)}
+			};
+			render::ComputePipelineRequest upRequest{
+				.shader = &upsampleShader,
+				.setLayouts = upSetLayouts,
+				.pushConstantRanges = upPushConstantRanges,
+			};
+			render::ResolvedPipeline upResolved = pipelineLibrary->ResolveCached(upRequest);
+
+			if (upResolved.pipeline) {
+				for (int mip = downPush.numMips - 1; mip > 0; --mip) {
+					upPush.srcIndex = bloomMipReadIndex[mip];
+					upPush.dstReadIndex = bloomMipReadIndex[mip - 1];
+					upPush.dstWriteIndex = bloomMipWriteIndex[mip - 1];
+					upPush.srcResolution = bloomMipResolution[mip];
+					upPush.dstResolution = bloomMipResolution[mip - 1];
+
+					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, upResolved.pipeline);
+					std::array<vk::DescriptorSet, 2> upBoundSets{
+						static_cast<VkDescriptorSet>(ctx.frameSet),
+						static_cast<VkDescriptorSet>(ctx.globalSet)
+					};
+					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, upResolved.layout, 0, upBoundSets, nullptr);
+					vkCmd.pushConstants(
+						upResolved.layout,
+						vk::ShaderStageFlagBits::eCompute,
+						0,
+						sizeof(BloomUpsamplePushConstants),
+						&upPush
+					);
+
+					std::uint32_t dstW = static_cast<std::uint32_t>(bloomMipResolution[mip - 1].x);
+					std::uint32_t dstH = static_cast<std::uint32_t>(bloomMipResolution[mip - 1].y);
+					vkCmd.dispatch((dstW + 15) / 16, (dstH + 15) / 16, 1);
+
+					vk::MemoryBarrier2 upBarrier(
+						vk::PipelineStageFlagBits2::eComputeShader,
+						vk::AccessFlagBits2::eShaderStorageWrite,
+						vk::PipelineStageFlagBits2::eComputeShader,
+						vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead
+					);
+					vk::DependencyInfo upDep({}, 1, &upBarrier);
+					vkCmd.pipelineBarrier2(upDep);
+				}
 			}
 
 			// Compute LTM Fuse Pass
@@ -346,6 +408,7 @@ namespace brassica {
 			push.ltmExpMipIndex = ctx.Index<LtmExpTextureMip0>();
 			push.depthTextureIndex = ctx.Index<GBufferDepth>();
 			push.ltmRes = glm::vec2(ctx.width / 2, ctx.height / 2);
+			push.numCdlEntries = s_cdlGradingLayers.numEntries;
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{swapchainFormat};

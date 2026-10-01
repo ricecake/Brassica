@@ -123,7 +123,7 @@ vec3 applyTonemapping(vec3 tex, int toneMapMode) {
 	} else if (toneMapMode == 9) {
 		return tex;
 	} else {
-		return aces(tex);
+		return tonemapFilmic(tex);
 	}
 }
 
