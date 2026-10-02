@@ -74,18 +74,15 @@ void main() {
 	uint meshletsPerRow = params.gridParams.y;
 	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
 
-	vec2 parentCameraSnap = floor(uCameraPosition.xz / parentMeshletSize) * parentMeshletSize;
-	vec2 relParentCameraSnap = parentCameraSnap - uCameraPosition.xz;
+	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+	vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 
 	float outerDist = (float(params.gridParams.y) * 0.5) * parentMeshletSize;
 
 	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
 	vec2 relBaseXZ = relMeshletMinXZ + localPos;
 
-	// Measure from this macro cell's own camera-grid-snap center (matches the boundary
-	// terrain.task culls against for morphLOD), not from the raw camera origin, or the
-	// morph trigger drifts by up to one parentMeshletSize per axis.
-	vec2 offsetDist = abs(relBaseXZ - relParentCameraSnap);
+	vec2 offsetDist = abs(relBaseXZ);
 	float distToCam = max(offsetDist.x, offsetDist.y);
 
 	float alpha = 0.0;
