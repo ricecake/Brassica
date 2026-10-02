@@ -133,10 +133,10 @@ void main() {
 	vec2 microGrad = vec2(0.0);
 	float detailFreq = 0.5;
 	float microNoise = psrdnoise(morphedWorldXZ * detailFreq, vec2(0.0), 0.0, microGrad);
-	float lodFade = clamp(1.0 - (float(lodLevel) / 4.0), 0.0, 1.0);
-	float microAmplitude = 0.15 * lodFade;
+	float lodFade = clamp(1.0 - (float(lodLevel) / 6.0), 0.0, 1.0);
+	float microAmplitude = lodFade;
 	height += microNoise * microAmplitude;
-	normal = normalize(normal + vec3(-microGrad.x, 0.0, -microGrad.y) * (0.05 * lodFade));
+	normal = normalize(normal + vec3(microGrad.x, 0.0, microGrad.y) * (0.05 * lodFade));
 
 	uint lodDiff = morphLOD - lodLevel;
 	uint gridDim = 1u << lodDiff;
