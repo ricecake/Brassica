@@ -187,7 +187,9 @@ namespace brassica {
 			return;
 		}
 
-		vkb::destroy_swapchain(vkbSwapchain);
+		if (vkbSwapchain.swapchain != VK_NULL_HANDLE) {
+			vkb::destroy_swapchain(vkbSwapchain);
+		}
 		vkbSwapchain = swap_ret.value();
 
 		auto raw_images = vkbSwapchain.get_images().value();
@@ -322,7 +324,10 @@ namespace brassica {
 			for (auto view : swapchainImageViews) {
 				device.destroyImageView(view);
 			}
-			vkb::destroy_swapchain(vkbSwapchain);
+			if (vkbSwapchain.swapchain != VK_NULL_HANDLE) {
+				vkb::destroy_swapchain(vkbSwapchain);
+				vkbSwapchain = {};
+			}
 
 			if (allocator != VK_NULL_HANDLE) {
 				vmaDestroyAllocator(allocator);
@@ -366,6 +371,8 @@ namespace brassica {
 		if (!inputHandler) {
 			inputHandler = CreateDefaultInputHandler();
 		}
+
+		taskScheduler.Initialize();
 
 		InitWindow();
 		if (!InitVulkan()) {
@@ -463,7 +470,6 @@ namespace brassica {
 			/*hasDefinedContents=*/false
 		);
 
-		taskScheduler.Initialize();
 		{
 			float altitude = std::max(10.0f, camera.position.y);
 			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
