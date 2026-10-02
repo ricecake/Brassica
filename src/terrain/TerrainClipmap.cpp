@@ -336,7 +336,7 @@ namespace brassica {
 			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 			imageInfo.imageType = VK_IMAGE_TYPE_2D;
 			imageInfo.extent = VkExtent3D{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 1};
-			imageInfo.mipLevels = 1;
+			imageInfo.mipLevels = 10;
 			imageInfo.arrayLayers = numLODs;
 			imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
 			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;

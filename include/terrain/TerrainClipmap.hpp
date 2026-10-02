@@ -151,11 +151,13 @@ namespace brassica {
 			.kind = graph::ResourceDesc::Kind::Image2D,
 			.width = TERRAIN_MAP_DIM,
 			.height = TERRAIN_MAP_DIM,
+			.mips = 10,
 			.layers = numLODs,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
 			),
+			.persistent = true,
 		};
 	}
 
