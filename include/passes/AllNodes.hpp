@@ -13,6 +13,8 @@
 #include "passes/AtmosphereCompositeNode.hpp"
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/CirrusNode.hpp"
+#include "passes/CloudRenderNode.hpp"
+#include "passes/CloudVolumeGenNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/ImGuiNode.hpp"
