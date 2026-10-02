@@ -1,0 +1,81 @@
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_quad : require
+
+#define FFX_GPU
+#define FFX_GLSL
+
+shared vec4 spdIntermediate[16][16];
+shared uint spdCounter;
+
+// srcTexture: Mip 0 clipmap array (e.g., r32f height)
+layout(set = 0, binding = 0) uniform sampler2DArray srcTexture;
+
+// outMips: Mips 1 through N. rg32f/rg16f for min/max
+layout(set = 0, binding = 1, rg32f) uniform writeonly image2DArray outMips[12];
+
+// outMip6: The coherent handoff mip
+layout(set = 0, binding = 2, rg32f) uniform coherent image2DArray outMip6;
+
+// counter: One uint per clipmap slice
+layout(set = 0, binding = 3, std430) buffer AtomicCounter { uint counter[]; };
+
+layout(push_constant) uniform Constants {
+    uint mips;
+    uint numWorkGroups;    // Workgroups PER SLICE
+    uvec2 workGroupOffset; // Useful if you only update the "L-shape" of a shifting clipmap
+} cb;
+
+// 1. Fetch Mip 0
+vec4 SpdLoadSourceImage(ivec2 pix, uint slice) {
+    // For Min/Max hierarchical traversal, you need exact texels.
+    float height = texelFetch(srcTexture, ivec3(pix, slice), 0).r;
+
+    // Duplicate base height into min (x) and max (y) channels
+    return vec4(height, height, 0.0, 0.0);
+}
+
+// 2. Fetch Mip 6
+vec4 SpdLoad(ivec2 pix, uint slice) {
+    return imageLoad(outMip6, ivec3(pix, slice));
+}
+
+// 3. Store intermediate Mips
+void SpdStore(ivec2 pix, vec4 outValue, uint index, uint slice) {
+    if (index == 5) {
+        imageStore(outMip6, ivec3(pix, slice), outValue);
+    } else {
+        imageStore(outMips[index], ivec3(pix, slice), outValue);
+    }
+}
+
+// 4. Atomic Counters
+void SpdIncreaseAtomicCounter(uint slice) {
+    spdCounter = atomicAdd(counter[slice], 1);
+}
+uint SpdGetAtomicCounter(uint slice) {
+    return spdCounter;
+}
+
+// 5. Min/Max Reduction
+vec4 SpdReduce4(vec4 v0, vec4 v1, vec4 v2, vec4 v3) {
+    // x = MIN height, y = MAX height
+    float min_val = min(min(v0.x, v1.x), min(v2.x, v3.x));
+    float max_val = max(max(v0.y, v1.y), max(v2.y, v3.y));
+    return vec4(min_val, max_val, 0.0, 0.0);
+}
+
+#include "ffx_spd.h"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    SpdDownsample(
+        gl_WorkGroupID.xy,
+        gl_LocalInvocationIndex,
+        cb.mips,
+        cb.numWorkGroups,
+        gl_WorkGroupID.z, // Passes Z directly to 'slice' in your hooks
+        cb.workGroupOffset
+    );
+}

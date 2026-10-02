@@ -332,11 +332,11 @@ namespace brassica {
 	}
 
 	void TerrainClipmap::CreateTextureArrays() {
-		auto createArrayImage = [&](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc) {
+		auto createArrayImage = [&](vk::Image& img, vk::ImageView& view, VmaAllocation& alloc, uint8_t mips = 1) {
 			VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 			imageInfo.imageType = VK_IMAGE_TYPE_2D;
 			imageInfo.extent = VkExtent3D{TERRAIN_MAP_DIM, TERRAIN_MAP_DIM, 1};
-			imageInfo.mipLevels = 10;
+			imageInfo.mipLevels = mips;
 			imageInfo.arrayLayers = numLODs;
 			imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
 			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -363,7 +363,7 @@ namespace brassica {
 			view = device.createImageView(viewInfo);
 		};
 
-		createArrayImage(image, imageView, allocation);
+		createArrayImage(image, imageView, allocation, 10);
 		createArrayImage(minmaxImage, minmaxImageView, minmaxAllocation);
 		createArrayImage(biomeImage, biomeImageView, biomeAllocation);
 		createArrayImage(visibilityImage, visibilityImageView, visibilityAllocation);
