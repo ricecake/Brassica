@@ -91,6 +91,19 @@ namespace brassica::graph {
 		std::uint32_t usageMask = 0;
 		std::uint64_t byteSize = 0;
 		HostAccess    hostAccess = HostAccess::None;
+
+		// True for a resource meant to live indefinitely once allocated, surviving frames where
+		// the producing node is inactive (e.g. TerrainBiomeNode's climate state, regenerated only
+		// every Nth frame). PhysicalResourceRegistry::ProvisionTexture/ProvisionBuffer never route
+		// a persistent realization through the alias pool, regardless of enableAliasing -- a pool
+		// block's "last live stage" is only ever updated when Acquire() is called again for that
+		// id, which never happens once a desc-match keeps reusing the same handle across frames
+		// (ProvisionTexture/Buffer's early return). Left unmarked, the pool would eventually
+		// believe the block is free and hand that exact memory to an unrelated resource while this
+		// one is still alive, silently corrupting it. A node declares this by setting the flag on
+		// the ResourceDesc its Setup() builds -- in practice, baked into that resource's shared
+		// desc-builder function so every Create/Modify of the key gets it for free.
+		bool persistent = false;
 	};
 
 	// Opaque per-resource bindless-index lookup *and* CPU-write entry point. Implemented by
