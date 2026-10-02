@@ -1175,6 +1175,12 @@ namespace brassica {
 
 	void Engine::Run() {
 		spdlog::info("Engine::Run options.renderTerrainMap = {}, path = '{}'", options.renderTerrainMap, options.terrainMapPath);
+
+		if (!device) {
+			spdlog::warn("Engine::Run called but Vulkan device is null.");
+			return;
+		}
+
 		if (options.renderTerrainMap) {
 			spdlog::info("Terrain map export requested: output path '{}'...", options.terrainMapPath);
 			bool success = TerrainMapExporter::ExportGPU(*this, options.terrainMapPath, 4096, 2048);
@@ -1232,11 +1238,6 @@ namespace brassica {
 			};
 			(void)frameGraph.Compile(ctx, queueSet);
 			std::cout << brassica::graph::ToDot(frameGraph) << std::endl;
-			return;
-		}
-
-		if (!device) {
-			spdlog::warn("Engine::Run called but Vulkan device is null.");
 			return;
 		}
 
