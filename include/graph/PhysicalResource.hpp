@@ -318,6 +318,7 @@ namespace brassica::graph {
 		VmaAllocator  m_allocator = nullptr;
 		vk::Image     m_image{};
 		vk::ImageView m_view{};
+		std::optional<vk::ImageView[]> m_views{};
 		VmaAllocation m_allocation = nullptr;
 		ResourceDesc  m_desc{};
 		Ownership     m_ownership = Ownership::Imported;

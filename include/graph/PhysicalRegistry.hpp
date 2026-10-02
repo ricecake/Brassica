@@ -1006,7 +1006,7 @@ namespace brassica::graph {
 			// once it starts hitting the desc-match early return above.
 			std::shared_ptr<PhysicalTexture> tex = (enableAliasing && !desc.persistent)
 				? m_imagePool.Acquire(desc, lifetime.firstPass, lifetime.lastPass)
-				: std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
+				: std::make_shared<PhysicalTexture>(m_device, m_allocator, desc); // This should handle mips?
 
 			AssignAndWriteBindlessIndices(*tex);
 
