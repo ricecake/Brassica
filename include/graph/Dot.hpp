@@ -1,6 +1,8 @@
 #pragma once
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -119,8 +121,8 @@ namespace brassica::graph {
 				return "Early";
 			case Phase::Default:
 				return "Default / GBuffer";
-			default:
-				break;
+			case Phase::Late:
+				return "Late / UnderwaterStructuralTranslucentRender";
 			}
 			switch (val) {
 			case -500:
@@ -135,8 +137,6 @@ namespace brassica::graph {
 				return "Reflection";
 			case 900:
 				return "Atmosphere";
-			case 1000:
-				return "Late / UnderwaterStructuralTranslucentRender";
 			case 1100:
 				return "UnderwaterParticleRender";
 			case 1200:
@@ -170,12 +170,13 @@ namespace brassica::graph {
 				id += std::to_string(index);
 			}
 			id += '_';
-			if (val == INT32_MIN) {
+			if (phase == Phase::PreviousFrame) {
 				id += "min";
-			} else if (val == INT32_MAX) {
+			} else if (phase == Phase::NextFrame) {
 				id += "max";
 			} else if (val < 0) {
-				id += "neg" + std::to_string(-val);
+				std::uint32_t absVal = static_cast<std::uint32_t>(-(val + 1)) + 1u;
+				id += "neg" + std::to_string(absVal);
 			} else {
 				id += std::to_string(val);
 			}
@@ -235,9 +236,9 @@ namespace brassica::graph {
 				std::int32_t val = static_cast<std::int32_t>(phase);
 				std::string pName = PhaseName(phase);
 				std::string labelStr = "Phase ";
-				if (val == INT32_MIN) {
+				if (phase == Phase::PreviousFrame) {
 					labelStr += "PreviousFrame";
-				} else if (val == INT32_MAX) {
+				} else if (phase == Phase::NextFrame) {
 					labelStr += "NextFrame";
 				} else {
 					labelStr += std::to_string(val) + " (" + pName + ")";
