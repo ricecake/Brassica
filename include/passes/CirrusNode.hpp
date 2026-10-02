@@ -33,6 +33,7 @@ namespace brassica {
 		std::uint32_t skyViewIndex{0};
 		float         cirrusAlt{10.0f};
 		float         cirrusOpacity{0.0125f};
+		std::uint32_t weatherBiomeIndex{0};
 	};
 
 	// Renders a thin, lower atmospheric cirrus cloud layer at ~10km altitude.
@@ -45,6 +46,7 @@ namespace brassica {
 			GBuffer<graph::Read>,
 			graph::Read<TransmittanceLUT>,
 			graph::Read<SkyViewLUT>,
+			graph::Read<TerrainWeatherBiomeTexture>,
 			graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase(1250);
@@ -119,6 +121,7 @@ namespace brassica {
 			push.hdrColorIndex = ctx.Index<HdrColor>();
 			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

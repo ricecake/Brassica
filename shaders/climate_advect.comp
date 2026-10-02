@@ -1,0 +1,71 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "helpers/octahedral.glsl"
+#include "terrain/generation.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform ClimateAdvectPushConstants {
+	uint  inStorageIdx;  // Input climate texture index
+	uint  outStorageIdx; // Output climate texture index
+	uint  textureDim;    // 2048
+	float dt;            // Advection step size (default 1.0)
+} push;
+
+void main() {
+	uvec2 pixel = gl_GlobalInvocationID.xy;
+	if (pixel.x >= push.textureDim || pixel.y >= push.textureDim) {
+		return;
+	}
+
+	vec2 uv = (vec2(pixel) + 0.5) / float(push.textureDim);
+	ivec2 coord = ivec2(pixel);
+
+	vec4 currentData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inStorageIdx)], coord);
+	vec2 currentWind = currentData.ba;
+
+	// Semi-Lagrangian backtrace along the wind field. dt == 0 degenerates to the identity
+	// (backtrackUV == uv) -- TerrainBiomeNode uses that to relocate a buffer between BFECC
+	// passes without a dedicated copy shader, so the physical adjustments below must not run
+	// in that case (they'd otherwise get silently double-applied).
+	vec2 backtrackUV = uv - currentWind * push.dt;
+
+	// Wrap backtrack coordinates seamlessly across octahedral sphere boundaries
+	vec3 backtrackDir = octahedralUVToDirection(backtrackUV);
+	vec2 wrappedBacktrackUV = directionToOctahedralUV(backtrackDir);
+	ivec2 backtrackCoord = ivec2(clamp(wrappedBacktrackUV * float(push.textureDim), vec2(0.0), vec2(float(push.textureDim - 1))));
+
+	vec4 advected = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inStorageIdx)], backtrackCoord);
+
+	if (push.dt != 0.0) {
+		// Evaluate terrain land/ocean mask for moisture replenishment & mountain deflection
+		vec3 dir = octahedralUVToDirection(uv);
+		float theta = atan(dir.x, dir.z);
+		float phi = asin(clamp(dir.y, -1.0, 1.0));
+		vec3 worldP = vec3(theta * FAKE_PLANET_RADIUS, 0.0, phi * FAKE_PLANET_RADIUS);
+
+		float landMask = 0.0;
+		vec3 gradMask = vec3(0.0);
+		evaluate_soft_voronoi_pseudosphere2(worldP, 32, landMask, gradMask);
+		float landVal = clamp(landMask, 0.0, 1.0);
+
+		// Ocean moisture replenishment
+		if (landVal < 0.2) {
+			advected.g = mix(advected.g, 0.85, 0.2);
+		}
+
+		// Mountain barrier deflection: deflect wind away from steep land gradients
+		vec2 landGrad2D = vec2(gradMask.x, gradMask.z) * 0.001;
+		advected.ba -= landGrad2D * landVal * 0.005;
+	}
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
+		coord,
+		vec4(clamp(advected.r, 0.0, 1.0), clamp(advected.g, 0.0, 1.0), advected.b, advected.a)
+	);
+}

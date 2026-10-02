@@ -94,7 +94,7 @@ void main() {
 
 		if (distToCam > morphStart) {
 			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
-			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+			alpha = 0.5*round(2.0*alpha * alpha * (3.0 - 2.0 * alpha));
 
 			float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
 

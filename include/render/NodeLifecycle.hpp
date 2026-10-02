@@ -16,6 +16,7 @@
 namespace brassica {
 	class ShaderWatcher;
 	class TerrainAccelerationStructure;
+	class TerrainClipmap;
 
 	namespace graph {
 		class PhysicalResourceRegistry;
@@ -31,6 +32,7 @@ namespace brassica::render {
 		PipelineLibrary*                 pipelineLibrary = nullptr;
 		ShaderWatcher*                   shaderWatcher = nullptr;
 		TerrainAccelerationStructure*    terrainAS = nullptr;
+		TerrainClipmap*                  terrainClipmap = nullptr;
 		const DispatchLoaderDynamic*     dispatchLoader = nullptr;
 		graph::PhysicalResourceRegistry* physicalRegistry = nullptr;
 		vk::Format                       swapchainFormat = vk::Format::eUndefined;

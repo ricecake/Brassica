@@ -405,12 +405,34 @@ namespace brassica {
 
 		terrainAS.Init(instance, device, allocator);
 
+		float initialTerrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
+		camera.position.y = initialTerrainHeight + 2.0f;
+
+		float altitude = std::max(10.0f, camera.position.y);
+		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
+		camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
+
+		// Must run before EngineNodeRegistry::InitAll below -- TerrainGenNode::Init registers
+		// the clipmap/min-max/biome/visibility images as imports itself now, which needs real
+		// GPU images already in hand (same ordering terrainAS.Init above already relies on via
+		// NodeServices::terrainAS).
+		terrainClipmap.Init(
+			device,
+			allocator,
+			constants::Class::Terrain::DefaultMaxLODs,
+			constants::Class::Terrain::BaseTexelSize,
+			0.0f,
+			camera.position
+		);
+
 		render::NodeServices nodeServices{
 			.device = device,
 			.pipelineLibrary = &pipelineLibrary,
 			.shaderWatcher = &shaderWatcher,
 			.terrainAS = &terrainAS,
+			.terrainClipmap = &terrainClipmap,
 			.dispatchLoader = &terrainAS.GetDls(),
+			.physicalRegistry = &physicalRegistry,
 			.swapchainFormat = GetSwapchainFormat(),
 		};
 		// Concrete evidence the CRTP registrar (render::NodeRegistrar<T>, include/render/
@@ -424,51 +446,7 @@ namespace brassica {
 		render::EngineNodeRegistry::Instance().CreateAll();
 		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
-		float initialTerrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
-		camera.position.y = initialTerrainHeight + 2.0f;
-
-		float altitude = std::max(10.0f, camera.position.y);
-		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
-		camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
-
-		terrainClipmap.Init(
-			device,
-			allocator,
-			constants::Class::Terrain::DefaultMaxLODs,
-			constants::Class::Terrain::BaseTexelSize,
-			0.0f,
-			camera.position
-		);
-
-		physicalRegistry.RegisterImportedTexture<TerrainClipmapTexture>(
-			terrainClipmap.GetImage(),
-			terrainClipmap.GetImageView(),
-			TerrainClipmapDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eUndefined,
-			/*hasDefinedContents=*/false
-		);
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
-		physicalRegistry.RegisterImportedTexture<TerrainMinMaxTexture>(
-			terrainClipmap.GetMinMaxImage(),
-			terrainClipmap.GetMinMaxImageView(),
-			TerrainMinMaxDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eUndefined,
-			/*hasDefinedContents=*/false
-		);
-		physicalRegistry.RegisterImportedTexture<TerrainBiomeTexture>(
-			terrainClipmap.GetBiomeImage(),
-			terrainClipmap.GetBiomeImageView(),
-			TerrainBiomeDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eUndefined,
-			/*hasDefinedContents=*/false
-		);
-		physicalRegistry.RegisterImportedTexture<TerrainTileVisibilityTexture>(
-			terrainClipmap.GetVisibilityImage(),
-			terrainClipmap.GetVisibilityImageView(),
-			TerrainTileVisibilityDesc(terrainClipmap.GetNumLODs()),
-			vk::ImageLayout::eUndefined,
-			/*hasDefinedContents=*/false
-		);
 
 		{
 			float altitude = std::max(10.0f, camera.position.y);

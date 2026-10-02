@@ -25,7 +25,7 @@ namespace brassica {
 		// padding, while GLSL's push-constant rules silently reinsert padding to keep the trailing
 		// vec4s 16-byte aligned, and that exact mismatch has bitten this struct before (see
 		// bloomEnabled's comment below).
-		float _pad0{0.0f};
+		float exposure{1.0f};
 
 		float contrast{1.0f};
 		float saturation{1.0f};
