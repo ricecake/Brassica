@@ -25,8 +25,10 @@ namespace brassica {
 		alignas(16) glm::vec4 cascadeExtents{20000.0f, 80000.0f, 320000.0f, 15000.0f};
 		alignas(16) glm::vec4 cascadeCenterPos[3]{};
 		alignas(16) glm::ivec4 cascadeGridOffset[3]{};
-		std::uint32_t forceRegeneration{1};
+		alignas(4) std::uint32_t forceRegeneration{1};
+		alignas(4) std::uint32_t padding[3]{0};
 	};
+	static_assert(sizeof(CloudVolumeGenPushConstants) == 160, "CloudVolumeGenPushConstants size must be 160 bytes");
 
 	struct CloudVolumeCascadeState {
 		glm::vec2 centerPos{0.0f};

@@ -23,6 +23,7 @@ namespace brassica {
 		alignas(16) glm::uvec4 cascadeSampledIdx{0};
 		alignas(16) glm::vec4 cameraPos{0.0f};
 	};
+	static_assert(sizeof(CloudRenderPushConstants) == 32, "CloudRenderPushConstants size must be 32 bytes");
 
 	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
 	// Minimally populated graphics fragment pass for cloud volume sampling and composition.
