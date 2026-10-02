@@ -4,12 +4,14 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
 #include "types/CdlGradingData.hpp"
 
+#include "graph/Dot.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
 #include <glm/gtc/matrix_transform.hpp>
@@ -1173,6 +1175,12 @@ namespace brassica {
 
 	void Engine::Run() {
 		spdlog::info("Engine::Run options.renderTerrainMap = {}, path = '{}'", options.renderTerrainMap, options.terrainMapPath);
+
+		if (!device) {
+			spdlog::warn("Engine::Run called but Vulkan device is null.");
+			return;
+		}
+
 		if (options.renderTerrainMap) {
 			spdlog::info("Terrain map export requested: output path '{}'...", options.terrainMapPath);
 			bool success = TerrainMapExporter::ExportGPU(*this, options.terrainMapPath, 4096, 2048);
@@ -1184,8 +1192,52 @@ namespace brassica {
 			return;
 		}
 
-		if (!device) {
-			spdlog::warn("Engine::Run called but Vulkan device is null.");
+		if (options.printRenderGraph) {
+			spdlog::info("Render graph export requested.");
+
+			render::NodeFrameParams frameParams{
+				.cameraPosition = camera.position,
+				.previousCameraPosition = camera.position,
+				.forceRegeneration = false,
+				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
+				.waterLevel = 0.0f,
+				.sunDir = glm::vec3(0.0f, 1.0f, 0.0f),
+				.sunRadiance = glm::vec3(3.0f, 2.94f, 2.76f),
+				.moonDir = glm::vec3(0.0f, -1.0f, 0.0f),
+				.moonRadiance = glm::vec3(0.1f, 0.12f, 0.16f),
+				.time = 0.0f,
+				.worldScale = 1.0f,
+				.multiScatScale = 1.0f,
+				.cloudShadowIntensity = 0.5f,
+				.skyExposure = lightManager.GetSkyExposure(),
+				.atmosphere = atmosphere,
+			};
+			auto& nodeRegistry = render::EngineNodeRegistry::Instance();
+			nodeRegistry.SetFrameParamsAll(frameParams);
+
+			graph::Graph frameGraph;
+			frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
+			frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
+			frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
+			frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+			frameGraph.Register<graph::Import<TerrainTLAS>>();
+			frameGraph.Register<graph::Import<Swapchain>>();
+			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+			materialManager.RegisterBufferNode(frameGraph);
+			nodeRegistry.RegisterAllInto(frameGraph);
+			for (auto& handler : systemHandlers) {
+				if (handler) {
+					handler->GetEntityNode().RegisterInto(frameGraph);
+				}
+			}
+			vk::Extent2D extent = GetSwapchainExtent();
+			graph::FrameContext ctx{
+				.width = extent.width > 0 ? extent.width : 1280u,
+				.height = extent.height > 0 ? extent.height : 720u,
+				.frameIndex = 0
+			};
+			(void)frameGraph.Compile(ctx, queueSet);
+			std::cout << brassica::graph::ToDot(frameGraph) << std::endl;
 			return;
 		}
 
