@@ -4,12 +4,14 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
 #include "types/CdlGradingData.hpp"
 
+#include "graph/Dot.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
 #include <glm/gtc/matrix_transform.hpp>
@@ -1181,6 +1183,32 @@ namespace brassica {
 			} else {
 				spdlog::error("Failed to export terrain map to '{}'.", options.terrainMapPath);
 			}
+			return;
+		}
+
+		if (options.printRenderGraph) {
+			spdlog::info("Render graph export requested.");
+			graph::Graph frameGraph;
+			frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
+			frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
+			frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
+			frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
+			frameGraph.Register<graph::Import<TerrainTLAS>>();
+			materialManager.RegisterBufferNode(frameGraph);
+			render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
+			for (auto& handler : systemHandlers) {
+				if (handler) {
+					handler->GetEntityNode().RegisterInto(frameGraph);
+				}
+			}
+			vk::Extent2D extent = GetSwapchainExtent();
+			graph::FrameContext ctx{
+				.width = extent.width > 0 ? extent.width : 1280u,
+				.height = extent.height > 0 ? extent.height : 720u,
+				.frameIndex = 0
+			};
+			(void)frameGraph.Compile(ctx, queueSet);
+			std::cout << brassica::graph::ToDot(frameGraph) << std::endl;
 			return;
 		}
 
