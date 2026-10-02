@@ -1188,14 +1188,37 @@ namespace brassica {
 
 		if (options.printRenderGraph) {
 			spdlog::info("Render graph export requested.");
+
+			render::NodeFrameParams frameParams{
+				.cameraPosition = camera.position,
+				.previousCameraPosition = camera.position,
+				.forceRegeneration = false,
+				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
+				.waterLevel = 0.0f,
+				.sunDir = glm::vec3(0.0f, 1.0f, 0.0f),
+				.sunRadiance = glm::vec3(3.0f, 2.94f, 2.76f),
+				.moonDir = glm::vec3(0.0f, -1.0f, 0.0f),
+				.moonRadiance = glm::vec3(0.1f, 0.12f, 0.16f),
+				.time = 0.0f,
+				.worldScale = 1.0f,
+				.multiScatScale = 1.0f,
+				.cloudShadowIntensity = 0.5f,
+				.skyExposure = lightManager.GetSkyExposure(),
+				.atmosphere = atmosphere,
+			};
+			auto& nodeRegistry = render::EngineNodeRegistry::Instance();
+			nodeRegistry.SetFrameParamsAll(frameParams);
+
 			graph::Graph frameGraph;
 			frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
 			frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
 			frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
 			frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 			frameGraph.Register<graph::Import<TerrainTLAS>>();
+			frameGraph.Register<graph::Import<Swapchain>>();
+			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 			materialManager.RegisterBufferNode(frameGraph);
-			render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
+			nodeRegistry.RegisterAllInto(frameGraph);
 			for (auto& handler : systemHandlers) {
 				if (handler) {
 					handler->GetEntityNode().RegisterInto(frameGraph);
