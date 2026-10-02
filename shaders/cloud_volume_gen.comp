@@ -2,6 +2,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #include "bindless.glsl"
+#include "lygia/generative/psrdnoise.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
@@ -49,7 +50,7 @@ void main() {
 		float heightGradient = smoothstep(0.0, 0.2, altitudeRel) * smoothstep(1.0, 0.6, altitudeRel);
 
 		// Basic noise/procedural density
-		float density = heightGradient * 0.5;
+		float density = 3*smoothstep(0.2, 1.0, psrdnoise(worldPos, vec3(0.0), uTime));
 
 		imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], ivec3(localVox), vec4(density, 0.0, 0.0, 1.0));
 	}

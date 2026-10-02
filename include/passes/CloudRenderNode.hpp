@@ -19,21 +19,37 @@
 
 namespace brassica {
 
-	struct CloudRenderPushConstants {
+
+	struct alignas(16) CloudRenderPushConstants {
+		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};
+		alignas(16) glm::vec4 sunRadianceAndSkyExp{3.0f, 2.94f, 2.76f, 1.0f};
 		alignas(16) glm::uvec4 cascadeSampledIdx{0};
-		alignas(16) glm::vec4 cameraPos{0.0f};
+		std::uint32_t gPositionIndex{0};
+		std::uint32_t gAlbedoIndex{0};
+		std::uint32_t hdrColorIndex{0};
+		std::uint32_t transmittanceIndex{0};
+
+		std::uint32_t skyViewIndex{0};
+		std::uint32_t weatherBiomeIndex{0};
+		float         cirrusOpacity{0.0125f};
+		float         _padding;
 	};
 
 	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
 	// Minimally populated graphics fragment pass for cloud volume sampling and composition.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
 		using Resources = graph::Declares<
+			GBuffer<graph::Read>,
 			graph::Read<CloudVolumeCascade0>,
 			graph::Read<CloudVolumeCascade1>,
 			graph::Read<CloudVolumeCascade2>,
+			graph::Read<TransmittanceLUT>,
+			graph::Read<SkyViewLUT>,
+			graph::Read<TerrainWeatherBiomeTexture>,
 			graph::Modify<HdrColor>>;
 
-		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
+		// static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
+		static constexpr graph::Phase kPhase = graph::Phase(1250);
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -68,7 +84,8 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.cameraPos = glm::vec4(p.cameraPosition, 1.0f);
+			push.sunDir = glm::vec4(p.sunDir, 0.0f);
+			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -102,6 +119,21 @@ namespace brassica {
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TransmittanceLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
+
 			return r;
 		}
 
@@ -109,6 +141,12 @@ namespace brassica {
 			push.cascadeSampledIdx.x = ctx.Index<CloudVolumeCascade0>();
 			push.cascadeSampledIdx.y = ctx.Index<CloudVolumeCascade1>();
 			push.cascadeSampledIdx.z = ctx.Index<CloudVolumeCascade2>();
+			push.gPositionIndex = ctx.Index<GBufferPosition>();
+			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
+			push.hdrColorIndex = ctx.Index<HdrColor>();
+			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
+			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
