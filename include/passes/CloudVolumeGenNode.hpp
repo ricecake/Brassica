@@ -91,7 +91,7 @@ namespace brassica {
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			previousCameraPos = cameraPos;
 			cameraPos = p.cameraPosition;
-			hasUpdate = (cameraPos != previousCameraPos);
+			hasUpdate = (cameraPos.x != previousCameraPos.x || cameraPos.z != previousCameraPos.z);
 			forceRegeneration = p.forceRegeneration;
 		}
 

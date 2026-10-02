@@ -21,13 +21,11 @@ namespace brassica {
 
 	struct CloudRenderPushConstants {
 		alignas(16) glm::uvec4 cascadeSampledIdx{0};
-		std::uint32_t hdrColorStorageIdx{0};
-		std::uint32_t width{0};
-		std::uint32_t height{0};
+		alignas(16) glm::vec4 cameraPos{0.0f};
 	};
 
 	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
-	// Minimally populated compute pass for cloud volume sampling and composition.
+	// Minimally populated graphics fragment pass for cloud volume sampling and composition.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
 		using Resources = graph::Declares<
 			graph::Read<CloudVolumeCascade0>,
@@ -37,13 +35,20 @@ namespace brassica {
 
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 
+		static constexpr render::GraphicsPipelineState kPipelineState{
+			.cullMode = vk::CullModeFlagBits::eNone,
+			.enableShadingRate = false,
+		};
+
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-		ComputeShader            renderShader;
+		VertexShader             vertShader; // shaders/atmosphere/sky.vert
+		FragmentShader           fragShader; // shaders/cloud_render.frag
 		CloudRenderPushConstants push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			if (!renderShader.CompileComputeFromFile(services.device, "shaders/cloud_render.comp")) {
+			if (!vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/cloud_render.frag")) {
 				spdlog::critical("CloudRenderNode shader compilation failed.");
 				throw std::runtime_error("CloudRenderNode shader compilation failed.");
 			}
@@ -53,19 +58,21 @@ namespace brassica {
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-			watcher.RegisterShader(&renderShader);
+			watcher.RegisterShader(&vertShader);
+			watcher.RegisterShader(&fragShader);
 		}
 
 		void Destroy(vk::Device device) {
-			renderShader.Destroy(device);
+			vertShader.Destroy(device);
+			fragShader.Destroy(device);
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			(void)p;
+			push.cameraPos = glm::vec4(p.cameraPosition, 1.0f);
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.reserve(4);
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -102,24 +109,21 @@ namespace brassica {
 			push.cascadeSampledIdx.x = ctx.Index<CloudVolumeCascade0>();
 			push.cascadeSampledIdx.y = ctx.Index<CloudVolumeCascade1>();
 			push.cascadeSampledIdx.z = ctx.Index<CloudVolumeCascade2>();
-			push.hdrColorStorageIdx = ctx.StorageIndex<HdrColor>();
-			push.width = ctx.width;
-			push.height = ctx.height;
 
+			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
+			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout))
-			};
-			std::array<vk::DescriptorSet, 2> boundSets{
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.frameSet)),
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
+				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
+				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudRenderPushConstants)}
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(CloudRenderPushConstants)}
 			};
 
-			render::ComputePipelineRequest request{
-				.shader = &renderShader,
+			render::GraphicsPipelineRequest request{
+				.stages = stages,
+				.state = kPipelineState,
+				.colorFormats = colorFormats,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};
@@ -127,24 +131,32 @@ namespace brassica {
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
 			}
 
+			std::array<vk::DescriptorSet, 2> boundSets{
+				static_cast<VkDescriptorSet>(ctx.frameSet),
+				static_cast<VkDescriptorSet>(ctx.globalSet)
+			};
 			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
 			}
+
+			vk::Extent2D extent{ctx.width, ctx.height};
+			vk::Viewport
+				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
+			vkCmd.setViewport(0, viewport);
+			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 
 			vkCmd.pushConstants(
 				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
+				vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(CloudRenderPushConstants),
 				&push
 			);
 
-			uint32_t groupX = (ctx.width + 15) / 16;
-			uint32_t groupY = (ctx.height + 15) / 16;
-			vkCmd.dispatch(groupX, groupY, 1);
+			vkCmd.draw(3, 1, 0, 0);
 		}
 	};
 
