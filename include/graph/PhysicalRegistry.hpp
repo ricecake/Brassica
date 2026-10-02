@@ -1001,7 +1001,10 @@ namespace brassica::graph {
 				RetireBindlessIndices(*existingIt->second, frameIndex);
 			}
 
-			std::shared_ptr<PhysicalTexture> tex = enableAliasing
+			// A persistent resource never goes through the alias pool -- see ResourceDesc::persistent's
+			// comment (Execution.hpp) for why a pool block can't track this resource's real lifetime
+			// once it starts hitting the desc-match early return above.
+			std::shared_ptr<PhysicalTexture> tex = (enableAliasing && !desc.persistent)
 				? m_imagePool.Acquire(desc, lifetime.firstPass, lifetime.lastPass)
 				: std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
 
@@ -1052,8 +1055,9 @@ namespace brassica::graph {
 			// to exist), but a host-write resource is explicitly meant to persist *across* frames
 			// -- aliasing it would let some unrelated same-frame resource's next-frame write
 			// silently stomp it.
+			// Same persistent-bypass reasoning as ProvisionTexture above.
 			std::shared_ptr<PhysicalBuffer> newBuffer;
-			if (enableAliasing && !hostWrite) {
+			if (enableAliasing && !hostWrite && !desc.persistent) {
 				newBuffer = m_bufferPool.Acquire(desc, lifetime.firstPass, lifetime.lastPass);
 			} else if (hostWrite) {
 				newBuffer = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc, ringSlots);

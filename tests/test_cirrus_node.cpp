@@ -8,6 +8,7 @@
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/CirrusNode.hpp"
 #include "passes/SkyBackgroundNode.hpp"
+#include "passes/TerrainBiomeNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 
@@ -66,6 +67,25 @@ namespace {
 		void Execute(graph::NodeContext&) {}
 	};
 
+	struct FakeWeatherProducer {
+		using Resources = graph::Declares<
+			graph::Create<TerrainWeatherBiomeTexture>>;
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = WeatherBiomeImageDesc(256),
+				}
+			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext&) {}
+	};
+
 } // namespace
 
 TEST_CASE("CirrusNode renders through PhysicalExecutionBackend with no validation errors, across two frames") {
@@ -114,6 +134,7 @@ TEST_CASE("CirrusNode renders through PhysicalExecutionBackend with no validatio
 		for (std::uint64_t frameIndex = 0; frameIndex < 2; ++frameIndex) {
 			graph::Graph graph;
 			graph.Register<FakeSceneProducer>(FakeSceneProducer{});
+			graph.Register<FakeWeatherProducer>(FakeWeatherProducer{});
 			graph.RegisterRef(transNode);
 			graph.RegisterRef(multiNode);
 			graph.RegisterRef(skyViewNode);

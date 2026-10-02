@@ -22,12 +22,18 @@ namespace brassica {
 	struct ClimateInitialPushConstants {
 		std::uint32_t outStorageIdx{0};
 		std::uint32_t textureDim{2048};
-		bool          forceRegeneration{true};
-		std::uint32_t pad{0};
 	};
 
 	struct ClimateAdvectPushConstants {
 		std::uint32_t inStorageIdx{0};
+		std::uint32_t outStorageIdx{0};
+		std::uint32_t textureDim{2048};
+		float         dt{1.0f};
+	};
+
+	struct ClimateBFECCCorrectPushConstants {
+		std::uint32_t forwardStorageIdx{0};
+		std::uint32_t originalStorageIdx{0};
 		std::uint32_t outStorageIdx{0};
 		std::uint32_t textureDim{2048};
 		float         dt{1.0f};
@@ -40,6 +46,11 @@ namespace brassica {
 		std::uint32_t pad{0};
 	};
 
+	// Marked persistent: this field is read every time a node Creates/Modifies either weather
+	// texture, so both get the lazy-allocate-once, alias-pool-bypassing treatment uniformly --
+	// see ResourceDesc::persistent (Execution.hpp). Without it, the registry's alias pool would
+	// eventually believe the memory backing one of these is free (it only ever runs once every
+	// updateInterval frames) and hand it to an unrelated transient resource.
 	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim = 2048) {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
@@ -50,6 +61,7 @@ namespace brassica {
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
 			),
+			.persistent = true,
 		};
 	}
 
@@ -61,9 +73,11 @@ namespace brassica {
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            initialShader;
 		ComputeShader            advectShader;
+		ComputeShader            correctShader;
 		ComputeShader            weatherShader;
 
 		bool          forceRegeneration{true};
+		bool          hasEverGenerated{false};
 		std::uint32_t frameCounter{0};
 		std::uint32_t updateInterval{300};
 		std::uint32_t textureDim{2048};
@@ -72,6 +86,7 @@ namespace brassica {
 			pipelineLibrary = services.pipelineLibrary;
 			if (!initialShader.CompileComputeFromFile(services.device, "shaders/climate_initial.comp") ||
 			    !advectShader.CompileComputeFromFile(services.device, "shaders/climate_advect.comp") ||
+			    !correctShader.CompileComputeFromFile(services.device, "shaders/climate_bfecc_correct.comp") ||
 			    !weatherShader.CompileComputeFromFile(services.device, "shaders/climate_weather.comp")) {
 				spdlog::critical("TerrainBiomeNode shader compilation failed.");
 				throw std::runtime_error("TerrainBiomeNode shader compilation failed.");
@@ -84,12 +99,14 @@ namespace brassica {
 		void RegisterShaders(ShaderWatcher& watcher) {
 			watcher.RegisterShader(&initialShader);
 			watcher.RegisterShader(&advectShader);
+			watcher.RegisterShader(&correctShader);
 			watcher.RegisterShader(&weatherShader);
 		}
 
 		void Destroy(vk::Device device) {
 			initialShader.Destroy(device);
 			advectShader.Destroy(device);
+			correctShader.Destroy(device);
 			weatherShader.Destroy(device);
 		}
 
@@ -121,6 +138,40 @@ namespace brassica {
 			return r;
 		}
 
+		// Binds/pushes/dispatches one of this node's compute passes. Shared across every pass
+		// below -- the bind-pipeline/bind-sets/push-constants/dispatch shape is otherwise
+		// identical for all five, differing only in which shader and push-constant type.
+		template <typename PushT>
+		void DispatchCompute(
+			vk::CommandBuffer                              vkCmd,
+			ComputeShader&                                 shader,
+			const std::array<vk::DescriptorSetLayout, 2>&  setLayouts,
+			const std::array<vk::DescriptorSet, 2>&        boundSets,
+			const PushT&                                   push
+		) {
+			std::array<vk::PushConstantRange, 1> pushRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushT)}
+			};
+
+			render::ComputePipelineRequest req{
+				.shader = &shader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushRanges,
+			};
+			render::ResolvedPipeline res = pipelineLibrary->ResolveCached(req);
+
+			if (res.pipeline) {
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, res.pipeline);
+			}
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, res.layout, 0, boundSets, nullptr);
+			}
+			vkCmd.pushConstants(res.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushT), &push);
+
+			std::uint32_t groupCount = (textureDim + 15) / 16;
+			vkCmd.dispatch(groupCount, groupCount, 1);
+		}
+
 		void Execute(graph::NodeContext& ctx) {
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
@@ -133,6 +184,12 @@ namespace brassica {
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
+			// mainIdx (TerrainWeatherBiomeTexture) and pingPongIdx (TerrainWeatherPingPongTexture)
+			// are both marked persistent (WeatherBiomeImageDesc) -- real GPU memory that survives
+			// every frame this node is inactive, not just the frame it was allocated on. pingPongIdx
+			// holds the persistent *raw* climate state (temp, moisture, windX, windY) carried
+			// across activations; mainIdx ends this function holding the display weather/biome
+			// texture CirrusNode/DeferredNode sample.
 			std::uint32_t mainIdx = ctx.StorageIndex<TerrainWeatherBiomeTexture>();
 			std::uint32_t pingPongIdx = ctx.StorageIndex<TerrainWeatherPingPongTexture>();
 
@@ -148,131 +205,88 @@ namespace brassica {
 				cmd.pipelineBarrier2(depInfo);
 			};
 
-			// Pass 1: Generate initial climate texture into pingPongIdx
-			{
-				ClimateInitialPushConstants pushInitial{
-					.outStorageIdx = pingPongIdx,
-					.textureDim = textureDim,
-					.forceRegeneration = forceRegeneration,
-				};
-
-				std::array<vk::PushConstantRange, 1> pushRanges{
-					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ClimateInitialPushConstants)}
-				};
-
-				render::ComputePipelineRequest req{
-					.shader = &initialShader,
-					.setLayouts = setLayouts,
-					.pushConstantRanges = pushRanges,
-				};
-				render::ResolvedPipeline res = pipelineLibrary->ResolveCached(req);
-
-				if (res.pipeline) {
-					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, res.pipeline);
-				}
-				if (boundSets[0] && boundSets[1]) {
-					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, res.layout, 0, boundSets, nullptr);
-				}
-				vkCmd.pushConstants(
-					res.layout,
-					vk::ShaderStageFlagBits::eCompute,
-					0,
-					sizeof(ClimateInitialPushConstants),
-					&pushInitial
+			// Regenerate the baseline only on first-ever generation or an explicit
+			// forceRegeneration. Every other activation continues advecting whatever state
+			// survived in pingPongIdx from the previous one -- that's the entire point of marking
+			// these textures persistent instead of letting this unconditionally reset the
+			// simulation back to the deterministic baseline field every updateInterval frames.
+			if (!hasEverGenerated || forceRegeneration) {
+				DispatchCompute(
+					vkCmd,
+					initialShader,
+					setLayouts,
+					boundSets,
+					ClimateInitialPushConstants{.outStorageIdx = pingPongIdx, .textureDim = textureDim}
 				);
-
-				std::uint32_t groupCount = (textureDim + 15) / 16;
-				vkCmd.dispatch(groupCount, groupCount, 1);
+				insertComputeBarrier(vkCmd);
+				hasEverGenerated = true;
 			}
 
+			// Back and Forth Error Compensation and Correction (BFECC), using the two persistent
+			// textures as the only two physical buffers for the whole cycle:
+			//   1. forward semi-Lagrangian step:        pingPongIdx (phi0) -> mainIdx (phi1)
+			//   2. backward step + pointwise correction, written in place over pingPongIdx --
+			//      phi0's own texel is never backtraced there, so overwriting it in place is safe
+			//      (see climate_bfecc_correct.comp)
+			//   3. final forward step of the corrected field: pingPongIdx -> mainIdx (phi_final)
+			//   4. relocate phi_final back to pingPongIdx (dt = 0, a pure copy -- see
+			//      climate_advect.comp) so it's there for the next activation's step 1
+			//   5. weather/Whittaker biome derivation: pingPongIdx (phi_final) -> mainIdx (display)
+			DispatchCompute(
+				vkCmd,
+				advectShader,
+				setLayouts,
+				boundSets,
+				ClimateAdvectPushConstants{
+					.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
+				}
+			);
 			insertComputeBarrier(vkCmd);
 
-			// Pass 2: Advection Ping-Pong Passes (4 iterations)
-			std::uint32_t currentIn = pingPongIdx;
-			std::uint32_t currentOut = mainIdx;
-
-			{
-				std::array<vk::PushConstantRange, 1> pushRanges{
-					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ClimateAdvectPushConstants)}
-				};
-
-				render::ComputePipelineRequest req{
-					.shader = &advectShader,
-					.setLayouts = setLayouts,
-					.pushConstantRanges = pushRanges,
-				};
-				render::ResolvedPipeline res = pipelineLibrary->ResolveCached(req);
-
-				if (res.pipeline) {
-					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, res.pipeline);
-				}
-				if (boundSets[0] && boundSets[1]) {
-					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, res.layout, 0, boundSets, nullptr);
-				}
-
-				std::uint32_t groupCount = (textureDim + 15) / 16;
-
-				for (int i = 0; i < 4; ++i) {
-					ClimateAdvectPushConstants pushAdvect{
-						.inStorageIdx = currentIn,
-						.outStorageIdx = currentOut,
-						.textureDim = textureDim,
-						.dt = 1.0f,
-					};
-
-					vkCmd.pushConstants(
-						res.layout,
-						vk::ShaderStageFlagBits::eCompute,
-						0,
-						sizeof(ClimateAdvectPushConstants),
-						&pushAdvect
-					);
-
-					vkCmd.dispatch(groupCount, groupCount, 1);
-
-					insertComputeBarrier(vkCmd);
-
-					std::swap(currentIn, currentOut);
-				}
-			}
-
-			// Pass 3: Weather Analysis & Whittaker Biome Pass (reads currentIn, writes mainIdx)
-			{
-				ClimateWeatherPushConstants pushWeather{
-					.climateStorageIdx = currentIn,
-					.outStorageIdx = mainIdx,
+			DispatchCompute(
+				vkCmd,
+				correctShader,
+				setLayouts,
+				boundSets,
+				ClimateBFECCCorrectPushConstants{
+					.forwardStorageIdx = mainIdx,
+					.originalStorageIdx = pingPongIdx,
+					.outStorageIdx = pingPongIdx,
 					.textureDim = textureDim,
-				};
-
-				std::array<vk::PushConstantRange, 1> pushRanges{
-					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ClimateWeatherPushConstants)}
-				};
-
-				render::ComputePipelineRequest req{
-					.shader = &weatherShader,
-					.setLayouts = setLayouts,
-					.pushConstantRanges = pushRanges,
-				};
-				render::ResolvedPipeline res = pipelineLibrary->ResolveCached(req);
-
-				if (res.pipeline) {
-					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, res.pipeline);
+					.dt = 1.0f,
 				}
-				if (boundSets[0] && boundSets[1]) {
-					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, res.layout, 0, boundSets, nullptr);
+			);
+			insertComputeBarrier(vkCmd);
+
+			DispatchCompute(
+				vkCmd,
+				advectShader,
+				setLayouts,
+				boundSets,
+				ClimateAdvectPushConstants{
+					.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
 				}
+			);
+			insertComputeBarrier(vkCmd);
 
-				vkCmd.pushConstants(
-					res.layout,
-					vk::ShaderStageFlagBits::eCompute,
-					0,
-					sizeof(ClimateWeatherPushConstants),
-					&pushWeather
-				);
+			DispatchCompute(
+				vkCmd,
+				advectShader,
+				setLayouts,
+				boundSets,
+				ClimateAdvectPushConstants{
+					.inStorageIdx = mainIdx, .outStorageIdx = pingPongIdx, .textureDim = textureDim, .dt = 0.0f
+				}
+			);
+			insertComputeBarrier(vkCmd);
 
-				std::uint32_t groupCount = (textureDim + 15) / 16;
-				vkCmd.dispatch(groupCount, groupCount, 1);
-			}
+			DispatchCompute(
+				vkCmd,
+				weatherShader,
+				setLayouts,
+				boundSets,
+				ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim}
+			);
 		}
 	};
 

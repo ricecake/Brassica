@@ -86,7 +86,7 @@ void main() {
 
 	float effectiveMoisture = clamp(moisture - rainShadow * 0.3, 0.0, 1.0);
 
-	// Store final output: r = advected temperature, g = advected moisture, b = severity, a = rain shadow
+	// Store final output: r = advected temperature, g = advected/effective moisture, b = severity, a = rain shadow
 	imageStore(
 		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
 		coord,

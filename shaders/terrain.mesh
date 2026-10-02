@@ -94,7 +94,7 @@ void main() {
 
 		if (distToCam > morphStart) {
 			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
-			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+			alpha = 0.5*round(2.0*alpha * alpha * (3.0 - 2.0 * alpha));
 
 			float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
 
@@ -128,6 +128,15 @@ void main() {
 			normal = normalize(mix(normal, texNext.gba, alpha));
 		}
 	}
+
+	// Add minor local perturbations to mesh height and surface normals for close-up detail
+	vec2 microGrad = vec2(0.0);
+	float detailFreq = 0.5;
+	float microNoise = psrdnoise(morphedWorldXZ * detailFreq, vec2(0.0), 0.0, microGrad);
+	float lodFade = clamp(1.0 - (float(lodLevel) / 4.0), 0.0, 1.0);
+	float microAmplitude = 0.15 * lodFade;
+	height += microNoise * microAmplitude;
+	normal = normalize(normal + vec3(-microGrad.x, 0.0, -microGrad.y) * (0.05 * lodFade));
 
 	uint lodDiff = morphLOD - lodLevel;
 	uint gridDim = 1u << lodDiff;

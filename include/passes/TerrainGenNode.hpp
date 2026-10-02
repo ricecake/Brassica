@@ -65,6 +65,44 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+
+			// The clipmap/min-max/biome/visibility images this node Modifies<> are real GPU
+			// resources owned by TerrainClipmap (its own streaming/paging logic needs raw handle
+			// access the graph's Write/WriteSpan primitives can't give it) -- registered as
+			// imports here, next to the node that actually declares and drives them, rather than
+			// centralized in Engine::Init where a resource's owner and its graph registration used
+			// to live in two unrelated places.
+			if (physicalRegistry && services.terrainClipmap) {
+				TerrainClipmap& clipmap = *services.terrainClipmap;
+				physicalRegistry->RegisterImportedTexture<TerrainClipmapTexture>(
+					clipmap.GetImage(),
+					clipmap.GetImageView(),
+					TerrainClipmapDesc(clipmap.GetNumLODs()),
+					vk::ImageLayout::eUndefined,
+					/*hasDefinedContents=*/false
+				);
+				physicalRegistry->RegisterImportedTexture<TerrainMinMaxTexture>(
+					clipmap.GetMinMaxImage(),
+					clipmap.GetMinMaxImageView(),
+					TerrainMinMaxDesc(clipmap.GetNumLODs()),
+					vk::ImageLayout::eUndefined,
+					/*hasDefinedContents=*/false
+				);
+				physicalRegistry->RegisterImportedTexture<TerrainBiomeTexture>(
+					clipmap.GetBiomeImage(),
+					clipmap.GetBiomeImageView(),
+					TerrainBiomeDesc(clipmap.GetNumLODs()),
+					vk::ImageLayout::eUndefined,
+					/*hasDefinedContents=*/false
+				);
+				physicalRegistry->RegisterImportedTexture<TerrainTileVisibilityTexture>(
+					clipmap.GetVisibilityImage(),
+					clipmap.GetVisibilityImageView(),
+					TerrainTileVisibilityDesc(clipmap.GetNumLODs()),
+					vk::ImageLayout::eUndefined,
+					/*hasDefinedContents=*/false
+				);
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
