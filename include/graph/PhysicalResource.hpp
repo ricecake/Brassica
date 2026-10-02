@@ -25,7 +25,7 @@ namespace brassica::graph {
 				{},
 				is3D ? vk::ImageType::e3D : vk::ImageType::e2D,
 				static_cast<vk::Format>(
-					desc.formatCode ? desc.formatCode : static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Unorm)
+					desc.formatCode ? desc.formatCode : static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Srgb)
 				),
 				vk::Extent3D(desc.width ? desc.width : 1, desc.height ? desc.height : 1, desc.depth ? desc.depth : 1),
 				desc.mips ? desc.mips : 1,
@@ -275,7 +275,7 @@ namespace brassica::graph {
 			// view type to bind correctly once something does go through here with layers > 1.
 			const bool is2DArray = !is3D && m_desc.layers > 1;
 			const auto format = static_cast<vk::Format>(
-				m_desc.formatCode ? m_desc.formatCode : static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Unorm)
+				m_desc.formatCode ? m_desc.formatCode : static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Srgb)
 			);
 			vk::ImageViewCreateInfo viewInfo{
 				{},
@@ -987,7 +987,7 @@ namespace brassica::graph {
 	// until a real Staged-texture write path exists to exercise it (this stage's
 	// ResourceServices/NodeContext::Write seam doesn't yet), rather than building it untested now.
 	inline ResourceDesc
-	StagedTextureDesc(std::uint32_t width, std::uint32_t height, vk::Format format = vk::Format::eR8G8B8A8Unorm) {
+	StagedTextureDesc(std::uint32_t width, std::uint32_t height, vk::Format format = vk::Format::eR8G8B8A8Srgb) {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Image2D,
 			.width = width,

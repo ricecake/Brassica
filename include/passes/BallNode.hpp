@@ -99,8 +99,7 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferAlbedo>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
-				}
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb)}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -132,7 +131,7 @@ namespace brassica {
 			std::array<vk::Format, 3>      colorFormats{
 				vk::Format::eR32G32B32A32Sfloat,
 				vk::Format::eR16G16B16A16Sfloat,
-				vk::Format::eR8G8B8A8Unorm
+				vk::Format::eR8G8B8A8Srgb
 			};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),

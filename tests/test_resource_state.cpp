@@ -30,11 +30,11 @@ TEST_CASE("AspectFor and IsDepthFormat handle depth, combined depth-stencil, ste
 	CHECK(IsDepthFormat(vk::Format::eD16UnormS8Uint));
 	CHECK(IsDepthFormat(vk::Format::eD32SfloatS8Uint));
 	CHECK(IsDepthFormat(vk::Format::eX8D24UnormPack32));
-	CHECK_FALSE(IsDepthFormat(vk::Format::eR8G8B8A8Unorm));
+	CHECK_FALSE(IsDepthFormat(vk::Format::eR8G8B8A8Srgb));
 	CHECK_FALSE(IsDepthFormat(vk::Format::eS8Uint));
 
 	CHECK(AspectFor(vk::Format::eD32Sfloat) == vk::ImageAspectFlagBits::eDepth);
-	CHECK(AspectFor(vk::Format::eR8G8B8A8Unorm) == vk::ImageAspectFlagBits::eColor);
+	CHECK(AspectFor(vk::Format::eR8G8B8A8Srgb) == vk::ImageAspectFlagBits::eColor);
 	CHECK(AspectFor(vk::Format::eS8Uint) == vk::ImageAspectFlagBits::eStencil);
 
 	// The bug all three duplicated old sites shared: a combined depth-stencil format must carry

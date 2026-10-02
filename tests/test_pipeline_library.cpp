@@ -92,7 +92,7 @@ TEST_CASE("PipelineLibrary::Resolve builds a fresh, distinct pipeline on every c
 		render::PipelineLibrary library(device.GetDevice(), nullptr);
 
 		std::array<GraphicsShader*, 2>  stages{&vert, &frag};
-		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Unorm};
+		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Srgb};
 		render::GraphicsPipelineRequest request{
 			.stages = stages,
 			.state = render::GraphicsPipelineState{.enableShadingRate = false}, // MinimalDevice has no VRS
@@ -137,7 +137,7 @@ TEST_CASE("PipelineLibrary::ResolveCached returns the same pipeline for a repeat
 		render::PipelineLibrary library(device.GetDevice(), nullptr);
 
 		std::array<GraphicsShader*, 2>  stages{&vert, &frag};
-		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Unorm};
+		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Srgb};
 		render::GraphicsPipelineRequest request{
 			.stages = stages,
 			.state = render::GraphicsPipelineState{.enableShadingRate = false}, // MinimalDevice has no VRS
@@ -183,7 +183,7 @@ TEST_CASE("PipelineLibrary::ResolveCached distinguishes requests that differ onl
 		render::PipelineLibrary library(vkDevice, nullptr);
 
 		std::array<GraphicsShader*, 2>       stages{&vert, &frag};
-		std::array<vk::Format, 1>            colorFormats{vk::Format::eR8G8B8A8Unorm};
+		std::array<vk::Format, 1>            colorFormats{vk::Format::eR8G8B8A8Srgb};
 		render::GraphicsPipelineState        state{.enableShadingRate = false}; // MinimalDevice has no VRS
 		std::array<vk::PushConstantRange, 1> pushRange{
 			vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, 16}
@@ -257,7 +257,7 @@ TEST_CASE(
 		render::PipelineLibrary library(vkDevice, nullptr);
 
 		std::array<GraphicsShader*, 2> stages{&vert, &frag};
-		std::array<vk::Format, 1>      colorFormats{vk::Format::eR8G8B8A8Unorm};
+		std::array<vk::Format, 1>      colorFormats{vk::Format::eR8G8B8A8Srgb};
 		render::GraphicsPipelineState  state{.enableShadingRate = false}; // MinimalDevice has no VRS
 
 		// Omitted entirely -- request.pushConstantRanges defaults empty, exactly what
@@ -321,7 +321,7 @@ TEST_CASE("PipelineLibrary::ResolveCached rebuilds after a shader hot-reloads, w
 		render::PipelineLibrary library(device.GetDevice(), nullptr);
 
 		std::array<GraphicsShader*, 2>  stages{&vert, &frag};
-		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Unorm};
+		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Srgb};
 		render::GraphicsPipelineRequest request{
 			.stages = stages,
 			.state = render::GraphicsPipelineState{.enableShadingRate = false}, // MinimalDevice has no VRS
@@ -371,7 +371,7 @@ TEST_CASE("PipelineLibrary::Reset destroys every cached pipeline/layout with no 
 		render::PipelineLibrary library(device.GetDevice(), nullptr);
 
 		std::array<GraphicsShader*, 2>  stages{&vert, &frag};
-		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Unorm};
+		std::array<vk::Format, 1>       colorFormats{vk::Format::eR8G8B8A8Srgb};
 		render::GraphicsPipelineRequest request{
 			.stages = stages,
 			.state = render::GraphicsPipelineState{.enableShadingRate = false}, // MinimalDevice has no VRS

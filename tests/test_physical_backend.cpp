@@ -37,7 +37,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestColorTarget>(),
 					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			r.realizations.push_back(
@@ -62,7 +62,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestColorTarget>(),
 					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(1920, 1080, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(1920, 1080, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			r.realizations.push_back(
@@ -137,7 +137,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestTemporalMask>(),
 					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -159,7 +159,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<History<TestTemporalMask>>(),
 					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -183,7 +183,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<VersionedKey<TestVersionedTarget, 1>>(),
 					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -201,7 +201,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<VersionedKey<TestVersionedTarget, 2>>(),
 					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -233,7 +233,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestBindlessSampledA>(),
 					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -251,7 +251,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestBindlessSampledB>(),
 					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -288,7 +288,7 @@ namespace {
 
 		Recipe Setup(const FrameContext& ctx) {
 			Recipe       r{.domain = ExecutionDomain::Graphics};
-			ResourceDesc desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm);
+			ResourceDesc desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
 			desc.layers = 4;
 			r.realizations.push_back(
 				ResourceRealization{.key = IdOf<TestBindlessArray>(), .access = AccessKind::Write, .desc = desc}
@@ -310,7 +310,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestBindlessResizable>(),
 					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -328,7 +328,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestBindlessFresh>(),
 					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -432,7 +432,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestSubColor>(),
 					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -450,7 +450,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestSubColor>(),
 					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			r.realizations.push_back(
@@ -564,7 +564,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestStagedTexture>(),
 					.access = AccessKind::Write,
-					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Unorm),
+					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -588,7 +588,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestStagedTexture>(),
 					.access = AccessKind::Read,
-					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Unorm),
+					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			return r;
@@ -641,7 +641,7 @@ namespace {
 				ResourceRealization{
 					.key = IdOf<TestIllegalStagedTarget>(),
 					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			r.realizations.push_back(

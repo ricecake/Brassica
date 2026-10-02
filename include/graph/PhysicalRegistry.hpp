@@ -889,7 +889,7 @@ namespace brassica::graph {
 				.kind = ResourceDesc::Kind::Image2D,
 				.width = 1,
 				.height = 1,
-				.formatCode = static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Unorm),
+				.formatCode = static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Srgb),
 				.usageMask = static_cast<std::uint32_t>(
 					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
 				),

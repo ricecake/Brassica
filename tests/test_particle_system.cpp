@@ -234,7 +234,7 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 			.device = vkDevice,
 			.pipelineLibrary = &pipelineLibrary,
 			.dispatchLoader = &dls,
-			.swapchainFormat = vk::Format::eR8G8B8A8Unorm,
+			.swapchainFormat = vk::Format::eR8G8B8A8Srgb,
 		};
 
 		ParticleResetNode resetNode;
@@ -334,7 +334,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 			.device = vkDevice,
 			.pipelineLibrary = &pipelineLibrary,
 			.dispatchLoader = &dls,
-			.swapchainFormat = vk::Format::eR8G8B8A8Unorm,
+			.swapchainFormat = vk::Format::eR8G8B8A8Srgb,
 		};
 
 		ParticleTypeBufferNode typeBufferNode{std::vector<ParticleType>(16, ParticleType{})};
@@ -654,7 +654,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 			.device = vkDevice,
 			.pipelineLibrary = &pipelineLibrary,
 			.dispatchLoader = &dls,
-			.swapchainFormat = vk::Format::eR8G8B8A8Unorm,
+			.swapchainFormat = vk::Format::eR8G8B8A8Srgb,
 		};
 
 		// Index 0 (bird, above water at y=10) and index 1 (fish, below water at y=-10) -- both
@@ -1006,7 +1006,7 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the rea
 			.kind = graph::ResourceDesc::Kind::Image2D,
 			.width = 2,
 			.height = 2,
-			.formatCode = static_cast<uint32_t>(vk::Format::eR8G8B8A8Unorm),
+			.formatCode = static_cast<uint32_t>(vk::Format::eR8G8B8A8Srgb),
 			.usageMask = static_cast<uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
 			.hostAccess = graph::HostAccess::Staged,
 		};

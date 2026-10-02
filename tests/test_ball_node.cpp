@@ -46,7 +46,7 @@ namespace {
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferAlbedo>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			r.realizations.push_back(
