@@ -84,6 +84,105 @@ vec3 calculateCloudColor(
 	return cloudColor;
 }
 
+// Assumes footprints: C0 (20km), C1 (80km), C2 (320km)
+float sampleCloudCascades(vec3 worldPos, float distFromCam) {
+    // Convert world position to normalized sampling coordinates for each cascade footprint
+	float distSq = dot(distFromCam, distFromCam);
+	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+	worldPos.y += dropOff;
+
+    vec3 uvw0 = worldPos / 20000.0;
+    vec3 uvw1 = worldPos / 80000.0;
+    vec3 uvw2 = worldPos / 320000.0;
+
+    float density = 0.0;
+
+    if (distFromCam < 20000.0) {
+        float d0 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, uvw0).r;
+        if (distFromCam > 16000.0) {
+            // Blend zone: 16km to 20km
+            float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
+            float blend = smoothstep(16000.0, 20000.0, distFromCam);
+            density = mix(d0, d1, blend);
+        } else {
+            density = d0;
+        }
+    } else if (distFromCam < 80000.0) {
+        float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
+        if (distFromCam > 64000.0) {
+            // Blend zone: 64km to 80km
+            float d2 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
+            float blend = smoothstep(64000.0, 80000.0, distFromCam);
+            density = mix(d1, d2, blend);
+        } else {
+            density = d1;
+        }
+    } else {
+        // Fallback to lowest detail cascade
+        density = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
+    }
+
+    return density;
+}
+
+vec3 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
+    // 1. Initial Setup and Jitter
+    float stepSize = 100.0; // Base step size (meters)
+    float t = t_start;
+
+    // Jitter the start position using Interleaved Gradient Noise or Bayer matrix
+    // to hide the discrete steps and prevent view-movement banding.
+    vec2 fragCoord = gl_FragCoord.xy;
+    float jitter = fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715))));
+    t += stepSize * jitter;
+
+    vec4 accumulatedColor = vec4(0.0); // rgb = color, a = accumulated alpha
+    float transmittance = 1.0;
+
+    // 2. Integration Loop
+    while (t < t_end) {
+        vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
+        float distFromCam = t;
+
+        // Space skipping using the 2D weather map
+        vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
+        vec3 surfaceDir = normalize(p_cloud - planetCenter);
+        vec2 weatherUV = directionToOctahedralUV(surfaceDir);
+        float weatherDensity = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV).g;
+
+        if (weatherDensity > 0.01) {
+            float density = sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
+
+            if (density > 0.0) {
+                // Optical depth for this single step
+                float extinction = max(0.0, density * 0.025);
+                float stepTransmittance = exp(-extinction * stepSize);
+
+                // Simple lighting formulation for the step
+                float cloudPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
+                vec3 stepLight = sunRadiance * cloudPhase * density * 0.01; // Expand with multiple-scattering later
+
+                // Accumulate front-to-back
+                vec3 inscatter = stepLight * (1.0 - stepTransmittance) / max(extinction, 0.0001);
+                accumulatedColor.rgb += inscatter * transmittance;
+
+                transmittance *= stepTransmittance;
+                accumulatedColor.a = 1.0 - transmittance;
+
+                // Early exit if completely opaque
+                if (transmittance < 0.01) break;
+            }
+        }
+
+        // 3. Variable Step Sizing (LOD Stepping)
+        t += stepSize;
+        // Increase step size geometrically to span horizon distances
+        stepSize *= 1.02;
+    }
+
+    return accumulatedColor.rgb;
+}
+
 void main() {
 	vec3 currentRadiance = SAMPLE_NEAREST(push.hdrColorIndex, inUV).rgb;
 	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, inUV);
@@ -111,39 +210,49 @@ void main() {
 	float r = planetRadius + camAltKM;
 	r = max(planetRadius + 0.001, r);
 
-	float cloudAlt = 5.0;
+	float cloudAlt = 5000.0;
 	float cloudRadius = planetRadius + cloudAlt;
 
-	float b = 2.0 * r * worldRay.y;
-	float c = (r * r) - (cloudRadius * cloudRadius);
-	float det = (b * b) - (4.0 * c);
+	float t_start, t_end;
+	bool intersection = intersectCloudShell(uCameraPosition.xyz, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
 
-	if (det > 0.0) {
-		float sqrtDet = sqrt(det);
-		float t1 = (-b - sqrtDet) * 0.5;
-		float t2 = (-b + sqrtDet) * 0.5;
-
+	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
-		vec3 skyRadiance = sampleSkyView(push.skyViewIndex, worldRay);
-
-		// If camera is above the cloud layer (r > cloudRadius), check far intersection (t2) first, then near (t1).
-		// If camera is below or inside, only t2 is forward (t1 <= 0).
-		if (t2 > 0.0 && t2 < surfaceDistKM) {
-			// If camera is above cloud layer, t2 represents the far limb intersection
-			if (r > cloudRadius) {
-				currentRadiance += calculateCloudColor(t2, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
-			} else if (t1 <= 0.0) {
-				// Camera below cloud layer, t2 is the single forward intersection looking up
-				currentRadiance += calculateCloudColor(t2, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
-			}
-		}
-
-		if (t1 > 0.0 && t1 < surfaceDistKM) {
-			// Near intersection (top side when camera is above, or entry point)
-			currentRadiance += calculateCloudColor(t1, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
+		currentRadiance += marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
+		intersection = intersectCloudShell(uCameraPosition.xyz+t_end*worldRay, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
+		if (intersection) {
+			currentRadiance += marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
 		}
 	}
+	// float b = 2.0 * r * worldRay.y;
+	// float c = (r * r) - (cloudRadius * cloudRadius);
+	// float det = (b * b) - (4.0 * c);
+
+	// if (det > 0.0) {
+	// 	float sqrtDet = sqrt(det);
+	// 	float t1 = (-b - sqrtDet) * 0.5;
+	// 	float t2 = (-b + sqrtDet) * 0.5;
+
+	// 	vec3 skyRadiance = sampleSkyView(push.skyViewIndex, worldRay);
+
+	// 	// If camera is above the cloud layer (r > cloudRadius), check far intersection (t2) first, then near (t1).
+	// 	// If camera is below or inside, only t2 is forward (t1 <= 0).
+	// 	if (t2 > 0.0 && t2 < surfaceDistKM) {
+	// 		// If camera is above cloud layer, t2 represents the far limb intersection
+	// 		if (r > cloudRadius) {
+	// 			currentRadiance += calculateCloudColor(t2, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
+	// 		} else if (t1 <= 0.0) {
+	// 			// Camera below cloud layer, t2 is the single forward intersection looking up
+	// 			currentRadiance += calculateCloudColor(t2, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
+	// 		}
+	// 	}
+
+	// 	if (t1 > 0.0 && t1 < surfaceDistKM) {
+	// 		// Near intersection (top side when camera is above, or entry point)
+	// 		currentRadiance += calculateCloudColor(t1, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
+	// 	}
+	// }
 
 	outColor = vec4(currentRadiance, 1.0);
 

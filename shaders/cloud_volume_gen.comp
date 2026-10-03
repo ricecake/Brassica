@@ -45,12 +45,10 @@ void main() {
 			push.cascadeCenterPos[c].z + voxelNorm.z * hExtent
 		);
 
-		// Procedural cloud density field calculation
-		float altitudeRel = (worldPos.y - baseAlt) / vSpan; // [0.0, 1.0]
-		float heightGradient = smoothstep(0.0, 0.2, altitudeRel) * smoothstep(1.0, 0.6, altitudeRel);
-
 		// Basic noise/procedural density
-		float density = 3*smoothstep(0.2, 1.0, psrdnoise(worldPos, vec3(0.0), uTime));
+		float n1 = psrdnoise(worldPos, vec3(0.0), 0.0);
+		float n2 = psrdnoise(worldPos/1000, vec3(0.0), 1.0);
+		float density = smoothstep(0.850, 1.0, smoothstep(0.5, 1.0, n2)*(n1+n2));
 
 		imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], ivec3(localVox), vec4(density, 0.0, 0.0, 1.0));
 	}
