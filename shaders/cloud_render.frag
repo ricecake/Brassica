@@ -219,48 +219,13 @@ void main() {
 	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
-		currentRadiance += marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
+		vec3 accumulated = marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
 		intersection = intersectCloudShell(uCameraPosition.xyz+t_end*worldRay, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
 		if (intersection) {
-			currentRadiance += marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
+			accumulated += marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
 		}
+
+		currentRadiance = mix(currentRadiance, accumulated, smoothstep(0.1, 1.95, accumulated));
 	}
-	// float b = 2.0 * r * worldRay.y;
-	// float c = (r * r) - (cloudRadius * cloudRadius);
-	// float det = (b * b) - (4.0 * c);
-
-	// if (det > 0.0) {
-	// 	float sqrtDet = sqrt(det);
-	// 	float t1 = (-b - sqrtDet) * 0.5;
-	// 	float t2 = (-b + sqrtDet) * 0.5;
-
-	// 	vec3 skyRadiance = sampleSkyView(push.skyViewIndex, worldRay);
-
-	// 	// If camera is above the cloud layer (r > cloudRadius), check far intersection (t2) first, then near (t1).
-	// 	// If camera is below or inside, only t2 is forward (t1 <= 0).
-	// 	if (t2 > 0.0 && t2 < surfaceDistKM) {
-	// 		// If camera is above cloud layer, t2 represents the far limb intersection
-	// 		if (r > cloudRadius) {
-	// 			currentRadiance += calculateCloudColor(t2, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
-	// 		} else if (t1 <= 0.0) {
-	// 			// Camera below cloud layer, t2 is the single forward intersection looking up
-	// 			currentRadiance += calculateCloudColor(t2, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
-	// 		}
-	// 	}
-
-	// 	if (t1 > 0.0 && t1 < surfaceDistKM) {
-	// 		// Near intersection (top side when camera is above, or entry point)
-	// 		currentRadiance += calculateCloudColor(t1, worldRay, worldScale, planetRadius, cloudAlt, sunDir, sunRadiance, skyRadiance);
-	// 	}
-	// }
-
 	outColor = vec4(currentRadiance, 1.0);
-
-	// // Sample from the 3 volume texture cascades (minimally populated sample)
-	// vec4 cascade0Sample = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, vec3(vUv, 0.5));
-	// vec4 cascade1Sample = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, vec3(vUv, 0.5));
-	// vec4 cascade2Sample = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, vec3(vUv, 0.5));
-
-	// vec4 cloudVal = cascade0Sample * 0.5 + cascade1Sample * 0.3 + cascade2Sample * 0.2;
-	// outColor = cloudVal;
 }
