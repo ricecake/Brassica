@@ -23,18 +23,27 @@
 
 namespace brassica {
 
+	struct ParticleResetPushConstants {
+		std::uint32_t gridSize{1024};
+	};
+
+	struct ParticleGridBuildPushConstants {
+		std::uint32_t maxParticles{8192};
+		std::uint32_t gridSize{1024};
+		float         cellSize{8.0f};
+	};
+
 	struct ParticleLivenessPushConstants {
-		std::uint32_t maxParticles{1024};
+		std::uint32_t maxParticles{8192};
 		float         deltaTime{0.016f};
-		// Crude, camera-relative depth sort: a particle's own position vs. this decides which
-		// alive-list it lands in for this frame (see particle_liveness.comp), not a fixed
-		// bird=above/fish=below assumption -- see ParticleLivenessNode::SetFrameParams.
-		float waterLevel{0.0f};
+		float         waterLevel{0.0f};
 	};
 
 	struct ParticleBehaviorPushConstants {
-		std::uint32_t maxParticles{1024};
+		std::uint32_t maxParticles{8192};
 		float         deltaTime{0.016f};
+		std::uint32_t gridSize{1024};
+		float         cellSize{8.0f};
 	};
 
 	struct ParticleRenderPushConstants {
@@ -55,8 +64,10 @@ namespace brassica {
 		auto pAboveIndirectBuf = registry->GetBuffer<AboveWaterParticleIndirectBuffer>();
 		auto pUnderAliveBuf = registry->GetBuffer<UnderwaterParticleAliveBuffer>();
 		auto pUnderIndirectBuf = registry->GetBuffer<UnderwaterParticleIndirectBuffer>();
+		auto pGridHeadsBuf = registry->GetBuffer<ParticleGridHeadsBuffer>();
+		auto pGridNextBuf = registry->GetBuffer<ParticleGridNextBuffer>();
 
-		if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf)
+		if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf || !pGridHeadsBuf || !pGridNextBuf)
 			return;
 
 		vk::Buffer b0 = pBuf->GetBuffer();
@@ -65,21 +76,25 @@ namespace brassica {
 		vk::Buffer b3 = pAboveIndirectBuf->GetBuffer();
 		vk::Buffer b4 = pUnderAliveBuf->GetBuffer();
 		vk::Buffer b5 = pUnderIndirectBuf->GetBuffer();
+		vk::Buffer b6 = pGridHeadsBuf->GetBuffer();
+		vk::Buffer b7 = pGridNextBuf->GetBuffer();
 
-		if (!b0 || !b1 || !b2 || !b3 || !b4 || !b5)
+		if (!b0 || !b1 || !b2 || !b3 || !b4 || !b5 || !b6 || !b7)
 			return;
 
-		std::array<vk::DescriptorBufferInfo, 6> bufferInfos{
+		std::array<vk::DescriptorBufferInfo, 8> bufferInfos{
 			vk::DescriptorBufferInfo{b0, 0, VK_WHOLE_SIZE},
 			vk::DescriptorBufferInfo{b1, 0, VK_WHOLE_SIZE},
 			vk::DescriptorBufferInfo{b2, 0, VK_WHOLE_SIZE},
 			vk::DescriptorBufferInfo{b3, 0, VK_WHOLE_SIZE},
 			vk::DescriptorBufferInfo{b4, 0, VK_WHOLE_SIZE},
-			vk::DescriptorBufferInfo{b5, 0, VK_WHOLE_SIZE}
+			vk::DescriptorBufferInfo{b5, 0, VK_WHOLE_SIZE},
+			vk::DescriptorBufferInfo{b6, 0, VK_WHOLE_SIZE},
+			vk::DescriptorBufferInfo{b7, 0, VK_WHOLE_SIZE}
 		};
 
-		std::array<vk::WriteDescriptorSet, 6> writes{};
-		for (uint32_t i = 0; i < 6; ++i) {
+		std::array<vk::WriteDescriptorSet, 8> writes{};
+		for (uint32_t i = 0; i < 8; ++i) {
 			writes[i]
 				.setDstSet(particleSet)
 				.setDstBinding(i)
@@ -92,16 +107,6 @@ namespace brassica {
 
 	namespace detail {
 
-		// One independent 6-binding descriptor set (layout + pool + set), same shape as
-		// ParticleSystemNode's own construction below. Used by UnderwaterParticleRenderNode and
-		// AboveWaterParticleRenderNode: now that they are independent top-level nodes (promoted out
-		// of ParticleSystemNode's Subgraph so their SubPhase::UnderwaterParticleRender/ParticleRender
-		// phases actually reach the outer scheduler relative to WaterNode), EngineNodeRegistry::
-		// InitAll() initializes them uniformly with no cross-node coordination possible -- each must
-		// own its own set pointing at the same underlying buffers, rather than share one set the way
-		// the four simulation nodes still do under ParticleSystemNode's single Init(). This also
-		// sidesteps the earlier-fixed class of bug (multiple nodes racing to refresh one shared set,
-		// UPDATE_AFTER_BIND validation failure) by construction: nothing else ever touches this set.
 		struct ParticleDescriptorSet {
 			vk::DescriptorSetLayout layout{nullptr};
 			vk::DescriptorPool      pool{nullptr};
@@ -111,8 +116,8 @@ namespace brassica {
 		inline ParticleDescriptorSet CreateParticleDescriptorSet(vk::Device device) {
 			ParticleDescriptorSet result;
 
-			std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
-			for (uint32_t i = 0; i < 6; ++i) {
+			std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
+			for (uint32_t i = 0; i < 8; ++i) {
 				bindings[i]
 					.setBinding(i)
 					.setDescriptorType(vk::DescriptorType::eStorageBuffer)
@@ -124,7 +129,7 @@ namespace brassica {
 			result.layout = device.createDescriptorSetLayout(layoutInfo);
 
 			std::array<vk::DescriptorPoolSize, 1> poolSizes{
-				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 6}
+				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 8}
 			};
 			vk::DescriptorPoolCreateInfo poolInfo{};
 			poolInfo.setPoolSizes(poolSizes);
@@ -162,7 +167,7 @@ namespace brassica {
 
 		struct ParticleDescriptorCache {
 			vk::DescriptorSet         set{nullptr};
-			std::array<vk::Buffer, 6> buffers{};
+			std::array<vk::Buffer, 8> buffers{};
 		};
 
 		inline void RefreshParticleDescriptorSet(
@@ -180,17 +185,21 @@ namespace brassica {
 			auto pAboveIndirectBuf = registry->GetBuffer<AboveWaterParticleIndirectBuffer>();
 			auto pUnderAliveBuf = registry->GetBuffer<UnderwaterParticleAliveBuffer>();
 			auto pUnderIndirectBuf = registry->GetBuffer<UnderwaterParticleIndirectBuffer>();
-			if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf) {
+			auto pGridHeadsBuf = registry->GetBuffer<ParticleGridHeadsBuffer>();
+			auto pGridNextBuf = registry->GetBuffer<ParticleGridNextBuffer>();
+			if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf || !pGridHeadsBuf || !pGridNextBuf) {
 				return;
 			}
 
-			std::array<vk::Buffer, 6> buffers{
+			std::array<vk::Buffer, 8> buffers{
 				pBuf->GetBuffer(),
 				pTypeBuf->GetBuffer(),
 				pAboveAliveBuf->GetBuffer(),
 				pAboveIndirectBuf->GetBuffer(),
 				pUnderAliveBuf->GetBuffer(),
 				pUnderIndirectBuf->GetBuffer(),
+				pGridHeadsBuf->GetBuffer(),
+				pGridNextBuf->GetBuffer(),
 			};
 			if (cache.set == particleSet && cache.buffers == buffers) {
 				return;
@@ -221,19 +230,15 @@ namespace brassica {
 	} // namespace detail
 
 	struct ParticleResetNode {
-		// Create, not Modify: this node's Recipe below realizes both buffers with
-		// AccessKind::Write -- a fresh per-frame overwrite (zeroing the indirect draw count), not a
-		// read-modify-write of the previous frame's contents. Declaring Modify here (as it used to)
-		// made this the *consumer* of a producer that doesn't exist, while ParticleLivenessNode's
-		// own Modify<...> of the same keys made it the same thing from the other side -- a genuine
-		// mutual dependency the graph correctly rejected as circular. Create<K> instead has an empty
-		// Consumes, breaking the cycle: Liveness's Modify<K> now depends on this Create<K> alone.
-		using Resources = graph::
-			Declares<graph::Create<AboveWaterParticleIndirectBuffer>, graph::Create<UnderwaterParticleIndirectBuffer>>;
+		using Resources = graph::Declares<
+			graph::Create<AboveWaterParticleIndirectBuffer>,
+			graph::Create<UnderwaterParticleIndirectBuffer>,
+			graph::Create<ParticleGridHeadsBuffer>>;
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary*        pipelineLibrary = nullptr;
 		ComputeShader                   compShader;
+		std::uint32_t                   gridSize{1024};
 		vk::DescriptorSetLayout         particleSetLayout;
 		vk::DescriptorSet               particleSet;
 		detail::ParticleDescriptorCache descriptorCache{};
@@ -255,10 +260,6 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
-			// eTransferSrc: general-purpose GPU-readback capability (numeric test probes copying
-			// the live indirect count to a host-visible buffer), same reasoning as
-			// PhysicalResource.hpp's eTransferSrc on every color target -- cheap to carry, not
-			// worth a separate preset.
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
@@ -275,6 +276,11 @@ namespace brassica {
 						.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
 						.access = graph::AccessKind::Write,
 						.desc = indirectDesc,
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleGridHeadsBuffer>(),
+						.access = graph::AccessKind::Write,
+						.desc = graph::StorageBufferDesc(gridSize * sizeof(int)),
 					}
 				}
 			};
@@ -288,10 +294,14 @@ namespace brassica {
 			}
 
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
+			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleResetPushConstants)}
+			};
 
 			render::ComputePipelineRequest request{
 				.shader = &compShader,
 				.setLayouts = setLayouts,
+				.pushConstantRanges = pushConstantRanges,
 			};
 			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
@@ -301,17 +311,21 @@ namespace brassica {
 			}
 			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, particleSet);
 
-			vkCmd.dispatch(1, 1, 1);
+			ParticleResetPushConstants push{.gridSize = gridSize};
+			vkCmd.pushConstants(
+				resolved.layout,
+				vk::ShaderStageFlagBits::eCompute,
+				0,
+				sizeof(ParticleResetPushConstants),
+				&push
+			);
+
+			std::uint32_t groupCount = (gridSize + 63u) / 64u;
+			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
 
 	struct ParticleLivenessNode {
-		// AliveBuffers are Create, not Modify, for the same reason as ParticleResetNode's indirect
-		// buffers above: this node is their sole producer every frame (Recipe realizes both with
-		// AccessKind::Write, a fresh overwrite -- liveness is recomputed from ParticleBuffer each
-		// frame, not read back from its own prior output), so declaring Modify would demand a
-		// producer that doesn't exist. IndirectBuffers stay Modify: these genuinely are read-
-		// modify-write, incrementing the count ParticleResetNode's Create<...> just zeroed.
 		using Resources = graph::Declares<
 			graph::Modify<ParticleBuffer>,
 			graph::Read<ParticleTypeBuffer>,
@@ -349,10 +363,6 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
-			// eTransferSrc: general-purpose GPU-readback capability (numeric test probes copying
-			// the live indirect count to a host-visible buffer), same reasoning as
-			// PhysicalResource.hpp's eTransferSrc on every color target -- cheap to carry, not
-			// worth a separate preset.
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
@@ -373,9 +383,6 @@ namespace brassica {
 					graph::ResourceRealization{
 						.key = graph::IdOf<AboveWaterParticleAliveBuffer>(),
 						.access = graph::AccessKind::Write,
-						// eTransferSrc: general-purpose GPU-readback capability (numeric test probes
-						// copying the live alive-index list to a host-visible buffer), same reasoning
-						// as the indirect buffers' own eTransferSrc above.
 						.desc =
 							[&] {
 								graph::ResourceDesc d = graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t));
@@ -407,16 +414,6 @@ namespace brassica {
 			};
 		}
 
-		// No RefreshParticleDescriptorSet call here: ParticleResetNode's Execute already refreshed
-		// it for this frame, and is guaranteed to run first (same SubPhase::Prepare, but this
-		// node's Modify<...> depends on Reset's Create<...>, so the scheduler orders Reset first
-		// regardless). Refreshing again here used to matter, since each node kept its own
-		// descriptorCache and couldn't see that a *different* node had already done it this frame
-		// -- meaning every one of Reset/Liveness/the two render nodes independently decided "my
-		// cache is empty, I must write," calling vkUpdateDescriptorSets on a set the command buffer
-		// had already bound moments earlier in the same recording. Vulkan disallows that without
-		// UPDATE_AFTER_BIND on the layout, which this one doesn't have -- confirmed as the real
-		// cause of the "destroyed or updated without UPDATE_AFTER_BIND" validation error.
 		void Execute(graph::NodeContext& ctx) {
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
@@ -454,6 +451,98 @@ namespace brassica {
 		}
 	};
 
+	struct ParticleGridBuildNode {
+		using Resources = graph::Declares<
+			graph::Read<ParticleBuffer>,
+			graph::Modify<ParticleGridHeadsBuffer>,
+			graph::Create<ParticleGridNextBuffer>>;
+
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
+
+		render::PipelineLibrary* pipelineLibrary = nullptr;
+		ComputeShader            compShader;
+		std::uint32_t            maxParticles{8192};
+		std::uint32_t            gridSize{1024};
+		float                    cellSize{8.0f};
+		vk::DescriptorSetLayout  particleSetLayout;
+		vk::DescriptorSet        particleSet;
+
+		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
+			pipelineLibrary = services.pipelineLibrary;
+			particleSetLayout = setLayout;
+			particleSet = set;
+			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_grid_build.comp")) {
+				spdlog::critical("ParticleGridBuildNode shader compilation failed.");
+				throw std::runtime_error("ParticleGridBuildNode shader compilation failed.");
+			}
+			if (services.shaderWatcher) {
+				services.shaderWatcher->RegisterShader(&compShader);
+			}
+		}
+
+		void Destroy(vk::Device device) { compShader.Destroy(device); }
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			return graph::Recipe{
+				.domain = graph::ExecutionDomain::Compute,
+				.isActive = true,
+				.realizations = {
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(Particle)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleGridHeadsBuffer>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::StorageBufferDesc(gridSize * sizeof(int)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleGridNextBuffer>(),
+						.access = graph::AccessKind::Write,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(int)),
+					}
+				}
+			};
+		}
+
+		void Execute(graph::NodeContext& ctx) {
+			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
+			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleGridBuildPushConstants)}
+			};
+
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushConstantRanges,
+			};
+			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (resolved.pipeline) {
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
+			}
+			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, particleSet);
+
+			ParticleGridBuildPushConstants push{
+				.maxParticles = maxParticles,
+				.gridSize = gridSize,
+				.cellSize = cellSize,
+			};
+			vkCmd.pushConstants(
+				resolved.layout,
+				vk::ShaderStageFlagBits::eCompute,
+				0,
+				sizeof(ParticleGridBuildPushConstants),
+				&push
+			);
+
+			std::uint32_t groupCount = (maxParticles + 63u) / 64u;
+			vkCmd.dispatch(groupCount, 1, 1);
+		}
+	};
+
 	struct ParticleBehaviorNode {
 		using Resources = graph::Declares<
 			graph::Modify<ParticleBuffer>,
@@ -461,13 +550,17 @@ namespace brassica {
 			graph::Read<AboveWaterParticleAliveBuffer>,
 			graph::Read<AboveWaterParticleIndirectBuffer>,
 			graph::Read<UnderwaterParticleAliveBuffer>,
-			graph::Read<UnderwaterParticleIndirectBuffer>>;
+			graph::Read<UnderwaterParticleIndirectBuffer>,
+			graph::Read<ParticleGridHeadsBuffer>,
+			graph::Read<ParticleGridNextBuffer>>;
 
-		static constexpr graph::Phase kPhase = graph::Phase::Late;
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
 		std::uint32_t            maxParticles{8192};
+		std::uint32_t            gridSize{1024};
+		float                    cellSize{8.0f};
 		float                    deltaTime{0.016f};
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
@@ -489,10 +582,6 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext&) {
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
-			// eTransferSrc: general-purpose GPU-readback capability (numeric test probes copying
-			// the live indirect count to a host-visible buffer), same reasoning as
-			// PhysicalResource.hpp's eTransferSrc on every color target -- cheap to carry, not
-			// worth a separate preset.
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
@@ -529,6 +618,16 @@ namespace brassica {
 						.key = graph::IdOf<UnderwaterParticleIndirectBuffer>(),
 						.access = graph::AccessKind::Read,
 						.desc = indirectDesc,
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleGridHeadsBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(gridSize * sizeof(int)),
+					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<ParticleGridNextBuffer>(),
+						.access = graph::AccessKind::Read,
+						.desc = graph::StorageBufferDesc(maxParticles * sizeof(int)),
 					}
 				}
 			};
@@ -553,7 +652,12 @@ namespace brassica {
 			}
 			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, particleSet);
 
-			ParticleBehaviorPushConstants push{.maxParticles = maxParticles, .deltaTime = deltaTime};
+			ParticleBehaviorPushConstants push{
+				.maxParticles = maxParticles,
+				.deltaTime = deltaTime,
+				.gridSize = gridSize,
+				.cellSize = cellSize,
+			};
 			vkCmd.pushConstants(
 				resolved.layout,
 				vk::ShaderStageFlagBits::eCompute,
@@ -568,14 +672,6 @@ namespace brassica {
 	};
 
 	struct UnderwaterParticleRenderNode: render::NodeRegistrar<UnderwaterParticleRenderNode> {
-		// Modify<GBufferDepth, 1>, not plain Modify<GBufferDepth>: this depth-tests particles
-		// against (and writes into) the same physical depth image DeferredNode/AtmosphereCompositeNode
-		// already read at phase 0/900, but as a distinct, later logical version -- an unversioned
-		// Modify here would create a real backward edge to those two earlier, pure-Read consumers
-		// ("a later phase cannot satisfy an earlier phase's input"), even though they were never
-		// meant to see this write at all. Genuinely later readers (anything past this phase using a
-		// plain, unversioned Read<GBufferDepth>) still pick this up automatically via Graph.hpp's
-		// version-lifting -- they don't need to know the version number exists.
 		using Resources = graph::Declares<
 			graph::Read<ParticleBuffer>,
 			graph::Read<ParticleTypeBuffer>,
@@ -584,11 +680,6 @@ namespace brassica {
 			graph::Modify<GBufferDepth, 1>,
 			graph::Modify<HdrColor>>;
 
-		// An independent top-level node, not part of ParticleSystemNode's Subgraph: this phase only
-		// means anything relative to WaterNode (SubPhase::WaterRender) if the outer scheduler can
-		// see it, which a Subgraph child's phase never can (Frame.hpp's Subgraph presents itself to
-		// its parent as one opaque node at the *wrapper's* single kPhase, regardless of what phases
-		// its own children declare internally).
 		static constexpr graph::Phase kPhase = SubPhase::UnderwaterParticleRender;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -636,10 +727,6 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
-			// eTransferSrc: general-purpose GPU-readback capability (numeric test probes copying
-			// the live indirect count to a host-visible buffer), same reasoning as
-			// PhysicalResource.hpp's eTransferSrc on every color target -- cheap to carry, not
-			// worth a separate preset.
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
@@ -681,11 +768,6 @@ namespace brassica {
 			};
 		}
 
-		// Refreshes its own descriptor set every frame, unlike the four simulation nodes (which
-		// share one set and let only ParticleResetNode refresh it -- see ParticleLivenessNode::
-		// Execute's comment for why that coordination is needed there). This node's set is never
-		// touched by anything else, so there is no race to coordinate: refreshing unconditionally
-		// here is correct and simplest.
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
@@ -760,9 +842,6 @@ namespace brassica {
 	BRASSICA_REGISTER_NODE(UnderwaterParticleRenderNode);
 
 	struct AboveWaterParticleRenderNode: render::NodeRegistrar<AboveWaterParticleRenderNode> {
-		// Modify<GBufferDepth, 2>, chaining onto UnderwaterParticleRenderNode's version 1 the same
-		// way version 1 chained onto Terrain/EntityNode's version 0 -- see that node's comment for
-		// why this needs an explicit version at all instead of a plain Modify<GBufferDepth>.
 		using Resources = graph::Declares<
 			graph::Read<ParticleBuffer>,
 			graph::Read<ParticleTypeBuffer>,
@@ -771,9 +850,6 @@ namespace brassica {
 			graph::Modify<GBufferDepth, 2>,
 			graph::Modify<HdrColor>>;
 
-		// See UnderwaterParticleRenderNode's own kPhase comment: an independent top-level node, not
-		// part of ParticleSystemNode's Subgraph, is what lets this actually schedule after
-		// WaterNode (SubPhase::WaterRender) rather than as its same-phase peer.
 		static constexpr graph::Phase kPhase = SubPhase::ParticleRender;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -821,10 +897,6 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
-			// eTransferSrc: general-purpose GPU-readback capability (numeric test probes copying
-			// the live indirect count to a host-visible buffer), same reasoning as
-			// PhysicalResource.hpp's eTransferSrc on every color target -- cheap to carry, not
-			// worth a separate preset.
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
@@ -866,8 +938,6 @@ namespace brassica {
 			};
 		}
 
-		// See UnderwaterParticleRenderNode::Execute's comment: refreshes its own, independent
-		// descriptor set unconditionally, since nothing else ever touches it.
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
@@ -943,32 +1013,17 @@ namespace brassica {
 
 	using ParticleRenderNode = AboveWaterParticleRenderNode;
 
-	// PredefinedBufferNode's phase defaults to Phase::Default (0), which is fine for its other,
-	// phase-insensitive users elsewhere in the engine -- but ParticleLivenessNode reads
-	// ParticleTypeBuffer at SubPhase::Prepare (-500), and a later phase can never satisfy an
-	// earlier one (Graph.hpp's phase check). Explicit SubPhase::Prepare here, not just "earlier
-	// than 0": same-phase nodes are still ordered relative to each other by real data dependency,
-	// so this Write still sequences before Liveness's Read.
 	using ParticleTypeBufferNode = graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType, SubPhase::Prepare>;
 
-	// UnderwaterParticleRenderNode/AboveWaterParticleRenderNode are deliberately NOT part of this
-	// spec (or any Subgraph): a Subgraph presents itself to the outer graph as one opaque node at
-	// its wrapper's single kPhase (graph/Frame.hpp), so a child's own kPhase only orders it
-	// relative to its Subgraph siblings, never relative to an outer sibling like WaterNode. The
-	// render nodes need exactly that outer-relative ordering (SubPhase::UnderwaterParticleRender/
-	// ParticleRender interleaved with WaterNode's SubPhase::WaterRender), so they are independent,
-	// top-level, auto-registered nodes instead -- see their own BRASSICA_REGISTER_NODE calls above.
-	// Only the simulation (spawn/liveness/behavior), which nothing outside this system needs to
-	// interleave with, stays in this Subgraph.
 	using ParticleSystemSpec =
-		graph::FrameSpec<ParticleTypeBufferNode, ParticleResetNode, ParticleLivenessNode, ParticleBehaviorNode>;
+		graph::FrameSpec<ParticleTypeBufferNode, ParticleResetNode, ParticleLivenessNode, ParticleGridBuildNode, ParticleBehaviorNode>;
 	using ParticleSystemSubgraph = graph::Subgraph<ParticleSystemSpec>;
 
 	struct ParticleSystemNode: render::NodeRegistrar<ParticleSystemNode> {
 		using SubgraphType = ParticleSystemSubgraph;
 		using Resources = SubgraphType::Resources;
 
-		static constexpr graph::Phase kPhase = graph::Phase::Late;
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		SubgraphType            m_subgraph;
 		vk::DescriptorSetLayout particleSetLayout{nullptr};
@@ -988,27 +1043,25 @@ namespace brassica {
 				.gravityScale = 0.0f,
 				.drag = 0.1f
 			},
+			ParticleType{
+				.color = glm::vec4(0.9f, 1.0f, 0.3f, 1.0f),
+				.size = 1.5f,
+				.gravityScale = 0.0f,
+				.drag = 0.05f
+			},
 		}};
 		ParticleResetNode      resetNode;
 		ParticleLivenessNode   livenessNode;
+		ParticleGridBuildNode  gridBuildNode;
 		ParticleBehaviorNode   behaviorNode;
 
-		// EngineNodeRegistry::SetFrameParamsAll only ever calls SetFrameParams on top-level
-		// registered types (this one), never on a Subgraph's inner nodes directly -- so this
-		// wrapper has to forward explicitly to whichever inner nodes actually need per-frame data.
-		// Only livenessNode does today (waterLevel, for the camera-relative depth sort -- see its
-		// own SetFrameParams).
 		void SetFrameParams(const render::NodeFrameParams& p) { livenessNode.SetFrameParams(p); }
 
-		// Descriptor set sized for the 4 simulation nodes only now (max 3 concurrently distinct
-		// sets rather than the previous 6-node/4-set sizing) -- the two render nodes own their own
-		// independent sets (detail::ParticleDescriptorSet) since they are top-level nodes now, see
-		// their own Init().
 		void Init(const render::NodeServices& services) {
 			vk::Device device = services.device;
 
-			std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
-			for (uint32_t i = 0; i < 6; ++i) {
+			std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
+			for (uint32_t i = 0; i < 8; ++i) {
 				bindings[i]
 					.setBinding(i)
 					.setDescriptorType(vk::DescriptorType::eStorageBuffer)
@@ -1021,11 +1074,11 @@ namespace brassica {
 			particleSetLayout = device.createDescriptorSetLayout(layoutInfo);
 
 			std::array<vk::DescriptorPoolSize, 1> poolSizes{
-				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 18}
+				vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 32}
 			};
 			vk::DescriptorPoolCreateInfo poolInfo{};
 			poolInfo.setPoolSizes(poolSizes);
-			poolInfo.setMaxSets(3);
+			poolInfo.setMaxSets(4);
 			particleDescriptorPool = device.createDescriptorPool(poolInfo);
 
 			vk::DescriptorSetAllocateInfo allocInfo{};
@@ -1035,18 +1088,21 @@ namespace brassica {
 
 			resetNode.Init(services, particleSetLayout, particleSet);
 			livenessNode.Init(services, particleSetLayout, particleSet);
+			gridBuildNode.Init(services, particleSetLayout, particleSet);
 			behaviorNode.Init(services, particleSetLayout, particleSet);
 
 			auto& inner = m_subgraph.InnerGraph();
 			inner.RegisterRef(typeBufferNode);
 			inner.RegisterRef(resetNode);
 			inner.RegisterRef(livenessNode);
+			inner.RegisterRef(gridBuildNode);
 			inner.RegisterRef(behaviorNode);
 		}
 
 		void Destroy(vk::Device device) {
 			resetNode.Destroy(device);
 			livenessNode.Destroy(device);
+			gridBuildNode.Destroy(device);
 			behaviorNode.Destroy(device);
 
 			if (particleDescriptorPool) {

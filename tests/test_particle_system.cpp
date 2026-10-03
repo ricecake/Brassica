@@ -21,9 +21,6 @@ using namespace brassica;
 
 namespace {
 
-	// Same StageOf pattern as tests/graph/test_graph.cpp's own anonymous-namespace helper -- not
-	// reusable across translation units (each test file is its own executable), so duplicated
-	// rather than shared.
 	std::ptrdiff_t StageOf(const graph::Schedule& schedule, std::size_t nodeIndex) {
 		for (std::size_t s = 0; s < schedule.stages.size(); ++s) {
 			const auto& nodes = schedule.stages[s].nodes;
@@ -79,26 +76,20 @@ namespace {
 } // namespace
 
 TEST_CASE("Particle struct layouts match std430 16-byte alignment requirements") {
-	CHECK(sizeof(Particle) == 64);
+	CHECK(sizeof(Particle) == 80);
 	CHECK(offsetof(Particle, position) == 0);
 	CHECK(offsetof(Particle, velocity) == 16);
-	CHECK(offsetof(Particle, misc) == 32);
-	CHECK(offsetof(Particle, type) == 48);
-	CHECK(offsetof(Particle, lifetime) == 52);
-	CHECK(offsetof(Particle, maxLifetime) == 56);
-	CHECK(offsetof(Particle, padding) == 60);
+	CHECK(offsetof(Particle, color) == 32);
+	CHECK(offsetof(Particle, misc) == 48);
+	CHECK(offsetof(Particle, type) == 64);
+	CHECK(offsetof(Particle, lifetime) == 68);
+	CHECK(offsetof(Particle, maxLifetime) == 72);
+	CHECK(offsetof(Particle, padding) == 76);
 
 	CHECK(sizeof(ParticleType) == 32);
 	CHECK(sizeof(ParticleIndirectCommand) == 12);
 }
 
-// This used to just compare the SubPhase integer constants to each other -- true, but it proved
-// nothing about where these nodes actually land in a real schedule. That test passed the whole
-// time WaterNode and the entire ParticleSystemNode Subgraph (including these two render nodes)
-// were scheduling at the exact same outer phase (both graph::Phase::Late), because a Subgraph
-// child's own kPhase never reaches the outer scheduler at all -- see ParticleSystemNode.hpp's
-// comment on why the render nodes are now independent top-level nodes instead. This is the real
-// test: build the actual graph, compile it, and check where these three nodes actually land.
 TEST_CASE("Underwater and AboveWater particle render nodes schedule before and after WaterNode") {
 	graph::Graph graph;
 	graph.Register<DeferredShadingProducer>();
@@ -150,7 +141,7 @@ TEST_CASE("Underwater and AboveWater particle render nodes schedule before and a
 	CHECK(waterStage < aboveWaterStage);
 }
 
-TEST_CASE("ParticleSystemNode executes in Phase::Late after DeferredNode in Phase::Default") {
+TEST_CASE("ParticleSystemNode executes in SubPhase::Prepare before DeferredNode in Phase::Default") {
 	graph::Graph graph;
 	graph.Register<DeferredShadingProducer>();
 	graph.Register<graph::Import<ParticleTypeBuffer>>();
@@ -185,7 +176,7 @@ TEST_CASE("ParticleSystemNode executes in Phase::Late after DeferredNode in Phas
 		}
 	}
 
-	CHECK(particleStage > deferredStage);
+	CHECK(particleStage < deferredStage);
 }
 
 TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
@@ -212,8 +203,8 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
-		for (uint32_t i = 0; i < 6; ++i) {
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
+		for (uint32_t i = 0; i < 8; ++i) {
 			bindings[i]
 				.setBinding(i)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
@@ -243,6 +234,9 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		ParticleLivenessNode livenessNode;
 		livenessNode.Init(services, particleSetLayout, nullptr);
 
+		ParticleGridBuildNode gridBuildNode;
+		gridBuildNode.Init(services, particleSetLayout, nullptr);
+
 		ParticleBehaviorNode behaviorNode;
 		behaviorNode.Init(services, particleSetLayout, nullptr);
 
@@ -254,6 +248,7 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 
 		resetNode.Destroy(vkDevice);
 		livenessNode.Destroy(vkDevice);
+		gridBuildNode.Destroy(vkDevice);
 		behaviorNode.Destroy(vkDevice);
 		underwaterRenderNode.Destroy(vkDevice);
 		renderNode.Destroy(vkDevice);
@@ -265,19 +260,6 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 	}
 }
 
-// Regression test for a real bug: ParticleSystemNode::Execute used to refresh the particle
-// descriptor set itself, but ParticleSystemNode is a Subgraph-kind node, and
-// PhysicalExecutionBackend::RunSchedule recurses straight into a Subgraph's inner-graph nodes on
-// the real backend path -- it never calls the Subgraph node's own Execute (see RunSchedule's own
-// comment, "recursing here... is what gives its own inner nodes real barriers", right where it
-// skips ExecuteNode for a Subgraph). So the refresh call was dead code on every real frame, and
-// descriptor set 2 (the particle buffers) was allocated but never written --
-// VUID-vkCmdDispatch-None-08114 on every dispatch that statically used it. Fixed by moving the
-// refresh into ParticleResetNode::Execute (Phase::Early, so it runs first every frame, and its
-// Execute does get called either way this graph is driven). This test drives the 3 compute
-// sub-nodes directly through a real Provision()+Execute() (no ParticleRenderNode/mesh shaders, so
-// it runs even without VK_EXT_mesh_shader) and checks both that the 4 buffers provision correctly
-// and that dispatching against the resulting descriptor set produces no validation errors.
 TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any dispatch uses it") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
@@ -302,8 +284,8 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
-		for (uint32_t i = 0; i < 6; ++i) {
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
+		for (uint32_t i = 0; i < 8; ++i) {
 			bindings[i]
 				.setBinding(i)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
@@ -315,7 +297,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 1> particlePoolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 6}
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 8}
 		};
 		vk::DescriptorPoolCreateInfo particlePoolInfo{};
 		particlePoolInfo.setPoolSizes(particlePoolSizes);
@@ -340,23 +322,20 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		ParticleTypeBufferNode typeBufferNode{std::vector<ParticleType>(16, ParticleType{})};
 		ParticleResetNode    resetNode;
 		ParticleLivenessNode livenessNode;
+		ParticleGridBuildNode gridBuildNode;
 		ParticleBehaviorNode behaviorNode;
 		resetNode.Init(services, particleSetLayout, particleSet);
 		livenessNode.Init(services, particleSetLayout, particleSet);
+		gridBuildNode.Init(services, particleSetLayout, particleSet);
 		behaviorNode.Init(services, particleSetLayout, particleSet);
 
 		graph::Graph g;
 		g.RegisterRef(typeBufferNode);
 		g.RegisterRef(resetNode);
 		g.RegisterRef(livenessNode);
+		g.RegisterRef(gridBuildNode);
 		g.RegisterRef(behaviorNode);
 
-		// Real frame set (set 0, a defined FrameUBO) + real bindless set (set 1, sampled-image[8]
-		// + sampler[1]) -- mirrors test_water_node.cpp's CreateWaterBindlessSet fixture.
-		// EnsureFallbackTexture (called by SetGlobalDescriptorSet) writes a real descriptor into
-		// the bindless set's binding 0 unconditionally, so an empty/zero-binding layout there
-		// crashes (VUID-VkWriteDescriptorSet-dstBinding-10009) rather than just validation-erroring
-		// -- confirmed by hand while building this fixture, not a hypothetical.
 		vk::DescriptorSetLayoutBinding frameUboBinding{};
 		frameUboBinding.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
@@ -483,11 +462,6 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		graph::CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
 		backend.Execute(g, ctx, cmd, false);
 
-		// Real GPU readback of the indirect draw command Liveness produces -- proves particles
-		// actually go alive (non-zero groupCountX) each frame, not just "the graph validates and
-		// dispatches with no errors," the gap the rest of this test case doesn't cover. Both
-		// buffers are guaranteed populated post-Execute (registry.GetBuffer returns non-null,
-		// checked below).
 		auto              pAboveIndirectForReadback = registry.GetBuffer<AboveWaterParticleIndirectBuffer>();
 		auto              pUnderIndirectForReadback = registry.GetBuffer<UnderwaterParticleIndirectBuffer>();
 		constexpr VkDeviceSize kIndirectSize = sizeof(ParticleIndirectCommand);
@@ -543,9 +517,6 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 			const auto* commands = static_cast<const ParticleIndirectCommand*>(indirectReadbackInfo.pMappedData);
 			MESSAGE("above-water alive count: ", commands[0].groupCountX);
 			MESSAGE("underwater alive count: ", commands[1].groupCountX);
-			// Every particle starts zero-initialized (lifetime <= 0), so particle_liveness.comp's
-			// own expiry check spawns and immediately marks it alive on this very first dispatch --
-			// both buckets (birds at even indices, fish at odd) should show real counts, not zero.
 			CHECK(commands[0].groupCountX > 0);
 			CHECK(commands[1].groupCountX > 0);
 			vmaDestroyBuffer(device.GetAllocator(), indirectReadbackBuffer, indirectReadbackAllocation);
@@ -567,6 +538,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 
 		resetNode.Destroy(vkDevice);
 		livenessNode.Destroy(vkDevice);
+		gridBuildNode.Destroy(vkDevice);
 		behaviorNode.Destroy(vkDevice);
 
 		Shader::ClearConstants();
@@ -587,17 +559,6 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 	CHECK(device.GetValidationWarningCount() == 0);
 }
 
-// The two alive-index buffers are really "renders after water" (AboveWaterAliveIndices) and
-// "renders before water" (UnderwaterAliveIndices) -- see particle_liveness.comp's own comment.
-// Which bucket a given particle lands in depends on whether it is on the same side of the water
-// plane as the camera, not a fixed bird=after/fish=below assumption. Real GPU proof: seeds one
-// particle above water and one below via a PredefinedBufferNode<ParticleBuffer, Particle,
-// SubPhase::Prepare> (same phase as ParticleLivenessNode's own Modify<ParticleBuffer>, so it has a
-// real same-phase Create<ParticleBuffer> to depend on -- same pattern ParticleTypeBufferNode
-// already uses), then runs Reset+Liveness twice against that same seeded buffer -- HostWriteNode's
-// dirty flag clears after the first write, so the second run leaves the seed positions untouched --
-// with the camera on each side of the water plane in turn, and reads back which alive-index buffer
-// each particle's index actually landed in both times.
 TEST_CASE("Particle liveness bucket assignment swaps with which side of water the camera is on") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
@@ -622,8 +583,8 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 6> bindings{};
-		for (uint32_t i = 0; i < 6; ++i) {
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
+		for (uint32_t i = 0; i < 8; ++i) {
 			bindings[i]
 				.setBinding(i)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
@@ -635,7 +596,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
 
 		std::array<vk::DescriptorPoolSize, 1> particlePoolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 6}
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 8}
 		};
 		vk::DescriptorPoolCreateInfo particlePoolInfo{};
 		particlePoolInfo.setPoolSizes(particlePoolSizes);
@@ -657,10 +618,6 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 			.swapchainFormat = vk::Format::eR8G8B8A8Srgb,
 		};
 
-		// Index 0 (bird, above water at y=10) and index 1 (fish, below water at y=-10) -- both
-		// well within particle_liveness.comp's 250-unit respawn-distance check from either camera
-		// position used below, and with enough lifetime left that neither respawns during either
-		// dispatch.
 		std::vector<Particle> seedParticles(2);
 		seedParticles[0].position = glm::vec4(0.0f, 10.0f, 0.0f, 1.0f);
 		seedParticles[0].lifetime = 10.0f;
@@ -797,10 +754,6 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		);
 		graph::PhysicalExecutionBackend backend(registry);
 
-		// Runs Reset+Liveness once with the camera at the given height, then reads back both
-		// alive-index buffers' first entry plus their indirect counts -- exactly 1 expected in each
-		// bucket per run, since there are only 2 seeded particles and they always land on opposite
-		// sides of the water plane from each other.
 		auto runOnce = [&](float cameraY) {
 			FrameUBO frameUbo{};
 			frameUbo.cameraPosition = glm::vec4(0.0f, cameraY, 0.0f, 1.0f);
@@ -902,7 +855,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 			return result;
 		};
 
-		auto above = runOnce(50.0f); // camera above water
+		auto above = runOnce(50.0f);
 		MESSAGE(
 			"camera above water: aboveBucket=[",
 			above.aboveFirst,
@@ -914,14 +867,12 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 			above.underCount,
 			")"
 		);
-		// Bird (idx 0, above water) is on the camera's side -> renders after water (AboveBucket).
-		// Fish (idx 1, below water) is on the opposite side -> renders before water (UnderBucket).
 		CHECK(above.aboveCount == 1);
 		CHECK(above.underCount == 1);
 		CHECK(above.aboveFirst == 0u);
 		CHECK(above.underFirst == 1u);
 
-		auto below = runOnce(-50.0f); // camera underwater -- same two particles, unmoved
+		auto below = runOnce(-50.0f);
 		MESSAGE(
 			"camera underwater: aboveBucket=[",
 			below.aboveFirst,
@@ -933,9 +884,6 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 			below.underCount,
 			")"
 		);
-		// Swapped: fish (idx 1, below water) is now on the submerged camera's side -> AboveBucket
-		// ("after water"). Bird (idx 0, above water) is now on the opposite side -> UnderBucket
-		// ("before water").
 		CHECK(below.aboveCount == 1);
 		CHECK(below.underCount == 1);
 		CHECK(below.aboveFirst == 1u);
@@ -962,13 +910,6 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 	CHECK(device.GetValidationWarningCount() == 0);
 }
 
-// Stage 4 (see .claude/plans/ancient-booping-magpie.md): PredefinedBufferNode/PredefinedTextureNode
-// are now thin HostWriteNode<Key,T> wrappers (Node.hpp) that write through ctx.WriteSpan<Key> --
-// a real Provision()+backend.Execute() cycle is required now (BeginHostWrite looks up an
-// already-provisioned resource, unlike the old UploadPredefinedBuffer/Texture, which created one
-// on demand), so this drives both nodes through the real seam instead of calling Setup/Execute by
-// hand. Also covers the plan's explicit re-upload case: SetData with a *larger* size exercises
-// ProvisionBuffer's grow-only capacity path (Stage 2) end-to-end.
 TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the real seam, and a "
 		  "larger re-upload grows the buffer") {
 	brassica::testing::MinimalDevice device;
@@ -1045,13 +986,9 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the rea
 
 		vk::Buffer stableBufHandle = physBuf->GetBuffer();
 
-		// A second frame with no SetData call: dirty is already false, so the node goes inactive
-		// and gets culled from the schedule -- the buffer must not be touched again.
 		runFrame(1);
 		CHECK(registry.GetBuffer<TestBufKey>()->GetBuffer() == stableBufHandle);
 
-		// Re-upload with a *larger* size -- exercises ProvisionBuffer's grow-only capacity path
-		// (Stage 2) end-to-end, not just PhysicalBuffer's own unit-level Mapped-ring test.
 		std::vector<uint32_t> biggerData(16, 42u);
 		bufNode.SetData(biggerData);
 		CHECK(bufNode.dirty == true);
@@ -1060,16 +997,12 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the rea
 
 		auto grownBuf = registry.GetBuffer<TestBufKey>();
 		REQUIRE(grownBuf != nullptr);
-		CHECK(grownBuf->GetBuffer() != stableBufHandle); // outgrew capacity -- real reallocation
+		CHECK(grownBuf->GetBuffer() != stableBufHandle);
 		CHECK(grownBuf->GetDesc().byteSize == biggerData.size() * sizeof(uint32_t));
 
 		vkDevice.destroyCommandPool(pool);
 	}
 
-	// TestBufKey's default StagedStorageBufferDesc is exactly the shape ParticleSystemNode's real
-	// typeBufferNode uses (ParticleSystemNode.hpp) -- until StorageBufferDesc gained eTransferDst
-	// (PhysicalResource.hpp, Stage 1), a real copy into a buffer shaped like this was a live
-	// VUID-vkCmdCopyBuffer-dstBuffer-00120.
 	CHECK(device.GetValidationErrorCount() == 0);
 	CHECK(device.GetValidationWarningCount() == 0);
 }
