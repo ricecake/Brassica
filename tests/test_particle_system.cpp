@@ -4,14 +4,17 @@
 
 #include "doctest/doctest.h"
 
+#include "ConfigManager.hpp"
 #include "graph/Graph.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
+#include "particle/ParticleManager.hpp"
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "passes/WaterNode.hpp"
 #include "render/PipelineLibrary.hpp"
+#include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "types/Particle.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -88,6 +91,49 @@ TEST_CASE("Particle struct layouts match std430 16-byte alignment requirements")
 
 	CHECK(sizeof(ParticleType) == 32);
 	CHECK(sizeof(ParticleIndirectCommand) == 12);
+}
+
+TEST_CASE("ParticleManager state, proportions, cutoffs, and reflection validation") {
+	ParticleManager mgr;
+	mgr.Initialize();
+
+	CHECK(mgr.IsEnabled() == true);
+	CHECK(mgr.GetActiveParticles() == 8192);
+	CHECK(mgr.GetMaxParticles() == 8192);
+	CHECK(mgr.GetEnableLights() == true);
+
+	float birdCutoff = 0.0f, fishCutoff = 0.0f;
+	mgr.GetCutoffs(birdCutoff, fishCutoff);
+	CHECK(birdCutoff == doctest::Approx(0.34f / 1.0f).epsilon(0.01));
+	CHECK(fishCutoff == doctest::Approx((0.34f + 0.33f) / 1.0f).epsilon(0.01));
+
+	mgr.SetBirdProportion(0.5f);
+	mgr.SetFishProportion(0.25f);
+	mgr.SetFireflyProportion(0.25f);
+	mgr.GetCutoffs(birdCutoff, fishCutoff);
+	CHECK(birdCutoff == doctest::Approx(0.50f));
+	CHECK(fishCutoff == doctest::Approx(0.75f));
+
+	mgr.SetEnabled(false);
+	mgr.SetActiveParticles(4096);
+	mgr.SetEnableLights(false);
+
+	CHECK(mgr.IsEnabled() == false);
+	CHECK(mgr.GetActiveParticles() == 4096);
+	CHECK(mgr.GetEnableLights() == false);
+
+	ConfigManager config;
+	config.Initialize();
+	mgr.SaveState(config);
+
+	ParticleManager mgr2;
+	mgr2.Initialize();
+	mgr2.LoadState(config);
+
+	CHECK(mgr2.IsEnabled() == false);
+	CHECK(mgr2.GetActiveParticles() == 4096);
+	CHECK(mgr2.GetEnableLights() == false);
+	CHECK(mgr2.GetBirdProportion() == doctest::Approx(0.5f));
 }
 
 TEST_CASE("Underwater and AboveWater particle render nodes schedule before and after WaterNode") {
@@ -186,6 +232,12 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		return;
 	}
 
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
+	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
+		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
+		return;
+	}
+
 	vk::Device vkDevice = device.GetDevice();
 
 	{
@@ -267,6 +319,12 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		return;
 	}
 
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
+	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
+		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
+		return;
+	}
+
 	vk::Device vkDevice = device.GetDevice();
 
 	{
@@ -319,35 +377,49 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 			.swapchainFormat = vk::Format::eR8G8B8A8Srgb,
 		};
 
+		graph::PredefinedBufferNode<ParticleBuffer, Particle, SubPhase::Prepare> seedParticleNode{
+			std::vector<Particle>(8192, Particle{})
+		};
 		ParticleTypeBufferNode typeBufferNode{std::vector<ParticleType>(16, ParticleType{})};
-		ParticleResetNode    resetNode;
-		ParticleLivenessNode livenessNode;
-		ParticleGridBuildNode gridBuildNode;
-		ParticleBehaviorNode behaviorNode;
+		ParticleResetNode      resetNode;
+		ParticleLivenessNode   livenessNode;
+		ParticleGridBuildNode  gridBuildNode;
+		ParticleBehaviorNode   behaviorNode;
 		resetNode.Init(services, particleSetLayout, particleSet);
 		livenessNode.Init(services, particleSetLayout, particleSet);
 		gridBuildNode.Init(services, particleSetLayout, particleSet);
 		behaviorNode.Init(services, particleSetLayout, particleSet);
 
 		graph::Graph g;
+		g.RegisterRef(seedParticleNode);
 		g.RegisterRef(typeBufferNode);
 		g.RegisterRef(resetNode);
 		g.RegisterRef(livenessNode);
 		g.RegisterRef(gridBuildNode);
 		g.RegisterRef(behaviorNode);
 
-		vk::DescriptorSetLayoutBinding frameUboBinding{};
-		frameUboBinding.setBinding(0)
+		std::array<vk::DescriptorSetLayoutBinding, 2> frameBindings{};
+		frameBindings[0]
+			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		frameBindings[1]
+			.setBinding(2)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+
 		vk::DescriptorSetLayoutCreateInfo frameLayoutInfo{};
-		frameLayoutInfo.setBindings(frameUboBinding);
+		frameLayoutInfo.setBindings(frameBindings);
 		vk::DescriptorSetLayout frameLayout = vkDevice.createDescriptorSetLayout(frameLayoutInfo);
 
-		vk::DescriptorPoolSize      framePoolSize{vk::DescriptorType::eUniformBuffer, 1};
+		std::array<vk::DescriptorPoolSize, 2> framePoolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1}
+		};
 		vk::DescriptorPoolCreateInfo framePoolInfo{};
-		framePoolInfo.setPoolSizes(framePoolSize);
+		framePoolInfo.setPoolSizes(framePoolSizes);
 		framePoolInfo.setMaxSets(1);
 		vk::DescriptorPool framePool = vkDevice.createDescriptorPool(framePoolInfo);
 
@@ -378,13 +450,36 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 			std::memset(frameAllocResultInfo.pMappedData, 0, sizeof(FrameUBO));
 		}
 
+		VkBufferCreateInfo lightsBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		lightsBufferInfo.size = 256 * 128; // LightsBuffer capacity
+		lightsBufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		VmaAllocationCreateInfo lightsAllocCreateInfo{};
+		lightsAllocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		VkBuffer      lightsBuffer = VK_NULL_HANDLE;
+		VmaAllocation lightsAllocation = nullptr;
+		vmaCreateBuffer(
+			device.GetAllocator(),
+			&lightsBufferInfo,
+			&lightsAllocCreateInfo,
+			&lightsBuffer,
+			&lightsAllocation,
+			nullptr
+		);
+
 		vk::DescriptorBufferInfo frameBufferDescInfo{frameUboBuffer, 0, sizeof(FrameUBO)};
-		vk::WriteDescriptorSet   uboWrite{};
-		uboWrite.setDstSet(frameSet);
-		uboWrite.setDstBinding(0);
-		uboWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
-		uboWrite.setBufferInfo(frameBufferDescInfo);
-		vkDevice.updateDescriptorSets(uboWrite, nullptr);
+		vk::DescriptorBufferInfo lightsBufferDescInfo{lightsBuffer, 0, VK_WHOLE_SIZE};
+		std::array<vk::WriteDescriptorSet, 2> frameWrites{};
+		frameWrites[0]
+			.setDstSet(frameSet)
+			.setDstBinding(0)
+			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+			.setBufferInfo(frameBufferDescInfo);
+		frameWrites[1]
+			.setDstSet(frameSet)
+			.setDstBinding(2)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setBufferInfo(lightsBufferDescInfo);
+		vkDevice.updateDescriptorSets(frameWrites, nullptr);
 
 		std::array<vk::DescriptorSetLayoutBinding, 2> globalLayoutBindings{};
 		globalLayoutBindings[0]
@@ -550,6 +645,9 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		if (frameUboBuffer && frameUboAllocation) {
 			vmaDestroyBuffer(device.GetAllocator(), frameUboBuffer, frameUboAllocation);
 		}
+		if (lightsBuffer && lightsAllocation) {
+			vmaDestroyBuffer(device.GetAllocator(), lightsBuffer, lightsAllocation);
+		}
 		vkDevice.destroyDescriptorPool(framePool);
 		vkDevice.destroyDescriptorSetLayout(frameLayout);
 		vkDevice.destroyCommandPool(pool);
@@ -563,6 +661,12 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
+	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
+		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
 		return;
 	}
 
@@ -630,9 +734,12 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		ParticleTypeBufferNode typeBufferNode{std::vector<ParticleType>(2, ParticleType{})};
 		ParticleResetNode      resetNode;
 		ParticleLivenessNode   livenessNode;
+		ParticleGridBuildNode  gridBuildNode;
 		resetNode.Init(services, particleSetLayout, particleSet);
 		livenessNode.Init(services, particleSetLayout, particleSet);
+		gridBuildNode.Init(services, particleSetLayout, particleSet);
 		livenessNode.maxParticles = 2;
+		gridBuildNode.maxParticles = 2;
 		livenessNode.waterLevel = 0.0f;
 
 		vk::DescriptorSetLayoutBinding frameUboBinding{};
@@ -770,6 +877,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 			g.RegisterRef(typeBufferNode);
 			g.RegisterRef(resetNode);
 			g.RegisterRef(livenessNode);
+			g.RegisterRef(gridBuildNode);
 
 			graph::FrameContext ctx{.width = 64, .height = 64, .frameIndex = 0};
 
@@ -891,6 +999,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 
 		resetNode.Destroy(vkDevice);
 		livenessNode.Destroy(vkDevice);
+		gridBuildNode.Destroy(vkDevice);
 
 		Shader::ClearConstants();
 		vkDevice.destroySampler(sampler);
@@ -915,6 +1024,12 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the rea
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
+	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
+		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
 		return;
 	}
 

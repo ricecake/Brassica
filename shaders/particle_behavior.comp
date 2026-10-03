@@ -45,6 +45,7 @@ layout(push_constant) uniform ParticleBehaviorPushConstants {
 	float deltaTime;
 	uint  gridSize;
 	float cellSize;
+	uint  enableLights;
 } uPush;
 
 uint hashCell(ivec3 cell, uint gridSize) {
@@ -120,9 +121,9 @@ void main() {
 		) * 0.8;
 		p.position.xyz += (p.velocity.xyz + turb) * uPush.deltaTime;
 
-		// Emit point light into LightsBuffer when pulsing bright (sin(phase) > 0.3)
+		// Emit point light into LightsBuffer when pulsing bright (sin(phase) > 0.3) if enableLights is true
 		float pulse = max(0.0, sin(phase));
-		if (pulse > 0.3) {
+		if (uPush.enableLights != 0u && pulse > 0.3) {
 			uint lightSlot = atomicAdd(uLightCount, 1);
 			if (lightSlot < 256u) {
 				uLights[lightSlot].position = p.position.xyz;

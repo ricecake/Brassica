@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
@@ -11,10 +12,12 @@
 #include "graph/Frame.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "particle/IParticleManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
+#include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
@@ -37,6 +40,9 @@ namespace brassica {
 		std::uint32_t maxParticles{8192};
 		float         deltaTime{0.016f};
 		float         waterLevel{0.0f};
+		std::uint32_t activeParticles{8192};
+		std::uint32_t birdCutoff{2785};
+		std::uint32_t fishCutoff{5570};
 	};
 
 	struct ParticleBehaviorPushConstants {
@@ -44,6 +50,7 @@ namespace brassica {
 		float         deltaTime{0.016f};
 		std::uint32_t gridSize{1024};
 		float         cellSize{8.0f};
+		std::uint32_t enableLights{1};
 	};
 
 	struct ParticleRenderPushConstants {
@@ -187,6 +194,7 @@ namespace brassica {
 			auto pUnderIndirectBuf = registry->GetBuffer<UnderwaterParticleIndirectBuffer>();
 			auto pGridHeadsBuf = registry->GetBuffer<ParticleGridHeadsBuffer>();
 			auto pGridNextBuf = registry->GetBuffer<ParticleGridNextBuffer>();
+
 			if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf || !pGridHeadsBuf || !pGridNextBuf) {
 				return;
 			}
@@ -259,13 +267,21 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
+			bool active = true;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr && !mgr->IsEnabled()) {
+					active = false;
+				}
+			}
+
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
 			return graph::Recipe{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = true,
+				.isActive = active,
 				.realizations = {
 					graph::ResourceRealization{
 						.key = graph::IdOf<AboveWaterParticleIndirectBuffer>(),
@@ -326,6 +342,7 @@ namespace brassica {
 	};
 
 	struct ParticleLivenessNode {
+		detail::ParticleDescriptorCache descriptorCache{};
 		using Resources = graph::Declares<
 			graph::Modify<ParticleBuffer>,
 			graph::Read<ParticleTypeBuffer>,
@@ -362,13 +379,21 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
+			bool active = true;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr && !mgr->IsEnabled()) {
+					active = false;
+				}
+			}
+
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
 			return graph::Recipe{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = true,
+				.isActive = active,
 				.realizations = {
 					graph::ResourceRealization{
 						.key = graph::IdOf<ParticleBuffer>(),
@@ -415,6 +440,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+				}
+			}
+
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleLivenessPushConstants)}
@@ -433,10 +464,27 @@ namespace brassica {
 			}
 			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, particleSet);
 
+			std::uint32_t activeCount = maxParticles;
+			float         birdProp = 0.34f;
+			float         fishProp = 0.67f;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr) {
+					activeCount = std::min(maxParticles, mgr->GetActiveParticles());
+					mgr->GetCutoffs(birdProp, fishProp);
+				}
+			}
+
+			std::uint32_t birdCutoffIdx = static_cast<std::uint32_t>(birdProp * static_cast<float>(activeCount));
+			std::uint32_t fishCutoffIdx = static_cast<std::uint32_t>(fishProp * static_cast<float>(activeCount));
+
 			ParticleLivenessPushConstants push{
 				.maxParticles = maxParticles,
 				.deltaTime = deltaTime,
 				.waterLevel = waterLevel,
+				.activeParticles = activeCount,
+				.birdCutoff = birdCutoffIdx,
+				.fishCutoff = fishCutoffIdx,
 			};
 			vkCmd.pushConstants(
 				resolved.layout,
@@ -452,6 +500,7 @@ namespace brassica {
 	};
 
 	struct ParticleGridBuildNode {
+		detail::ParticleDescriptorCache descriptorCache{};
 		using Resources = graph::Declares<
 			graph::Read<ParticleBuffer>,
 			graph::Modify<ParticleGridHeadsBuffer>,
@@ -483,9 +532,17 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
+			bool active = true;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr && !mgr->IsEnabled()) {
+					active = false;
+				}
+			}
+
 			return graph::Recipe{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = true,
+				.isActive = active,
 				.realizations = {
 					graph::ResourceRealization{
 						.key = graph::IdOf<ParticleBuffer>(),
@@ -507,6 +564,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+				}
+			}
+
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleGridBuildPushConstants)}
@@ -544,6 +607,7 @@ namespace brassica {
 	};
 
 	struct ParticleBehaviorNode {
+		detail::ParticleDescriptorCache descriptorCache{};
 		using Resources = graph::Declares<
 			graph::Modify<ParticleBuffer>,
 			graph::Read<ParticleTypeBuffer>,
@@ -581,13 +645,21 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
+			bool active = true;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr && !mgr->IsEnabled()) {
+					active = false;
+				}
+			}
+
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
 			return graph::Recipe{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = true,
+				.isActive = active,
 				.realizations = {
 					graph::ResourceRealization{
 						.key = graph::IdOf<ParticleBuffer>(),
@@ -634,6 +706,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+				}
+			}
+
 			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, particleSetLayout);
 			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleBehaviorPushConstants)}
@@ -652,11 +730,20 @@ namespace brassica {
 			}
 			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, particleSet);
 
+			bool enableLights = true;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr) {
+					enableLights = mgr->GetEnableLights();
+				}
+			}
+
 			ParticleBehaviorPushConstants push{
 				.maxParticles = maxParticles,
 				.deltaTime = deltaTime,
 				.gridSize = gridSize,
 				.cellSize = cellSize,
+				.enableLights = enableLights ? 1u : 0u,
 			};
 			vkCmd.pushConstants(
 				resolved.layout,
@@ -726,13 +813,21 @@ namespace brassica {
 		void SetIndirectBuffer(vk::Buffer buf) { indirectBuffer = buf; }
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
+			bool active = true;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr && !mgr->IsEnabled()) {
+					active = false;
+				}
+			}
+
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
 			return graph::Recipe{
 				.domain = graph::ExecutionDomain::Graphics,
-				.isActive = true,
+				.isActive = active,
 				.realizations = {
 					graph::ResourceRealization{
 						.key = graph::IdOf<ParticleBuffer>(),
@@ -896,13 +991,21 @@ namespace brassica {
 		void SetIndirectBuffer(vk::Buffer buf) { indirectBuffer = buf; }
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
+			bool active = true;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
+				if (mgr && !mgr->IsEnabled()) {
+					active = false;
+				}
+			}
+
 			graph::ResourceDesc indirectDesc = graph::StorageBufferDesc(sizeof(ParticleIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
 			return graph::Recipe{
 				.domain = graph::ExecutionDomain::Graphics,
-				.isActive = true,
+				.isActive = active,
 				.realizations = {
 					graph::ResourceRealization{
 						.key = graph::IdOf<ParticleBuffer>(),
