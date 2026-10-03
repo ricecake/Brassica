@@ -41,8 +41,8 @@ namespace brassica {
 		float         deltaTime{0.016f};
 		float         waterLevel{0.0f};
 		std::uint32_t activeParticles{8192};
-		float         birdCutoff{0.34f};
-		float         fishCutoff{0.67f};
+		std::uint32_t birdCutoff{2785};
+		std::uint32_t fishCutoff{5570};
 	};
 
 	struct ParticleBehaviorPushConstants {
@@ -465,23 +465,26 @@ namespace brassica {
 			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, particleSet);
 
 			std::uint32_t activeCount = maxParticles;
-			float         birdCutoff = 0.34f;
-			float         fishCutoff = 0.67f;
+			float         birdProp = 0.34f;
+			float         fishProp = 0.67f;
 			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
 				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
 				if (mgr) {
 					activeCount = std::min(maxParticles, mgr->GetActiveParticles());
-					mgr->GetCutoffs(birdCutoff, fishCutoff);
+					mgr->GetCutoffs(birdProp, fishProp);
 				}
 			}
+
+			std::uint32_t birdCutoffIdx = static_cast<std::uint32_t>(birdProp * static_cast<float>(activeCount));
+			std::uint32_t fishCutoffIdx = static_cast<std::uint32_t>(fishProp * static_cast<float>(activeCount));
 
 			ParticleLivenessPushConstants push{
 				.maxParticles = maxParticles,
 				.deltaTime = deltaTime,
 				.waterLevel = waterLevel,
 				.activeParticles = activeCount,
-				.birdCutoff = birdCutoff,
-				.fishCutoff = fishCutoff,
+				.birdCutoff = birdCutoffIdx,
+				.fishCutoff = fishCutoffIdx,
 			};
 			vkCmd.pushConstants(
 				resolved.layout,

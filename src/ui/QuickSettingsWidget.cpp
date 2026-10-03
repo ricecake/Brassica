@@ -3,6 +3,7 @@
 #include "ConfigManager.hpp"
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
+#include "particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
 #include "terrain/ITerrainClipmap.hpp"
 #include "types/CameraData.hpp"
@@ -95,6 +96,21 @@ namespace brassica::ui {
 				}
 				if (cfg) {
 					cfg->SetAppSetting("quick_day_night_paused", m_timePaused);
+				}
+			}
+
+			ImGui::Separator();
+
+			// Particles
+			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Particles:");
+			if (ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto particleMgr = ServiceLocator::Instance().Get<IParticleManager>();
+				bool particlesEnabled = particleMgr->IsEnabled();
+				if (ImGui::Checkbox("Enable Particles##Quick", &particlesEnabled)) {
+					particleMgr->SetEnabled(particlesEnabled);
+					if (cfg) {
+						cfg->SetAppSetting("particles_enabled", particlesEnabled);
+					}
 				}
 			}
 

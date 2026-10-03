@@ -56,6 +56,9 @@ layout(push_constant) uniform ParticleLivenessPushConstants {
 	uint  maxParticles;
 	float deltaTime;
 	float waterLevel;
+	uint  activeParticles;
+	uint  birdCutoff;
+	uint  fishCutoff;
 } uPush;
 
 float hash1(uint n) {
@@ -86,7 +89,7 @@ void advanceParticleTrajectory(inout Particle p, float dt) {
 void main() {
 	uint idx = gl_GlobalInvocationID.x;
 
-	if (idx >= uPush.maxParticles) {
+	if (idx >= uPush.activeParticles || idx >= uPush.maxParticles) {
 		return;
 	}
 
@@ -95,11 +98,13 @@ void main() {
 	vec3 camRight = normalize(uInvViewMatrix[0].xyz);
 	vec3 camUp = normalize(uInvViewMatrix[1].xyz);
 
-	// Select type: Birds (0), Fish (1), Fireflies (2) based on index hash
-	uint pType = 0u;
-	uint modType = idx % 3u;
-	if (modType == 1u) pType = 1u;
-	else if (modType == 2u) pType = 2u;
+	// Select type: Birds (0), Fish (1), Fireflies (2) based on allotment cutoffs
+	uint pType = 2u; // Fireflies default
+	if (idx < uPush.birdCutoff) {
+		pType = 0u; // Birds
+	} else if (idx < uPush.fishCutoff) {
+		pType = 1u; // Fish
+	}
 
 	uParticles[idx].type = pType;
 

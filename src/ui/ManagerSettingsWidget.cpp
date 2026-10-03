@@ -7,6 +7,7 @@
 #include "IManager.hpp"
 #include "imgui.h"
 #include "lighting/ILightManager.hpp"
+#include "particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
 #include "terrain/ITerrainClipmap.hpp"
 
@@ -32,6 +33,9 @@ namespace brassica::ui {
 
 			if (ServiceLocator::Instance().Has<ILightManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ILightManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<IParticleManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<IParticleManager>().get());
 			}
 			if (ServiceLocator::Instance().Has<ITerrainClipmap>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ITerrainClipmap>().get());

@@ -232,7 +232,7 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 		return;
 	}
 
-	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
 	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
 		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
 		return;
@@ -319,7 +319,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		return;
 	}
 
-	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
 	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
 		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
 		return;
@@ -664,7 +664,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		return;
 	}
 
-	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
 	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
 		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
 		return;
@@ -1027,7 +1027,7 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the rea
 		return;
 	}
 
-	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+	auto props2 = device.GetPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>(device.GetDls());
 	if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
 		MESSAGE("Mesa LLVMpipe driver detected; skipping full compute dispatch execution.");
 		return;
