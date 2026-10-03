@@ -1,7 +1,7 @@
 #version 460 core
 #include "bindless.glsl"
 
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct IndirectCommand {
 	uint groupCountX;
@@ -17,12 +17,27 @@ layout(std430, set = 2, binding = 5) buffer UnderwaterIndirectCommandBuffer {
 	IndirectCommand uUnderwaterIndirectCommand;
 };
 
-void main() {
-	uAboveWaterIndirectCommand.groupCountX = 0;
-	uAboveWaterIndirectCommand.groupCountY = 1;
-	uAboveWaterIndirectCommand.groupCountZ = 1;
+layout(std430, set = 2, binding = 6) buffer ParticleGridHeads {
+	int uParticleGridHeads[];
+};
 
-	uUnderwaterIndirectCommand.groupCountX = 0;
-	uUnderwaterIndirectCommand.groupCountY = 1;
-	uUnderwaterIndirectCommand.groupCountZ = 1;
+layout(push_constant) uniform ParticleResetPushConstants {
+	uint gridSize;
+} uPush;
+
+void main() {
+	if (gl_GlobalInvocationID.x == 0u) {
+		uAboveWaterIndirectCommand.groupCountX = 0;
+		uAboveWaterIndirectCommand.groupCountY = 1;
+		uAboveWaterIndirectCommand.groupCountZ = 1;
+
+		uUnderwaterIndirectCommand.groupCountX = 0;
+		uUnderwaterIndirectCommand.groupCountY = 1;
+		uUnderwaterIndirectCommand.groupCountZ = 1;
+	}
+
+	uint idx = gl_GlobalInvocationID.x;
+	if (idx < uPush.gridSize) {
+		uParticleGridHeads[idx] = -1;
+	}
 }
