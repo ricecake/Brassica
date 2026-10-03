@@ -143,7 +143,7 @@ void main() {
 	}
 
 	bool  hasSurface = albedo.a >= 0.01;
-	float surfaceDistKM = hasSurface ? (length(relPos) / 1000.0) : 1e9;
+	float surfaceDistKM = hasSurface ? (length(relPos)) : 1e9;
 
 	vec2 clipCoord = inUV * 2.0 - 1.0;
 	vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
@@ -163,9 +163,11 @@ void main() {
 	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
+		t_end = min(surfaceDistKM, t_end);
 		vec3 accumulated = marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
 		intersection = intersectCloudShell(uCameraPosition.xyz+t_end*worldRay, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
-		if (intersection) {
+		if (intersection && t_start < surfaceDistKM) {
+			t_end = min(surfaceDistKM, t_end);
 			accumulated += marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
 		}
 
