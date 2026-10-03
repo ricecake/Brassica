@@ -21,12 +21,37 @@ void main() {
 	if (vox.x >= 256 || vox.y >= 256 || vox.z >= 256) {
 		return;
 	}
+	// 1D index for stochastic scattering
+	uint linearIdx = vox.x + vox.y * 256 + vox.z * 256 * 256;
+
+	// Update roughly 1/64th of the volume per frame using prime-number striding
+	// to prevent visible rolling-wave update artifacts.
+	uint phaseOffset =  (1 * uFrameIndex * 7919u) % 64u;
+
+	vec3 rawDelta = uCameraPosition.xyz - uPreviousCameraPosition.xyz;
 
 	for (int c = 0; c < 3; ++c) {
 		uint storageIdx = push.cascadeStorageIdx[c];
-		if (storageIdx == 0xFFFFFFFFu) {
-			continue;
-		}
+		if (storageIdx == 0xFFFFFFFFu) continue;
+
+		bool needsUpdate = push.forceRegeneration != 0;
+		float hExtent = push.cascadeExtents[c];
+
+		vec3 delta = rawDelta / (hExtent * 256.0);
+
+		// 1. Scroll Update Check: Is this logical voxel in the newly exposed boundary slab?
+		if (delta.x > 0 && vox.x >= 256 - delta.x) needsUpdate = true;
+		if (delta.x < 0 && vox.x < -delta.x) needsUpdate = true;
+		if (delta.y > 0 && vox.y >= 256 - delta.y) needsUpdate = true;
+		if (delta.y < 0 && vox.y < -delta.y) needsUpdate = true;
+		if (delta.z > 0 && vox.z >= 256 - delta.z) needsUpdate = true;
+		if (delta.z < 0 && vox.z < -delta.z) needsUpdate = true;
+
+		// 2. Stochastic Update Check
+		if ((linearIdx % 64u) == phaseOffset) needsUpdate = true;
+
+		// The GPU will rapidly collapse warp execution for masked threads.
+		if (!needsUpdate) continue;
 
 		// Toroidal voxel index calculation
 		ivec3 localVox = (ivec3(vox) + push.cascadeGridOffset[c].xyz) % 256;
@@ -34,9 +59,8 @@ void main() {
 		if (localVox.y < 0) localVox.y += 256;
 		if (localVox.z < 0) localVox.z += 256;
 
-		float hExtent = push.cascadeExtents[c];
 		float vSpan = push.cascadeExtents.w; // 15000m
-		float baseAlt = 1000.0;             // 1km in the air
+		float baseAlt = 5000.0;             // 1km in the air
 
 		// World position corresponding to this voxel
 		vec3 voxelNorm = (vec3(vox) / 256.0) - vec3(0.5, 0.0, 0.5);
@@ -57,3 +81,218 @@ void main() {
 		imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], ivec3(localVox), vec4(density, 0.0, 0.0, 1.0));
 	}
 }
+
+
+/*
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "lygia/generative/psrdnoise.glsl"
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(push_constant) uniform CloudVolumeGenPushConstants {
+	vec4  cameraPos;
+	uvec4 cascadeStorageIdx;
+	vec4  cascadeExtents;
+	vec4  cascadeCenterPos[3];
+	ivec4 cascadeGridOffset[3];
+	ivec4 cascadeGridDelta[3];  // NEW: Voxel shift delta since last update for C0, C1, C2
+	uint  forceRegeneration;
+	uint  frameCount;           // NEW: For prime-scattered phase updates
+	float phaseTime;            // NEW: Evolution time for noise
+} push;
+
+void main() {
+	uvec3 vox = gl_GlobalInvocationID;
+	if (vox.x >= 256 || vox.y >= 256 || vox.z >= 256) return;
+
+	// 1D index for stochastic scattering
+	uint linearIdx = vox.x + vox.y * 256 + vox.z * 256 * 256;
+
+	// Update roughly 1/64th of the volume per frame using prime-number striding
+	// to prevent visible rolling-wave update artifacts.
+	uint phaseOffset = (push.frameCount * 7919u) % 64u;
+
+	for (int c = 0; c < 3; ++c) {
+		uint storageIdx = push.cascadeStorageIdx[c];
+		if (storageIdx == 0xFFFFFFFFu) continue;
+
+		bool needsUpdate = push.forceRegeneration != 0;
+
+		// 1. Scroll Update Check: Is this logical voxel in the newly exposed boundary slab?
+		ivec3 delta = push.cascadeGridDelta[c].xyz;
+		if (delta.x > 0 && vox.x >= 256 - delta.x) needsUpdate = true;
+		if (delta.x < 0 && vox.x < -delta.x) needsUpdate = true;
+		if (delta.y > 0 && vox.y >= 256 - delta.y) needsUpdate = true;
+		if (delta.y < 0 && vox.y < -delta.y) needsUpdate = true;
+		if (delta.z > 0 && vox.z >= 256 - delta.z) needsUpdate = true;
+		if (delta.z < 0 && vox.z < -delta.z) needsUpdate = true;
+
+		// 2. Stochastic Update Check
+		if ((linearIdx % 64u) == phaseOffset) needsUpdate = true;
+
+		// The GPU will rapidly collapse warp execution for masked threads.
+		if (!needsUpdate) continue;
+
+		// Toroidal voxel index calculation
+		ivec3 localVox = (ivec3(vox) + push.cascadeGridOffset[c].xyz) % 256;
+		if (localVox.x < 0) localVox.x += 256;
+		if (localVox.y < 0) localVox.y += 256;
+		if (localVox.z < 0) localVox.z += 256;
+
+		float hExtent = push.cascadeExtents[c];
+		float vSpan = push.cascadeExtents.w;
+		float baseAlt = 1000.0;
+
+		float voxelSize = hExtent / 256.0;
+
+		vec3 voxelNorm = (vec3(vox) / 256.0) - vec3(0.5, 0.0, 0.5);
+		vec3 worldPos = vec3(
+			push.cascadeCenterPos[c].x + voxelNorm.x * hExtent,
+			baseAlt + voxelNorm.y * vSpan,
+			push.cascadeCenterPos[c].z + voxelNorm.z * hExtent
+		);
+
+		// 3. Frequency-Clamped fBm Evaluation
+		float density = 0.0;
+		float frequency = 1.0 / 100000.0; // Base shape frequency (100km)
+		float amplitude = 1.0;
+		float maxAmplitude = 0.0;
+
+		for (int i = 0; i < 6; i++) {
+			float wavelength = 1.0 / frequency;
+
+			// Nyquist clamp: Stop accumulating detail if the noise feature is smaller than 2 voxels.
+			// We fade it out smoothly to guarantee that Cascade 0 and Cascade 1 match perfectly at their boundary.
+			float fade = clamp((wavelength - 2.0 * voxelSize) / (2.0 * voxelSize), 0.0, 1.0);
+			if (fade <= 0.0) break;
+
+			float n = psrdnoise(worldPos * frequency, vec3(0.0), push.phaseTime);
+
+			density += n * amplitude * fade;
+			maxAmplitude += amplitude * fade;
+
+			frequency *= 2.0;
+			amplitude *= 0.5; // Or use an exposed roughness parameter
+		}
+
+		density = max(0.0, density / maxAmplitude);
+
+		// Shape the final density using global height bounds
+		density *= smoothstep(0.1, 0.15, voxelNorm.y) * (1.0 - smoothstep(0.85, 1.0, voxelNorm.y));
+
+		imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], ivec3(localVox), vec4(density, 0.0, 0.0, 1.0));
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "lygia/generative/psrdnoise.glsl"
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(push_constant) uniform CloudVolumeGenPushConstants {
+	vec4  cameraPos;            // x, y, z = camera position
+	uvec4 cascadeStorageIdx;    // x, y, z = storage bindless indices
+	vec4  cascadeExtents;       // x=20000, y=80000, z=320000, w=15000 (vertical span)
+
+	// Update Scaffolding
+	uvec3 updateOffset;         // Used for scroll updates (the starting local voxel)
+	uint  updateMode;           // 0 = Volume/Scroll, 1 = Stochastic Scatter
+	uint  frameIndex;           // For the stochastic noise seed
+	uint  stochasticBudget;     // Number of voxels to update per frame (e.g., 262144)
+} push;
+
+void main() {
+	uvec3 vox;
+
+	if (push.updateMode == 1) {
+		// Mode 1: Stochastic Regeneration
+		// Flatten the 3D dispatch into a 1D thread pool
+		uint threadIdx = gl_GlobalInvocationID.x +
+						 gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) +
+						 gl_GlobalInvocationID.z * (gl_NumWorkGroups.x * gl_WorkGroupSize.x * gl_NumWorkGroups.y * gl_WorkGroupSize.y);
+
+		if (threadIdx >= push.stochasticBudget) return;
+
+		// Use prime hashing to scatter the updates throughout the 256^3 volume
+		uint voxelIdx = (push.frameIndex * push.stochasticBudget + threadIdx) * 7919u % (256u*256u*256u);
+
+		vox = uvec3(
+			voxelIdx % 256u,
+			(voxelIdx / 256u) % 256u,
+			voxelIdx / 65536u
+		);
+	} else {
+		// Mode 0: Full initialization or Toroidal Scroll update
+		vox = gl_GlobalInvocationID + push.updateOffset;
+		if (vox.x >= 256 || vox.y >= 256 || vox.z >= 256) return;
+	}
+
+	float baseAlt = 1000.0; // 1km in the air
+
+	for (int c = 0; c < 3; ++c) {
+		uint storageIdx = push.cascadeStorageIdx[c];
+		if (storageIdx == 0xFFFFFFFFu) continue;
+
+		float hExtent = push.cascadeExtents[c];
+		float vSpan = push.cascadeExtents.w;
+		float voxelSizeX = hExtent / 256.0;
+		float voxelSizeY = vSpan / 256.0;
+
+		// 1. Lock the grid center to absolute integer world coordinates
+		vec2 snappedCenterXZ = floor(push.cameraPos.xz / voxelSizeX) * voxelSizeX;
+
+		// 2. Map from [0, 255] execution bounds to [-128, 127] spatial bounds
+		ivec3 gridOffset = ivec3(vox) - ivec3(128, 0, 128);
+
+		// 3. Reconstruct absolute world position
+		vec3 worldPos = vec3(
+			snappedCenterXZ.x + float(gridOffset.x) * voxelSizeX,
+			baseAlt + float(vox.y) * voxelSizeY,
+			snappedCenterXZ.y + float(gridOffset.z) * voxelSizeX
+		);
+
+		// 4. Calculate exact toroidal storage coordinate
+		// GLSL mod() perfectly wraps negative floats, unlike integer % arithmetic.
+		ivec3 storageVox = ivec3(
+			mod(floor(worldPos.x / voxelSizeX), 256.0),
+			vox.y, // Y doesn't scroll in a top-down clipmap
+			mod(floor(worldPos.z / voxelSizeX), 256.0)
+		);
+
+		// 5. Evaluate noise
+		float n1 = psrdnoise(worldPos/vec3(5000), vec3(0.0), 0.0);
+		float n2 = psrdnoise(worldPos/vec3(100000, 5000, 100000), vec3(0.0), 1.0);
+		float density = step(0.0, n2) * remap(n1, n2, 1.0, 0.0, 1.0);
+
+		// Aliasing safeguard: If you add higher frequency noise (e.g., 500m phase),
+		// you must fade it out on Cascade 2 (where voxelSizeX > 1000m) to prevent static.
+		// if (voxelSizeX > 1000.0) density = mix(density, low_freq_base, ...);
+
+		imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], storageVox, vec4(density, 0.0, 0.0, 1.0));
+	}
+}
+
+
+
+
+*/

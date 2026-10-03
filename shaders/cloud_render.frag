@@ -150,16 +150,10 @@ void main() {
 	vec3 viewDir = viewRay4.xyz / viewRay4.w;
 	vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
 
-	float planetRadius = FAKE_PLANET_RADIUS / 1000.0;
-	float r = planetRadius + camAltKM;
-	r = max(planetRadius + 0.001, r);
-
 	float cloudAlt = 5000.0;
-	float cloudRadius = planetRadius + cloudAlt;
-
 	float t_start, t_end;
-	bool intersection = intersectCloudShell(uCameraPosition.xyz, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
 
+	bool intersection = intersectCloudShell(uCameraPosition.xyz, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
 	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
