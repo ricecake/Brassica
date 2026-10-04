@@ -702,3 +702,39 @@ float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad, out mat3 ou
     out_hessian = hessian / max_amp;
     return val / max_amp;
 }
+
+float cloudPhase(float cosTheta) {
+	// Dual-lobe Henyey-Greenstein for forward and back scattering
+	// Blended with a large isotropic component to ensure visibility at all angles
+	float hg = mix(henyeyGreenstein(cloudPhaseG1, cosTheta), henyeyGreenstein(cloudPhaseG2, cosTheta), cloudPhaseAlpha);
+	return mix(hg, (1.0 / (4.0 * PI)), cloudPhaseIsotropic);
+}
+
+float beerPowder(float d, float local_d) {
+	// Approximation of multiple scattering (Beer-Powder law)
+	// Ensuring sunny side isn't black when d is small
+	return max(
+		exp(-d),
+		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (1.0 - exp(-local_d * cloudPowderLocalScale))
+	);
+}
+
+vec3 beerPowder(vec3 d, vec3 local_d) {
+	// Approximation of multiple scattering (Beer-Powder law)
+	// Ensuring sunny side isn't black when d is small
+	return max(
+		exp(-d),
+		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (vec3(1.0) - exp(-local_d * cloudPowderLocalScale))
+	);
+}
+
+float schlickPhase(float cosTheta, float k) {
+    float kCos = k * cosTheta;
+    float denom = 1.0 - kCos;
+    return 0.079577 * (1.0 - k * k) / (denom * denom);
+}
+
+float dualLobeSchlick(float cosTheta, float kFwd, float kBck, float weight) {
+    return mix(schlickPhase(cosTheta, -kBck), schlickPhase(cosTheta, kFwd), weight);
+}
+
