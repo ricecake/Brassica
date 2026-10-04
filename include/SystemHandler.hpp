@@ -1,9 +1,10 @@
 #pragma once
 
 #include <memory>
+#include <utility>
 #include <vector>
 
-#include "passes/EntityNode.hpp"
+#include "passes/IEntityNode.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 #include <entt/entity/entity.hpp>
@@ -45,45 +46,31 @@ namespace brassica {
 			}
 		}
 
-		// Registers a new entity in the entt registry with at least basic spatial details (TransformComponent)
-		entt::entity RegisterEntity(Engine& engine, const TransformComponent& transform = {});
+		// Registers a new entity in the entt registry with spatial and optional render details
+		entt::entity RegisterEntity(Engine& engine, const TransformComponent& transform = {}, const EntityRenderComponent& render = {});
+
+		// Removes an entity managed by this handler from m_entities and destroys it in the entt registry
+		bool RemoveEntity(Engine& engine, entt::entity entity);
+
+		// Clears all entities managed by this handler
+		void ClearEntities(Engine& engine);
 
 		[[nodiscard]] const std::vector<entt::entity>& GetEntities() const { return m_entities; }
 
-		[[nodiscard]] IEntityNode& GetEntityNode() {
-			if (!m_entityNode) {
-				m_entityNode = std::make_shared<EntityNode<SystemHandler>>();
-			}
-			return *m_entityNode;
-		}
+		[[nodiscard]] IEntityNode& GetEntityNode();
 
-		[[nodiscard]] const IEntityNode& GetEntityNode() const {
-			if (!m_entityNode) {
-				m_entityNode = std::make_shared<EntityNode<SystemHandler>>();
-			}
-			return *m_entityNode;
-		}
+		[[nodiscard]] const IEntityNode& GetEntityNode() const;
 
-		virtual void InitNode(const render::NodeServices& services) {
-			if (!m_nodeInitialized) {
-				GetEntityNode().Init(services);
-				m_nodeInitialized = true;
-			}
-		}
+		virtual void InitNode(const render::NodeServices& services);
 
-		virtual void DestroyNode(const vk::Device& device) {
-			if (m_entityNode && m_nodeInitialized) {
-				m_entityNode->Destroy(device);
-				m_nodeInitialized = false;
-			}
-		}
+		virtual void DestroyNode(const vk::Device& device);
 
 		[[nodiscard]] bool IsNodeInitialized() const { return m_nodeInitialized; }
 
 	protected:
-		template <typename Tag>
-		void CreateEntityNode() {
-			m_entityNode = std::make_shared<EntityNode<Tag>>();
+		template <typename NodeT, typename... Args>
+		void CreateEntityNode(Args&&... args) {
+			m_entityNode = std::make_shared<NodeT>(std::forward<Args>(args)...);
 		}
 
 		std::vector<entt::entity>            m_entities;

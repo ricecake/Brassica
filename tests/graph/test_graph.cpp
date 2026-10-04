@@ -1238,3 +1238,98 @@ TEST_CASE("TerrainMapColorConfig elevation, slope, and water color tinting") {
 	CHECK(g > 180);
 	CHECK(b > 180);
 }
+
+namespace {
+	class MockBatchEntityNode: public brassica::IEntityNode {
+	public:
+		void Init(const brassica::render::NodeServices&) override {}
+		void Destroy(vk::Device) override {}
+		void RegisterInto(brassica::graph::Graph&) override {}
+
+		void SetPushConstants(const brassica::EntityPushConstants& p) override {
+			if (instances.empty()) {
+				instances.push_back({.push = p});
+			} else {
+				instances[0].push = p;
+			}
+		}
+
+		void SetIndirectCommand(const brassica::MeshTasksIndirectCommand& cmd) override {
+			if (instances.empty()) {
+				instances.push_back({.indirectCmd = cmd});
+			} else {
+				instances[0].indirectCmd = cmd;
+			}
+		}
+
+		brassica::EntityPushConstants& GetPushConstants() override {
+			if (instances.empty()) instances.push_back({});
+			return instances[0].push;
+		}
+
+		brassica::MeshTasksIndirectCommand& GetIndirectCommand() override {
+			if (instances.empty()) instances.push_back({});
+			return instances[0].indirectCmd;
+		}
+
+		void AddInstance(const brassica::EntityPushConstants& push, const brassica::MeshTasksIndirectCommand& cmd = {1, 1, 1}) override {
+			instances.push_back({.push = push, .indirectCmd = cmd});
+		}
+
+		void ClearInstances() override {
+			instances.clear();
+		}
+
+		void SetInstances(std::span<const brassica::EntityInstanceData> insts) override {
+			instances.assign(insts.begin(), insts.end());
+		}
+
+		const std::vector<brassica::EntityInstanceData>& GetInstances() const override {
+			return instances;
+		}
+
+		std::vector<brassica::EntityInstanceData> instances;
+	};
+} // namespace
+
+TEST_CASE("IEntityNode multi-instance batching API") {
+	MockBatchEntityNode node;
+	CHECK(node.GetInstances().empty());
+
+	brassica::EntityPushConstants push1{.positionAndScale = glm::vec4(1.0f, 2.0f, 3.0f, 1.0f)};
+	brassica::EntityPushConstants push2{.positionAndScale = glm::vec4(4.0f, 5.0f, 6.0f, 2.0f)};
+
+	node.AddInstance(push1);
+	node.AddInstance(push2);
+
+	REQUIRE(node.GetInstances().size() == 2);
+	CHECK(node.GetInstances()[0].push.positionAndScale.x == doctest::Approx(1.0f));
+	CHECK(node.GetInstances()[1].push.positionAndScale.x == doctest::Approx(4.0f));
+
+	node.ClearInstances();
+	CHECK(node.GetInstances().empty());
+}
+
+TEST_CASE("SystemHandler dynamic entity lifecycle with components") {
+	entt::registry registry;
+	brassica::TransformComponent t1{.position = glm::vec3(10.0f, 20.0f, 30.0f)};
+	brassica::EntityRenderComponent r1{.entityTypeId = 1, .color = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f), .materialId = 2};
+
+	entt::entity e1 = registry.create();
+	registry.emplace<brassica::TransformComponent>(e1, t1);
+	registry.emplace<brassica::EntityRenderComponent>(e1, r1);
+
+	CHECK(registry.valid(e1));
+	auto* tr = registry.try_get<brassica::TransformComponent>(e1);
+	auto* re = registry.try_get<brassica::EntityRenderComponent>(e1);
+
+	REQUIRE(tr != nullptr);
+	REQUIRE(re != nullptr);
+	CHECK(tr->position.x == doctest::Approx(10.0f));
+	CHECK(re->entityTypeId == 1);
+	CHECK(re->materialId == 2);
+	CHECK(re->color.r == doctest::Approx(1.0f));
+
+	registry.destroy(e1);
+	CHECK_FALSE(registry.valid(e1));
+}

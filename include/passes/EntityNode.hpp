@@ -2,49 +2,26 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
+#include <vector>
 
 #include "VulkanCompat.hpp"
 
+#include "graph/Declaration.hpp"
+#include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/IEntityNode.hpp"
+#include "passes/ResourceGroups.hpp"
+#include "passes/ResourceKeys.hpp"
+#include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
 #include <glm/glm.hpp>
 
-#include "graph/Declaration.hpp"
-#include "graph/Execution.hpp"
-#include "passes/ResourceGroups.hpp"
-#include "passes/ResourceKeys.hpp"
-#include "render/NodeLifecycle.hpp"
-
 namespace brassica {
-
-	struct EntityPushConstants {
-		glm::vec4  positionAndScale{0.0f, 15.0f, 0.0f, 3.0f};
-		glm::vec4  color{0.0f, 0.4f, 1.0f, 1.0f}; // Bright blue
-		glm::uvec4 params{8, 12, 0, 0};           // rings, pointsPerRing
-	};
-
-	using BallPushConstants = EntityPushConstants;
-
-	struct MeshTasksIndirectCommand {
-		std::uint32_t groupCountX{1};
-		std::uint32_t groupCountY{1};
-		std::uint32_t groupCountZ{1};
-	};
-
-	struct IEntityNode {
-		virtual ~IEntityNode() = default;
-		virtual void                      Init(const render::NodeServices& services) = 0;
-		virtual void                      Destroy(vk::Device device) = 0;
-		virtual void                      RegisterInto(graph::Graph& graph) = 0;
-		virtual void                      SetPushConstants(const EntityPushConstants& p) = 0;
-		virtual void                      SetIndirectCommand(const MeshTasksIndirectCommand& cmd) = 0;
-		virtual EntityPushConstants&      GetPushConstants() = 0;
-		virtual MeshTasksIndirectCommand& GetIndirectCommand() = 0;
-	};
 
 	template <typename Tag = struct DefaultEntityTag>
 	struct EntityNode: public IEntityNode {
@@ -62,18 +39,57 @@ namespace brassica {
 		MeshShader     meshShader;
 		FragmentShader fragShader;
 
-		render::PipelineLibrary*     pipelineLibrary = nullptr;
-		const DispatchLoaderDynamic* dls = nullptr;
-		EntityPushConstants          push{};
-		MeshTasksIndirectCommand     indirectCmd{0, 0, 0};
+		render::PipelineLibrary*        pipelineLibrary = nullptr;
+		const DispatchLoaderDynamic*    dls = nullptr;
+		std::vector<EntityInstanceData> instances;
+		MeshTasksIndirectCommand        indirectCmd{0, 0, 0};
 
-		void SetPushConstants(const EntityPushConstants& p) override { push = p; }
+		void AddInstance(const EntityPushConstants& push, const MeshTasksIndirectCommand& cmd = {1, 1, 1}) override {
+			instances.push_back(EntityInstanceData{.push = push, .indirectCmd = cmd});
+		}
 
-		void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) override { indirectCmd = cmd; }
+		void ClearInstances() override {
+			instances.clear();
+		}
 
-		EntityPushConstants& GetPushConstants() override { return push; }
+		void SetInstances(std::span<const EntityInstanceData> insts) override {
+			instances.assign(insts.begin(), insts.end());
+		}
 
-		MeshTasksIndirectCommand& GetIndirectCommand() override { return indirectCmd; }
+		const std::vector<EntityInstanceData>& GetInstances() const override {
+			return instances;
+		}
+
+		void SetPushConstants(const EntityPushConstants& p) override {
+			if (instances.empty()) {
+				instances.push_back(EntityInstanceData{.push = p, .indirectCmd = {1, 1, 1}});
+			} else {
+				instances[0].push = p;
+			}
+		}
+
+		void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) override {
+			indirectCmd = cmd;
+			if (instances.empty()) {
+				instances.push_back(EntityInstanceData{.push = {}, .indirectCmd = cmd});
+			} else {
+				instances[0].indirectCmd = cmd;
+			}
+		}
+
+		EntityPushConstants& GetPushConstants() override {
+			if (instances.empty()) {
+				instances.push_back(EntityInstanceData{});
+			}
+			return instances[0].push;
+		}
+
+		MeshTasksIndirectCommand& GetIndirectCommand() override {
+			if (instances.empty()) {
+				instances.push_back(EntityInstanceData{});
+			}
+			return instances[0].indirectCmd;
+		}
 
 		void RegisterInto(graph::Graph& graph) override { graph.RegisterRef(*this); }
 
@@ -105,7 +121,7 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.isActive = (indirectCmd.groupCountX > 0 || indirectCmd.groupCountY > 0 || indirectCmd.groupCountZ > 0);
+			r.isActive = !instances.empty() || (indirectCmd.groupCountX > 0 || indirectCmd.groupCountY > 0 || indirectCmd.groupCountZ > 0);
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -196,14 +212,6 @@ namespace brassica {
 			vkCmd.setViewport(0, viewport);
 			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
-				0,
-				sizeof(EntityPushConstants),
-				&push
-			);
-
 			vk::Buffer    indirectBuf{nullptr};
 			std::uint64_t offset = 0;
 			if (ctx.resources) {
@@ -215,7 +223,22 @@ namespace brassica {
 				}
 			}
 
-			if (dls && dls->vkCmdDrawMeshTasksIndirectEXT && indirectBuf) {
+			if (!instances.empty()) {
+				for (const auto& inst : instances) {
+					vkCmd.pushConstants(
+						resolved.layout,
+						vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+						0,
+						sizeof(EntityPushConstants),
+						&inst.push
+					);
+
+					if (dls && dls->vkCmdDrawMeshTasksEXT) {
+						std::uint32_t groups = inst.indirectCmd.groupCountX > 0 ? inst.indirectCmd.groupCountX : 1;
+						vkCmd.drawMeshTasksEXT(groups, 1, 1, *dls);
+					}
+				}
+			} else if (dls && dls->vkCmdDrawMeshTasksIndirectEXT && indirectBuf) {
 				dls->vkCmdDrawMeshTasksIndirectEXT(
 					static_cast<VkCommandBuffer>(ctx.cmd.vkCmd),
 					static_cast<VkBuffer>(indirectBuf),
