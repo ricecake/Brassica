@@ -7,6 +7,7 @@
 #include "animation/SkinnedCylinder.hpp"
 #include "passes/OzzCylinderNode.hpp"
 #include "terrain/TerrainClipmap.hpp"
+#include "types/EntityRenderComponent.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 
@@ -18,7 +19,7 @@ namespace brassica {
 			m_entityNode = std::make_shared<OzzCylinderNode<struct OzzCylinderTag>>();
 		}
 
-		void Setup(Engine& engine, const FrameDetails& frameDetails) override {
+		void Setup(Engine& engine, const FrameDetails& /*frameDetails*/) override {
 			float targetX = 6.0f;
 			float targetZ = -20.0f;
 			float terrainY = TerrainClipmap::SampleTerrain(targetX, targetZ, 0.5f).r;
@@ -28,9 +29,19 @@ namespace brassica {
 			transform.rotation = glm::vec3(0.0f);
 			transform.scale = glm::vec3(3.0f);
 
-			cylinderEntity = RegisterEntity(engine, transform);
-
 			cylinderColor = glm::vec4(0.9f, 0.4f, 0.1f, 1.0f); // Bright orange
+
+			EntityRenderComponent renderComp{};
+			renderComp.meshType = 1; // Cylinder
+			renderComp.color = cylinderColor;
+			renderComp.params = glm::uvec4(
+				static_cast<uint32_t>(m_cylinder.GetVertexCount()),
+				static_cast<uint32_t>(m_cylinder.GetTriangleCount()),
+				0,
+				0
+			);
+
+			cylinderEntity = RegisterEntity(engine, transform, renderComp);
 
 			MeshTasksIndirectCommand cmd{};
 			cmd.groupCountX = 1;
@@ -38,7 +49,7 @@ namespace brassica {
 			cmd.groupCountZ = 1;
 			GetCylinderNode().SetIndirectCommand(cmd);
 
-			UpdateRenderData(transform, frameDetails.totalTime);
+			GetCylinderNode().SetMeshData(m_cylinder.GetPositions(), m_cylinder.GetNormals(), m_cylinder.GetIndices());
 		}
 
 		void UpdateEntity(entt::entity entity, Engine& engine, const FrameDetails& frameDetails) override {
@@ -62,7 +73,8 @@ namespace brassica {
 				transform->position.x = targetX;
 				transform->position.z = targetZ;
 				transform->position.y = terrainY + 8.0f;
-				UpdateRenderData(*transform, frameDetails.totalTime);
+
+				GetCylinderNode().SetMeshData(m_cylinder.GetPositions(), m_cylinder.GetNormals(), m_cylinder.GetIndices());
 			}
 		}
 
@@ -77,22 +89,6 @@ namespace brassica {
 		}
 
 	private:
-		void UpdateRenderData(const TransformComponent& transform, double totalTime) {
-			EntityPushConstants push{};
-			push.positionAndScale = glm::vec4(transform.position, transform.scale.x);
-			push.color = cylinderColor;
-			push.params = glm::uvec4(
-				static_cast<uint32_t>(m_cylinder.GetVertexCount()),
-				static_cast<uint32_t>(m_cylinder.GetTriangleCount()),
-				0,
-				0
-			);
-
-			auto& node = GetCylinderNode();
-			node.SetMeshData(m_cylinder.GetPositions(), m_cylinder.GetNormals(), m_cylinder.GetIndices());
-			node.SetPushConstants(push);
-		}
-
 		entt::entity    cylinderEntity{entt::null};
 		glm::vec4       cylinderColor{0.9f, 0.4f, 0.1f, 1.0f};
 		SkinnedCylinder m_cylinder;
