@@ -253,6 +253,44 @@ uvec2 decodeMorton2D(uint code) {
 	return uvec2(unpart1by1(code), unpart1by1(code >> 1u));
 }
 
+// Expands a 10-bit integer into 30 bits by inserting 2 zeros after each bit.
+// Input range: [0, 1023]
+uint expandBits3D(uint v) {
+    v = (v | (v << 16)) & 0x030000FFu;
+    v = (v | (v <<  8)) & 0x0300F00Fu;
+    v = (v | (v <<  4)) & 0x030C30C3u;
+    v = (v | (v <<  2)) & 0x09249249u;
+    return v;
+}
+
+// Compacts a 30-bit Morton code back into a 10-bit integer by extracting every 3rd bit.
+uint compactBits3D(uint v) {
+    v = v & 0x09249249u;
+    v = (v | (v >>  2)) & 0x030C30C3u;
+    v = (v | (v >>  4)) & 0x0300F00Fu;
+    v = (v | (v >>  8)) & 0x030000FFu;
+    v = (v | (v >> 16)) & 0x000003FFu;
+    return v;
+}
+
+// ENCODER: Takes 3D spatial coordinates and returns a single 30-bit Morton code
+uint encodeMorton3D(uvec3 coords) {
+    uint xx = expandBits3D(coords.x);
+    uint yy = expandBits3D(coords.y);
+    uint zz = expandBits3D(coords.z);
+    return xx | (yy << 1) | (zz << 2);
+}
+
+// DECODER: Takes a 30-bit Morton code and restores the original 3D coordinates
+uvec3 decodeMorton3D(uint morton) {
+    uint x = compactBits3D(morton);
+    uint y = compactBits3D(morton >> 1);
+    uint z = compactBits3D(morton >> 2);
+    return uvec3(x, y, z);
+}
+
+
+
 uint mortonOwenScramble(uvec2 p, uint seed) {
 	uint morton = encodeMorton2D(p);
 	return owenScrambleBase4(morton, seed);

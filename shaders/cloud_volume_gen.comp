@@ -22,11 +22,13 @@ void main() {
 		return;
 	}
 	// 1D index for stochastic scattering
-	uint linearIdx = vox.x + vox.y * 256 + vox.z * 256 * 256;
+	// uint linearIdx = vox.x + vox.y * 256 + vox.z * 256 * 256;
+	uint linearIdx = encodeMorton3D(vox);
 
 	// Update roughly 1/64th of the volume per frame using prime-number striding
 	// to prevent visible rolling-wave update artifacts.
-	uint phaseOffset =  (1 * uFrameIndex * 7919u) % 17u;
+	// uint phaseOffset =  (1 * uFrameIndex * 7919u) % 67u;
+	uint phaseOffset =  ( uFrameIndex ) % 67u;
 
 	vec3 rawDelta = uCameraPosition.xyz - uPreviousCameraPosition.xyz;
 
@@ -51,7 +53,7 @@ void main() {
 		if (gridDelta.y > 0 && vox.z >= 256 - gridDelta.y) needsUpdate = true;
 		if (gridDelta.y < 0 && vox.z < -gridDelta.y) needsUpdate = true;
 
-		if ((linearIdx % 17u) == phaseOffset) needsUpdate = true;
+		if ((linearIdx % 67u) == phaseOffset) needsUpdate = true;
 
 		if (!needsUpdate) continue;
 
