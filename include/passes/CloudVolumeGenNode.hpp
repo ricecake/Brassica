@@ -100,7 +100,7 @@ namespace brassica {
 			(void)ctx;
 			graph::Recipe r{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = (frameCount++ % 32 == 0) || hasUpdate || forceRegeneration,
+				.isActive = (frameCount++ % 3 == 0) || hasUpdate || forceRegeneration,
 			};
 			r.realizations.reserve(3);
 			r.realizations.push_back(

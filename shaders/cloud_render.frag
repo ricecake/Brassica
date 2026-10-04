@@ -6,6 +6,7 @@
 #include "atmosphere/common.glsl"
 #include "helpers/octahedral.glsl"
 #include "lygia/generative/psrdnoise.glsl"
+#include "common.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -44,24 +45,24 @@ float sampleCloudCascades(vec3 worldPos, float distFromCam) {
 	vec3 uvw2 = vec3(worldPos.x / 320000.0, uv_y, worldPos.z / 320000.0);
 	float density = 0.0;
 
-	if (distFromCam < 20000.0) {
+	if (distFromCam < 10000.0) {
 		// return 0.0;
 		float d0 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, uvw0).r;
-		if (distFromCam > 16000.0) {
+		if (distFromCam > 8000.0) {
 			// Blend zone: 16km to 20km
 			float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-			float blend = smoothstep(16000.0, 20000.0, distFromCam);
+			float blend = smoothstep(8000.0, 10000.0, distFromCam);
 			density = mix(d0, d1, blend);
 		} else {
 			density = d0;
 		}
-	} else if (distFromCam < 80000.0) {
-		return 0.0;
+	} else if (distFromCam < 40000.0) {
+		// return 0.0;
 		float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-		if (distFromCam > 64000.0) {
+		if (distFromCam > 32000.0) {
 			// Blend zone: 64km to 80km
 			float d2 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-			float blend = smoothstep(64000.0, 80000.0, distFromCam);
+			float blend = smoothstep(32000.0, 40000.0, distFromCam);
 			density = mix(d1, d2, blend);
 		} else {
 			density = d1;
@@ -89,12 +90,12 @@ float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
 vec3 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
 	// 1. Initial Setup and Jitter
 	float stepSize = 50.0; // Base step size (meters)
-	float t = t_start;
+	float t = t_start - stepSize;
 
 	// Jitter the start position using Interleaved Gradient Noise or Bayer matrix
 	// to hide the discrete steps and prevent view-movement banding.
 	vec2 fragCoord = gl_FragCoord.xy;
-	float jitter = fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715))));
+	float jitter = InterleavedGradientNoise(fragCoord, int(uFrameIndex));
 	t += stepSize * jitter;
 
 	vec4 accumulatedColor = vec4(0.0); // rgb = color, a = accumulated alpha
