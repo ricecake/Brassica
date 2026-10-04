@@ -75,6 +75,7 @@ namespace brassica::testing {
 			features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 			features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 			features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+			features12.bufferDeviceAddress = VK_TRUE;
 
 			VkPhysicalDeviceFeatures features1{};
 			features1.shaderInt64 = VK_TRUE;
@@ -121,6 +122,7 @@ namespace brassica::testing {
 			allocatorInfo.device = m_device;
 			allocatorInfo.instance = m_instance;
 			allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+			allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
 			if (vmaCreateAllocator(&allocatorInfo, &m_allocator) != VK_SUCCESS) {
 				spdlog::error("MinimalDevice: failed to create VMA allocator.");

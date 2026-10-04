@@ -10,6 +10,8 @@
 #include "passes/EntityNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
+#include "types/EntityRenderComponent.hpp"
+#include "types/TransformComponent.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "VulkanCompat.hpp"
 
@@ -237,7 +239,11 @@ TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect comma
 		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
 
 		EntityNode<TestBallTag> entityNode;
-		entityNode.SetIndirectCommand(MeshTasksIndirectCommand{1, 1, 1});
+		// Add multiple entity instances of different mesh types
+		entityNode.AddInstance(TransformComponent{.position = glm::vec3(0.0f, 10.0f, 0.0f), .scale = glm::vec3(2.0f)}, EntityRenderComponent{.meshType = 1, .color = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)});
+		entityNode.AddInstance(TransformComponent{.position = glm::vec3(5.0f, 10.0f, 0.0f), .scale = glm::vec3(1.0f)}, EntityRenderComponent{.meshType = 0, .color = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)});
+		entityNode.AddInstance(TransformComponent{.position = glm::vec3(-5.0f, 10.0f, 0.0f), .scale = glm::vec3(1.0f)}, EntityRenderComponent{.meshType = 0, .color = glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)});
+
 		entityNode.Init(
 			render::NodeServices{
 				.device = vkDevice,
@@ -258,6 +264,18 @@ TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect comma
 		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
 		vkCmd.end();
 
+		// Verify EntityInstanceBuffer was provisioned and written
+		auto physInstBuf = registry.GetBuffer<EntityInstanceBuffer<TestBallTag>>();
+		REQUIRE(physInstBuf != nullptr);
+		CHECK(physInstBuf->IsHostMapped());
+
+		const auto* instData = static_cast<const EntityInstanceData*>(physInstBuf->MappedSlice(0));
+		REQUIRE(instData != nullptr);
+		// Verified sorting by meshType: meshType 0 instances come first!
+		CHECK(instData[0].positionAndScale.x == doctest::Approx(5.0f));
+		CHECK(instData[1].positionAndScale.x == doctest::Approx(-5.0f));
+		CHECK(instData[2].positionAndScale.x == doctest::Approx(0.0f));
+
 		// Verify EntityIndirectBuffer was provisioned as host-mapped
 		auto physBuf = registry.GetBuffer<EntityIndirectBuffer<TestBallTag>>();
 		REQUIRE(physBuf != nullptr);
@@ -265,9 +283,8 @@ TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect comma
 
 		const auto* cmdData = static_cast<const MeshTasksIndirectCommand*>(physBuf->MappedSlice(0));
 		REQUIRE(cmdData != nullptr);
-		CHECK(cmdData->groupCountX == 1);
-		CHECK(cmdData->groupCountY == 1);
-		CHECK(cmdData->groupCountZ == 1);
+		// Single indirect draw command dispatches all 3 instances
+		CHECK(cmdData[0].groupCountX == 3);
 
 		vk::SubmitInfo submitInfo{};
 		submitInfo.setCommandBuffers(vkCmd);
