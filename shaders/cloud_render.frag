@@ -30,101 +30,118 @@ vec3 getTransmittance(float r, float mu) {
 
 // Assumes footprints: C0 (20km), C1 (80km), C2 (320km)
 float sampleCloudCascades(vec3 worldPos, float distFromCam) {
-    // Convert world position to normalized sampling coordinates for each cascade footprint
-	float distSq = dot(distFromCam, distFromCam);
+// 1. Curved Earth Dropoff
+	float distSq = distFromCam * distFromCam;
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-	worldPos.y += dropOff;
+	float adjustedY = worldPos.y + dropOff;
 
-    vec3 uvw0 = worldPos / 20000.0;
-    vec3 uvw1 = worldPos / 80000.0;
-    vec3 uvw2 = worldPos / 320000.0;
+	// 2. Exact UV Y-axis mapping matching the compute shader (5000m base, 15000m span)
+	float uv_y = (adjustedY - 5000.0) / 15000.0;
 
-    float density = 0.0;
+	// 3. Absolute XZ mapping (hardware sampler VK_SAMPLER_ADDRESS_MODE_REPEAT handles wrapping)
+	vec3 uvw0 = vec3(worldPos.x / 20000.0,  uv_y, worldPos.z / 20000.0);
+	vec3 uvw1 = vec3(worldPos.x / 80000.0,  uv_y, worldPos.z / 80000.0);
+	vec3 uvw2 = vec3(worldPos.x / 320000.0, uv_y, worldPos.z / 320000.0);
+	float density = 0.0;
 
-    if (distFromCam < 20000.0) {
-        float d0 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, uvw0).r;
-        if (distFromCam > 16000.0) {
-            // Blend zone: 16km to 20km
-            float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-            float blend = smoothstep(16000.0, 20000.0, distFromCam);
-            density = mix(d0, d1, blend);
-        } else {
-            density = d0;
-        }
-    } else if (distFromCam < 80000.0) {
-        float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-        if (distFromCam > 64000.0) {
-            // Blend zone: 64km to 80km
-            float d2 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-            float blend = smoothstep(64000.0, 80000.0, distFromCam);
-            density = mix(d1, d2, blend);
-        } else {
-            density = d1;
-        }
-    } else {
-        // Fallback to lowest detail cascade
-        density = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-    }
+	if (distFromCam < 20000.0) {
+		// return 0.0;
+		float d0 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, uvw0).r;
+		if (distFromCam > 16000.0) {
+			// Blend zone: 16km to 20km
+			float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
+			float blend = smoothstep(16000.0, 20000.0, distFromCam);
+			density = mix(d0, d1, blend);
+		} else {
+			density = d0;
+		}
+	} else if (distFromCam < 80000.0) {
+		return 0.0;
+		float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
+		if (distFromCam > 64000.0) {
+			// Blend zone: 64km to 80km
+			float d2 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
+			float blend = smoothstep(64000.0, 80000.0, distFromCam);
+			density = mix(d1, d2, blend);
+		} else {
+			density = d1;
+		}
+	} else {
+		// return 0.0;
+		// Fallback to lowest detail cascade
+		density = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
+	}
 
-    return density;
+	return density;
+}
+
+float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
+	if (dist <= f0) return f0;
+	if (dist >= f2) return f2;
+	if (dist >= f1) {
+		return f1 + smoothstep(f2 - 0.25*(f2-f1), f2, dist);
+	}
+	if (dist >= f0) {
+		return f0 + smoothstep(f1 - 0.25*(f1-f0), f1, dist);
+	}
 }
 
 vec3 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
-    // 1. Initial Setup and Jitter
-    float stepSize = 100.0; // Base step size (meters)
-    float t = t_start;
+	// 1. Initial Setup and Jitter
+	float stepSize = 50.0; // Base step size (meters)
+	float t = t_start;
 
-    // Jitter the start position using Interleaved Gradient Noise or Bayer matrix
-    // to hide the discrete steps and prevent view-movement banding.
-    vec2 fragCoord = gl_FragCoord.xy;
-    float jitter = fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715))));
-    t += stepSize * jitter;
+	// Jitter the start position using Interleaved Gradient Noise or Bayer matrix
+	// to hide the discrete steps and prevent view-movement banding.
+	vec2 fragCoord = gl_FragCoord.xy;
+	float jitter = fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715))));
+	t += stepSize * jitter;
 
-    vec4 accumulatedColor = vec4(0.0); // rgb = color, a = accumulated alpha
-    float transmittance = 1.0;
+	vec4 accumulatedColor = vec4(0.0); // rgb = color, a = accumulated alpha
+	float transmittance = 1.0;
 
-    // 2. Integration Loop
-    while (t < t_end) {
-        vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
-        float distFromCam = t;
+	// 2. Integration Loop
+	while (t < t_end) {
+		vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
+		float distFromCam = t;
 
-        // Space skipping using the 2D weather map
-        vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
-        vec3 surfaceDir = normalize(p_cloud - planetCenter);
-        vec2 weatherUV = directionToOctahedralUV(surfaceDir);
-        float weatherDensity = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV).g;
+		// Space skipping using the 2D weather map
+		vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
+		vec3 surfaceDir = normalize(p_cloud - planetCenter);
+		vec2 weatherUV = directionToOctahedralUV(surfaceDir);
+		float weatherDensity = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV).g;
 
-        if (weatherDensity > 0.01) {
-            float density = sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
+		if (weatherDensity > 0.01) {
+			float density = sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
 
-            if (density > 0.0) {
-                // Optical depth for this single step
-                float extinction = max(0.0, density * 0.025);
-                float stepTransmittance = exp(-extinction * stepSize);
+			if (density > 0.0) {
+				// Optical depth for this single step
+				float extinction = max(0.0, density * 0.025);
+				float stepTransmittance = exp(-extinction * stepSize);
 
-                // Simple lighting formulation for the step
-                float cloudPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
-                vec3 stepLight = sunRadiance * cloudPhase * density * 0.01; // Expand with multiple-scattering later
+				// Simple lighting formulation for the step
+				float cloudPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
+				vec3 stepLight = sunRadiance * cloudPhase * density * 0.01; // Expand with multiple-scattering later
 
-                // Accumulate front-to-back
-                vec3 inscatter = stepLight * (1.0 - stepTransmittance) / max(extinction, 0.0001);
-                accumulatedColor.rgb += inscatter * transmittance;
+				// Accumulate front-to-back
+				vec3 inscatter = stepLight * (1.0 - stepTransmittance) / max(extinction, 0.0001);
+				accumulatedColor.rgb += inscatter * transmittance;
 
-                transmittance *= stepTransmittance;
-                accumulatedColor.a = 1.0 - transmittance;
+				transmittance *= stepTransmittance;
+				accumulatedColor.a = 1.0 - transmittance;
 
-                // Early exit if completely opaque
-                if (transmittance < 0.01) break;
-            }
-        }
+				// Early exit if completely opaque
+				if (transmittance < 0.01) break;
+			}
+		}
 
-        // 3. Variable Step Sizing (LOD Stepping)
-        t += stepSize;
-        // Increase step size geometrically to span horizon distances
-        stepSize *= 1.02;
-    }
+		// 3. Variable Step Sizing (LOD Stepping)
+		t += stepSize;
+		// Increase step size geometrically to span horizon distances
+		stepSize *= 1.02;
+	}
 
-    return accumulatedColor.rgb;
+	return accumulatedColor.rgb;
 }
 
 void main() {
@@ -151,18 +168,21 @@ void main() {
 	vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
 
 	float cloudAlt = 5000.0;
-	float t_start, t_end;
-
-	bool intersection = intersectCloudShell(uCameraPosition.xyz, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
+	float t_s1, t_e1, t_s2, t_e2;
+	bool intersection = intersectCloudShell(uCameraPosition.xyz, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_s1, t_e1, t_s2, t_e2);
 	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
-		t_end = min(surfaceDistKM, t_end);
-		vec3 accumulated = marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
-		intersection = intersectCloudShell(uCameraPosition.xyz+t_end*worldRay, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_start, t_end);
-		if (intersection && t_start < surfaceDistKM) {
-			t_end = min(surfaceDistKM, t_end);
-			accumulated += marchClouds(worldRay, t_start, t_end, sunDir, sunRadiance);
+		vec3 accumulated = vec3(0.0);
+
+		// Segment 1 (Near side of the cloud shell)
+		if (t_s1 < t_e1 && t_s1 < surfaceDistKM) {
+			accumulated += marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
+		}
+
+		// Segment 2 (Far side of the cloud shell, if ray pierces entirely through space)
+		if (t_s2 < t_e2 && t_s2 < surfaceDistKM) {
+			accumulated += marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
 		}
 
 		currentRadiance = mix(currentRadiance, accumulated, smoothstep(0.1, 1.95, accumulated));

@@ -66,6 +66,7 @@ namespace brassica {
 		glm::vec3                   previousCameraPos{0.0f};
 		bool                        hasUpdate{true};
 		bool                        forceRegeneration{true};
+		uint32_t frameCount{0};
 
 		CloudVolumeCascadeState cascades[3]{};
 
@@ -97,7 +98,10 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{
+				.domain = graph::ExecutionDomain::Compute,
+				.isActive = (frameCount++ % 32 == 0) || hasUpdate || forceRegeneration,
+			};
 			r.realizations.reserve(3);
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -133,7 +137,6 @@ namespace brassica {
 				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
 			};
 
-			if (hasUpdate || forceRegeneration) {
 				// Update cascade states
 				float extents[3] = {push.cascadeExtents.x, push.cascadeExtents.y, push.cascadeExtents.z};
 				for (int i = 0; i < 3; ++i) {
@@ -178,7 +181,6 @@ namespace brassica {
 
 				// Dispatch 256 / 8 = 32 workgroups per dimension
 				vkCmd.dispatch(32, 32, 32);
-			}
 		}
 	};
 

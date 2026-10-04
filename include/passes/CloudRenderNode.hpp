@@ -93,6 +93,13 @@ namespace brassica {
 			r.realizations.reserve(4);
 			r.realizations.push_back(
 				graph::ResourceRealization{
+					.key = graph::IdOf<HdrColor>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
 					.key = graph::IdOf<CloudVolumeCascade0>(),
 					.access = graph::AccessKind::Read,
 					.desc = CloudVolumeDesc(),
@@ -110,13 +117,6 @@ namespace brassica {
 					.key = graph::IdOf<CloudVolumeCascade2>(),
 					.access = graph::AccessKind::Read,
 					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			r.realizations.push_back(
