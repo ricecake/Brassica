@@ -26,7 +26,7 @@ void main() {
 
 	// Update roughly 1/64th of the volume per frame using prime-number striding
 	// to prevent visible rolling-wave update artifacts.
-	uint phaseOffset =  (1 * uFrameIndex * 7919u) % 64u;
+	uint phaseOffset =  (1 * uFrameIndex * 7919u) % 17u;
 
 	vec3 rawDelta = uCameraPosition.xyz - uPreviousCameraPosition.xyz;
 
@@ -51,7 +51,7 @@ void main() {
 		if (gridDelta.y > 0 && vox.z >= 256 - gridDelta.y) needsUpdate = true;
 		if (gridDelta.y < 0 && vox.z < -gridDelta.y) needsUpdate = true;
 
-		if ((linearIdx % 64u) == phaseOffset) needsUpdate = true;
+		if ((linearIdx % 17u) == phaseOffset) needsUpdate = true;
 
 		if (!needsUpdate) continue;
 
@@ -80,11 +80,11 @@ void main() {
 
 		// 3. Frequency-Clamped fBm Evaluation
 		float density = 0.0;
-		float frequency = 1.0 / 100000.0; // Base shape frequency (100km)
+		float frequency = 1.0 / 32000.0; // Base shape frequency (100km)
 		float amplitude = 1.0;
 		float maxAmplitude = 0.0;
 
-		for (int i = 0; i < 6; i++) {
+		for (int i = 0; i < 3; i++) {
 			float wavelength = 1.0 / frequency;
 
 			// Nyquist clamp: Stop accumulating detail if the noise feature is smaller than 2 voxels.
@@ -92,13 +92,13 @@ void main() {
 			float fade = clamp((wavelength - 2.0 * voxelSize) / (2.0 * voxelSize), 0.0, 1.0);
 			if (fade <= 0.0) break;
 
-			float n = psrdnoise(worldPos * frequency, vec3(0.0), uTime);
+			float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), uTime * 0.125);
 
 			density += n * amplitude * fade;
 			maxAmplitude += amplitude * fade;
 
-			frequency *= 2.0;
-			amplitude *= 0.5; // Or use an exposed roughness parameter
+			frequency *= 1.87;
+			amplitude *= 0.43; // Or use an exposed roughness parameter
 		}
 
 		density = max(0.0, density / maxAmplitude);
@@ -108,6 +108,8 @@ void main() {
 
         float voxelNormY = float(vox.y) / 256.0;
         density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
+
+		density *= smoothstep(0.15, 1.0, density);
 
         imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], localVox, vec4(density, 0.0, 0.0, 1.0));
 	}

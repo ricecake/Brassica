@@ -31,45 +31,40 @@ vec3 getTransmittance(float r, float mu) {
 
 // Assumes footprints: C0 (20km), C1 (80km), C2 (320km)
 float sampleCloudCascades(vec3 worldPos, float distFromCam) {
-// 1. Curved Earth Dropoff
 	float distSq = distFromCam * distFromCam;
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	float adjustedY = worldPos.y + dropOff;
 
-	// 2. Exact UV Y-axis mapping matching the compute shader (5000m base, 15000m span)
 	float uv_y = (adjustedY - 5000.0) / 15000.0;
 
-	// 3. Absolute XZ mapping (hardware sampler VK_SAMPLER_ADDRESS_MODE_REPEAT handles wrapping)
-	vec3 uvw0 = vec3(worldPos.x / 20000.0,  uv_y, worldPos.z / 20000.0);
-	vec3 uvw1 = vec3(worldPos.x / 80000.0,  uv_y, worldPos.z / 80000.0);
-	vec3 uvw2 = vec3(worldPos.x / 320000.0, uv_y, worldPos.z / 320000.0);
+	// Fixes the vertical streaks (Screenshot 3) by preventing Y-axis wrapping
+	if (uv_y < 0.0 || uv_y > 1.0) return 0.0;
+
+	// Fixes the axis-aligned boundaries (Screenshot 1 & 2) by forcing toroidal XZ wrapping
+	vec3 uvw0 = vec3(fract(worldPos.x / 20000.0),  uv_y, fract(worldPos.z / 20000.0));
+	vec3 uvw1 = vec3(fract(worldPos.x / 80000.0),  uv_y, fract(worldPos.z / 80000.0));
+	vec3 uvw2 = vec3(fract(worldPos.x / 320000.0), uv_y, fract(worldPos.z / 320000.0));
+
 	float density = 0.0;
 
+	// Blend radii must match the physical bounds (half the total width)
 	if (distFromCam < 10000.0) {
-		// return 0.0;
 		float d0 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, uvw0).r;
 		if (distFromCam > 8000.0) {
-			// Blend zone: 16km to 20km
 			float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-			float blend = smoothstep(8000.0, 10000.0, distFromCam);
-			density = mix(d0, d1, blend);
+			density = mix(d0, d1, smoothstep(8000.0, 10000.0, distFromCam));
 		} else {
 			density = d0;
 		}
 	} else if (distFromCam < 40000.0) {
-		// return 0.0;
 		float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
 		if (distFromCam > 32000.0) {
-			// Blend zone: 64km to 80km
 			float d2 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-			float blend = smoothstep(32000.0, 40000.0, distFromCam);
-			density = mix(d1, d2, blend);
+			density = mix(d1, d2, smoothstep(32000.0, 40000.0, distFromCam));
 		} else {
 			density = d1;
 		}
 	} else {
-		// return 0.0;
-		// Fallback to lowest detail cascade
 		density = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
 	}
 
@@ -90,7 +85,7 @@ float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
 vec3 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
 	// 1. Initial Setup and Jitter
 	float stepSize = 50.0; // Base step size (meters)
-	float t = t_start - stepSize;
+	float t = t_start;
 
 	// Jitter the start position using Interleaved Gradient Noise or Bayer matrix
 	// to hide the discrete steps and prevent view-movement banding.
