@@ -50,6 +50,11 @@ namespace brassica {
 			.help("Enable GPU-assisted + synchronization Vulkan validation (much slower; for debugging only)")
 			.default_value(false)
 			.implicit_value(true);
+
+		m_parser.add_argument("--print-render-graph", "--print-graphviz")
+			.help("Print the graphviz formatted output of the render graph and exit")
+			.default_value(false)
+			.implicit_value(true);
 	}
 
 	void ArgparseManager::Initialize() {
@@ -153,6 +158,12 @@ namespace brassica {
 		if (!m_argsParsed)
 			return false;
 		return m_parser.get<bool>("--aggressive-validation");
+	}
+
+	bool ArgparseManager::GetPrintRenderGraph() const {
+		if (!m_argsParsed)
+			return false;
+		return m_parser.get<bool>("--print-render-graph");
 	}
 
 } // namespace brassica
