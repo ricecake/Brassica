@@ -48,17 +48,11 @@ void main() {
 	uvec2 tileCell = uvec2(floor((uCameraPosition.xz + relTileMin) / max(tileSize, 1.0)));
 	uint seed = hashUint(tileCell.x * 73856093u ^ tileCell.y * 19349663u ^ lodLevel * 83492791u);
 
-	mat4 viewRel = mat4(mat3(uViewMatrix));
-	mat4 viewProjRel = uProjMatrix * viewRel;
-
 	float windStrength = sin(params.windTime * 2.5 + relTileMin.x * 0.15 + relTileMin.y * 0.15) * 0.25;
 
 	// Distribute blades across 4 clumps within the tile
 	uint numClumps = 4u;
 	uint bladesPerClump = clamp(bladesInTile / numClumps, 1u, 8u);
-	uint totalBlades = min(numClumps * bladesPerClump, 32u);
-
-	SetMeshOutputsEXT(totalBlades * 4u, totalBlades * 2u);
 
 	uint bladeIndex = 0u;
 
@@ -130,33 +124,41 @@ void main() {
 				}
 			}
 
-			// Bottom left
-			gl_MeshVerticesEXT[vBase + 0u].gl_Position = viewProjRel * vec4(basePos - sideDir, 1.0);
-			outWorldPos[vBase + 0u] = basePos - sideDir + uCameraPosition.xyz;
+			// Vertex 0: Bottom left
+			vec3 v0 = basePos - sideDir;
+			vec3 view0 = mat3(uViewMatrix) * v0;
+			gl_MeshVerticesEXT[vBase + 0u].gl_Position = uProjMatrix * vec4(view0, 1.0);
+			outWorldPos[vBase + 0u] = v0 + uCameraPosition.xyz;
 			outNormal[vBase + 0u] = terrainNormal;
 			outUV[vBase + 0u] = vec2(0.0, 0.0);
 			outColor[vBase + 0u] = bottomColor;
 			outMaterialType[vBase + 0u] = foliageType;
 
-			// Bottom right
-			gl_MeshVerticesEXT[vBase + 1u].gl_Position = viewProjRel * vec4(basePos + sideDir, 1.0);
-			outWorldPos[vBase + 1u] = basePos + sideDir + uCameraPosition.xyz;
+			// Vertex 1: Bottom right
+			vec3 v1 = basePos + sideDir;
+			vec3 view1 = mat3(uViewMatrix) * v1;
+			gl_MeshVerticesEXT[vBase + 1u].gl_Position = uProjMatrix * vec4(view1, 1.0);
+			outWorldPos[vBase + 1u] = v1 + uCameraPosition.xyz;
 			outNormal[vBase + 1u] = terrainNormal;
 			outUV[vBase + 1u] = vec2(1.0, 0.0);
 			outColor[vBase + 1u] = bottomColor;
 			outMaterialType[vBase + 1u] = foliageType;
 
-			// Top left
-			gl_MeshVerticesEXT[vBase + 2u].gl_Position = viewProjRel * vec4(tipPos - sideDir * 0.3, 1.0);
-			outWorldPos[vBase + 2u] = tipPos - sideDir * 0.3 + uCameraPosition.xyz;
+			// Vertex 2: Top left
+			vec3 v2 = tipPos - sideDir * 0.3;
+			vec3 view2 = mat3(uViewMatrix) * v2;
+			gl_MeshVerticesEXT[vBase + 2u].gl_Position = uProjMatrix * vec4(view2, 1.0);
+			outWorldPos[vBase + 2u] = v2 + uCameraPosition.xyz;
 			outNormal[vBase + 2u] = terrainNormal;
 			outUV[vBase + 2u] = vec2(0.0, 1.0);
 			outColor[vBase + 2u] = topColor;
 			outMaterialType[vBase + 2u] = foliageType;
 
-			// Top right
-			gl_MeshVerticesEXT[vBase + 3u].gl_Position = viewProjRel * vec4(tipPos + sideDir * 0.3, 1.0);
-			outWorldPos[vBase + 3u] = tipPos + sideDir * 0.3 + uCameraPosition.xyz;
+			// Vertex 3: Top right
+			vec3 v3 = tipPos + sideDir * 0.3;
+			vec3 view3 = mat3(uViewMatrix) * v3;
+			gl_MeshVerticesEXT[vBase + 3u].gl_Position = uProjMatrix * vec4(view3, 1.0);
+			outWorldPos[vBase + 3u] = v3 + uCameraPosition.xyz;
 			outNormal[vBase + 3u] = terrainNormal;
 			outUV[vBase + 3u] = vec2(1.0, 1.0);
 			outColor[vBase + 3u] = topColor;
@@ -169,4 +171,7 @@ void main() {
 			++bladeIndex;
 		}
 	}
+
+	// Set actual output counts matching the exact number of blades generated
+	SetMeshOutputsEXT(bladeIndex * 4u, bladeIndex * 2u);
 }
