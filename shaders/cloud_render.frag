@@ -313,7 +313,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 
 	const float cloudPhaseG1 = 0.8;
 	const float cloudPhaseG2 = -0.2;
-	const float cloudPhaseAlpha = 0.5;
+	const float cloudPhaseAlpha = 0.05;
 	const float cloudPhaseIsotropic = 0.2;
 	const float cloudBeerPowderMix = 0.5;
 
@@ -383,7 +383,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				}
 
 				const float powderScale = 300.0;
-				float powder = 0.0;//1.0 - 1.0 / (1.0 + (25.0 * stepDensity * powderScale));
+				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * powderScale));
 
 				// Tie ambient glow loosely to sunRadiance so they scale together under HDR
 				vec3 ambientGlow = sunRadiance * vec3(0.02, 0.03, 0.04) * powder;
@@ -442,12 +442,16 @@ void main() {
 
 		// Segment 1 (Near side of the cloud shell)
 		if (t_s1 < t_e1 && t_s1 < surfaceDistKM) {
-			result += marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
+			vec4 near = marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
+			result.rgb += near.rgb;
+			result.a *= near.a;
 		}
 
 		// Segment 2 (Far side of the cloud shell, if ray pierces entirely through space)
 		if (t_s2 < t_e2 && t_s2 < surfaceDistKM) {
-			result += marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
+			vec4 far = marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
+			result.rgb += far.rgb * result.a;
+			result.a *= far.a;
 		}
 
 		currentRadiance = currentRadiance * result.a + result.rgb;
