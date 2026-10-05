@@ -313,8 +313,8 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 
 	const float cloudPhaseG1 = 0.8;
 	const float cloudPhaseG2 = -0.2;
-	const float cloudPhaseAlpha = 0.05;
-	const float cloudPhaseIsotropic = 0.2;
+	const float cloudPhaseAlpha = 0.5;
+	const float cloudPhaseIsotropic = 0.52;
 	const float cloudBeerPowderMix = 0.5;
 
 	while (t < t_end) {
@@ -323,14 +323,16 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 
 		vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
 		vec3 surfaceDir = normalize(p_cloud - planetCenter);
+        vec3 toPlanetCenter = p_cloud - planetCenter;
+        float r_world = length(toPlanetCenter);
 		vec2 weatherUV = directionToOctahedralUV(surfaceDir);
 		float weatherDensity = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV).g;
 
 		if (weatherDensity > 0.01) {
-			float density = 10*sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
+			float density = 10.0*sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
 
 			if (density > 0.0) {
-				float extinction = max(0.0, density * 0.25);
+				float extinction = max(0.0, density * 0.0125);
 				float averageDensity = (prevDensity + density) * 0.5;
 				float stepDensity = averageDensity * extinction;
 				float stepOpticalDepth = stepDensity * stepSize;
@@ -340,7 +342,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float light_t = stepSize;
 				float lightStepSize = stepSize * 2.0;
 
-				for (int i = 0; i < 3; i++) {
+				for (int i = 0; i < 5; i++) {
 					vec3 sp_c = p_cloud + sunDir * light_t;
 					float shadow_dist = length(sp_c - uCameraPosition.xyz);
 					float shadow_density = sampleCloudCascades(sp_c, shadow_dist) * weatherDensity;
@@ -349,6 +351,10 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 					light_t += lightStepSize;
 					lightStepSize *= 2.0;
 				}
+
+				float r_km = r_world / 1000.0;
+                float mu = dot(surfaceDir, sunDir);
+                vec3 atmosphereTransmittance = getTransmittance(r_km, mu);
 
 				float cosTheta = dot(worldRay, sunDir);
 				const int OCTAVES = 3;
@@ -375,7 +381,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 
 					msScattering += vec3(shadowTerm * phase * currentEnergy);
 
-					currentExtinction *= 0.25;
+					currentExtinction *= 0.5;
 					currentKfwd *= 0.5;
 					currentKbck *= 0.5;
 					currentEnergy *= 0.5;
@@ -388,7 +394,9 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				// Tie ambient glow loosely to sunRadiance so they scale together under HDR
 				vec3 ambientGlow = sunRadiance * vec3(0.02, 0.03, 0.04) * powder;
 
-				vec3 stepScattering = (sunRadiance * msScattering) + ambientGlow;
+				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering;
+                vec3 stepScattering = directLight + ambientGlow;
+				// vec3 stepScattering = (sunRadiance * msScattering) + ambientGlow;
 
 				// FIX: Removed the `/ max(stepDensity, 0.0001)` that was blowing up the light
 				vec3 inscatter = stepScattering * (1.0 - stepTransmittance);

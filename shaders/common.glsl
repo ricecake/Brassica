@@ -724,7 +724,7 @@ float beerPowder(float d, float local_d) {
 	// Ensuring sunny side isn't black when d is small
 	return max(
 		exp(-d),
-		exp(-d * 0.01) * 5 * (1.0 - exp(-local_d * 2.67))
+		exp(-d * 0.1) * 50 * (1.0 - exp(-local_d * 2.67))
 	);
 }
 
