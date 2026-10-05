@@ -703,30 +703,39 @@ float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad, out mat3 ou
     return val / max_amp;
 }
 
-float cloudPhase(float cosTheta) {
-	// Dual-lobe Henyey-Greenstein for forward and back scattering
-	// Blended with a large isotropic component to ensure visibility at all angles
-	float hg = mix(henyeyGreenstein(cloudPhaseG1, cosTheta), henyeyGreenstein(cloudPhaseG2, cosTheta), cloudPhaseAlpha);
-	return mix(hg, (1.0 / (4.0 * PI)), cloudPhaseIsotropic);
-}
+// float cloudPhase(float cosTheta) {
+// 	// Dual-lobe Henyey-Greenstein for forward and back scattering
+// 	// Blended with a large isotropic component to ensure visibility at all angles
+// 	float hg = mix(henyeyGreenstein(cloudPhaseG1, cosTheta), henyeyGreenstein(cloudPhaseG2, cosTheta), cloudPhaseAlpha);
+// 	return mix(hg, (1.0 / (4.0 * PI)), cloudPhaseIsotropic);
+// }
+
+// float beerPowder(float d, float local_d) {
+// 	// Approximation of multiple scattering (Beer-Powder law)
+// 	// Ensuring sunny side isn't black when d is small
+// 	return max(
+// 		exp(-d),
+// 		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (1.0 - exp(-local_d * cloudPowderLocalScale))
+// 	);
+// }
 
 float beerPowder(float d, float local_d) {
 	// Approximation of multiple scattering (Beer-Powder law)
 	// Ensuring sunny side isn't black when d is small
 	return max(
 		exp(-d),
-		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (1.0 - exp(-local_d * cloudPowderLocalScale))
+		exp(-d * 0.01) * 5 * (1.0 - exp(-local_d * 2.67))
 	);
 }
 
-vec3 beerPowder(vec3 d, vec3 local_d) {
-	// Approximation of multiple scattering (Beer-Powder law)
-	// Ensuring sunny side isn't black when d is small
-	return max(
-		exp(-d),
-		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (vec3(1.0) - exp(-local_d * cloudPowderLocalScale))
-	);
-}
+// vec3 beerPowder(vec3 d, vec3 local_d) {
+// 	// Approximation of multiple scattering (Beer-Powder law)
+// 	// Ensuring sunny side isn't black when d is small
+// 	return max(
+// 		exp(-d),
+// 		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (vec3(1.0) - exp(-local_d * cloudPowderLocalScale))
+// 	);
+// }
 
 float schlickPhase(float cosTheta, float k) {
     float kCos = k * cosTheta;

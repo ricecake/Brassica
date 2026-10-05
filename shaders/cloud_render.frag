@@ -298,133 +298,115 @@ float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
 	}
 }
 
-vec3 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
-	// 1. Initial Setup and Jitter
-	float stepSize = 50.0; // Base step size (meters)
+// Change signature to return vec4
+vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
+	float stepSize = 50.0;
 	float t = t_start;
 
-	// Jitter the start position using Interleaved Gradient Noise or Bayer matrix
-	// to hide the discrete steps and prevent view-movement banding.
 	vec2 fragCoord = gl_FragCoord.xy;
 	float jitter = InterleavedGradientNoise(fragCoord, int(uFrameIndex));
 	t += stepSize * jitter;
 
-	vec4 accumulatedColor = vec4(0.0); // rgb = color, a = accumulated alpha
 	float cloudTransmittance = 1.0;
-	vec3 accumulatedOpticalDepth = vec3(0.0);
 	vec3 lightEnergy = vec3(0.0);
-	vec3  cloudColor = vec3(0.0);
-
 	float prevDensity = 0.0;
-	// 2. Integration Loop
+
+	const float cloudPhaseG1 = 0.8;
+	const float cloudPhaseG2 = -0.2;
+	const float cloudPhaseAlpha = 0.5;
+	const float cloudPhaseIsotropic = 0.2;
+	const float cloudBeerPowderMix = 0.5;
+
 	while (t < t_end) {
 		vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
 		float distFromCam = t;
 
-		// Space skipping using the 2D weather map
 		vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
 		vec3 surfaceDir = normalize(p_cloud - planetCenter);
 		vec2 weatherUV = directionToOctahedralUV(surfaceDir);
 		float weatherDensity = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV).g;
 
 		if (weatherDensity > 0.01) {
-			float density = sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
+			float density = 10*sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
 
 			if (density > 0.0) {
-				float extinction = max(0.0, density * 0.025);
+				float extinction = max(0.0, density * 0.25);
 				float averageDensity = (prevDensity + density) * 0.5;
 				float stepDensity = averageDensity * extinction;
-				float stepOpticalDepth = averageDensity * stepSize * extinction;
+				float stepOpticalDepth = stepDensity * stepSize;
 				float stepTransmittance = exp(-stepOpticalDepth);
 
+				float opticalDepthToLight = 0.0;
+				float light_t = stepSize;
+				float lightStepSize = stepSize * 2.0;
 
-				float S = 0.0;
+				for (int i = 0; i < 3; i++) {
+					vec3 sp_c = p_cloud + sunDir * light_t;
+					float shadow_dist = length(sp_c - uCameraPosition.xyz);
+					float shadow_density = sampleCloudCascades(sp_c, shadow_dist) * weatherDensity;
 
-				float cosTheta = dot(rayDir, L);
+					opticalDepthToLight += max(0.0, shadow_density * 0.0125) * lightStepSize;
+					light_t += lightStepSize;
+					lightStepSize *= 2.0;
+				}
 
+				float cosTheta = dot(worldRay, sunDir);
 				const int OCTAVES = 3;
-				const float extinctionMult = 0.5;
-				const float phaseWidenMult = 0.5;
-				const float energyAttenuation = 0.5;
-				const float msCatChaos = 0.5;
-
-				float kFwd = cloudPhaseG1;
-				float kBck = cloudPhaseG2;
-				float phaseWeight = cloudPhaseAlpha;
-
-				vec3 msScattering = vec3(0.0);
 				float currentExtinction = 1.0;
-				float currentKfwd = kFwd;
-				float currentKbck = kBck;
+				float currentKfwd = cloudPhaseG1;
+				float currentKbck = cloudPhaseG2;
 				float currentEnergy = 1.0;
 				float currentScatChaos = (1.0 - cloudPhaseIsotropic);
 
+				vec3 msScattering = vec3(0.0);
+
 				for(int oct = 0; oct < OCTAVES; oct++) {
-					float phase = dualLobeSchlick(cosTheta, currentKfwd, currentKbck, phaseWeight);
+					float phase = dualLobeSchlick(cosTheta, currentKfwd, currentKbck, cloudPhaseAlpha);
 					phase = mix((1.0 / (4.0 * PI)), phase, currentScatChaos);
 
-					vec3 octaveOpticalDepth = opticalDepthToLight * currentExtinction;
-					vec3 octaveStepDensity = stepDensity * currentExtinction;
+					float octaveOpticalDepth = opticalDepthToLight * currentExtinction;
+					float octaveStepDensity = stepDensity * currentExtinction;
 
-					vec3 shadowTerm = mix(
+					float shadowTerm = mix(
 						beerPowder(octaveOpticalDepth, octaveStepDensity),
 						exp(-octaveOpticalDepth),
 						cloudBeerPowderMix
 					);
 
-					msScattering += shadowTerm * phase * currentEnergy;
+					msScattering += vec3(shadowTerm * phase * currentEnergy);
 
-					currentExtinction *= extinctionMult;
-					currentKfwd *= phaseWidenMult;
-					currentKbck *= phaseWidenMult;
-					currentEnergy *= energyAttenuation;
-					currentScatChaos *= msCatChaos;
+					currentExtinction *= 0.25;
+					currentKfwd *= 0.5;
+					currentKbck *= 0.5;
+					currentEnergy *= 0.5;
+					currentScatChaos *= 0.5;
 				}
 
-				float lightScale = (j == 0 ? cloudSunLightScale : cloudMoonLightScale);
-				stepScattering += lightTransmittance * lights[j].color.rgb * msScattering *
-					lights[j].intensity * attenuation * lightScale;
-			}
+				const float powderScale = 300.0;
+				float powder = 0.0;//1.0 - 1.0 / (1.0 + (25.0 * stepDensity * powderScale));
 
+				// Tie ambient glow loosely to sunRadiance so they scale together under HDR
+				vec3 ambientGlow = sunRadiance * vec3(0.02, 0.03, 0.04) * powder;
 
+				vec3 stepScattering = (sunRadiance * msScattering) + ambientGlow;
 
-				// Simple lighting formulation for the step
-				float cloudPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
-				vec3 stepLight = sunRadiance * cloudPhase * density * 0.01; // Expand with multiple-scattering later
+				// FIX: Removed the `/ max(stepDensity, 0.0001)` that was blowing up the light
+				vec3 inscatter = stepScattering * (1.0 - stepTransmittance);
 
-				// Accumulate front-to-back
-				vec3 inscatter = stepLight * (1.0 - stepTransmittance) / max(extinction, 0.0001);
-				accumulatedColor.rgb += inscatter * cloudTransmittance;
+				lightEnergy += inscatter * cloudTransmittance;
+				cloudTransmittance *= stepTransmittance;
 
-				accumulatedColor.a = 1.0 - cloudTransmittance;
-
-
-					float scalarAccumOD = dot(accumulatedOpticalDepth, vec3(0.3333));
-					float bias = exp(-scalarAccumOD * 15.0);
-					vec3 weight = cloudTransmittance * (vec3(1.0) - stepTransmittance);
-					lightEnergy += S * weight;
-
-					cloudTransmittance *= stepTransmittance;
-					accumulatedOpticalDepth += stepOpticalDepth;
-
-				// Early exit if completely opaque
 				if (cloudTransmittance < 0.05) break;
 			}
 			prevDensity = density;
 		}
 
-		// 3. Variable Step Sizing (LOD Stepping)
 		t += stepSize;
-		// Increase step size geometrically to span horizon distances
 		stepSize *= 1.02;
 	}
 
-	cloudColor = lightEnergy;
-
-	// vec4 finalColor = vec4(cloudColor, dot(smoothstep(0.05, 1, cloudTransmittance), vec3(0.3333)));
-	vec4 finalColor = vec4(cloudColor, smoothstep(0.05, 1, cloudTransmittance));
-
-	return accumulatedColor.rgb;
+	// Return energy and the remaining transmittance
+	return vec4(lightEnergy, cloudTransmittance);
 }
 
 void main() {
@@ -456,19 +438,19 @@ void main() {
 	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
-		vec3 accumulated = vec3(0.0);
+		vec4 result = vec4(0.0, 0.0, 0.0, 1.0);
 
 		// Segment 1 (Near side of the cloud shell)
 		if (t_s1 < t_e1 && t_s1 < surfaceDistKM) {
-			accumulated += marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
+			result += marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
 		}
 
 		// Segment 2 (Far side of the cloud shell, if ray pierces entirely through space)
 		if (t_s2 < t_e2 && t_s2 < surfaceDistKM) {
-			accumulated += marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
+			result += marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
 		}
 
-		currentRadiance = mix(currentRadiance, accumulated, smoothstep(0.1, 1.95, accumulated));
+		currentRadiance = currentRadiance * result.a + result.rgb;
 	}
 	outColor = vec4(currentRadiance, 1.0);
 }
