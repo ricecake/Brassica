@@ -1,6 +1,9 @@
 #pragma once
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -107,6 +110,79 @@ namespace brassica::graph {
 			}
 		}
 
+		inline std::string PhaseName(Phase phase) {
+			std::int32_t val = static_cast<std::int32_t>(phase);
+			switch (phase) {
+			case Phase::PreviousFrame:
+				return "PreviousFrame";
+			case Phase::NextFrame:
+				return "NextFrame";
+			case Phase::Early:
+				return "Early";
+			case Phase::Default:
+				return "Default / GBuffer";
+			case Phase::Late:
+				return "Late / UnderwaterStructuralTranslucentRender";
+			}
+			switch (val) {
+			case -500:
+				return "Prepare";
+			case 500:
+				return "LightPreparation";
+			case 600:
+				return "GIComput";
+			case 700:
+				return "DeferredShading";
+			case 800:
+				return "Reflection";
+			case 900:
+				return "Atmosphere";
+			case 1100:
+				return "UnderwaterParticleRender";
+			case 1200:
+				return "WaterRender";
+			case 1300:
+				return "StructuralTranslucent";
+			case 1400:
+				return "ParticleRender";
+			case 1500:
+				return "Exposure";
+			case 1600:
+				return "BloomAndOptics";
+			case 1700:
+				return "ToneMapping";
+			case 1800:
+				return "PostProcessing";
+			case 2000:
+				return "HudOverlay";
+			case 3000:
+				return "MenuOverlay";
+			default:
+				return "Phase " + std::to_string(val);
+			}
+		}
+
+		inline std::string PhaseClusterId(const std::vector<std::size_t>& path, Phase phase) {
+			std::int32_t val = static_cast<std::int32_t>(phase);
+			std::string id = "cluster_phase";
+			for (std::size_t index : path) {
+				id += '_';
+				id += std::to_string(index);
+			}
+			id += '_';
+			if (phase == Phase::PreviousFrame) {
+				id += "min";
+			} else if (phase == Phase::NextFrame) {
+				id += "max";
+			} else if (val < 0) {
+				std::uint32_t absVal = static_cast<std::uint32_t>(-(val + 1)) + 1u;
+				id += "neg" + std::to_string(absVal);
+			} else {
+				id += std::to_string(val);
+			}
+			return id;
+		}
+
 		// Edge decoration for a single (producer, consumer, key) resource-flow edge, derived
 		// the same way Graph::Compile() derives it for barrier synthesis: same access-kind
 		// rule, same RAR-is-hazard-free rule. Kept independent of Compile() having actually
@@ -151,18 +227,41 @@ namespace brassica::graph {
 
 			const auto nodes = graph.Nodes();
 
+			std::map<Phase, std::vector<std::size_t>> phaseGroups;
 			for (std::size_t i = 0; i < nodes.size(); ++i) {
-				std::vector<std::size_t> nodePath = path;
-				nodePath.push_back(i);
-				const auto& desc = nodes[i].Descriptor();
+				phaseGroups[nodes[i].Descriptor().phase].push_back(i);
+			}
 
-				if (const Graph* inner = nodes[i].InnerGraphIfAny()) {
-					EmitGraph(*inner, nodePath, desc.name, out, /*asCluster=*/true);
-					continue;
+			for (const auto& [phase, nodeIndices] : phaseGroups) {
+				std::int32_t val = static_cast<std::int32_t>(phase);
+				std::string pName = PhaseName(phase);
+				std::string labelStr = "Phase ";
+				if (phase == Phase::PreviousFrame) {
+					labelStr += "PreviousFrame";
+				} else if (phase == Phase::NextFrame) {
+					labelStr += "NextFrame";
+				} else {
+					labelStr += std::to_string(val) + " (" + pName + ")";
 				}
 
-				out << DotId(nodePath) << " [label=\"" << Escape(desc.name) << "\", shape=" << ShapeFor(desc.kind)
-				    << ", style=filled, fillcolor=" << FillColorFor(desc.kind) << "];\n";
+				out << "subgraph " << PhaseClusterId(path, phase) << " {\n";
+				out << "label=\"" << Escape(labelStr) << "\";\nstyle=dashed;\n";
+
+				for (std::size_t i : nodeIndices) {
+					std::vector<std::size_t> nodePath = path;
+					nodePath.push_back(i);
+					const auto& desc = nodes[i].Descriptor();
+
+					if (const Graph* inner = nodes[i].InnerGraphIfAny()) {
+						EmitGraph(*inner, nodePath, desc.name, out, /*asCluster=*/true);
+						continue;
+					}
+
+					out << DotId(nodePath) << " [label=\"" << Escape(desc.name) << "\", shape=" << ShapeFor(desc.kind)
+					    << ", style=filled, fillcolor=" << FillColorFor(desc.kind) << "];\n";
+				}
+
+				out << "}\n";
 			}
 
 			// Resource-flow edges: one per (producer, consumer, key) touching this graph's own
