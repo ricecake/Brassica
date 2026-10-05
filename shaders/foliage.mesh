@@ -1,0 +1,186 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 128, max_primitives = 128) out;
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(push_constant) uniform FoliagePushConstants {
+	uvec4 gridParams; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	uint  weatherBiomeIndex;
+	float windTime;
+	float lodBaseRange;
+	float lodScaleFactor;
+	float baseTileSize;
+	float flowerRatio;
+	float fernRatio;
+}
+params;
+
+struct FoliageTaskPayload {
+	vec2  relTileMinXZ[32];
+	float tileSize[32];
+	uint  lodLevel[32];
+	uint  clumpCount[32];
+};
+
+taskPayloadSharedEXT FoliageTaskPayload payload;
+
+layout(location = 0) out vec3 outWorldPos[];
+layout(location = 1) out vec3 outNormal[];
+layout(location = 2) out vec2 outUV[];
+layout(location = 3) out vec4 outColor[];
+layout(location = 4) flat out uint outMaterialType[];
+
+void main() {
+	uint workGroupID = gl_WorkGroupID.x;
+
+	vec2  relTileMin = payload.relTileMinXZ[workGroupID];
+	float tileSize = payload.tileSize[workGroupID];
+	uint  lodLevel = payload.lodLevel[workGroupID];
+	uint  bladesInTile = payload.clumpCount[workGroupID];
+
+	// Deterministic seed based on tile origin
+	uvec2 tileCell = uvec2(floor((uCameraPosition.xz + relTileMin) / max(tileSize, 1.0)));
+	uint seed = hashUint(tileCell.x * 73856093u ^ tileCell.y * 19349663u ^ lodLevel * 83492791u);
+
+	mat4 viewRel = mat4(mat3(uViewMatrix));
+	mat4 viewProjRel = uProjMatrix * viewRel;
+
+	float windStrength = sin(params.windTime * 2.5 + relTileMin.x * 0.15 + relTileMin.y * 0.15) * 0.25;
+
+	// Distribute blades across 4 clumps within the tile
+	uint numClumps = 4u;
+	uint bladesPerClump = clamp(bladesInTile / numClumps, 1u, 8u);
+
+	uint bladeIndex = 0u;
+
+	for (uint c = 0u; c < numClumps; ++c) {
+		uint clumpSeed = seed + c * 101u;
+		vec2 clumpCenterRel = relTileMin + vec2(pcg_hash(clumpSeed + 1u), pcg_hash(clumpSeed + 2u)) * tileSize;
+		vec2 clumpCenterWorld = uCameraPosition.xz + clumpCenterRel;
+
+		float distToCam = length(clumpCenterRel);
+		float dropOff = (distToCam * distToCam) / (2.0 * FAKE_PLANET_RADIUS);
+
+		// Sample finest terrain clipmap level 0 (544m finest grid around camera) for near foliage so bases lock 100% to terrain
+		uint sampleLOD = (distToCam < 400.0) ? 0u : min(lodLevel, 2u);
+		vec4 terrainSample = sampleTerrainClipmap(params.clipmapIndex, clumpCenterWorld, sampleLOD, params.gridParams.w);
+		float terrainHeight = terrainSample.r - dropOff;
+		vec3  terrainNormal = (length(terrainSample.gba) >= 0.1) ? normalize(terrainSample.gba) : vec3(0.0, 1.0, 0.0);
+
+		// Skip underwater or steep cliff faces
+		if (terrainHeight < -2.0 || terrainNormal.y < 0.55) {
+			continue;
+		}
+
+		for (uint b = 0u; b < bladesPerClump && bladeIndex < 32u; ++b) {
+			uint bladeSeed = clumpSeed + b * 17u;
+			float angle = pcg_hash(bladeSeed) * TAU;
+			float radius = pcg_hash(bladeSeed + 1u) * 1.2;
+			vec2 offset = vec2(cos(angle), sin(angle)) * radius;
+
+			vec2 bladeWorldXZ = clumpCenterWorld + offset;
+			vec2 bladeRelXZ = clumpCenterRel + offset;
+
+			float typeSelector = pcg_hash(bladeSeed + 4u);
+			uint foliageType = 0u; // 0 = Grass, 1 = Fern, 2 = Flower
+			if (typeSelector < params.flowerRatio) {
+				foliageType = 2u; // Flower
+			} else if (typeSelector < params.flowerRatio + params.fernRatio) {
+				foliageType = 1u; // Fern
+			}
+
+			float bladeHeight = 0.8 + pcg_hash(bladeSeed + 2u) * 0.6;
+			float bladeWidth = 0.08 + pcg_hash(bladeSeed + 3u) * 0.04;
+
+			if (foliageType == 1u) { // Fern: wider, slightly taller
+				bladeWidth *= 1.8;
+				bladeHeight *= 1.2;
+			} else if (foliageType == 2u) { // Flower: stem width
+				bladeWidth *= 0.6;
+			}
+
+			vec3 basePos = vec3(bladeRelXZ.x, terrainHeight - uCameraPosition.y, bladeRelXZ.y);
+			vec3 bladeDir = vec3(cos(angle), 0.0, sin(angle));
+			vec3 sideDir = vec3(-bladeDir.z, 0.0, bladeDir.x) * bladeWidth;
+
+			vec3 tipPos = basePos + vec3(0.0, bladeHeight, 0.0) + vec3(windStrength, 0.0, windStrength);
+
+			uint vBase = bladeIndex * 4u;
+
+			vec4 bottomColor = vec4(0.08, 0.25, 0.04, 1.0);
+			vec4 topColor = vec4(0.28, 0.75, 0.18, 1.0);
+
+			if (foliageType == 1u) {
+				bottomColor = vec4(0.04, 0.20, 0.06, 1.0);
+				topColor = vec4(0.15, 0.60, 0.15, 1.0);
+			} else if (foliageType == 2u) {
+				bottomColor = vec4(0.06, 0.30, 0.05, 1.0);
+				float flowerColorHue = pcg_hash(bladeSeed + 5u);
+				if (flowerColorHue < 0.33) {
+					topColor = vec4(0.95, 0.85, 0.20, 1.0); // Yellow
+				} else if (flowerColorHue < 0.66) {
+					topColor = vec4(0.95, 0.30, 0.50, 1.0); // Pink/Red
+				} else {
+					topColor = vec4(0.90, 0.90, 0.95, 1.0); // White
+				}
+			}
+
+			// Vertex 0: Bottom left
+			vec3 v0 = basePos - sideDir;
+			vec3 view0 = mat3(uViewMatrix) * v0;
+			gl_MeshVerticesEXT[vBase + 0u].gl_Position = uProjMatrix * vec4(view0, 1.0);
+			outWorldPos[vBase + 0u] = v0 + uCameraPosition.xyz;
+			outNormal[vBase + 0u] = terrainNormal;
+			outUV[vBase + 0u] = vec2(0.0, 0.0);
+			outColor[vBase + 0u] = bottomColor;
+			outMaterialType[vBase + 0u] = foliageType;
+
+			// Vertex 1: Bottom right
+			vec3 v1 = basePos + sideDir;
+			vec3 view1 = mat3(uViewMatrix) * v1;
+			gl_MeshVerticesEXT[vBase + 1u].gl_Position = uProjMatrix * vec4(view1, 1.0);
+			outWorldPos[vBase + 1u] = v1 + uCameraPosition.xyz;
+			outNormal[vBase + 1u] = terrainNormal;
+			outUV[vBase + 1u] = vec2(1.0, 0.0);
+			outColor[vBase + 1u] = bottomColor;
+			outMaterialType[vBase + 1u] = foliageType;
+
+			// Vertex 2: Top left
+			vec3 v2 = tipPos - sideDir * 0.3;
+			vec3 view2 = mat3(uViewMatrix) * v2;
+			gl_MeshVerticesEXT[vBase + 2u].gl_Position = uProjMatrix * vec4(view2, 1.0);
+			outWorldPos[vBase + 2u] = v2 + uCameraPosition.xyz;
+			outNormal[vBase + 2u] = terrainNormal;
+			outUV[vBase + 2u] = vec2(0.0, 1.0);
+			outColor[vBase + 2u] = topColor;
+			outMaterialType[vBase + 2u] = foliageType;
+
+			// Vertex 3: Top right
+			vec3 v3 = tipPos + sideDir * 0.3;
+			vec3 view3 = mat3(uViewMatrix) * v3;
+			gl_MeshVerticesEXT[vBase + 3u].gl_Position = uProjMatrix * vec4(view3, 1.0);
+			outWorldPos[vBase + 3u] = v3 + uCameraPosition.xyz;
+			outNormal[vBase + 3u] = terrainNormal;
+			outUV[vBase + 3u] = vec2(1.0, 1.0);
+			outColor[vBase + 3u] = topColor;
+			outMaterialType[vBase + 3u] = foliageType;
+
+			uint pBase = bladeIndex * 2u;
+			gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 1u, vBase + 2u);
+			gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
+
+			++bladeIndex;
+		}
+	}
+
+	// Set actual output counts matching the exact number of blades generated
+	SetMeshOutputsEXT(bladeIndex * 4u, bladeIndex * 2u);
+}

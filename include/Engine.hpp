@@ -16,6 +16,7 @@
 #include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
 #include "audio/AudioManager.hpp"
+#include "foliage/FoliageManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "passes/AllNodes.hpp"
@@ -174,6 +175,10 @@ namespace brassica {
 
 		const AudioManager& GetAudioManager() const { return audioManager; }
 
+		FoliageManager& GetFoliageManager() { return foliageManager; }
+
+		const FoliageManager& GetFoliageManager() const { return foliageManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -282,6 +287,7 @@ namespace brassica {
 		LightManager     lightManager;
 		LightningManager lightningManager;
 		AudioManager     audioManager;
+		FoliageManager   foliageManager;
 		MaterialManager  materialManager;
 
 		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame

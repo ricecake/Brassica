@@ -15,6 +15,7 @@
 #include "passes/CirrusNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"
+#include "passes/FoliageNode.hpp"
 #include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/SkyBackgroundNode.hpp"
