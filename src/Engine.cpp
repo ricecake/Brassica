@@ -1236,7 +1236,8 @@ namespace brassica {
 				.height = extent.height > 0 ? extent.height : 720u,
 				.frameIndex = 0
 			};
-			(void)frameGraph.Compile(ctx, queueSet);
+			frameGraph.Setup(ctx);
+			(void)frameGraph.Compile();
 			std::cout << brassica::graph::ToDot(frameGraph) << std::endl;
 			return;
 		}
