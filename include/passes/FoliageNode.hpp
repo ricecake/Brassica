@@ -37,7 +37,7 @@ namespace brassica {
 
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
 		using Resources = graph::Declares<
-			GBuffer<graph::Modify>,
+			GBuffer<graph::ModifyKey>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
