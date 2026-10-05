@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-#include "vulkan/vulkan.hpp"
+#include "VulkanCompat.hpp"
 #include <glm/glm.hpp>
 
 #include "constants.h"
@@ -57,7 +57,7 @@ namespace brassica {
 		TaskShader                   taskShader;
 		MeshShader                   meshShader;
 		FragmentShader               fragShader;
-		const DispatchLoaderDynamic* dls = nullptr;
+		const brassica::DispatchLoaderDynamic* dls = nullptr;
 		FoliagePushConstants         push{};
 		bool                         enabled{true};
 
