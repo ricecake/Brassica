@@ -8,33 +8,6 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 #include "terrain.glsl"
 #include "helpers/culling.glsl"
 
-struct GrassProperties {
-	vec4  colorTop;
-	vec4  colorBottom;
-	float height;
-	float width;
-	float rigidity;
-	float heightVariance;
-	float widthVariance;
-	float density;
-	float colorVariability;
-	float windInfluence;
-	uint  enabled;
-	float flowerRatio;
-};
-
-struct GlobalGrassProperties {
-	float lengthMultiplier;
-	float widthMultiplier;
-	float densityMultiplier;
-	float rigidityMultiplier;
-	float windMultiplier;
-	uint  enabled;
-	float lodScaleFactor;
-	float lodBaseRange;
-	float baseScale;
-};
-
 layout(push_constant) uniform FoliagePushConstants {
 	uvec4 gridParams; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
 	uint  clipmapIndex;
@@ -45,6 +18,8 @@ layout(push_constant) uniform FoliagePushConstants {
 	float lodBaseRange;
 	float lodScaleFactor;
 	float baseTileSize;
+	float flowerRatio;
+	float fernRatio;
 }
 params;
 

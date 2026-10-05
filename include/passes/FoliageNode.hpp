@@ -33,7 +33,11 @@ namespace brassica {
 		float         lodBaseRange{20.0f};
 		float         lodScaleFactor{2.0f};
 		float         baseTileSize{16.0f};
+		float         flowerRatio{0.15f};
+		float         fernRatio{0.20f};
 	};
+
+	static_assert(sizeof(FoliagePushConstants) == 56, "FoliagePushConstants size must be 56 bytes");
 
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
 		using Resources = graph::Declares<
@@ -53,13 +57,13 @@ namespace brassica {
 			.enableShadingRate = false,
 		};
 
-		render::PipelineLibrary*     pipelineLibrary = nullptr;
-		TaskShader                   taskShader;
-		MeshShader                   meshShader;
-		FragmentShader               fragShader;
+		render::PipelineLibrary*               pipelineLibrary = nullptr;
+		TaskShader                             taskShader;
+		MeshShader                             meshShader;
+		FragmentShader                         fragShader;
 		const brassica::DispatchLoaderDynamic* dls = nullptr;
-		FoliagePushConstants         push{};
-		bool                         enabled{true};
+		FoliagePushConstants                   push{};
+		bool                                   enabled{true};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -95,6 +99,9 @@ namespace brassica {
 				auto props = mgr->GetGlobalProperties();
 				push.lodBaseRange = props.lodBaseRange;
 				push.lodScaleFactor = props.lodScaleFactor;
+				push.baseTileSize = props.baseTileSize;
+				push.flowerRatio = props.flowerRatio;
+				push.fernRatio = props.fernRatio;
 			}
 		}
 

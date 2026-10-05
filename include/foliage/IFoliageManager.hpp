@@ -35,6 +35,9 @@ namespace brassica {
 		float    lodScaleFactor{2.0f};
 		float    lodBaseRange{20.0f};
 		float    baseScale{0.5f};
+		float    flowerRatio{0.15f};
+		float    fernRatio{0.20f};
+		float    baseTileSize{16.0f};
 	};
 
 	struct FoliageState {
@@ -47,6 +50,9 @@ namespace brassica {
 		float    lodScaleFactor{2.0f};
 		float    lodBaseRange{20.0f};
 		float    baseScale{0.5f};
+		float    flowerRatio{0.15f};
+		float    fernRatio{0.20f};
+		float    baseTileSize{16.0f};
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
 
@@ -61,6 +67,9 @@ namespace brassica {
 				MakeField("lodScaleFactor", "LOD Scale Factor", &FoliageState::lodScaleFactor, 0.5f, 5.0f, UIHint::Slider),
 				MakeField("lodBaseRange", "LOD Base Range", &FoliageState::lodBaseRange, 5.0f, 100.0f, UIHint::Slider),
 				MakeField("baseScale", "Base Scale", &FoliageState::baseScale, 0.1f, 2.0f, UIHint::Slider),
+				MakeField("flowerRatio", "Flower Ratio", &FoliageState::flowerRatio, 0.0f, 1.0f, UIHint::Slider),
+				MakeField("fernRatio", "Fern Ratio", &FoliageState::fernRatio, 0.0f, 1.0f, UIHint::Slider),
+				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 64.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 12u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 32u, UIHint::Slider)
 			);
@@ -77,6 +86,9 @@ namespace brassica {
 				MakeField("lodScaleFactor", "LOD Scale Factor", &FoliageState::lodScaleFactor, 0.5f, 5.0f, UIHint::Slider),
 				MakeField("lodBaseRange", "LOD Base Range", &FoliageState::lodBaseRange, 5.0f, 100.0f, UIHint::Slider),
 				MakeField("baseScale", "Base Scale", &FoliageState::baseScale, 0.1f, 2.0f, UIHint::Slider),
+				MakeField("flowerRatio", "Flower Ratio", &FoliageState::flowerRatio, 0.0f, 1.0f, UIHint::Slider),
+				MakeField("fernRatio", "Fern Ratio", &FoliageState::fernRatio, 0.0f, 1.0f, UIHint::Slider),
+				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 64.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 12u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 32u, UIHint::Slider)
 			);

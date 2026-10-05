@@ -18,6 +18,8 @@ layout(push_constant) uniform FoliagePushConstants {
 	float lodBaseRange;
 	float lodScaleFactor;
 	float baseTileSize;
+	float flowerRatio;
+	float fernRatio;
 }
 params;
 
@@ -48,6 +50,9 @@ void main() {
 	uvec2 tileCell = uvec2(floor((uCameraPosition.xz + relTileMin) / max(tileSize, 1.0)));
 	uint seed = hashUint(tileCell.x * 73856093u ^ tileCell.y * 19349663u ^ lodLevel * 83492791u);
 
+	mat4 viewRel = mat4(mat3(uViewMatrix));
+	mat4 viewProjRel = uProjMatrix * viewRel;
+
 	float windStrength = sin(params.windTime * 2.5 + relTileMin.x * 0.15 + relTileMin.y * 0.15) * 0.25;
 
 	// Distribute blades across 4 clumps within the tile
@@ -61,8 +66,12 @@ void main() {
 		vec2 clumpCenterRel = relTileMin + vec2(pcg_hash(clumpSeed + 1u), pcg_hash(clumpSeed + 2u)) * tileSize;
 		vec2 clumpCenterWorld = uCameraPosition.xz + clumpCenterRel;
 
-		float dropOff = dot(clumpCenterRel, clumpCenterRel) / (2.0 * FAKE_PLANET_RADIUS);
-		vec4  terrainSample = sampleTerrainClipmap(params.clipmapIndex, clumpCenterWorld, lodLevel, params.gridParams.w);
+		float distToCam = length(clumpCenterRel);
+		float dropOff = (distToCam * distToCam) / (2.0 * FAKE_PLANET_RADIUS);
+
+		// Sample finest terrain clipmap level 0 (544m finest grid around camera) for near foliage so bases lock 100% to terrain
+		uint sampleLOD = (distToCam < 400.0) ? 0u : min(lodLevel, 2u);
+		vec4 terrainSample = sampleTerrainClipmap(params.clipmapIndex, clumpCenterWorld, sampleLOD, params.gridParams.w);
 		float terrainHeight = terrainSample.r - dropOff;
 		vec3  terrainNormal = (length(terrainSample.gba) >= 0.1) ? normalize(terrainSample.gba) : vec3(0.0, 1.0, 0.0);
 
@@ -82,9 +91,9 @@ void main() {
 
 			float typeSelector = pcg_hash(bladeSeed + 4u);
 			uint foliageType = 0u; // 0 = Grass, 1 = Fern, 2 = Flower
-			if (typeSelector > 0.85) {
+			if (typeSelector < params.flowerRatio) {
 				foliageType = 2u; // Flower
-			} else if (typeSelector > 0.65) {
+			} else if (typeSelector < params.flowerRatio + params.fernRatio) {
 				foliageType = 1u; // Fern
 			}
 

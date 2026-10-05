@@ -39,6 +39,9 @@ namespace brassica {
 			.lodScaleFactor = m_state.lodScaleFactor,
 			.lodBaseRange = m_state.lodBaseRange,
 			.baseScale = m_state.baseScale,
+			.flowerRatio = m_state.flowerRatio,
+			.fernRatio = m_state.fernRatio,
+			.baseTileSize = m_state.baseTileSize,
 		};
 	}
 
@@ -52,6 +55,9 @@ namespace brassica {
 		m_state.lodScaleFactor = props.lodScaleFactor;
 		m_state.lodBaseRange = props.lodBaseRange;
 		m_state.baseScale = props.baseScale;
+		m_state.flowerRatio = props.flowerRatio;
+		m_state.fernRatio = props.fernRatio;
+		m_state.baseTileSize = props.baseTileSize;
 	}
 
 	FoliageState FoliageManager::GetState() const {
