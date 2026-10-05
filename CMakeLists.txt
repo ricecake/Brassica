@@ -129,10 +129,6 @@ add_subdirectory(external/doctest)
 add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
 add_subdirectory(external/geometry-central)
-# Intercept cmake_minimum_required for submodules requesting CMake > current runner version
-macro(cmake_minimum_required)
-endmacro()
-
 add_subdirectory(external/ozz-animation)
 if(TARGET eigen)
     target_compile_definitions(eigen INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
