@@ -35,9 +35,19 @@ namespace brassica {
 		float         baseTileSize{16.0f};
 		float         flowerRatio{0.15f};
 		float         fernRatio{0.20f};
+		float         rockRatio{0.05f};
+		float         seaweedRatio{0.05f};
+		float         bushRatio{0.10f};
+		float         lengthMultiplier{1.0f};
+		float         widthMultiplier{1.0f};
+		float         densityMultiplier{1.0f};
+		float         windMultiplier{1.0f};
+		float         rigidityMultiplier{1.0f};
+		float         padding0{0.0f};
+		float         padding1{0.0f};
 	};
 
-	static_assert(sizeof(FoliagePushConstants) == 56, "FoliagePushConstants size must be 56 bytes");
+	static_assert(sizeof(FoliagePushConstants) == 96, "FoliagePushConstants size must be 96 bytes");
 
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
 		using Resources = graph::Declares<
@@ -102,6 +112,18 @@ namespace brassica {
 				push.baseTileSize = props.baseTileSize;
 				push.flowerRatio = props.flowerRatio;
 				push.fernRatio = props.fernRatio;
+				push.rockRatio = props.rockRatio;
+				push.seaweedRatio = props.seaweedRatio;
+				push.bushRatio = props.bushRatio;
+				push.lengthMultiplier = props.lengthMultiplier;
+				push.widthMultiplier = props.widthMultiplier;
+				push.densityMultiplier = props.densityMultiplier;
+				push.windMultiplier = props.windMultiplier;
+				push.rigidityMultiplier = props.rigidityMultiplier;
+
+				push.gridParams.x = props.maxLODs;
+				push.gridParams.y = props.tilesPerRow;
+				push.gridParams.z = props.maxLODs * props.tilesPerRow * props.tilesPerRow;
 			}
 		}
 

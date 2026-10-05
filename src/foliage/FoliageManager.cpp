@@ -41,7 +41,12 @@ namespace brassica {
 			.baseScale = m_state.baseScale,
 			.flowerRatio = m_state.flowerRatio,
 			.fernRatio = m_state.fernRatio,
+			.rockRatio = m_state.rockRatio,
+			.seaweedRatio = m_state.seaweedRatio,
+			.bushRatio = m_state.bushRatio,
 			.baseTileSize = m_state.baseTileSize,
+			.maxLODs = m_state.maxLODs,
+			.tilesPerRow = m_state.tilesPerRow,
 		};
 	}
 
@@ -57,7 +62,12 @@ namespace brassica {
 		m_state.baseScale = props.baseScale;
 		m_state.flowerRatio = props.flowerRatio;
 		m_state.fernRatio = props.fernRatio;
+		m_state.rockRatio = props.rockRatio;
+		m_state.seaweedRatio = props.seaweedRatio;
+		m_state.bushRatio = props.bushRatio;
 		m_state.baseTileSize = props.baseTileSize;
+		m_state.maxLODs = props.maxLODs;
+		m_state.tilesPerRow = props.tilesPerRow;
 	}
 
 	FoliageState FoliageManager::GetState() const {

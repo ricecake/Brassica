@@ -54,6 +54,9 @@ namespace brassica::ui {
 
 					modified |= ImGui::SliderFloat("Flower Ratio", &props.flowerRatio, 0.0f, 1.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Fern Ratio", &props.fernRatio, 0.0f, 1.0f, "%.2f");
+					modified |= ImGui::SliderFloat("Rock Ratio", &props.rockRatio, 0.0f, 1.0f, "%.2f");
+					modified |= ImGui::SliderFloat("Seaweed Ratio", &props.seaweedRatio, 0.0f, 1.0f, "%.2f");
+					modified |= ImGui::SliderFloat("Bush Ratio", &props.bushRatio, 0.0f, 1.0f, "%.2f");
 
 					if (modified) {
 						mgr->SetGlobalProperties(props);
@@ -64,9 +67,21 @@ namespace brassica::ui {
 					auto props = mgr->GetGlobalProperties();
 					bool modified = false;
 
-					modified |= ImGui::SliderFloat("Base Tile Size", &props.baseTileSize, 4.0f, 64.0f, "%.1f m");
-					modified |= ImGui::SliderFloat("LOD Base Range", &props.lodBaseRange, 5.0f, 100.0f, "%.1f m");
+					modified |= ImGui::SliderFloat("Base Tile Size", &props.baseTileSize, 4.0f, 128.0f, "%.1f m");
+					modified |= ImGui::SliderFloat("LOD Base Range", &props.lodBaseRange, 5.0f, 1000.0f, "%.1f m");
 					modified |= ImGui::SliderFloat("LOD Scale Factor", &props.lodScaleFactor, 0.5f, 5.0f, "%.2f");
+
+					int maxLODs = static_cast<int>(props.maxLODs);
+					if (ImGui::SliderInt("Max LODs", &maxLODs, 1, 16)) {
+						props.maxLODs = static_cast<uint32_t>(maxLODs);
+						modified = true;
+					}
+
+					int tilesPerRow = static_cast<int>(props.tilesPerRow);
+					if (ImGui::SliderInt("Tiles Per Row", &tilesPerRow, 4, 64)) {
+						props.tilesPerRow = static_cast<uint32_t>(tilesPerRow);
+						modified = true;
+					}
 
 					if (modified) {
 						mgr->SetGlobalProperties(props);

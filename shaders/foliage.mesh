@@ -20,6 +20,16 @@ layout(push_constant) uniform FoliagePushConstants {
 	float baseTileSize;
 	float flowerRatio;
 	float fernRatio;
+	float rockRatio;
+	float seaweedRatio;
+	float bushRatio;
+	float lengthMultiplier;
+	float widthMultiplier;
+	float densityMultiplier;
+	float windMultiplier;
+	float rigidityMultiplier;
+	float padding0;
+	float padding1;
 }
 params;
 
@@ -46,20 +56,26 @@ void main() {
 	uint  lodLevel = payload.lodLevel[workGroupID];
 	uint  bladesInTile = payload.clumpCount[workGroupID];
 
+	// Apply global density multiplier
+	uint scaledBlades = uint(round(float(bladesInTile) * params.densityMultiplier));
+	if (scaledBlades == 0u || params.densityMultiplier <= 0.001) {
+		SetMeshOutputsEXT(0u, 0u);
+		return;
+	}
+
 	// Deterministic seed based on tile origin
 	uvec2 tileCell = uvec2(floor((uCameraPosition.xz + relTileMin) / max(tileSize, 1.0)));
 	uint seed = hashUint(tileCell.x * 73856093u ^ tileCell.y * 19349663u ^ lodLevel * 83492791u);
 
-	mat4 viewRel = mat4(mat3(uViewMatrix));
-	mat4 viewProjRel = uProjMatrix * viewRel;
+	float windScale = params.windMultiplier;
+	float rigidity = max(params.rigidityMultiplier, 0.1);
+	float windStrength = sin(params.windTime * (2.5 * windScale) + relTileMin.x * 0.15 + relTileMin.y * 0.15) * (0.25 * windScale / rigidity);
 
-	float windStrength = sin(params.windTime * 2.5 + relTileMin.x * 0.15 + relTileMin.y * 0.15) * 0.25;
-
-	// Distribute blades across 4 clumps within the tile
 	uint numClumps = 4u;
-	uint bladesPerClump = clamp(bladesInTile / numClumps, 1u, 8u);
+	uint itemsPerClump = clamp(scaledBlades / numClumps, 1u, 8u);
 
-	uint bladeIndex = 0u;
+	uint vCount = 0u;
+	uint pCount = 0u;
 
 	for (uint c = 0u; c < numClumps; ++c) {
 		uint clumpSeed = seed + c * 101u;
@@ -69,118 +85,281 @@ void main() {
 		float distToCam = length(clumpCenterRel);
 		float dropOff = (distToCam * distToCam) / (2.0 * FAKE_PLANET_RADIUS);
 
-		// Sample finest terrain clipmap level 0 (544m finest grid around camera) for near foliage so bases lock 100% to terrain
 		uint sampleLOD = (distToCam < 400.0) ? 0u : min(lodLevel, 2u);
 		vec4 terrainSample = sampleTerrainClipmap(params.clipmapIndex, clumpCenterWorld, sampleLOD, params.gridParams.w);
 		float terrainHeight = terrainSample.r - dropOff;
 		vec3  terrainNormal = (length(terrainSample.gba) >= 0.1) ? normalize(terrainSample.gba) : vec3(0.0, 1.0, 0.0);
 
-		// Skip underwater or steep cliff faces
-		if (terrainHeight < -2.0 || terrainNormal.y < 0.55) {
+		// Skip deep water or steep cliff faces
+		if (terrainHeight < -50.0 || terrainNormal.y < 0.55) {
 			continue;
 		}
 
-		for (uint b = 0u; b < bladesPerClump && bladeIndex < 32u; ++b) {
-			uint bladeSeed = clumpSeed + b * 17u;
-			float angle = pcg_hash(bladeSeed) * TAU;
-			float radius = pcg_hash(bladeSeed + 1u) * 1.2;
+		bool isUnderwater = (terrainHeight < -0.2);
+
+		for (uint b = 0u; b < itemsPerClump; ++b) {
+			if (vCount + 12u > 128u || pCount + 12u > 128u) {
+				break;
+			}
+
+			uint itemSeed = clumpSeed + b * 17u;
+			float angle = pcg_hash(itemSeed) * TAU;
+			float radius = pcg_hash(itemSeed + 1u) * 1.2;
 			vec2 offset = vec2(cos(angle), sin(angle)) * radius;
 
-			vec2 bladeWorldXZ = clumpCenterWorld + offset;
-			vec2 bladeRelXZ = clumpCenterRel + offset;
+			vec2 itemWorldXZ = clumpCenterWorld + offset;
+			vec2 itemRelXZ = clumpCenterRel + offset;
 
-			float typeSelector = pcg_hash(bladeSeed + 4u);
-			uint foliageType = 0u; // 0 = Grass, 1 = Fern, 2 = Flower
-			if (typeSelector < params.flowerRatio) {
-				foliageType = 2u; // Flower
-			} else if (typeSelector < params.flowerRatio + params.fernRatio) {
-				foliageType = 1u; // Fern
-			}
+			uint foliageType = 0u; // 0 = Grass, 1 = Fern, 2 = Flower, 3 = Rock, 4 = Seaweed, 5 = Bush
 
-			float bladeHeight = 0.8 + pcg_hash(bladeSeed + 2u) * 0.6;
-			float bladeWidth = 0.08 + pcg_hash(bladeSeed + 3u) * 0.04;
-
-			if (foliageType == 1u) { // Fern: wider, slightly taller
-				bladeWidth *= 1.8;
-				bladeHeight *= 1.2;
-			} else if (foliageType == 2u) { // Flower: stem width
-				bladeWidth *= 0.6;
-			}
-
-			vec3 basePos = vec3(bladeRelXZ.x, terrainHeight - uCameraPosition.y, bladeRelXZ.y);
-			vec3 bladeDir = vec3(cos(angle), 0.0, sin(angle));
-			vec3 sideDir = vec3(-bladeDir.z, 0.0, bladeDir.x) * bladeWidth;
-
-			vec3 tipPos = basePos + vec3(0.0, bladeHeight, 0.0) + vec3(windStrength, 0.0, windStrength);
-
-			uint vBase = bladeIndex * 4u;
-
-			vec4 bottomColor = vec4(0.08, 0.25, 0.04, 1.0);
-			vec4 topColor = vec4(0.28, 0.75, 0.18, 1.0);
-
-			if (foliageType == 1u) {
-				bottomColor = vec4(0.04, 0.20, 0.06, 1.0);
-				topColor = vec4(0.15, 0.60, 0.15, 1.0);
-			} else if (foliageType == 2u) {
-				bottomColor = vec4(0.06, 0.30, 0.05, 1.0);
-				float flowerColorHue = pcg_hash(bladeSeed + 5u);
-				if (flowerColorHue < 0.33) {
-					topColor = vec4(0.95, 0.85, 0.20, 1.0); // Yellow
-				} else if (flowerColorHue < 0.66) {
-					topColor = vec4(0.95, 0.30, 0.50, 1.0); // Pink/Red
+			if (isUnderwater) {
+				// Underwater terrain: Seaweed or underwater rocks
+				float underwaterChoice = pcg_hash(itemSeed + 4u);
+				if (underwaterChoice < 0.75) {
+					foliageType = 4u; // Seaweed
 				} else {
-					topColor = vec4(0.90, 0.90, 0.95, 1.0); // White
+					foliageType = 3u; // Underwater Rock
+				}
+			} else {
+				// Land terrain: select based on species ratios
+				float sel = pcg_hash(itemSeed + 4u);
+				float cumulative = params.flowerRatio;
+				if (sel < cumulative) {
+					foliageType = 2u; // Flower
+				} else {
+					cumulative += params.fernRatio;
+					if (sel < cumulative) {
+						foliageType = 1u; // Fern
+					} else {
+						cumulative += params.rockRatio;
+						if (sel < cumulative) {
+							foliageType = 3u; // Rock
+						} else {
+							cumulative += params.seaweedRatio;
+							if (sel < cumulative) {
+								foliageType = 4u; // Seaweed
+							} else {
+								cumulative += params.bushRatio;
+								if (sel < cumulative) {
+									foliageType = 5u; // Simple Bush
+								} else {
+									foliageType = 0u; // Grass
+								}
+							}
+						}
+					}
 				}
 			}
 
-			// Vertex 0: Bottom left
-			vec3 v0 = basePos - sideDir;
-			vec3 view0 = mat3(uViewMatrix) * v0;
-			gl_MeshVerticesEXT[vBase + 0u].gl_Position = uProjMatrix * vec4(view0, 1.0);
-			outWorldPos[vBase + 0u] = v0 + uCameraPosition.xyz;
-			outNormal[vBase + 0u] = terrainNormal;
-			outUV[vBase + 0u] = vec2(0.0, 0.0);
-			outColor[vBase + 0u] = bottomColor;
-			outMaterialType[vBase + 0u] = foliageType;
+			vec3 basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
 
-			// Vertex 1: Bottom right
-			vec3 v1 = basePos + sideDir;
-			vec3 view1 = mat3(uViewMatrix) * v1;
-			gl_MeshVerticesEXT[vBase + 1u].gl_Position = uProjMatrix * vec4(view1, 1.0);
-			outWorldPos[vBase + 1u] = v1 + uCameraPosition.xyz;
-			outNormal[vBase + 1u] = terrainNormal;
-			outUV[vBase + 1u] = vec2(1.0, 0.0);
-			outColor[vBase + 1u] = bottomColor;
-			outMaterialType[vBase + 1u] = foliageType;
+			if (foliageType == 3u) {
+				// -------------------------------------------------------------
+				// TYPE 3: ROCK (3D Low-poly Boulder)
+				// -------------------------------------------------------------
+				float rockScale = (0.4 + pcg_hash(itemSeed + 2u) * 0.8) * params.lengthMultiplier;
+				vec3 rockSize = vec3(
+					rockScale * (0.8 + pcg_hash(itemSeed + 3u) * 0.4) * params.widthMultiplier,
+					rockScale * (0.5 + pcg_hash(itemSeed + 5u) * 0.5),
+					rockScale * (0.8 + pcg_hash(itemSeed + 6u) * 0.4) * params.widthMultiplier
+				);
 
-			// Vertex 2: Top left
-			vec3 v2 = tipPos - sideDir * 0.3;
-			vec3 view2 = mat3(uViewMatrix) * v2;
-			gl_MeshVerticesEXT[vBase + 2u].gl_Position = uProjMatrix * vec4(view2, 1.0);
-			outWorldPos[vBase + 2u] = v2 + uCameraPosition.xyz;
-			outNormal[vBase + 2u] = terrainNormal;
-			outUV[vBase + 2u] = vec2(0.0, 1.0);
-			outColor[vBase + 2u] = topColor;
-			outMaterialType[vBase + 2u] = foliageType;
+				vec4 rockColor = vec4(
+					0.42 + pcg_hash(itemSeed + 7u) * 0.12,
+					0.40 + pcg_hash(itemSeed + 8u) * 0.10,
+					0.38 + pcg_hash(itemSeed + 9u) * 0.10,
+					1.0
+				);
 
-			// Vertex 3: Top right
-			vec3 v3 = tipPos + sideDir * 0.3;
-			vec3 view3 = mat3(uViewMatrix) * v3;
-			gl_MeshVerticesEXT[vBase + 3u].gl_Position = uProjMatrix * vec4(view3, 1.0);
-			outWorldPos[vBase + 3u] = v3 + uCameraPosition.xyz;
-			outNormal[vBase + 3u] = terrainNormal;
-			outUV[vBase + 3u] = vec2(1.0, 1.0);
-			outColor[vBase + 3u] = topColor;
-			outMaterialType[vBase + 3u] = foliageType;
+				uint vBase = vCount;
+				// 8 Box vertices relative to basePos (partially buried in ground)
+				vec3 hSize = rockSize * 0.5;
+				vec3 center = basePos + vec3(0.0, hSize.y * 0.6, 0.0);
 
-			uint pBase = bladeIndex * 2u;
-			gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 1u, vBase + 2u);
-			gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
+				vec3 boxVerts[8] = vec3[8](
+					center + vec3(-hSize.x, -hSize.y, -hSize.z),
+					center + vec3( hSize.x, -hSize.y, -hSize.z),
+					center + vec3( hSize.x,  hSize.y, -hSize.z),
+					center + vec3(-hSize.x,  hSize.y, -hSize.z),
+					center + vec3(-hSize.x, -hSize.y,  hSize.z),
+					center + vec3( hSize.x, -hSize.y,  hSize.z),
+					center + vec3( hSize.x,  hSize.y,  hSize.z),
+					center + vec3(-hSize.x,  hSize.y,  hSize.z)
+				);
 
-			++bladeIndex;
+				for (uint i = 0u; i < 8u; ++i) {
+					vec3 vPos = boxVerts[i];
+					vec3 viewP = mat3(uViewMatrix) * vPos;
+					gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+					outWorldPos[vBase + i] = vPos + uCameraPosition.xyz;
+					outNormal[vBase + i] = normalize(vPos - center + vec3(0.0, 0.2, 0.0));
+					outUV[vBase + i] = vec2(0.5, 0.5);
+					outColor[vBase + i] = rockColor;
+					outMaterialType[vBase + i] = 3u;
+				}
+
+				uint pBase = pCount;
+				// 10 Triangles for top and 4 sides (bottom buried)
+				uvec3 boxTris[10] = uvec3[10](
+					// Top face
+					uvec3(vBase + 3u, vBase + 2u, vBase + 6u),
+					uvec3(vBase + 3u, vBase + 6u, vBase + 7u),
+					// Front face (+Z)
+					uvec3(vBase + 4u, vBase + 5u, vBase + 6u),
+					uvec3(vBase + 4u, vBase + 6u, vBase + 7u),
+					// Back face (-Z)
+					uvec3(vBase + 1u, vBase + 0u, vBase + 3u),
+					uvec3(vBase + 1u, vBase + 3u, vBase + 2u),
+					// Left face (-X)
+					uvec3(vBase + 0u, vBase + 4u, vBase + 7u),
+					uvec3(vBase + 0u, vBase + 7u, vBase + 3u),
+					// Right face (+X)
+					uvec3(vBase + 5u, vBase + 1u, vBase + 2u),
+					uvec3(vBase + 5u, vBase + 2u, vBase + 6u)
+				);
+
+				for (uint i = 0u; i < 10u; ++i) {
+					gl_PrimitiveTriangleIndicesEXT[pBase + i] = boxTris[i];
+				}
+
+				vCount += 8u;
+				pCount += 10u;
+
+			} else if (foliageType == 5u) {
+				// -------------------------------------------------------------
+				// TYPE 5: SIMPLE BUSH (Volumetric Cross-Quad Bush)
+				// -------------------------------------------------------------
+				float bushHeight = (1.2 + pcg_hash(itemSeed + 2u) * 1.0) * params.lengthMultiplier;
+				float bushWidth = (1.0 + pcg_hash(itemSeed + 3u) * 0.8) * params.widthMultiplier;
+
+				vec4 bushBottomColor = vec4(0.08, 0.28, 0.06, 1.0);
+				vec4 bushTopColor = vec4(0.18 + pcg_hash(itemSeed + 5u) * 0.08, 0.55, 0.12, 1.0);
+
+				uint vBase = vCount;
+				vec3 topCenter = basePos + vec3(windStrength * 0.5, bushHeight, windStrength * 0.5);
+
+				// 2 Intersecting quads forming a 3D bush volume
+				vec3 dirA = vec3(cos(angle), 0.0, sin(angle)) * (bushWidth * 0.5);
+				vec3 dirB = vec3(-dirA.z, 0.0, dirA.x);
+
+				// Quad A
+				vec3 v0 = basePos - dirA;
+				vec3 v1 = basePos + dirA;
+				vec3 v2 = topCenter - dirA * 0.6;
+				vec3 v3 = topCenter + dirA * 0.6;
+
+				// Quad B
+				vec3 v4 = basePos - dirB;
+				vec3 v5 = basePos + dirB;
+				vec3 v6 = topCenter - dirB * 0.6;
+				vec3 v7 = topCenter + dirB * 0.6;
+
+				vec3 bVerts[8] = vec3[8](v0, v1, v2, v3, v4, v5, v6, v7);
+				vec2 bUVs[8] = vec2[8](
+					vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 1.0),
+					vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 1.0)
+				);
+
+				for (uint i = 0u; i < 8u; ++i) {
+					vec3 p = bVerts[i];
+					vec3 viewP = mat3(uViewMatrix) * p;
+					gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+					outWorldPos[vBase + i] = p + uCameraPosition.xyz;
+					outNormal[vBase + i] = terrainNormal;
+					outUV[vBase + i] = bUVs[i];
+					outColor[vBase + i] = (i < 2u || (i >= 4u && i < 6u)) ? bushBottomColor : bushTopColor;
+					outMaterialType[vBase + i] = 5u;
+				}
+
+				uint pBase = pCount;
+				gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 1u, vBase + 2u);
+				gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
+				gl_PrimitiveTriangleIndicesEXT[pBase + 2u] = uvec3(vBase + 4u, vBase + 5u, vBase + 6u);
+				gl_PrimitiveTriangleIndicesEXT[pBase + 3u] = uvec3(vBase + 5u, vBase + 7u, vBase + 6u);
+
+				vCount += 8u;
+				pCount += 4u;
+
+			} else {
+				// -------------------------------------------------------------
+				// TYPES 0, 1, 2, 4: QUAD BLADES (Grass, Fern, Flower, Seaweed)
+				// -------------------------------------------------------------
+				float height = (0.8 + pcg_hash(itemSeed + 2u) * 0.6) * params.lengthMultiplier;
+				float width = (0.08 + pcg_hash(itemSeed + 3u) * 0.04) * params.widthMultiplier;
+
+				if (foliageType == 1u) { // Fern
+					width *= 1.8;
+					height *= 1.2;
+				} else if (foliageType == 2u) { // Flower
+					width *= 0.6;
+				} else if (foliageType == 4u) { // Seaweed
+					height *= 2.2;
+					width *= 1.5;
+				}
+
+				vec3 bladeDir = vec3(cos(angle), 0.0, sin(angle));
+				vec3 sideDir = vec3(-bladeDir.z, 0.0, bladeDir.x) * width;
+
+				// Underwater kelp sway vs air wind sway
+				vec3 sway = vec3(windStrength, 0.0, windStrength);
+				if (foliageType == 4u) {
+					float kelpSway = sin(params.windTime * 1.5 + itemWorldXZ.x * 0.4 + itemWorldXZ.y * 0.4) * 0.4;
+					sway = vec3(kelpSway, 0.0, kelpSway);
+				}
+
+				vec3 tipPos = basePos + vec3(0.0, height, 0.0) + sway;
+
+				vec4 bottomColor = vec4(0.08, 0.25, 0.04, 1.0);
+				vec4 topColor = vec4(0.28, 0.75, 0.18, 1.0);
+
+				if (foliageType == 1u) { // Fern
+					bottomColor = vec4(0.04, 0.20, 0.06, 1.0);
+					topColor = vec4(0.15, 0.60, 0.15, 1.0);
+				} else if (foliageType == 2u) { // Flower
+					bottomColor = vec4(0.06, 0.30, 0.05, 1.0);
+					float hue = pcg_hash(itemSeed + 5u);
+					if (hue < 0.33) {
+						topColor = vec4(0.95, 0.85, 0.20, 1.0); // Yellow
+					} else if (hue < 0.66) {
+						topColor = vec4(0.95, 0.30, 0.50, 1.0); // Pink
+					} else {
+						topColor = vec4(0.90, 0.90, 0.95, 1.0); // White
+					}
+				} else if (foliageType == 4u) { // Seaweed
+					bottomColor = vec4(0.05, 0.25, 0.15, 1.0);
+					topColor = vec4(0.10, 0.50, 0.28, 1.0);
+				}
+
+				uint vBase = vCount;
+
+				vec3 v0 = basePos - sideDir;
+				vec3 v1 = basePos + sideDir;
+				vec3 v2 = tipPos - sideDir * 0.3;
+				vec3 v3 = tipPos + sideDir * 0.3;
+
+				vec3 qVerts[4] = vec3[4](v0, v1, v2, v3);
+				vec2 qUVs[4] = vec2[4](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 1.0));
+
+				for (uint i = 0u; i < 4u; ++i) {
+					vec3 p = qVerts[i];
+					vec3 viewP = mat3(uViewMatrix) * p;
+					gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+					outWorldPos[vBase + i] = p + uCameraPosition.xyz;
+					outNormal[vBase + i] = terrainNormal;
+					outUV[vBase + i] = qUVs[i];
+					outColor[vBase + i] = (i < 2u) ? bottomColor : topColor;
+					outMaterialType[vBase + i] = foliageType;
+				}
+
+				uint pBase = pCount;
+				gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 1u, vBase + 2u);
+				gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
+
+				vCount += 4u;
+				pCount += 2u;
+			}
 		}
 	}
 
-	// Set actual output counts matching the exact number of blades generated
-	SetMeshOutputsEXT(bladeIndex * 4u, bladeIndex * 2u);
+	SetMeshOutputsEXT(vCount, pCount);
 }
