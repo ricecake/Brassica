@@ -14,7 +14,8 @@ layout(location = 2) out vec4 outAlbedo;
 
 void main() {
 	vec3 relPos = inWorldPos - uCameraPosition.xyz;
+	float roughness = (inMaterialType == 1u) ? 0.6 : ((inMaterialType == 2u) ? 0.3 : 0.5);
 	outPosition = vec4(relPos, 1.0);
-	outNormal = vec4(normalize(inNormal), 0.5); // Alpha stores roughness
+	outNormal = vec4(normalize(inNormal), roughness);
 	outAlbedo = inColor;
 }
