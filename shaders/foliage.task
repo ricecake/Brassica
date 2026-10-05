@@ -1,0 +1,154 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+#include "helpers/culling.glsl"
+
+struct GrassProperties {
+	vec4  colorTop;
+	vec4  colorBottom;
+	float height;
+	float width;
+	float rigidity;
+	float heightVariance;
+	float widthVariance;
+	float density;
+	float colorVariability;
+	float windInfluence;
+	uint  enabled;
+	float flowerRatio;
+};
+
+struct GlobalGrassProperties {
+	float lengthMultiplier;
+	float widthMultiplier;
+	float densityMultiplier;
+	float rigidityMultiplier;
+	float windMultiplier;
+	uint  enabled;
+	float lodScaleFactor;
+	float lodBaseRange;
+	float baseScale;
+};
+
+layout(push_constant) uniform FoliagePushConstants {
+	uvec4 gridParams; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	uint  weatherBiomeIndex;
+	float windTime;
+	float lodBaseRange;
+	float lodScaleFactor;
+	float baseTileSize;
+}
+params;
+
+struct FoliageTaskPayload {
+	vec2  relTileMinXZ[32];
+	float tileSize[32];
+	uint  lodLevel[32];
+	uint  clumpCount[32];
+};
+
+taskPayloadSharedEXT FoliageTaskPayload payload;
+
+shared uint tileCount;
+
+void main() {
+	uint threadID = gl_LocalInvocationID.x;
+
+	if (threadID == 0) {
+		tileCount = 0;
+	}
+	barrier();
+
+	uint tileID = gl_WorkGroupID.x * 32 + threadID;
+	bool visible = false;
+
+	if (tileID < params.gridParams.z) {
+		uint tilesPerRow = params.gridParams.y;
+		uint totalPerLOD = tilesPerRow * tilesPerRow;
+		uint lodLevel = min(tileID / totalPerLOD, params.gridParams.x - 1);
+		uint localID = tileID % totalPerLOD;
+
+		uint row = localID / tilesPerRow;
+		uint col = localID % tilesPerRow;
+
+		float baseSize = params.baseTileSize > 0.0 ? params.baseTileSize : 16.0;
+		float tileSize = baseSize * getLODScale(float(lodLevel));
+
+		vec2 cameraSnap = floor(uCameraPosition.xz / tileSize) * tileSize;
+		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
+
+		vec3 relMinB = vec3(
+			relCameraSnap.x + (float(col) - float(tilesPerRow) * 0.5) * tileSize,
+			-200.0 - uCameraPosition.y,
+			relCameraSnap.y + (float(row) - float(tilesPerRow) * 0.5) * tileSize
+		);
+		vec3 relMaxB = relMinB + vec3(tileSize, 1500.0, tileSize);
+
+		if (params.minMaxIndex > 0u) {
+			vec2 centerXZ = cameraSnap + (vec2(float(col), float(row)) - float(tilesPerRow) * 0.5 + vec2(0.5)) * tileSize;
+			vec2 minMax = sampleTerrainMinMax(
+				params.minMaxIndex,
+				centerXZ,
+				lodLevel,
+				params.gridParams.w
+			);
+			relMinB.y = minMax.x - 10.0 - uCameraPosition.y;
+			relMaxB.y = minMax.y + 20.0 - uCameraPosition.y;
+		}
+
+		mat4 viewRel = mat4(mat3(uViewMatrix));
+		mat4 viewProjRel = uProjMatrix * viewRel;
+
+		visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(20.0, 50.0, 20.0), -50.0);
+
+		if (visible && lodLevel > 0) {
+			float prevTileSize = baseSize * getLODScale(float(lodLevel - 1));
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevTileSize) * prevTileSize;
+			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;
+			float prevExtent = float(tilesPerRow) * 0.5 * prevTileSize;
+
+			bool insideX = relMinB.x >= prevRelSnap.x - prevExtent && relMaxB.x <= prevRelSnap.x + prevExtent;
+			bool insideZ = relMinB.z >= prevRelSnap.y - prevExtent && relMaxB.z <= prevRelSnap.y + prevExtent;
+
+			if (insideX && insideZ) {
+				visible = false;
+			}
+		}
+
+		if (visible) {
+			vec2 centerXZ = relMinB.xz + tileSize * 0.5;
+			float distToCam = length(centerXZ);
+
+			// Ghost of Tsushima nested LOD clump count determination
+			// Near LODs render dense clumps (up to 32 blades per clump), distant LODs render sparse clumps (4 blades)
+			uint bladesPerClump = 32u;
+			if (lodLevel >= 4u || distToCam > 150.0) {
+				bladesPerClump = 4u;
+			} else if (lodLevel >= 2u || distToCam > 60.0) {
+				bladesPerClump = 8u;
+			} else if (lodLevel >= 1u || distToCam > 30.0) {
+				bladesPerClump = 16u;
+			}
+
+			uint idx = atomicAdd(tileCount, 1u);
+			payload.relTileMinXZ[idx] = relMinB.xz;
+			payload.tileSize[idx] = tileSize;
+			payload.lodLevel[idx] = lodLevel;
+			payload.clumpCount[idx] = bladesPerClump;
+		}
+	}
+
+	barrier();
+
+	if (threadID == 0) {
+		EmitMeshTasksEXT(tileCount, 1, 1);
+	}
+}

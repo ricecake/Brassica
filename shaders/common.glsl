@@ -1,3 +1,6 @@
+#ifndef SHADERS_COMMON_GLSL
+#define SHADERS_COMMON_GLSL
+
 const float FAKE_PLANET_RADIUS = 600000.0; // 600km radius (1/10th scale planet)
 const float PI = 3.14159265359;
 const float PHI = 1.618033988749894848204586834;
@@ -664,3 +667,5 @@ float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad, out mat3 ou
     out_hessian = hessian / max_amp;
     return val / max_amp;
 }
+
+#endif // SHADERS_COMMON_GLSL

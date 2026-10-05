@@ -495,6 +495,10 @@ namespace brassica {
 		serviceLocator.Provide<ILightManager>(std::shared_ptr<ILightManager>(&lightManager, [](ILightManager*) {}));
 		serviceLocator.Provide<LightManager>(std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {}));
 
+		foliageManager.Initialize();
+		serviceLocator.Provide<IFoliageManager>(std::shared_ptr<IFoliageManager>(&foliageManager, [](IFoliageManager*) {}));
+		serviceLocator.Provide<FoliageManager>(std::shared_ptr<FoliageManager>(&foliageManager, [](FoliageManager*) {}));
+
 		materialManager.Initialize();
 		serviceLocator.Provide<IMaterialManager>(std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {}));
 		serviceLocator.Provide<MaterialManager>(std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {}));
