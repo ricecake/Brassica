@@ -30,6 +30,21 @@ glm::vec3 sample_mantle_curl(glm::vec3 p) {
 	return Simplex::curlNoise(p);
 }
 
+// Returns the exact 'k' value needed to create a transition zone of 'width_km'
+// Example uses:
+// 10km sharp coastline transition -> k = ~10,700
+// 50km wide mountain range      -> k = ~430
+// 150km massive crumple zone    -> k = ~95
+float calculate_k_for_width(float width_km, float planet_radius = 600.0f) {
+    float theta = width_km / planet_radius;
+    float denom = std::cos(theta) - 1.0f;
+
+    // Prevent divide by zero if width is 0
+    if (std::abs(denom) < 0.000001f) return 10000.0f;
+
+    return std::log(0.05f) / denom;
+}
+
 // ==============================================================================
 // GENERATOR FUNCTION
 // ==============================================================================
