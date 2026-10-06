@@ -197,7 +197,6 @@ struct TectonicPlate {
     float height;  // Base continent elevation (e.g., 1.0 for land, 0.0 for ocean)
 	float k;
     vec3 velocity;
-    // You could also store vec3 drift_velocity here for tectonic flow
 };
 
 // // SSBO containing your continent seeds
@@ -502,14 +501,14 @@ void evaluate_tectonics_geocentric(
         vec3 dw_crump = k_crumple * w_crump * S;
 
         vec3 randVec = cross_noise(plates[i].seed_dir, plates[i].k);
-        vec3 V = 50*(randVec - plates[i].seed_dir * dot(randVec, plates[i].seed_dir));
+        // vec3 V = 50*(randVec - plates[i].seed_dir * dot(randVec, plates[i].seed_dir));
 
         sum_w_crump  += w_crump;
-        // sum_v        += w_crump * plates[i].velocity;
-        sum_v        += w_crump * V;
+        sum_v        += w_crump * plates[i].velocity;
+        // sum_v        += w_crump * V;
         grad_w_crump += dw_crump;
-        // J_sum_v      += outerProduct(plates[i].velocity, dw_crump);
-        J_sum_v      += outerProduct(V, dw_crump);
+        J_sum_v      += outerProduct(plates[i].velocity, dw_crump);
+        // J_sum_v      += outerProduct(V, dw_crump);
 
         // Track squared weights and their gradients strictly for the Fault Line Mask
         sum_w2_crump += w_crump * w_crump;
@@ -530,10 +529,21 @@ void evaluate_tectonics_geocentric(
 
     // Fault Mask: 1.0 - sum( (w/W)^2 )
     float sum_N2_crump = sum_w2_crump * inv_W_crump2;
-    out_fault = 1.0 - sum_N2_crump;
+// Old: out_fault = 1.0 - sum_N2_crump;
 
-    // Exact analytical gradient of the fault mask using the quotient rule
-    out_grad_f = -(grad_w2_crump - 2.0 * sum_N2_crump * sum_w_crump * grad_w_crump) * inv_W_crump2;
+// New: Remap the raw mask so that 0.5 becomes 1.0 using a smooth curve
+float raw_fault = 1.0 - sum_N2_crump;
+float max_fault_expected = 0.55; // Slightly above 0.5 to account for 3-plate intersections
+
+// smoothstep(0.0, max_fault_expected, raw_fault)
+float t_fault = clamp(raw_fault / max_fault_expected, 0.0, 1.0);
+out_fault = t_fault * t_fault * (3.0 - 2.0 * t_fault);
+
+// Chain rule for the new smoothstep mask
+float d_smooth_fault = 6.0 * t_fault * (1.0 - t_fault) / max_fault_expected;
+
+vec3 raw_grad_f = -(grad_w2_crump - 2.0 * sum_N2_crump * sum_w_crump * grad_w_crump) * inv_W_crump2;
+out_grad_f = raw_grad_f * d_smooth_fault;
 }
 
 // float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
@@ -557,7 +567,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
 
     // A low k_crumple (e.g., 8.0 - 15.0) spreads the fault_mask and velocity field
     // hundreds of kilometers wide, while coastlines remain sharp.
-    float k_crumple = 15.0;
+    float k_crumple = 450.0;
 
     evaluate_tectonics_geocentric(p_tectonic, k_crumple,
         base_h, grad_base_h,
@@ -575,8 +585,15 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // Because k_crumple is such a low-frequency, ultra-smooth field, we can safely
     // treat the gradient of this specific uplift layer as near-zero to avoid
     // needing the Hessian of the Voronoi cells, without causing visible lighting errors.
-    float uplift = (1.0-smoothstep(-1.5, 0.0, I1)) * 1.5;
-    base_h += uplift;
+// Isolate violent collisions (highly negative I1)
+// Adjust the -2.0 based on the magnitude of your velocity drift speed
+float collision_intensity = smoothstep(-0.5, -2.0, I1);
+
+// Aggressively push the base crust up.
+// A multiplier of 0.4 means a collision can push a lowland plate (0.2)
+// all the way up to a highland plateau (0.6) before any noise is added.
+float uplift = collision_intensity * 0.4;
+base_h += uplift;
 
     // 3. Base Continent Topography (Rolling Hills & Plains)
     float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;

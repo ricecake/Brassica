@@ -50,6 +50,7 @@ namespace brassica {
 		bool        renderTerrainMap{false};
 		std::string terrainMapPath{"terrain_map.png"};
 		bool        aggressiveValidation{false};
+		bool        printRenderGraph{false};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
 			ArgparseManager argManager;
@@ -64,7 +65,8 @@ namespace brassica {
 			opts.renderTerrainMap = argManager.GetRenderTerrainMap();
 			opts.terrainMapPath = argManager.GetTerrainMapPath();
 			opts.aggressiveValidation = argManager.GetAggressiveValidation();
-			if (opts.renderTerrainMap) {
+			opts.printRenderGraph = argManager.GetPrintRenderGraph();
+			if (opts.renderTerrainMap || opts.printRenderGraph) {
 				opts.headless = true;
 			}
 			return opts;
