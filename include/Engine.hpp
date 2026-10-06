@@ -19,6 +19,7 @@
 #include "foliage/FoliageManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
+#include "particle/ParticleManager.hpp"
 #include "passes/AllNodes.hpp"
 #include "render/MaterialManager.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -177,6 +178,9 @@ namespace brassica {
 		FoliageManager& GetFoliageManager() { return foliageManager; }
 
 		const FoliageManager& GetFoliageManager() const { return foliageManager; }
+		ParticleManager& GetParticleManager() { return particleManager; }
+
+		const ParticleManager& GetParticleManager() const { return particleManager; }
 
 		void UpdateCamera(float deltaTime);
 
@@ -278,6 +282,7 @@ namespace brassica {
 		AudioManager     audioManager;
 		FoliageManager   foliageManager;
 		MaterialManager  materialManager;
+		ParticleManager  particleManager;
 
 		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
 		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'

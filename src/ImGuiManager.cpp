@@ -13,6 +13,7 @@
 #include "ui/FoliageWidget.hpp"
 #include "ui/LightingWidget.hpp"
 #include "ui/ManagerSettingsWidget.hpp"
+#include "ui/ParticleWidget.hpp"
 #include "ui/QuickSettingsWidget.hpp"
 
 namespace brassica {
@@ -43,6 +44,7 @@ namespace brassica {
 		AddWidget(std::make_shared<ui::ManagerSettingsWidget>());
 		AddWidget(std::make_shared<ui::LightingWidget>());
 		AddWidget(std::make_shared<ui::FoliageWidget>());
+		AddWidget(std::make_shared<ui::ParticleWidget>());
 	}
 
 	void ImGuiManager::InitVulkanAndGlfw(

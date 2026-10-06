@@ -108,6 +108,10 @@ namespace brassica {
 
 	struct AboveWaterParticleIndirectBuffer {};
 
+	struct ParticleGridHeadsBuffer {};
+
+	struct ParticleGridNextBuffer {};
+
 	using ParticleAliveBuffer = AboveWaterParticleAliveBuffer;
 
 	using ParticleIndirectBuffer = AboveWaterParticleIndirectBuffer;

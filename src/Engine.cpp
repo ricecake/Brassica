@@ -287,6 +287,7 @@ namespace brassica {
 
 		if (device) {
 			audioManager.Shutdown();
+			particleManager.Shutdown();
 			imguiManager.Shutdown();
 			shaderWatcher.StopWatching();
 
@@ -501,6 +502,10 @@ namespace brassica {
 		serviceLocator.Provide<IMaterialManager>(std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {}));
 		serviceLocator.Provide<MaterialManager>(std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {}));
 
+		particleManager.Initialize();
+		serviceLocator.Provide<IParticleManager>(std::shared_ptr<IParticleManager>(&particleManager, [](IParticleManager*) {}));
+		serviceLocator.Provide<ParticleManager>(std::shared_ptr<ParticleManager>(&particleManager, [](ParticleManager*) {}));
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -520,6 +525,7 @@ namespace brassica {
 		audioManager.LoadState(configManager);
 		lightManager.LoadState(configManager);
 		terrainManager.LoadState(configManager);
+		particleManager.LoadState(configManager);
 		terrainAS.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);

@@ -10,6 +10,7 @@ layout(triangles, max_vertices = 4, max_primitives = 2) out;
 struct Particle {
 	vec4  position;
 	vec4  velocity;
+	vec4  color;
 	vec4  misc;
 	uint  type;
 	float lifetime;
@@ -59,14 +60,6 @@ layout(push_constant) uniform ParticleRenderPushConstants {
 	uint isUnderwater;
 } uPush;
 
-// particleType (uint) must be flat -- integer interface variables cannot be smoothly
-// interpolated in GLSL/Vulkan -- but it was previously bundled into the same block as uv/
-// worldPos/color, and a single `flat` qualifier on an interface block applies to every member:
-// that froze uv (and worldPos) to the provoking vertex's value across each whole triangle
-// instead of varying per-pixel, which is what particle.frag's shape functions actually need to
-// draw anything -- the practical effect was shapeAlpha evaluating near-constant and below the
-// 0.02 discard threshold almost everywhere, i.e. particles rendering as invisible. Split into its
-// own flat output so the rest of the block gets real (default smooth) interpolation.
 layout(location = 0) out struct ParticleVertexOutput {
 	vec4 color;
 	vec2 uv;
@@ -92,14 +85,6 @@ void main() {
 	vec3 camPos = uCameraPosition.xyz;
 	vec3 pos = p.position.xyz;
 
-	// Planet-curvature drop-off: every other real-geometry mesh shader (terrain.mesh, water.mesh,
-	// ball.mesh) bends world Y down by distSq/(2*FAKE_PLANET_RADIUS) as horizontal distance from
-	// the camera grows, simulating a curved planet surface -- this shader omitted it entirely, so
-	// at any real distance a particle's uncorrected height increasingly diverged from the
-	// correctly-bent water/terrain surface beneath it, which is exactly what put particles behind
-	// (and therefore depth-tested away by) water/terrain right where they visually overlapped it.
-	// Applied to the particle's center once, before deriving orientation/offsets from it, since a
-	// billboard-sized offset changes distSq by a negligible amount relative to FAKE_PLANET_RADIUS.
 	vec2  flatXZ = pos.xz - camPos.xz;
 	float distSq = dot(flatXZ, flatXZ);
 	pos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
@@ -112,7 +97,7 @@ void main() {
 	vec3 right = normalize(cross(up, forward));
 	up = cross(forward, right);
 
-	float size = (pType.size > 0.0) ? pType.size : ((p.type == 0u) ? 3.0 : 2.0);
+	float size = (pType.size > 0.0) ? pType.size : ((p.type == 0u) ? 3.0 : ((p.type == 1u) ? 2.0 : 1.2));
 	float halfSize = size * 0.5;
 
 	vec3 offsets[4] = vec3[4](
@@ -126,17 +111,16 @@ void main() {
 
 	SetMeshOutputsEXT(4, 2);
 
-	vec4 baseColor;
+	vec4 baseColor = p.color;
 	if (pType.color.a > 0.0) {
 		baseColor = pType.color;
-	} else if (p.type == 0u) {
-		baseColor = vec4(1.0, 0.95, 0.7, 0.95); // Warm golden/white luminous bird plumage
-	} else {
-		baseColor = vec4(0.1, 0.95, 0.85, 0.95); // Vibrant cyan/seafoam underwater fish sheen
 	}
 
 	float lifeRatio = clamp(p.lifetime / max(p.maxLifetime, 0.0001), 0.0, 1.0);
-	baseColor.a *= min(1.0, lifeRatio * 2.0);
+	float lifeFade = smoothstep(0.0, 0.15, lifeRatio) * smoothstep(1.0, 0.85, lifeRatio);
+	float distToCam = length(pos - camPos);
+	float distFade = smoothstep(300.0, 220.0, distToCam);
+	baseColor.a *= (lifeFade * distFade);
 
 	for (uint i = 0u; i < 4u; ++i) {
 		vec3 vWorldPos = pos + offsets[i];

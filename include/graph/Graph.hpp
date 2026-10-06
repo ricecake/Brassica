@@ -452,6 +452,9 @@ namespace brassica::graph {
 						if (alreadyChained(producer, consumer, key)) {
 							continue;
 						}
+						if (nodes[producer].phase == nodes[consumer].phase && producer > consumer && isSelfModifyMember(nodes[producer], key)) {
+							continue;
+						}
 						edges.push_back(Edge{producer, consumer, key});
 					}
 				}

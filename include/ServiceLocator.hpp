@@ -24,6 +24,8 @@ namespace brassica {
 		mutable std::shared_mutex mtx;
 
 	public:
+		static bool HasInstance() { return s_instance != nullptr; }
+
 		static ServiceLocator& Instance() {
 			assert(s_instance && "ServiceLocator not yet initialized");
 			return *s_instance;

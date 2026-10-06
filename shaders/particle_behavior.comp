@@ -1,11 +1,14 @@
 #version 460 core
+#define LIGHTS_BUFFER_WRITABLE
 #include "bindless.glsl"
+#include "lighting.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct Particle {
 	vec4  position;
 	vec4  velocity;
+	vec4  color;
 	vec4  misc;
 	uint  type;
 	float lifetime;
@@ -29,16 +32,37 @@ layout(std430, set = 2, binding = 1) readonly buffer ParticleTypes {
 	ParticleType uParticleTypes[];
 };
 
+layout(std430, set = 2, binding = 6) readonly buffer ParticleGridHeads {
+	int uParticleGridHeads[];
+};
+
+layout(std430, set = 2, binding = 7) readonly buffer ParticleGridNext {
+	int uParticleGridNext[];
+};
+
 layout(push_constant) uniform ParticleBehaviorPushConstants {
 	uint  maxParticles;
 	float deltaTime;
+	uint  gridSize;
+	float cellSize;
+	uint  enableLights;
 } uPush;
+
+uint hashCell(ivec3 cell, uint gridSize) {
+	uvec3 p = uvec3(cell);
+	uint h = p.x * 73856093u ^ p.y * 19349663u ^ p.z * 83492791u;
+	return h % gridSize;
+}
 
 void main() {
 	uint idx = gl_GlobalInvocationID.x;
 
 	if (idx >= uPush.maxParticles) {
 		return;
+	}
+
+	if (idx < 240u) {
+		uLights[16u + idx].intensity = 0.0;
 	}
 
 	Particle p = uParticles[idx];
@@ -48,16 +72,75 @@ void main() {
 
 	if (p.type == 0u) { // Birds
 		p.misc.x += uPush.deltaTime * 8.0; // Wing flap animation phase
-		// Curved flight vector perturbation
 		vec3 perturbation = vec3(cos(p.misc.x * 0.2), sin(p.misc.x * 0.4) * 0.3, sin(p.misc.x * 0.2)) * 2.0;
 		p.position.xyz += (p.velocity.xyz + perturbation) * uPush.deltaTime;
 		p.position.y = max(p.position.y, 2.0); // Stay above water
-	} else { // Fish
+	} else if (p.type == 1u) { // Fish
 		p.misc.x += uPush.deltaTime * 6.0; // Tail wiggle animation phase
-		// Swimming undulating path
 		vec3 perturbation = vec3(sin(p.misc.x * 0.5) * 1.5, cos(p.misc.x * 0.8) * 0.2, cos(p.misc.x * 0.5) * 1.5);
 		p.position.xyz += (p.velocity.xyz + perturbation) * uPush.deltaTime;
 		p.position.y = min(p.position.y, -1.0); // Stay below water
+	} else if (p.type == 2u) { // Fireflies
+		float phase = p.misc.x;
+
+		// 3D spatial hash proximity grid search for nearby fireflies
+		ivec3 myCell = ivec3(floor(p.position.xyz / uPush.cellSize));
+		float neighborCount = 1.0;
+		float neighborPhaseSum = phase;
+
+		for (int dz = -1; dz <= 1; dz++) {
+			for (int dy = -1; dy <= 1; dy++) {
+				for (int dx = -1; dx <= 1; dx++) {
+					ivec3 cell = myCell + ivec3(dx, dy, dz);
+					uint cellHash = hashCell(cell, uPush.gridSize);
+					int curr = uParticleGridHeads[cellHash];
+
+					int loopCount = 0;
+					while (curr != -1 && loopCount < 32) {
+						if (uint(curr) != idx && uParticles[curr].type == 2u && uParticles[curr].lifetime > 0.0) {
+							float distSq = dot(uParticles[curr].position.xyz - p.position.xyz, uParticles[curr].position.xyz - p.position.xyz);
+							if (distSq < uPush.cellSize * uPush.cellSize) {
+								neighborCount += 1.0;
+								neighborPhaseSum += uParticles[curr].misc.x;
+							}
+						}
+						curr = uParticleGridNext[curr];
+						loopCount++;
+					}
+				}
+			}
+		}
+
+		// Phase-synchronization coupling nudge
+		float avgPhase = neighborPhaseSum / neighborCount;
+		phase = mix(phase, avgPhase, min(1.0, uPush.deltaTime * 1.5));
+		phase += uPush.deltaTime * 3.0;
+		p.misc.x = phase;
+
+		// Micro-turbulence drift
+		vec3 turb = vec3(
+			sin(phase * 0.8 + p.position.y * 0.5),
+			cos(phase * 1.2 + p.position.x * 0.5) * 0.3,
+			sin(phase * 0.9 + p.position.z * 0.5)
+		) * 0.8;
+		p.position.xyz += (p.velocity.xyz + turb) * uPush.deltaTime;
+
+		// Statically claim light slot (16u + idx) for the life of the particle
+		if (idx < 240u) {
+			atomicMax(uLightCount, 256u);
+			uint lightSlot = 16u + idx;
+			float pulse = max(0.0, sin(phase));
+			uLights[lightSlot].position = p.position.xyz;
+			uLights[lightSlot].intensity = (uPush.enableLights != 0u) ? (1.5 * pulse) : 0.0;
+			uLights[lightSlot].color = p.color.rgb * pulse * 2.0;
+			uLights[lightSlot].type = LIGHT_TYPE_POINT;
+			uLights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
+			uLights[lightSlot].innerCutoff = 0.0;
+			uLights[lightSlot].outerCutoff = 8.0;
+			uLights[lightSlot].flags = 0;
+			uLights[lightSlot]._pad0 = 0.0;
+			uLights[lightSlot]._pad1 = 0.0;
+		}
 	}
 
 	uParticles[idx] = p;
