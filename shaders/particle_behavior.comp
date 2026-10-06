@@ -61,6 +61,10 @@ void main() {
 		return;
 	}
 
+	if (idx < 240u) {
+		uLights[16u + idx].intensity = 0.0;
+	}
+
 	Particle p = uParticles[idx];
 	if (p.lifetime <= 0.0) {
 		return;
@@ -136,12 +140,6 @@ void main() {
 			uLights[lightSlot].flags = 0;
 			uLights[lightSlot]._pad0 = 0.0;
 			uLights[lightSlot]._pad1 = 0.0;
-		}
-	} else {
-		// Non-firefly particles (or expired fireflies) in the particle light range set intensity to 0
-		if (idx < 240u) {
-			uint lightSlot = 16u + idx;
-			uLights[lightSlot].intensity = 0.0;
 		}
 	}
 
