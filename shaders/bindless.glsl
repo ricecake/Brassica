@@ -24,9 +24,6 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	uint  uFrameIndex;
 	uint  uGlobalSeed;
 	uint  uFrameRandom;
-
-	// Last frame's uViewProjMatrix -- see FrameUBO.hpp's previousViewProjMatrix for why. Available
-	// to any shader that needs to reproject a world-space point into last frame's screen space.
 	mat4  uPreviousViewProjMatrix;
 };
 

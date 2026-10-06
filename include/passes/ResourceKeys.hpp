@@ -7,7 +7,29 @@
 // handles into a shared blackboard; the new model has no separate blackboard, cross-pass resource
 // sharing is just these keys plus Declares<Create/Read/Modify<K>...> on each node.
 
+#include "graph/Execution.hpp"
+#include "vulkan/vulkan.hpp"
+
 namespace brassica {
+
+	struct CloudVolumeCascade0 {};
+
+	struct CloudVolumeCascade1 {};
+
+	struct CloudVolumeCascade2 {};
+
+	inline graph::ResourceDesc CloudVolumeDesc() {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image3D,
+			.width = 256,
+			.height = 256,
+			.depth = 256,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
 
 	struct Swapchain {};
 
