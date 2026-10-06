@@ -146,6 +146,11 @@ void evaluate_brdf(vec3 N, vec3 V, vec3 L, Material material, vec3 radiance, flo
 	vec3 F = fresnelSchlickFast(HdotV, F0);
 	vec3 specular = NDF * V_term * F;
 
+	if (material.glint > 0.0) {
+		float glintTerm = pow(max(dot(N, H), 0.0), 64.0) * material.glint;
+		specular += vec3(glintTerm);
+	}
+
 	vec3 kS = F;
 	vec3 kD = (vec3(1.0) - kS) * (1.0 - material.metallic);
 

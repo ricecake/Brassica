@@ -128,6 +128,8 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 	vec3 spatialSHAmbient = getSpatialAmbientSH(frag_pos, N);
 	result.color += spatialSHAmbient * uAmbientLight.rgb * material.albedo * (material.ao * terrainOcc);
 
+	result.color += material.albedo * material.emissivity;
+
 	return result;
 }
 

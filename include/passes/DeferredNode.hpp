@@ -40,6 +40,7 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
+		std::uint32_t gMaterialIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -110,6 +111,7 @@ namespace brassica {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
+			push.gMaterialIndex = ctx.Index<GBufferMaterial>();
 			push.gDepthIndex = ctx.Index<GBufferDepth>();
 			push.backgroundIndex = ctx.Index<AtmosphereRadiance>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();

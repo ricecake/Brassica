@@ -149,6 +149,14 @@ namespace brassica {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferMaterial>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
+					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
@@ -164,10 +172,11 @@ namespace brassica {
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
-			std::array<vk::Format, 3>      colorFormats{
+			std::array<vk::Format, 4>      colorFormats{
 				vk::Format::eR32G32B32A32Sfloat,
 				vk::Format::eR16G16B16A16Sfloat,
-				vk::Format::eR8G8B8A8Srgb
+				vk::Format::eR8G8B8A8Srgb,
+				vk::Format::eR8G8B8A8Unorm
 			};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
