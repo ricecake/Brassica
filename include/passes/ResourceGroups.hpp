@@ -10,6 +10,6 @@ namespace brassica {
 	// quartet, e.g. ParticleLivenessNode is Modify/Read/Modify/Modify) stays explicit -- forcing
 	// it through a group would declare a dependency that doesn't exist.
 	template <template <typename> class Op>
-	using GBuffer = graph::Group<Op, GBufferPosition, GBufferNormal, GBufferAlbedo, GBufferDepth>;
+	using GBuffer = graph::Group<Op, GBufferPosition, GBufferNormal, GBufferAlbedo, GBufferMaterial, GBufferDepth>;
 
 } // namespace brassica

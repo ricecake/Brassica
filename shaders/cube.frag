@@ -9,9 +9,11 @@ layout(location = 2) in vec4 inAlbedo;
 layout(location = 0) out vec4 gPosition;
 layout(location = 1) out vec4 gNormal;
 layout(location = 2) out vec4 gAlbedo;
+layout(location = 3) out vec4 gMaterial;
 
 void main() {
-	gPosition = vec4(inPosition, 1.0);
-	gNormal = vec4(normalize(inNormal), 0.0);
+	gPosition = vec4(inPosition, 0.0);
+	gNormal = vec4(normalize(inNormal), 1.0);
 	gAlbedo = inAlbedo;
+	gMaterial = vec4(0.0, 0.7, 0.0, 0.0);
 }

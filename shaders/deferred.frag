@@ -21,6 +21,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  biomeIndex;
 	uint  visibilityIndex;
 	uint  weatherBiomeIndex;
+	uint  gMaterialIndex;
 }
 
 params;
@@ -88,7 +89,8 @@ void main() {
 	vec4  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
 	vec4  normalSample = SAMPLE_NEAREST(params.gNormalIndex, inUV);
 	vec3  norm = normalSample.rgb;
-	vec3  relPos = SAMPLE_NEAREST(params.gPositionIndex, inUV).rgb;
+	vec4  posSample = SAMPLE_NEAREST(params.gPositionIndex, inUV);
+	vec3  relPos = posSample.rgb;
 	vec3  pos = relPos + uCameraPosition.xyz;
 	vec3  hdrBg = SAMPLE_NEAREST(params.backgroundIndex, inUV).rgb;
 	float depth = SAMPLE_NEAREST(params.gDepthIndex, inUV).r;
@@ -99,7 +101,13 @@ void main() {
 	if (albedo.a < 0.01) {
 		hdrColor = hdrBg;
 	} else {
-		float roughness = normalSample.a > 0.0 ? normalSample.a : 0.7;
+		vec4 matSample = SAMPLE_NEAREST(params.gMaterialIndex, inUV);
+
+		float metallic   = matSample.r;
+		float roughness  = matSample.g > 0.0 ? matSample.g : 0.7;
+		float glint      = matSample.b;
+		float ao         = normalSample.a > 0.0 ? normalSample.a : 1.0;
+		float emissivity = posSample.a;
 
 		if (params.weatherBiomeIndex > 0u) {
 			vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, pos);
@@ -114,7 +122,7 @@ void main() {
 			roughness = mix(roughness, wb.roughness, 0.65);
 		}
 
-		Material material = Material(albedo.rgb, roughness, 0.0, 1.0);
+		Material material = Material(albedo.rgb, roughness, metallic, ao, emissivity, glint);
 
 		// Aerial perspective / underwater extinction is no longer applied here: it happens
 		// uniformly for every pixel (this one included) in AtmosphereCompositeNode, which runs

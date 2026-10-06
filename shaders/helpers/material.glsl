@@ -17,10 +17,12 @@ struct Material {
 	float roughness;
 	float metallic;
 	float ao;
+	float emissivity;
+	float glint;
 };
 
 Material materialDefault() {
-	return Material(vec3(1.0), 0.7, 0.0, 1.0);
+	return Material(vec3(1.0), 0.7, 0.0, 1.0, 0.0, 0.0);
 }
 
 #endif // HELPERS_MATERIAL_GLSL
