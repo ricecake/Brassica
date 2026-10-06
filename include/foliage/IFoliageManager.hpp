@@ -10,6 +10,12 @@
 
 namespace brassica {
 
+	// Matches shaders/helpers/whittaker.glsl's WhittakerBiome::biomeIndex range (0-9) exactly --
+	// this used to be 8 anonymous slots with no relation to the real per-location biome signal,
+	// which only ever comes from the weather texture (TerrainBiomeTexture's own per-location
+	// value is hardcoded to 0 in terrain_gen.comp).
+	inline constexpr std::uint32_t kFoliageBiomeCount = 10;
+
 	struct GrassProperties {
 		glm::vec4 colorTop{0.3f, 0.8f, 0.2f, 1.0f};
 		glm::vec4 colorBottom{0.1f, 0.3f, 0.05f, 1.0f};
@@ -43,6 +49,7 @@ namespace brassica {
 		float    baseTileSize{16.0f};
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
+		uint32_t enableOcclusionCulling{1};
 	};
 
 	struct FoliageState {
@@ -63,6 +70,7 @@ namespace brassica {
 		float    baseTileSize{16.0f};
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
+		bool     enableOcclusionCulling{true};
 
 		auto GetReflection() {
 			return std::make_tuple(
@@ -82,7 +90,10 @@ namespace brassica {
 				MakeField("bushRatio", "Bush Ratio", &FoliageState::bushRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
-				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider)
+				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),
+				MakeField(
+					"enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling
+				)
 			);
 		}
 
@@ -104,7 +115,10 @@ namespace brassica {
 				MakeField("bushRatio", "Bush Ratio", &FoliageState::bushRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
-				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider)
+				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),
+				MakeField(
+					"enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling
+				)
 			);
 		}
 	};

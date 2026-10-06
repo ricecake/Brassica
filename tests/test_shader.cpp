@@ -327,6 +327,7 @@ TEST_CASE("Terrain Occlusion Helper Consumers Compile") {
 		{"shaders/water.mesh", shaderc_glsl_mesh_shader},
 		{"shaders/foliage.task", shaderc_glsl_task_shader},
 		{"shaders/foliage.mesh", shaderc_glsl_mesh_shader},
+		{"shaders/foliage.frag", shaderc_glsl_fragment_shader},
 		{"shaders/deferred.frag", shaderc_glsl_fragment_shader},
 		{"shaders/terrain_aabb.comp", shaderc_glsl_compute_shader},
 		{"shaders/terrain_gen.comp", shaderc_glsl_compute_shader},

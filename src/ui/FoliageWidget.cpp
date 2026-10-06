@@ -67,6 +67,9 @@ namespace brassica::ui {
 					auto props = mgr->GetGlobalProperties();
 					bool modified = false;
 
+					// Jitter-cell size for the per-cell stable-hash placement grid -- previously
+					// round-tripped through FoliageManager but never reached the shader at all.
+					modified |= ImGui::SliderFloat("Base Scale", &props.baseScale, 0.1f, 2.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Base Tile Size", &props.baseTileSize, 4.0f, 128.0f, "%.1f m");
 					modified |= ImGui::SliderFloat("LOD Base Range", &props.lodBaseRange, 5.0f, 1000.0f, "%.1f m");
 					modified |= ImGui::SliderFloat("LOD Scale Factor", &props.lodScaleFactor, 0.5f, 5.0f, "%.2f");
@@ -83,6 +86,12 @@ namespace brassica::ui {
 						modified = true;
 					}
 
+					bool occlusionCulling = (props.enableOcclusionCulling != 0u);
+					if (ImGui::Checkbox("Terrain Occlusion Culling", &occlusionCulling)) {
+						props.enableOcclusionCulling = occlusionCulling ? 1u : 0u;
+						modified = true;
+					}
+
 					if (modified) {
 						mgr->SetGlobalProperties(props);
 					}
@@ -90,7 +99,22 @@ namespace brassica::ui {
 
 				if (ImGui::CollapsingHeader("Per-Biome Grass Properties")) {
 					static int selectedBiome = 0;
-					ImGui::Combo("Select Biome", &selectedBiome, "Biome 0\0Biome 1\0Biome 2\0Biome 3\0Biome 4\0Biome 5\0Biome 6\0Biome 7\0");
+					// Indexed by shaders/helpers/whittaker.glsl's WhittakerBiome::biomeIndex (0-9) --
+					// these are the real per-location biomes, not 8 anonymous slots.
+					ImGui::Combo(
+						"Select Biome",
+						&selectedBiome,
+						"Ice / Snow\0"
+						"Tundra\0"
+						"Taiga / Boreal Forest\0"
+						"Cold Desert / Grassland\0"
+						"Woodland / Shrubland\0"
+						"Deciduous Forest\0"
+						"Temperate Rainforest\0"
+						"Subtropical Desert\0"
+						"Savanna\0"
+						"Tropical Rainforest\0"
+					);
 
 					GrassProperties bProps = mgr->GetBiomeProperties(static_cast<uint32_t>(selectedBiome));
 					bool bModified = false;

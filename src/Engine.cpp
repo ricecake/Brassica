@@ -1225,6 +1225,7 @@ namespace brassica {
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 			materialManager.RegisterBufferNode(frameGraph);
+			foliageManager.RegisterTableNode(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
 			for (auto& handler : systemHandlers) {
 				if (handler) {
@@ -1559,6 +1560,7 @@ namespace brassica {
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		materialManager.RegisterBufferNode(frameGraph);
+		foliageManager.RegisterTableNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 		for (auto& handler : systemHandlers) {
 			if (handler) {

@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
+#extension GL_KHR_shader_subgroup_ballot : require
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
@@ -12,7 +13,7 @@ layout(push_constant) uniform FoliagePushConstants {
 	uvec4 gridParams; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
 	uint  clipmapIndex;
 	uint  minMaxIndex;
-	uint  biomeIndex;
+	uint  biomeIndex; // reserved -- see FoliageNode.hpp
 	uint  weatherBiomeIndex;
 	float windTime;
 	float lodBaseRange;
@@ -28,16 +29,22 @@ layout(push_constant) uniform FoliagePushConstants {
 	float densityMultiplier;
 	float windMultiplier;
 	float rigidityMultiplier;
+	uint  biomeTableIndex;
+	float baseScale;
+	float waterLevel;
+	uint  terrainNumLevels;
+	uint  foliageFlags; // bit 0: terrain occlusion culling
 	float padding0;
-	float padding1;
 }
 params;
 
+// Each surviving tile now hands its clumps a continuous density/fade curve (foliage.mesh) instead
+// of a precomputed step count -- the task shader's only remaining job is deciding which tiles are
+// worth emitting at all (frustum/parent-nesting/occlusion), not how dense they'll be.
 struct FoliageTaskPayload {
 	vec2  relTileMinXZ[32];
 	float tileSize[32];
 	uint  lodLevel[32];
-	uint  clumpCount[32];
 };
 
 taskPayloadSharedEXT FoliageTaskPayload payload;
@@ -108,28 +115,32 @@ void main() {
 			}
 		}
 
-		if (visible) {
-			vec2 centerXZ = relMinB.xz + tileSize * 0.5;
-			float distToCam = length(centerXZ);
-
-			// Ghost of Tsushima nested LOD clump count determination
-			// Near LODs render dense clumps (up to 32 blades per clump), distant LODs render sparse clumps (4 blades)
-			uint bladesPerClump = 32u;
-			float lodRange = (params.lodBaseRange > 0.0) ? params.lodBaseRange : 20.0;
-			if (lodLevel >= 4u || distToCam > lodRange * 7.5) {
-				bladesPerClump = 4u;
-			} else if (lodLevel >= 2u || distToCam > lodRange * 3.0) {
-				bladesPerClump = 8u;
-			} else if (lodLevel >= 1u || distToCam > lodRange * 1.5) {
-				bladesPerClump = 16u;
+		// Self-occlusion cull: a tile fully hidden behind nearer, higher terrain is never worth
+		// dispatching a mesh workgroup for. Skipped for the nearest ring (lodLevel 0) the same way
+		// terrain.task skips it -- a near tile is never worth the march either. Toggle via
+		// FoliageState::enableOcclusionCulling (foliageFlags bit 0).
+		if (visible && lodLevel >= 1u && params.minMaxIndex > 0u && (params.foliageFlags & 1u) != 0u) {
+			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+				params.clipmapIndex,
+				params.minMaxIndex,
+				params.gridParams.w,
+				params.terrainNumLevels,
+				params.waterLevel
+			);
+			vec3 worldMinB = relMinB + uCameraPosition.xyz;
+			vec3 worldMaxB = relMaxB + uCameraPosition.xyz;
+			float occlusionSlack = tileSize * 2.0 + 50.0;
+			if (isAABBOccludedByTerrain(occCtx, worldMinB, worldMaxB, occlusionSlack)) {
+				visible = false;
 			}
+		}
 
+		if (visible) {
 			uint idx = atomicAdd(tileCount, 1u);
 			if (idx < 32u) {
 				payload.relTileMinXZ[idx] = relMinB.xz;
 				payload.tileSize[idx] = tileSize;
 				payload.lodLevel[idx] = lodLevel;
-				payload.clumpCount[idx] = bladesPerClump;
 			}
 		}
 	}
@@ -137,6 +148,8 @@ void main() {
 	barrier();
 
 	if (threadID == 0) {
-		EmitMeshTasksEXT(min(tileCount, 32u), 1, 1);
+		// 4 clumps per tile -- see foliage.mesh, which now gives each clump its own mesh
+		// workgroup/vertex budget instead of sharing one 128-vertex budget across a whole tile.
+		EmitMeshTasksEXT(min(tileCount, 32u) * 4u, 1, 1);
 	}
 }

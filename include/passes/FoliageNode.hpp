@@ -24,9 +24,12 @@
 namespace brassica {
 
 	struct FoliagePushConstants {
-		glm::uvec4 gridParams{8u, 16u, 2048u, 1088u}; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
+		glm::uvec4 gridParams{8u, 16u, 2048u, 1024u}; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
+		// Reserved: TerrainBiomeTexture's per-location value is hardcoded to 0 in
+		// terrain_gen.comp. The real per-location biome signal is weatherBiomeIndex below, via
+		// evaluateWhittakerBiome (helpers/whittaker.glsl) -> biomeTableIndex's per-biome row.
 		std::uint32_t biomeIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 		float         windTime{0.0f};
@@ -43,11 +46,17 @@ namespace brassica {
 		float         densityMultiplier{1.0f};
 		float         windMultiplier{1.0f};
 		float         rigidityMultiplier{1.0f};
+		// Appended, not interleaved -- see feedback_push_constant_struct_editing. These replace
+		// what used to be padding0/padding1 (same offsets, same size) plus a real append after.
+		std::uint32_t biomeTableIndex{0};
+		float         baseScale{0.5f};
+		float         waterLevel{0.0f};
+		std::uint32_t terrainNumLevels{8};
+		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling
 		float         padding0{0.0f};
-		float         padding1{0.0f};
 	};
 
-	static_assert(sizeof(FoliagePushConstants) == 96, "FoliagePushConstants size must be 96 bytes");
+	static_assert(sizeof(FoliagePushConstants) == 112, "FoliagePushConstants size must be 112 bytes");
 
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
 		using Resources = graph::Declares<
@@ -55,7 +64,8 @@ namespace brassica {
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainWeatherBiomeTexture>>;
+			graph::Read<TerrainWeatherBiomeTexture>,
+			graph::Read<FoliageBiomeTableTexture>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::GBuffer;
 
@@ -103,6 +113,11 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.windTime = p.time;
+			// gridParams.w previously stayed at its hardcoded default (1088) forever -- never
+			// synced to the real terrain texture size, so foliage sampled slightly wrong texels.
+			push.gridParams.w = p.terrainGridParams.w;
+			push.terrainNumLevels = p.terrainGridParams.x;
+			push.waterLevel = p.waterLevel;
 			if (ServiceLocator::Instance().Has<IFoliageManager>()) {
 				auto mgr = ServiceLocator::Instance().Get<IFoliageManager>();
 				enabled = mgr->IsEnabled();
@@ -120,6 +135,8 @@ namespace brassica {
 				push.densityMultiplier = props.densityMultiplier;
 				push.windMultiplier = props.windMultiplier;
 				push.rigidityMultiplier = props.rigidityMultiplier;
+				push.baseScale = props.baseScale;
+				push.foliageFlags = (props.enableOcclusionCulling != 0u) ? 1u : 0u;
 
 				push.gridParams.x = props.maxLODs;
 				push.gridParams.y = props.tilesPerRow;
@@ -161,6 +178,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.biomeTableIndex = ctx.Index<FoliageBiomeTableTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

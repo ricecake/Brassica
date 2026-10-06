@@ -29,6 +29,13 @@ const mat3 GOLD = mat3(
 
 const int bayer4x4[16] = int[](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
 
+// Normalized [0, 1) ordered-dither threshold for screen pixel p -- for even (not clumpy) thinning
+// against a continuous [0, 1] coverage value, e.g. discard if bayerDither4x4(gl_FragCoord.xy) >= coverage.
+float bayerDither4x4(vec2 p) {
+	ivec2 cell = ivec2(p) & ivec2(3);
+	return float(bayer4x4[cell.y * 4 + cell.x]) / 16.0;
+}
+
 float safeDiv(float a, float b) {
 	return (b != 0.0) ? (a / b) : 0.0;
 }
