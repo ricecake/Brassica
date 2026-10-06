@@ -297,8 +297,6 @@ namespace brassica {
 
 			terrainAS.DestroyAccelerationStructures();
 
-			terrainClipmap.Cleanup();
-
 			pipelineLibrary.Reset();
 			render::EngineNodeRegistry::Instance().DestroyAll(device);
 
@@ -315,7 +313,7 @@ namespace brassica {
 				frameTimelineSemaphore = nullptr;
 			}
 
-			CleanupAsyncTransferResources();
+			terrainManager.Cleanup();
 
 			for (auto sem : swapchainRenderSemaphores) {
 				if (sem)
@@ -384,7 +382,6 @@ namespace brassica {
 		InitSwapchain();
 		InitCommands();
 		InitSyncStructures();
-		InitAsyncTransferResources();
 
 		std::random_device rd;
 		globalSeed = rd();
@@ -407,24 +404,25 @@ namespace brassica {
 
 		terrainAS.Init(instance, device, allocator);
 
-		float initialTerrainHeight = TerrainClipmap::SampleTerrain(camera.position.x, camera.position.z, 0.5f).r;
-		camera.position.y = initialTerrainHeight + 2.0f;
+		// Simple constant seed, not a real terrain query -- no node/pipeline exists yet at this
+		// point in Init, so there's no cheap way to ask the GPU what's actually there. The
+		// existing per-frame readback-driven ground snap (UpdateCamera, via TerrainManager::
+		// GetCachedGroundHeight) corrects this within the first frame or two, the same way
+		// free-fly ground clamping already behaves reactively.
+		constexpr float kInitialTerrainHeight = 0.0f;
+		camera.position.y = kInitialTerrainHeight + 2.0f;
 
 		float altitude = std::max(10.0f, camera.position.y);
 		float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
 		camera.farPlane = std::max(32768.0f, horizonDist + 20000.0f);
 
-		// Must run before EngineNodeRegistry::InitAll below -- TerrainGenNode::Init registers
-		// the clipmap/min-max/biome/visibility images as imports itself now, which needs real
-		// GPU images already in hand (same ordering terrainAS.Init above already relies on via
-		// NodeServices::terrainAS).
-		terrainClipmap.Init(
+		terrainManager.Init(
 			device,
 			allocator,
+			transferQueue,
+			transferQueueFamily,
 			constants::Class::Terrain::DefaultMaxLODs,
-			constants::Class::Terrain::BaseTexelSize,
-			0.0f,
-			camera.position
+			constants::Class::Terrain::BaseTexelSize
 		);
 
 		render::NodeServices nodeServices{
@@ -432,7 +430,6 @@ namespace brassica {
 			.pipelineLibrary = &pipelineLibrary,
 			.shaderWatcher = &shaderWatcher,
 			.terrainAS = &terrainAS,
-			.terrainClipmap = &terrainClipmap,
 			.dispatchLoader = &terrainAS.GetDls(),
 			.physicalRegistry = &physicalRegistry,
 			.swapchainFormat = GetSwapchainFormat(),
@@ -461,8 +458,7 @@ namespace brassica {
 		shaderWatcher.Initialize();
 		pipelineLibrary.Initialize();
 		terrainAS.Initialize();
-		terrainClipmap.Initialize();
-		terrainUploader.Initialize();
+		terrainManager.Initialize();
 		physicalRegistry.Initialize();
 
 		imguiManager.InitVulkanAndGlfw(
@@ -509,12 +505,9 @@ namespace brassica {
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
 		);
-		serviceLocator.Provide<AsyncTerrainUploader>(
-			std::shared_ptr<AsyncTerrainUploader>(&terrainUploader, [](AsyncTerrainUploader*) {})
-		);
-		serviceLocator.Provide<ITerrainClipmap>(std::shared_ptr<ITerrainClipmap>(&terrainClipmap, [](ITerrainClipmap*) {
+		serviceLocator.Provide<ITerrainManager>(std::shared_ptr<ITerrainManager>(&terrainManager, [](ITerrainManager*) {
 		}));
-		serviceLocator.Provide<TerrainClipmap>(std::shared_ptr<TerrainClipmap>(&terrainClipmap, [](TerrainClipmap*) {
+		serviceLocator.Provide<TerrainManager>(std::shared_ptr<TerrainManager>(&terrainManager, [](TerrainManager*) {
 		}));
 		serviceLocator.Provide<TerrainAccelerationStructure>(
 			std::shared_ptr<TerrainAccelerationStructure>(&terrainAS, [](TerrainAccelerationStructure*) {})
@@ -526,9 +519,8 @@ namespace brassica {
 
 		audioManager.LoadState(configManager);
 		lightManager.LoadState(configManager);
-		terrainClipmap.LoadState(configManager);
+		terrainManager.LoadState(configManager);
 		terrainAS.LoadState(configManager);
-		terrainUploader.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
 		physicalRegistry.LoadState(configManager);
@@ -552,17 +544,10 @@ namespace brassica {
 
 	void Engine::UpdateCamera(float deltaTime) {
 		// Poll GPU readback data first
-		PollReadbackData();
+		terrainManager.PollReadbackData();
 
-		std::vector<glm::vec4> readbackData;
-		uint32_t rw = 0, rh = 0;
-		float maxTerrainHeight = -1024.0f; // Default terrain floor fallback if no readback has arrived yet
-		if (GetLatestReadbackData(readbackData, rw, rh) && !readbackData.empty()) {
-			// Find peak terrain height in non-blocking async transfer region around camera
-			for (const auto& sample : readbackData) {
-				maxTerrainHeight = std::max(maxTerrainHeight, sample.r);
-			}
-		}
+		// -1024.0f: default terrain floor fallback if no readback has arrived yet.
+		float maxTerrainHeight = terrainManager.GetCachedGroundHeight(-1024.0f);
 
 		auto* defaultHandler = dynamic_cast<DefaultInputHandler*>(inputHandler.get());
 
@@ -827,28 +812,38 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
-		// Trigger new readback for next frame if clipmap image is initialized and has been populated/transitioned in frame graph
-		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
-		if (clipmapTex && clipmapTex->GetImage() && terrainClipmap.GetNumLODs() > 0 &&
-		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
-			const auto& level0 = terrainClipmap.GetLevelInfo(0);
-			float texelSize0 = level0.texelSize > 0.0001f ? level0.texelSize : 0.5f;
-			glm::vec2 relPos = (glm::vec2(camera.position.x, camera.position.z) - level0.centerWorldPos) / texelSize0;
-			int camU = (static_cast<int>(std::floor(relPos.x)) + level0.gridOffset.x) % TERRAIN_MAP_DIM;
-			int camV = (static_cast<int>(std::floor(relPos.y)) + level0.gridOffset.y) % TERRAIN_MAP_DIM;
-			if (camU < 0) camU += TERRAIN_MAP_DIM;
-			if (camV < 0) camV += TERRAIN_MAP_DIM;
+		// Trigger a new ground-height readback for next frame, if TerrainMinMaxTexture is
+		// initialized and has been populated/transitioned in the frame graph. Reads a small
+		// window of a coarse mip (3: 128x128 for MapDim = 1024, each texel already the real
+		// min/max over an 8x8 mip-0 footprint) rather than an 8x8 window of the raw heightmap --
+		// far less data for an equivalent real-world footprint, and the mip chain already holds
+		// exactly this reduction. Same stateless toroidal addressing terrain_gen.comp computes
+		// every dispatch (LOD 0, so getLODScale(0) == 1 -- texelSize0 is just baseTexelSize), just
+		// scaled by the mip's texel size -- no CPU-side paging bookkeeping needed, unlike the
+		// deleted TerrainClipmap::levelInfos/UpdateCameraPosition.
+		auto minMaxTex = physicalRegistry.GetTexture<TerrainMinMaxTexture>();
+		if (minMaxTex && minMaxTex->GetImage() && terrainManager.GetNumLODs() > 0 &&
+		    minMaxTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
+			constexpr int kReadbackMip = 3;
+			constexpr int dim = static_cast<int>(constants::Class::Terrain::MapDim) >> kReadbackMip;
+			float texelSize0 = terrainManager.GetBaseTexelSize() > 0.0001f ? terrainManager.GetBaseTexelSize() : 0.5f;
+			float texelSizeMip = texelSize0 * static_cast<float>(1 << kReadbackMip);
+			glm::vec2 camGrid = glm::floor(glm::vec2(camera.position.x, camera.position.z) / texelSizeMip);
+			int camU = static_cast<int>(camGrid.x) % dim;
+			int camV = static_cast<int>(camGrid.y) % dim;
+			if (camU < 0) camU += dim;
+			if (camV < 0) camV += dim;
 
-			int minU = std::clamp(camU - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
-			int minV = std::clamp(camV - 4, 0, static_cast<int>(TERRAIN_MAP_DIM) - 8);
+			int minU = std::clamp(camU - 1, 0, dim - 2);
+			int minV = std::clamp(camV - 1, 0, dim - 2);
 
-			TriggerImageRegionReadbackAsync(
-				clipmapTex->GetImage(),
+			terrainManager.TriggerImageRegionReadbackAsync(
+				minMaxTex->GetImage(),
 				0, // arrayLayer (LOD 0)
-				0, // mipLevel
+				kReadbackMip,
 				vk::Offset2D{minU, minV},
-				vk::Extent2D{8, 8},
-				clipmapTex->GetCurrentLayout()
+				vk::Extent2D{2, 2},
+				minMaxTex->GetCurrentLayout()
 			);
 		}
 
@@ -1220,10 +1215,6 @@ namespace brassica {
 			nodeRegistry.SetFrameParamsAll(frameParams);
 
 			graph::Graph frameGraph;
-			frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
-			frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
-			frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
-			frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 			frameGraph.Register<graph::Import<TerrainTLAS>>();
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
@@ -1411,7 +1402,7 @@ namespace brassica {
 		ubo.invProjMatrix = camera.invProjMatrix;
 		ubo.viewProjMatrix = camera.viewProjMatrix;
 		ubo.invViewProjMatrix = camera.invViewProjMatrix;
-		ubo.cameraPosition = glm::vec4(camera.position, terrainClipmap.GetBaseTexelSize());
+		ubo.cameraPosition = glm::vec4(camera.position, terrainManager.GetBaseTexelSize());
 		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
 		ubo.previousViewProjMatrix = previousViewProjMatrix;
 		ubo.time = static_cast<float>(currentTime);
@@ -1488,16 +1479,14 @@ namespace brassica {
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
 
-		terrainClipmap.UpdateCameraPosition(camera.position);
-
-		uint32_t lods = terrainClipmap.GetNumLODs();
+		uint32_t lods = terrainManager.GetNumLODs();
 		uint32_t meshletsPerRow = constants::Class::Terrain::MeshletsPerRow;
 		uint32_t totalMeshlets = lods * meshletsPerRow * meshletsPerRow;
 
 		TerrainPushConstants terrainPush{};
 		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
 
-		bool       forceRegeneration = terrainClipmap.ShouldForceRegeneration();
+		bool       forceRegeneration = terrainManager.ShouldForceRegeneration();
 
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
@@ -1562,10 +1551,6 @@ namespace brassica {
 		nodeRegistry.SetFrameParamsAll(frameParams);
 
 		graph::Graph frameGraph;
-		frameGraph.Register<graph::Import<TerrainClipmapTexture>>();
-		frameGraph.Register<graph::Import<TerrainMinMaxTexture>>();
-		frameGraph.Register<graph::Import<TerrainBiomeTexture>>();
-		frameGraph.Register<graph::Import<TerrainTileVisibilityTexture>>();
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
@@ -1633,7 +1618,7 @@ namespace brassica {
 			return;
 		}
 
-		terrainClipmap.ResetForceRegeneration();
+		terrainManager.ResetForceRegeneration();
 
 		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
 		// srcStage/srcAccess now come from the registry's tracked state rather than being
@@ -2127,203 +2112,6 @@ namespace brassica {
 		bindlessBindings.frameSet = frameDescriptorSets[0];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
-	}
-
-	void Engine::InitAsyncTransferResources() {
-		if (!device) {
-			return;
-		}
-
-		vk::CommandPoolCreateInfo poolInfo{};
-		poolInfo.setQueueFamilyIndex(transferQueueFamily);
-		poolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-		asyncTransferCommandPool = device.createCommandPool(poolInfo);
-
-		vk::CommandBufferAllocateInfo allocInfo{};
-		allocInfo.setCommandPool(asyncTransferCommandPool);
-		allocInfo.setLevel(vk::CommandBufferLevel::ePrimary);
-		allocInfo.setCommandBufferCount(1);
-		asyncTransferCommandBuffer = device.allocateCommandBuffers(allocInfo).front();
-
-		vk::SemaphoreTypeCreateInfo typeInfo{};
-		typeInfo.setSemaphoreType(vk::SemaphoreType::eTimeline);
-		typeInfo.setInitialValue(0);
-
-		vk::SemaphoreCreateInfo semInfo{};
-		semInfo.setPNext(&typeInfo);
-		readbackTimelineSemaphore = device.createSemaphore(semInfo);
-
-		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-		bufferInfo.size = 1024 * 1024 * 16; // 16MB max readback staging
-		bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-		VmaAllocationCreateInfo allocCreateInfo{};
-		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-		                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-		VkBuffer       buf{VK_NULL_HANDLE};
-		VmaAllocationInfo allocationInfo{};
-		if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &buf, &readbackStagingAllocation, &allocationInfo) == VK_SUCCESS) {
-			readbackStagingBuffer = buf;
-			readbackStagingMapped = allocationInfo.pMappedData;
-		} else {
-			spdlog::error("Failed to allocate readback staging buffer.");
-		}
-	}
-
-	void Engine::CleanupAsyncTransferResources() {
-		if (device) {
-			if (readbackStagingBuffer && readbackStagingAllocation) {
-				vmaDestroyBuffer(allocator, readbackStagingBuffer, readbackStagingAllocation);
-				readbackStagingBuffer = nullptr;
-				readbackStagingAllocation = VK_NULL_HANDLE;
-				readbackStagingMapped = nullptr;
-			}
-			if (readbackTimelineSemaphore) {
-				device.destroySemaphore(readbackTimelineSemaphore);
-				readbackTimelineSemaphore = nullptr;
-			}
-			if (asyncTransferCommandPool) {
-				device.destroyCommandPool(asyncTransferCommandPool);
-				asyncTransferCommandPool = nullptr;
-			}
-		}
-	}
-
-	bool Engine::TriggerImageRegionReadbackAsync(
-		vk::Image image,
-		uint32_t arrayLayer,
-		uint32_t mipLevel,
-		vk::Offset2D offset,
-		vk::Extent2D extent,
-		vk::ImageLayout currentLayout
-	) {
-		if (!image || readbackInFlight || !readbackStagingBuffer) {
-			return false;
-		}
-
-		size_t requiredBytes = static_cast<size_t>(extent.width) * extent.height * sizeof(glm::vec4);
-		if (requiredBytes > 1024 * 1024 * 16) {
-			spdlog::warn("Requested image region readback size {} bytes exceeds staging capacity.", requiredBytes);
-			return false;
-		}
-
-		cachedReadbackWidth = extent.width;
-		cachedReadbackHeight = extent.height;
-
-		readbackSubmittedTimelineValue++;
-
-		asyncTransferCommandBuffer.reset();
-		asyncTransferCommandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-		vk::ImageMemoryBarrier2 barrier1{};
-		barrier1.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands);
-		barrier1.setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead);
-		barrier1.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer);
-		barrier1.setDstAccessMask(vk::AccessFlagBits2::eTransferRead);
-		barrier1.setOldLayout(currentLayout);
-		barrier1.setNewLayout(vk::ImageLayout::eTransferSrcOptimal);
-		barrier1.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
-		barrier1.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
-		barrier1.setImage(image);
-		barrier1.setSubresourceRange(vk::ImageSubresourceRange{
-			vk::ImageAspectFlagBits::eColor,
-			mipLevel,
-			1,
-			arrayLayer,
-			1
-		});
-
-		vk::DependencyInfo depInfo1{};
-		depInfo1.setImageMemoryBarriers(barrier1);
-		asyncTransferCommandBuffer.pipelineBarrier2(depInfo1);
-
-		vk::BufferImageCopy copyRegion{};
-		copyRegion.setBufferOffset(0);
-		copyRegion.setBufferRowLength(extent.width);
-		copyRegion.setBufferImageHeight(extent.height);
-		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{
-			vk::ImageAspectFlagBits::eColor,
-			mipLevel,
-			arrayLayer,
-			1
-		});
-		copyRegion.setImageOffset(vk::Offset3D{offset.x, offset.y, 0});
-		copyRegion.setImageExtent(vk::Extent3D{extent.width, extent.height, 1});
-
-		asyncTransferCommandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, readbackStagingBuffer, copyRegion);
-
-		vk::ImageMemoryBarrier2 barrier2{};
-		barrier2.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer);
-		barrier2.setSrcAccessMask(vk::AccessFlagBits2::eTransferRead);
-		barrier2.setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands);
-		barrier2.setDstAccessMask(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite);
-		barrier2.setOldLayout(vk::ImageLayout::eTransferSrcOptimal);
-		barrier2.setNewLayout(currentLayout);
-		barrier2.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
-		barrier2.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
-		barrier2.setImage(image);
-		barrier2.setSubresourceRange(vk::ImageSubresourceRange{
-			vk::ImageAspectFlagBits::eColor,
-			mipLevel,
-			1,
-			arrayLayer,
-			1
-		});
-
-		vk::DependencyInfo depInfo2{};
-		depInfo2.setImageMemoryBarriers(barrier2);
-		asyncTransferCommandBuffer.pipelineBarrier2(depInfo2);
-
-		asyncTransferCommandBuffer.end();
-
-		vk::SemaphoreSubmitInfo signalInfo{};
-		signalInfo.setSemaphore(readbackTimelineSemaphore);
-		signalInfo.setValue(readbackSubmittedTimelineValue);
-		signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
-
-		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
-		cmdSubmitInfo.setCommandBuffer(asyncTransferCommandBuffer);
-
-		vk::SubmitInfo2 submitInfo{};
-		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
-		submitInfo.setSignalSemaphoreInfos(signalInfo);
-
-		transferQueue.submit2(submitInfo, nullptr);
-		readbackInFlight = true;
-
-		return true;
-	}
-
-	void Engine::PollReadbackData() {
-		if (!readbackInFlight || !readbackTimelineSemaphore) {
-			return;
-		}
-
-		uint64_t currentValue = device.getSemaphoreCounterValue(readbackTimelineSemaphore);
-		if (currentValue >= readbackSubmittedTimelineValue) {
-			readbackCompletedTimelineValue = currentValue;
-			readbackInFlight = false;
-
-			size_t pixelCount = static_cast<size_t>(cachedReadbackWidth) * cachedReadbackHeight;
-			cachedReadbackData.resize(pixelCount);
-			if (readbackStagingMapped) {
-				std::memcpy(cachedReadbackData.data(), readbackStagingMapped, pixelCount * sizeof(glm::vec4));
-			}
-			hasReadbackData = true;
-		}
-	}
-
-	bool Engine::GetLatestReadbackData(std::vector<glm::vec4>& outData, uint32_t& outWidth, uint32_t& outHeight) const {
-		if (!hasReadbackData) {
-			return false;
-		}
-		outData = cachedReadbackData;
-		outWidth = cachedReadbackWidth;
-		outHeight = cachedReadbackHeight;
-		return true;
 	}
 
 	void Engine::CleanupGlobalDescriptors() {

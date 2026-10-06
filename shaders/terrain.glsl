@@ -69,17 +69,6 @@ vec4 sampleTerrainBiome(
 	return SAMPLE_ARRAY_WRAP(biomeIndex, vec3(uv, float(level)));
 }
 
-// Sample terrain tile visibility map (r = visibility flag / occlusion factor)
-float sampleTerrainTileVisibility(
-	uint  visIndex,
-	vec2  worldXZ,
-	uint  level,
-	uint  textureDim
-) {
-	vec2 uv = sampleToroidalUV(worldXZ, level, textureDim);
-	return SAMPLE_ARRAY_WRAP(visIndex, vec3(uv, float(level))).r;
-}
-
 // Sample octahedral weather and Whittaker biome texture
 vec4 sampleTerrainWeatherBiome(uint weatherStorageIdx, vec3 worldPos) {
 	vec3 dir = normalize(worldPos - vec3(0.0, -FAKE_PLANET_RADIUS, 0.0));

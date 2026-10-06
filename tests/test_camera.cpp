@@ -142,8 +142,11 @@ TEST_CASE("First Person Camera: Standing Height, Crouching Height, and Speeds") 
 	REQUIRE(engine.GetCamera().mode == brassica::CameraMode::FirstPerson);
 	REQUIRE(engine.GetCamera().isCaptured);
 
-	float sampledTerrain = brassica::TerrainClipmap::SampleTerrain(engine.GetCamera().position.x, engine.GetCamera().position.z, 0.5f).r;
-	float expectedStandingGroundLevel = std::max(sampledTerrain, 0.0f) + 3.0f;
+	// No real device in this test, so TerrainManager's async readback never completes --
+	// UpdateCamera's ground height falls back to its floor default (clamped to 0.0f via
+	// std::max), not a real terrain sample. This is real, legitimate device-less fallback
+	// behavior, not an approximation of it.
+	float expectedStandingGroundLevel = 0.0f + 3.0f;
 
 	// Ground snapping check: standing camera height should be about 3 units above ground
 	CHECK(engine.GetCamera().position.y == doctest::Approx(expectedStandingGroundLevel).epsilon(0.01));
@@ -165,7 +168,7 @@ TEST_CASE("First Person Camera: Standing Height, Crouching Height, and Speeds") 
 	for (int i = 0; i < 30; ++i) {
 		engine.UpdateCamera(0.05f);
 	}
-	float expectedCrouchGroundLevel = std::max(sampledTerrain, 0.0f) + 1.5f;
+	float expectedCrouchGroundLevel = 0.0f + 1.5f;
 	// Height should lower to ~1.5 units above ground
 	CHECK(engine.GetCamera().position.y == doctest::Approx(expectedCrouchGroundLevel).epsilon(0.01));
 	// Speed should cap at brisk walking speed (~4.0 m/s)
@@ -199,8 +202,10 @@ TEST_CASE("First Person Camera: Earth Gravity and Jump Physics") {
 	engine.UpdateCamera(0.016f);
 	REQUIRE(engine.GetCamera().mode == brassica::CameraMode::FirstPerson);
 
-	float sampledTerrain = brassica::TerrainClipmap::SampleTerrain(engine.GetCamera().position.x, engine.GetCamera().position.z, 0.5f).r;
-	float groundLevel = std::max(sampledTerrain, 0.0f) + 3.0f;
+	// No real device in this test, so TerrainManager's async readback never completes --
+	// UpdateCamera's ground height falls back to its floor default (clamped to 0.0f via
+	// std::max), not a real terrain sample.
+	float groundLevel = 0.0f + 3.0f;
 
 	// Initial position is grounded
 	CHECK(engine.GetCamera().position.y == doctest::Approx(groundLevel).epsilon(0.01));
@@ -246,24 +251,26 @@ TEST_CASE("First Person Camera: Underwater Zero-Gravity Swimming") {
 	handler->OnKey(nullptr, GLFW_KEY_0, 0, GLFW_PRESS, 0);
 	engine.UpdateCamera(0.016f);
 
-	float sampledTerrain = brassica::TerrainClipmap::SampleTerrain(engine.GetCamera().position.x, engine.GetCamera().position.z, 0.5f).r;
-	if (sampledTerrain < 0.0f) {
-		glm::vec3 underwaterPos = engine.GetCamera().position;
+	// No real device in this test, so TerrainManager's async readback never completes --
+	// UpdateCamera's terrain height falls back to -1024.0f, always < 0.0f here, and the camera's
+	// own Y (-10.0f, set above) is also < 0.0f -- isUnderwater's real condition
+	// (camera.position.y < 0.0f && terrainHeight < 0.0f) is therefore unconditionally true in
+	// this context, so this no longer needs (or should have) a SampleTerrain-based guard.
+	glm::vec3 underwaterPos = engine.GetCamera().position;
 
-		// No key pressed -> no gravity falling underwater
-		engine.UpdateCamera(0.1f);
-		CHECK(engine.GetCamera().position.y == doctest::Approx(underwaterPos.y));
+	// No key pressed -> no gravity falling underwater
+	engine.UpdateCamera(0.1f);
+	CHECK(engine.GetCamera().position.y == doctest::Approx(underwaterPos.y));
 
-		// Move forward underwater
-		handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_PRESS, 0);
-		for (int i = 0; i < 20; ++i) {
-			engine.UpdateCamera(0.05f);
-		}
-		handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_RELEASE, 0);
-
-		// Speed caps at swimming speed (~5.0 m/s)
-		CHECK(engine.GetCamera().currentSpeed <= 5.001f);
+	// Move forward underwater
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_PRESS, 0);
+	for (int i = 0; i < 20; ++i) {
+		engine.UpdateCamera(0.05f);
 	}
+	handler->OnKey(nullptr, GLFW_KEY_W, 0, GLFW_RELEASE, 0);
+
+	// Speed caps at swimming speed (~5.0 m/s)
+	CHECK(engine.GetCamera().currentSpeed <= 5.001f);
 }
 
 TEST_CASE("Camera Controls: Speed Adjustment (PageUp, PageDown, Home, End)") {

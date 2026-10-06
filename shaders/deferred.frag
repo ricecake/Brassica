@@ -19,7 +19,6 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  gDepthIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
-	uint  visibilityIndex;
 	uint  weatherBiomeIndex;
 }
 

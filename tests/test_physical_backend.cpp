@@ -299,6 +299,31 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
+	struct TestMipStorage {};
+
+	// desc.mips > 1 with eStorage usage -- the shape CreateView (PhysicalResource.hpp) branches
+	// on to build one single-mip view per level instead of the single full-range view every
+	// other resource in this file uses. eTransferSrc added on top of ComputeStorageImageDesc's
+	// usual mask so the test below can read each mip back directly.
+	struct MipStorageWriter {
+		using Resources = Declares<Create<TestMipStorage>>;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe       r{.domain = ExecutionDomain::Compute};
+			ResourceDesc desc = ComputeStorageImageDesc(8, 8, vk::Format::eR16G16B16A16Sfloat);
+			desc.mips = 4; // 8 -> 4 -> 2 -> 1
+			desc.usageMask |= static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eTransferSrc);
+			r.realizations.push_back(
+				ResourceRealization{.key = IdOf<TestMipStorage>(), .access = AccessKind::Write, .desc = desc}
+			);
+			return r;
+		}
+
+		// The real per-mip imageStore writes happen by hand in the test body, directly after
+		// backend.Execute() returns -- see the test case below for why.
+		void Execute(NodeContext&) {}
+	};
+
 	// Setup()'s desc tracks ctx.width/height directly, so re-running with a different FrameContext
 	// extent is what exercises ProvisionTexture's desc-mismatch replace-and-retire path.
 	struct ResizableWriter {
@@ -1182,6 +1207,191 @@ TEST_CASE(
 		CHECK(registry.GetStorageBindlessIndex<TestBindlessStorage>() == storageIndex);
 		CHECK(registry.GetBindlessIndex<TestBindlessArray>() == arrayIndex);
 
+		vkDevice.destroyCommandPool(pool);
+		DestroyBindlessTestSet(vkDevice, bindlessSet);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+// Proves the actual gap the broken `std::optional<vk::ImageView[]> m_views` WIP stub was trying
+// (and failing) to close: a storage-image descriptor requires levelCount == 1
+// (VUID-VkWriteDescriptorSet-descriptorType-04152), so a texture with desc.mips > 1 needs one
+// single-mip view + bindless index per level, not the one full-range view/index every other
+// resource uses. Two halves: distinct nonzero indices per mip (allocation), and a real dispatched
+// imageStore through each index landing in that mip and nowhere else (the view actually points at
+// the right subresource).
+TEST_CASE(
+	"A multi-mip storage texture gets one single-mip view and one distinct bindless storage "
+	"index per level, each independently writable without corrupting the others"
+) {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device   vkDevice = device.GetDevice();
+	VmaAllocator allocator = device.GetAllocator();
+	{
+		BindlessTestSet bindlessSet = CreateBindlessTestSet(vkDevice);
+
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				device.GetQueueFamily(),
+			}
+		);
+		vk::CommandBuffer vkCmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+
+		PhysicalResourceRegistry registry(vkDevice, allocator);
+		registry.SetGlobalDescriptorSet(bindlessSet.bindings);
+		PhysicalExecutionBackend backend(registry);
+
+		Graph g;
+		g.Register<MipStorageWriter>();
+		FrameContext ctx{.width = 8, .height = 8, .frameIndex = 0};
+
+		vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+		CHECK_NOTHROW(backend.Execute(g, ctx, cmd, false));
+
+		// First half of the proof: three distinct, nonzero bindless storage indices, one per mip
+		// -- AssignAndWriteBindlessIndices's per-mip branch actually ran instead of the old
+		// single-index path.
+		const std::uint32_t idx0 = registry.GetStorageBindlessIndex<TestMipStorage>(0);
+		const std::uint32_t idx1 = registry.GetStorageBindlessIndex<TestMipStorage>(1);
+		const std::uint32_t idx2 = registry.GetStorageBindlessIndex<TestMipStorage>(2);
+		REQUIRE(idx0 != 0);
+		REQUIRE(idx1 != 0);
+		REQUIRE(idx2 != 0);
+		CHECK(idx0 != idx1);
+		CHECK(idx1 != idx2);
+		CHECK(idx0 != idx2);
+
+		auto tex = registry.GetTexture<TestMipStorage>();
+		REQUIRE(tex != nullptr);
+		vk::Image image = tex->GetImage();
+
+		// Second half: a real dispatched imageStore through each of those three indices must land
+		// in that mip and nowhere else. The Acquire barrier backend.Execute() already recorded for
+		// this stage (Write + Compute + eStorage usage derives eGeneral, DeriveImageState) already
+		// transitioned the whole image, so these dispatches -- appended to the same vkCmd right
+		// after backend.Execute() returns, before the test submits it -- need no transition of
+		// their own. Format-qualified (rgba16f, matching ComputeStorageImageDesc's real
+		// R16G16B16A16Sfloat) rather than a formatless alias: that capability is proven elsewhere
+		// in this file, this test is about the view/index plumbing, not formatless aliasing.
+		static constexpr const char* kShaderSource = R"(
+			#version 460
+			#extension GL_EXT_nonuniform_qualifier : require
+			layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+			layout(set = 0, binding = 2, rgba16f) uniform image2D uImages[];
+			layout(push_constant) uniform PC { uint index; float value; } pc;
+			void main() {
+				imageStore(uImages[nonuniformEXT(pc.index)], ivec2(0, 0), vec4(pc.value, 0.0, 0.0, 1.0));
+			}
+		)";
+
+		brassica::ComputeShader shader;
+		REQUIRE(shader.CompileFromSource(vkDevice, kShaderSource, shaderc_glsl_compute_shader, "test_mip_storage"));
+
+		struct PushConstants {
+			std::uint32_t index;
+			float         value;
+		};
+
+		vk::PushConstantRange pcRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushConstants)};
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
+		pipelineLayoutInfo.setSetLayouts(bindlessSet.layout).setPushConstantRanges(pcRange);
+		vk::PipelineLayout pipelineLayout = vkDevice.createPipelineLayout(pipelineLayoutInfo);
+
+		vk::ComputePipelineCreateInfo pipelineInfo{};
+		pipelineInfo.setStage(shader.GetStageCreateInfo()).setLayout(pipelineLayout);
+		vk::Pipeline pipeline = vkDevice.createComputePipelines(vk::PipelineCache{}, pipelineInfo).value.front();
+
+		vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
+		vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout, 0, bindlessSet.bindings.set, {});
+
+		constexpr std::array<float, 3> kValues{0.25f, 0.5f, 0.75f}; // exact in half precision
+		const std::array<std::uint32_t, 3> indices{idx0, idx1, idx2};
+		for (std::size_t i = 0; i < 3; ++i) {
+			PushConstants pc{.index = indices[i], .value = kValues[i]};
+			vkCmd.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
+			vkCmd.dispatch(1, 1, 1);
+		}
+
+		// Compute-write -> transfer-read, staying in General throughout -- same legal-source-layout
+		// reasoning as the formatless-storage-image test above. Covers all 4 mips (only 0-2 were
+		// written, but a barrier range wider than what changed is harmless).
+		vk::ImageMemoryBarrier2 toTransferRead{};
+		toTransferRead.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader)
+			.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite)
+			.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer)
+			.setDstAccessMask(vk::AccessFlagBits2::eTransferRead)
+			.setOldLayout(vk::ImageLayout::eGeneral)
+			.setNewLayout(vk::ImageLayout::eGeneral)
+			.setImage(image)
+			.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 4, 0, 1});
+		vk::DependencyInfo toTransferReadDep{};
+		toTransferReadDep.setImageMemoryBarriers(toTransferRead);
+		vkCmd.pipelineBarrier2(toTransferReadDep);
+
+		constexpr vk::DeviceSize kTexelBytes = 4 * sizeof(std::uint16_t); // rgba16f
+		vk::BufferCreateInfo     bufferInfo{};
+		bufferInfo.setSize(kTexelBytes * 3).setUsage(vk::BufferUsageFlagBits::eTransferDst);
+		VkBufferCreateInfo rawBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
+
+		VmaAllocationCreateInfo bufAllocInfo{};
+		bufAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		bufAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VkBuffer          rawBuffer{};
+		VmaAllocation     bufAllocation{};
+		VmaAllocationInfo bufAllocResultInfo{};
+		REQUIRE(
+			vmaCreateBuffer(allocator, &rawBufferInfo, &bufAllocInfo, &rawBuffer, &bufAllocation, &bufAllocResultInfo) ==
+			VK_SUCCESS
+		);
+		vk::Buffer readbackBuffer{rawBuffer};
+
+		for (std::uint32_t mip = 0; mip < 3; ++mip) {
+			vk::BufferImageCopy copyRegion{};
+			copyRegion.setBufferOffset(kTexelBytes * mip)
+				.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, mip, 0, 1})
+				.setImageExtent(vk::Extent3D{1, 1, 1});
+			vkCmd.copyImageToBuffer(image, vk::ImageLayout::eGeneral, readbackBuffer, copyRegion);
+		}
+
+		vkCmd.end();
+
+		vk::SubmitInfo submitInfo{};
+		submitInfo.setCommandBuffers(vkCmd);
+		device.GetQueue().submit(submitInfo);
+		device.GetQueue().waitIdle();
+
+		// Bit-pattern compare against the pushed values' exact half-float representations -- the
+		// real proof each mip's view routed its write to that mip alone, not mip 0 three times or
+		// some other mip's subresource.
+		std::array<std::uint16_t, 3> redChannel{};
+		for (std::uint32_t mip = 0; mip < 3; ++mip) {
+			std::memcpy(
+				&redChannel[mip],
+				static_cast<const std::byte*>(bufAllocResultInfo.pMappedData) + kTexelBytes * mip,
+				sizeof(std::uint16_t)
+			);
+		}
+		CHECK(redChannel[0] == 0x3400); // 0.25
+		CHECK(redChannel[1] == 0x3800); // 0.5
+		CHECK(redChannel[2] == 0x3A00); // 0.75
+
+		vmaDestroyBuffer(allocator, rawBuffer, bufAllocation);
+		vkDevice.destroyPipeline(pipeline);
+		vkDevice.destroyPipelineLayout(pipelineLayout);
+		shader.Destroy(vkDevice);
 		vkDevice.destroyCommandPool(pool);
 		DestroyBindlessTestSet(vkDevice, bindlessSet);
 	}

@@ -4,7 +4,7 @@
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/ITerrainClipmap.hpp"
+#include "terrain/ITerrainManager.hpp"
 #include "types/CameraData.hpp"
 
 namespace brassica::ui {
@@ -108,9 +108,9 @@ namespace brassica::ui {
 				}
 			}
 			if (ImGui::Button("Regenerate Terrain##Quick")) {
-				if (ServiceLocator::Instance().Has<ITerrainClipmap>()) {
-					auto terrainClipmap = ServiceLocator::Instance().Get<ITerrainClipmap>();
-					terrainClipmap->Regenerate();
+				if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+					auto terrainManager = ServiceLocator::Instance().Get<ITerrainManager>();
+					terrainManager->Regenerate();
 				}
 			}
 

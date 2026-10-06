@@ -27,9 +27,8 @@
 #include "ShaderWatcher.hpp"
 #include "SystemHandler.hpp"
 #include "TaskScheduler.h"
-#include "terrain/AsyncTerrainUploader.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
-#include "terrain/TerrainClipmap.hpp"
+#include "terrain/TerrainManager.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/FrameDetails.hpp"
@@ -220,19 +219,9 @@ namespace brassica {
 
 		const graph::PhysicalResourceRegistry& GetPhysicalRegistry() const { return physicalRegistry; }
 
-		// Async Image Region Readback methods
-		bool TriggerImageRegionReadbackAsync(
-			vk::Image image,
-			uint32_t arrayLayer,
-			uint32_t mipLevel,
-			vk::Offset2D offset,
-			vk::Extent2D extent,
-			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
-		);
+		TerrainManager& GetTerrainManager() { return terrainManager; }
 
-		void PollReadbackData();
-
-		bool GetLatestReadbackData(std::vector<glm::vec4>& outData, uint32_t& outWidth, uint32_t& outHeight) const;
+		const TerrainManager& GetTerrainManager() const { return terrainManager; }
 
 	private:
 		void InitWindow();
@@ -297,8 +286,7 @@ namespace brassica {
 
 		TerrainAccelerationStructure terrainAS;
 
-		TerrainClipmap       terrainClipmap;
-		AsyncTerrainUploader terrainUploader;
+		TerrainManager terrainManager;
 
 		uint32_t     globalSeed{0};
 		std::mt19937 rng;
@@ -368,25 +356,6 @@ namespace brassica {
 
 		entt::registry                              registry;
 		std::vector<std::shared_ptr<SystemHandler>> systemHandlers;
-
-		// Async Readback Transfer Queue Resources
-		vk::CommandPool   asyncTransferCommandPool{nullptr};
-		vk::CommandBuffer asyncTransferCommandBuffer{nullptr};
-		vk::Buffer        readbackStagingBuffer{nullptr};
-		VmaAllocation     readbackStagingAllocation{VK_NULL_HANDLE};
-		void*             readbackStagingMapped{nullptr};
-		vk::Semaphore     readbackTimelineSemaphore{nullptr};
-		uint64_t          readbackSubmittedTimelineValue{0};
-		uint64_t          readbackCompletedTimelineValue{0};
-		bool              readbackInFlight{false};
-
-		std::vector<glm::vec4> cachedReadbackData;
-		uint32_t               cachedReadbackWidth{0};
-		uint32_t               cachedReadbackHeight{0};
-		bool                   hasReadbackData{false};
-
-		void InitAsyncTransferResources();
-		void CleanupAsyncTransferResources();
 	};
 
 } // namespace brassica
