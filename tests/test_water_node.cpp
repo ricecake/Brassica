@@ -31,7 +31,8 @@ namespace {
 			graph::Create<GBufferMaterial>,
 			graph::Create<GBufferDepth>,
 			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>>;
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<SkyViewLUT>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -96,6 +97,13 @@ namespace {
 						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
 						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
 					},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;
