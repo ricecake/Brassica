@@ -20,6 +20,16 @@ layout(push_constant) uniform FoliagePushConstants {
 	float baseTileSize;
 	float flowerRatio;
 	float fernRatio;
+	float rockRatio;
+	float seaweedRatio;
+	float bushRatio;
+	float lengthMultiplier;
+	float widthMultiplier;
+	float densityMultiplier;
+	float windMultiplier;
+	float rigidityMultiplier;
+	float padding0;
+	float padding1;
 }
 params;
 
@@ -105,11 +115,12 @@ void main() {
 			// Ghost of Tsushima nested LOD clump count determination
 			// Near LODs render dense clumps (up to 32 blades per clump), distant LODs render sparse clumps (4 blades)
 			uint bladesPerClump = 32u;
-			if (lodLevel >= 4u || distToCam > 150.0) {
+			float lodRange = (params.lodBaseRange > 0.0) ? params.lodBaseRange : 20.0;
+			if (lodLevel >= 4u || distToCam > lodRange * 7.5) {
 				bladesPerClump = 4u;
-			} else if (lodLevel >= 2u || distToCam > 60.0) {
+			} else if (lodLevel >= 2u || distToCam > lodRange * 3.0) {
 				bladesPerClump = 8u;
-			} else if (lodLevel >= 1u || distToCam > 30.0) {
+			} else if (lodLevel >= 1u || distToCam > lodRange * 1.5) {
 				bladesPerClump = 16u;
 			}
 

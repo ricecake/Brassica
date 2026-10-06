@@ -18,6 +18,7 @@ namespace brassica {
 		bool        renderTerrainMap{false};
 		std::string terrainMapPath{"terrain_map.png"};
 		bool        aggressiveValidation{false};
+		bool        printRenderGraph{false};
 
 		auto GetReflection() const {
 			return std::make_tuple(
@@ -38,7 +39,8 @@ namespace brassica {
 					"aggressiveValidation",
 					"Aggressive Vulkan Validation (GPU-assisted + sync, slow)",
 					&ArgparseManagerState::aggressiveValidation
-				)
+				),
+				MakeField("printRenderGraph", "Print Render Graph", &ArgparseManagerState::printRenderGraph)
 			);
 		}
 	};
@@ -64,7 +66,8 @@ namespace brassica {
 				.appName = GetAppName(),
 				.renderTerrainMap = GetRenderTerrainMap(),
 				.terrainMapPath = GetTerrainMapPath(),
-				.aggressiveValidation = GetAggressiveValidation()
+				.aggressiveValidation = GetAggressiveValidation(),
+				.printRenderGraph = GetPrintRenderGraph()
 			};
 		}
 
@@ -82,6 +85,7 @@ namespace brassica {
 		[[nodiscard]] bool        GetRenderTerrainMap() const;
 		[[nodiscard]] std::string GetTerrainMapPath() const;
 		[[nodiscard]] bool        GetAggressiveValidation() const;
+		[[nodiscard]] bool        GetPrintRenderGraph() const;
 
 		argparse::ArgumentParser& GetParser() { return m_parser; }
 

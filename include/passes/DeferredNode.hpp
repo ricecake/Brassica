@@ -38,7 +38,6 @@ namespace brassica {
 		std::uint32_t gDepthIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
-		std::uint32_t visibilityIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 	};
 
@@ -50,7 +49,6 @@ namespace brassica {
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>,
 			graph::Read<TerrainWeatherBiomeTexture>,
 			graph::Read<TerrainTLAS>,
 			graph::Create<HdrColor>>;
@@ -116,7 +114,6 @@ namespace brassica {
 			push.tlasIndex = ctx.Index<TerrainTLAS>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
-			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};

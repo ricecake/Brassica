@@ -17,17 +17,60 @@ TEST_CASE("FoliageManager state and global properties") {
 	brassica::GlobalGrassProperties props = mgr.GetGlobalProperties();
 	props.densityMultiplier = 2.5f;
 	props.lengthMultiplier = 1.2f;
+	props.rockRatio = 0.12f;
+	props.seaweedRatio = 0.18f;
+	props.bushRatio = 0.25f;
+	props.lodBaseRange = 500.0f;
+	props.maxLODs = 10u;
+	props.tilesPerRow = 24u;
 	mgr.SetGlobalProperties(props);
 
 	brassica::GlobalGrassProperties updatedProps = mgr.GetGlobalProperties();
 	CHECK(updatedProps.densityMultiplier == doctest::Approx(2.5f));
 	CHECK(updatedProps.lengthMultiplier == doctest::Approx(1.2f));
+	CHECK(updatedProps.rockRatio == doctest::Approx(0.12f));
+	CHECK(updatedProps.seaweedRatio == doctest::Approx(0.18f));
+	CHECK(updatedProps.bushRatio == doctest::Approx(0.25f));
+	CHECK(updatedProps.lodBaseRange == doctest::Approx(500.0f));
+	CHECK(updatedProps.maxLODs == 10u);
+	CHECK(updatedProps.tilesPerRow == 24u);
 
 	brassica::GrassProperties biome0 = mgr.GetBiomeProperties(0);
 	CHECK(biome0.enabled == 1u);
 	CHECK(biome0.height > 0.0f);
 }
 
-TEST_CASE("FoliageNode registration and phase") {
+TEST_CASE("FoliageNode registration and push constants sync") {
 	CHECK(brassica::FoliageNode::kPhase == brassica::SubPhase::GBuffer);
+
+	brassica::ServiceLocator locator;
+	brassica::ServiceLocator::SetInstance(&locator);
+
+	auto foliageMgr = std::make_shared<brassica::FoliageManager>();
+	foliageMgr->Initialize();
+	locator.Provide<brassica::IFoliageManager>(foliageMgr);
+
+	brassica::GlobalGrassProperties props = foliageMgr->GetGlobalProperties();
+	props.lodBaseRange = 800.0f;
+	props.rockRatio = 0.3f;
+	props.seaweedRatio = 0.2f;
+	props.bushRatio = 0.4f;
+	props.maxLODs = 12u;
+	props.tilesPerRow = 16u;
+	foliageMgr->SetGlobalProperties(props);
+
+	brassica::FoliageNode node;
+	brassica::render::NodeFrameParams frameParams{.time = 12.34f};
+	node.SetFrameParams(frameParams);
+
+	CHECK(node.push.windTime == doctest::Approx(12.34f));
+	CHECK(node.push.lodBaseRange == doctest::Approx(800.0f));
+	CHECK(node.push.rockRatio == doctest::Approx(0.3f));
+	CHECK(node.push.seaweedRatio == doctest::Approx(0.2f));
+	CHECK(node.push.bushRatio == doctest::Approx(0.4f));
+	CHECK(node.push.gridParams.x == 12u);
+	CHECK(node.push.gridParams.y == 16u);
+	CHECK(node.push.gridParams.z == 12u * 16u * 16u);
+
+	brassica::ServiceLocator::SetInstance(nullptr);
 }

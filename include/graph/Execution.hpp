@@ -129,7 +129,12 @@ namespace brassica::graph {
 	struct ResourceServices {
 		virtual ~ResourceServices() = default;
 		virtual std::uint32_t IndexOf(ResourceId) const = 0;
-		virtual std::uint32_t StorageIndexOf(ResourceId) const = 0;
+
+		// mip defaults to 0, the only value that was ever valid before per-mip storage views
+		// existed -- a resource with desc.mips == 1 (everything except the terrain min/max
+		// chain) ignores it entirely. For a resource with real per-mip storage usage, this is
+		// which single-mip view's bindless slot to return.
+		virtual std::uint32_t StorageIndexOf(ResourceId, std::uint32_t mip = 0) const = 0;
 
 		// The bindless-storage-buffer analogue of StorageIndexOf, for a buffer registered through
 		// PhysicalResourceRegistry::ProvisionBuffer with eStorageBuffer usage (PhysicalRegistry.hpp's
@@ -207,8 +212,8 @@ namespace brassica::graph {
 		}
 
 		template <typename K>
-		[[nodiscard]] std::uint32_t StorageIndex() const {
-			return resources ? resources->StorageIndexOf(IdOf<K>()) : 0u;
+		[[nodiscard]] std::uint32_t StorageIndex(std::uint32_t mip = 0) const {
+			return resources ? resources->StorageIndexOf(IdOf<K>(), mip) : 0u;
 		}
 
 		template <typename K>

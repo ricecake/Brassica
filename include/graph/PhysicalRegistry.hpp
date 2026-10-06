@@ -295,7 +295,9 @@ namespace brassica::graph {
 		// is never expected to resolve to anything else, so this is just GetStorageBindlessIndex
 		// under the interface every node's Execute actually has access to (a NodeContext, not a
 		// raw registry pointer).
-		[[nodiscard]] std::uint32_t StorageIndexOf(ResourceId id) const override { return GetStorageBindlessIndex(id); }
+		[[nodiscard]] std::uint32_t StorageIndexOf(ResourceId id, std::uint32_t mip = 0) const override {
+			return GetStorageBindlessIndex(id, mip);
+		}
 
 		// ResourceServices: the lookup NodeContext::BufferIndex<K>() (Execution.hpp) calls through
 		// to -- the storage-buffer analogue of StorageIndexOf, since buffers have no sampled/
@@ -341,14 +343,17 @@ namespace brassica::graph {
 		// assigned" for retirement bookkeeping -- unlike the sampled array, nothing ever writes a
 		// real descriptor at slot 0 here, since a storage-image read is never expected to fall
 		// back to anything.
-		[[nodiscard]] std::uint32_t GetStorageBindlessIndex(ResourceId id) const {
+		[[nodiscard]] std::uint32_t GetStorageBindlessIndex(ResourceId id, std::uint32_t mip = 0) const {
 			auto tex = GetTexture(id);
-			return tex ? tex->GetStorageBindlessIndex() : 0;
+			if (!tex) {
+				return 0;
+			}
+			return tex->HasPerMipStorage() ? tex->GetMipStorageBindlessIndex(mip) : tex->GetStorageBindlessIndex();
 		}
 
 		template <ResourceRef K>
-		[[nodiscard]] std::uint32_t GetStorageBindlessIndex() const {
-			return GetStorageBindlessIndex(IdOf<K>());
+		[[nodiscard]] std::uint32_t GetStorageBindlessIndex(std::uint32_t mip = 0) const {
+			return GetStorageBindlessIndex(IdOf<K>(), mip);
 		}
 
 		// The acceleration-structure-array index for id.
@@ -850,9 +855,21 @@ namespace brassica::graph {
 				WriteSampledImageDescriptor(index, tex.GetView(), layout, sampledKind);
 			}
 			if (usage & vk::ImageUsageFlagBits::eStorage) {
-				const std::uint32_t index = m_storageArena.Allocate();
-				tex.SetStorageBindlessIndex(index);
-				WriteStorageImageDescriptor(index, tex.GetView());
+				if (tex.HasPerMipStorage()) {
+					// tex.GetView() spans every mip -- illegal to bind as a storage image
+					// (VUID-VkWriteDescriptorSet-descriptorType-04152 requires levelCount == 1).
+					// One index + one single-mip view per level instead (CreateView,
+					// PhysicalResource.hpp, built these only because desc.mips > 1 here).
+					for (std::uint32_t mip = 0; mip < tex.MipViewCount(); ++mip) {
+						const std::uint32_t index = m_storageArena.Allocate();
+						tex.SetMipStorageBindlessIndex(mip, index);
+						WriteStorageImageDescriptor(index, tex.GetMipView(mip));
+					}
+				} else {
+					const std::uint32_t index = m_storageArena.Allocate();
+					tex.SetStorageBindlessIndex(index);
+					WriteStorageImageDescriptor(index, tex.GetView());
+				}
 			}
 		}
 
@@ -870,7 +887,14 @@ namespace brassica::graph {
 					isVolume ? m_sampled3DArena : (texDesc.layers > 1 ? m_sampledArrayArena : m_sampledArena);
 				arena.Retire(tex.GetSampledBindlessIndex(), frameIndex);
 			}
-			if (tex.GetStorageBindlessIndex() != 0) {
+			if (tex.HasPerMipStorage()) {
+				for (std::uint32_t mip = 0; mip < tex.MipViewCount(); ++mip) {
+					const std::uint32_t index = tex.GetMipStorageBindlessIndex(mip);
+					if (index != 0) {
+						m_storageArena.Retire(index, frameIndex);
+					}
+				}
+			} else if (tex.GetStorageBindlessIndex() != 0) {
 				m_storageArena.Retire(tex.GetStorageBindlessIndex(), frameIndex);
 			}
 		}
@@ -1006,7 +1030,7 @@ namespace brassica::graph {
 			// once it starts hitting the desc-match early return above.
 			std::shared_ptr<PhysicalTexture> tex = (enableAliasing && !desc.persistent)
 				? m_imagePool.Acquire(desc, lifetime.firstPass, lifetime.lastPass)
-				: std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
+				: std::make_shared<PhysicalTexture>(m_device, m_allocator, desc); // This should handle mips?
 
 			AssignAndWriteBindlessIndices(*tex);
 

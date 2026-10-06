@@ -14,7 +14,18 @@ layout(location = 2) out vec4 outAlbedo;
 
 void main() {
 	vec3 relPos = inWorldPos - uCameraPosition.xyz;
-	float roughness = (inMaterialType == 1u) ? 0.6 : ((inMaterialType == 2u) ? 0.3 : 0.5);
+	float roughness = 0.5;
+	if (inMaterialType == 1u) {        // Fern
+		roughness = 0.6;
+	} else if (inMaterialType == 2u) { // Flower
+		roughness = 0.3;
+	} else if (inMaterialType == 3u) { // Rock
+		roughness = 0.85;
+	} else if (inMaterialType == 4u) { // Seaweed
+		roughness = 0.25;
+	} else if (inMaterialType == 5u) { // Simple Bush
+		roughness = 0.6;
+	}
 	outPosition = vec4(relPos, 1.0);
 	outNormal = vec4(normalize(inNormal), roughness);
 	outAlbedo = inColor;

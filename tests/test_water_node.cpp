@@ -76,7 +76,7 @@ namespace {
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainMinMaxTexture>(),
 					.access = graph::AccessKind::Write,
-					// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainClipmap.hpp), which also
+					// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainManager.hpp), which also
 					// requests eStorage for terrain_gen.comp's writer -- this fixture only needs
 					// WaterNode's read side, and this bindless set (below) declares no storage-image
 					// binding to write that second descriptor into.
@@ -85,7 +85,7 @@ namespace {
 						.width = 4,
 						.height = 4,
 						.layers = 2,
-						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
 						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
 					},
 				}

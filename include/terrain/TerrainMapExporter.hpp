@@ -80,11 +80,6 @@ namespace brassica {
 			uint32_t           width = 4096,
 			uint32_t           height = 2048
 		);
-		static bool ExportCPU(
-			const std::string& outputPath,
-			uint32_t           width = 1024,
-			uint32_t           height = 512
-		);
 	};
 
 } // namespace brassica

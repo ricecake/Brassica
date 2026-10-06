@@ -25,19 +25,19 @@ TEST_CASE("Engine Persistent Queues & Async Readback Test") {
 		CHECK(qset.compute.familyIndex == engine.GetComputeQueueFamily());
 		CHECK(qset.transfer.familyIndex == engine.GetTransferQueueFamily());
 
-		// Test non-blocking readback polling before triggers
-		engine.PollReadbackData();
+		// Test non-blocking readback polling before triggers -- GetCachedGroundHeight must still
+		// report the fallback verbatim, confirming no spurious cached data before anything ever
+		// completed.
+		engine.GetTerrainManager().PollReadbackData();
 
-		std::vector<glm::vec4> readbackData;
-		uint32_t rw = 0, rh = 0;
-		bool hasData = engine.GetLatestReadbackData(readbackData, rw, rh);
-		CHECK_FALSE(hasData);
+		constexpr float kFallback = -1024.0f;
+		CHECK(engine.GetTerrainManager().GetCachedGroundHeight(kFallback) == kFallback);
 
 		// Update camera to exercise async readback triggering and motion constraint
 		engine.UpdateCamera(0.016f);
 
 		// Poll readback after camera update
-		engine.PollReadbackData();
+		engine.GetTerrainManager().PollReadbackData();
 
 		engine.Cleanup();
 	} else {

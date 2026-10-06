@@ -17,7 +17,7 @@
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainAccelerationStructure.hpp"
-#include "terrain/TerrainClipmap.hpp"
+#include "terrain/TerrainManager.hpp"
 
 namespace brassica {
 
@@ -31,16 +31,20 @@ namespace brassica {
 		std::uint32_t clipmapStorageIdx{0};
 		std::uint32_t minMaxStorageIdx{0};
 		std::uint32_t biomeStorageIdx{0};
-		std::uint32_t visibilityStorageIdx{0};
 		bool forceRegeneration = true;
 	};
 
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {
+		// Create<>, not Modify<>: these are pass-owned persistent resources now (ResourceDesc::
+		// persistent, already set on all three descs), provisioned the normal way through
+		// ProvisionTexture like any other persistent resource (TerrainBiomeNode's
+		// WeatherBiomeImageDesc is the precedent) -- not hand-built in C++ and smuggled in via
+		// RegisterImportedTexture. TerrainTLAS stays Modify<>: it's still imported from
+		// TerrainAccelerationStructure, unrelated to this.
 		using Resources = graph::Declares<
-			graph::Modify<TerrainClipmapTexture>,
-			graph::Modify<TerrainMinMaxTexture>,
-			graph::Modify<TerrainBiomeTexture>,
-			graph::Modify<TerrainTileVisibilityTexture>,
+			graph::Create<TerrainClipmapTexture>,
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<TerrainBiomeTexture>,
 			graph::Modify<TerrainTLAS>>;
 
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
@@ -65,44 +69,6 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-
-			// The clipmap/min-max/biome/visibility images this node Modifies<> are real GPU
-			// resources owned by TerrainClipmap (its own streaming/paging logic needs raw handle
-			// access the graph's Write/WriteSpan primitives can't give it) -- registered as
-			// imports here, next to the node that actually declares and drives them, rather than
-			// centralized in Engine::Init where a resource's owner and its graph registration used
-			// to live in two unrelated places.
-			if (physicalRegistry && services.terrainClipmap) {
-				TerrainClipmap& clipmap = *services.terrainClipmap;
-				physicalRegistry->RegisterImportedTexture<TerrainClipmapTexture>(
-					clipmap.GetImage(),
-					clipmap.GetImageView(),
-					TerrainClipmapDesc(clipmap.GetNumLODs()),
-					vk::ImageLayout::eUndefined,
-					/*hasDefinedContents=*/false
-				);
-				physicalRegistry->RegisterImportedTexture<TerrainMinMaxTexture>(
-					clipmap.GetMinMaxImage(),
-					clipmap.GetMinMaxImageView(),
-					TerrainMinMaxDesc(clipmap.GetNumLODs()),
-					vk::ImageLayout::eUndefined,
-					/*hasDefinedContents=*/false
-				);
-				physicalRegistry->RegisterImportedTexture<TerrainBiomeTexture>(
-					clipmap.GetBiomeImage(),
-					clipmap.GetBiomeImageView(),
-					TerrainBiomeDesc(clipmap.GetNumLODs()),
-					vk::ImageLayout::eUndefined,
-					/*hasDefinedContents=*/false
-				);
-				physicalRegistry->RegisterImportedTexture<TerrainTileVisibilityTexture>(
-					clipmap.GetVisibilityImage(),
-					clipmap.GetVisibilityImageView(),
-					TerrainTileVisibilityDesc(clipmap.GetNumLODs()),
-					vk::ImageLayout::eUndefined,
-					/*hasDefinedContents=*/false
-				);
-			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -125,7 +91,7 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(5);
+			r.realizations.reserve(4);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainClipmapTexture>(),
@@ -145,13 +111,6 @@ namespace brassica {
 					.key = graph::IdOf<TerrainBiomeTexture>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = TerrainBiomeDesc(push.gridParams.x),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainTileVisibilityTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = TerrainTileVisibilityDesc(push.gridParams.x),
 				}
 			);
 			r.realizations.push_back(
@@ -178,7 +137,6 @@ namespace brassica {
 				push.clipmapStorageIdx = ctx.StorageIndex<TerrainClipmapTexture>();
 				push.minMaxStorageIdx = ctx.StorageIndex<TerrainMinMaxTexture>();
 				push.biomeStorageIdx = ctx.StorageIndex<TerrainBiomeTexture>();
-				push.visibilityStorageIdx = ctx.StorageIndex<TerrainTileVisibilityTexture>();
 				push.forceRegeneration = forceRegeneration;
 
 				std::array<vk::PushConstantRange, 1> pushConstantRanges{
