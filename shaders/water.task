@@ -18,6 +18,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gNormalIndex;
 	uint  sceneColor;
 	uint  minMaxIndex;
+	uint  gMaterialIndex;
+	uint  skyViewIndex;
 }
 params;
 
