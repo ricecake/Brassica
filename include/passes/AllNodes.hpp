@@ -20,6 +20,7 @@
 #include "passes/SkyBackgroundNode.hpp"
 #include "passes/TerrainBiomeNode.hpp"
 #include "passes/TerrainGenNode.hpp"
+#include "passes/TerrainMinMaxDownsampleNode.hpp"
 #include "passes/TerrainNode.hpp"
 #include "passes/TonemapNode.hpp"
 #include "passes/WaterNode.hpp"

@@ -8,7 +8,7 @@
 #include "imgui.h"
 #include "lighting/ILightManager.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/ITerrainClipmap.hpp"
+#include "terrain/ITerrainManager.hpp"
 
 namespace brassica::ui {
 
@@ -33,8 +33,8 @@ namespace brassica::ui {
 			if (ServiceLocator::Instance().Has<ILightManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ILightManager>().get());
 			}
-			if (ServiceLocator::Instance().Has<ITerrainClipmap>()) {
-				managers.push_back(ServiceLocator::Instance().Get<ITerrainClipmap>().get());
+			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<ITerrainManager>().get());
 			}
 			if (ServiceLocator::Instance().Has<ArgparseManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ArgparseManager>().get());

@@ -141,7 +141,9 @@ namespace brassica::graph {
 			m_lastAccess(o.m_lastAccess),
 			m_hasDefinedContents(o.m_hasDefinedContents),
 			m_sampledBindlessIndex(o.m_sampledBindlessIndex),
-			m_storageBindlessIndex(o.m_storageBindlessIndex) {
+			m_storageBindlessIndex(o.m_storageBindlessIndex),
+			m_mipViews(std::move(o.m_mipViews)),
+			m_mipStorageIndices(std::move(o.m_mipStorageIndices)) {
 			o.m_image = nullptr;
 			o.m_view = nullptr;
 			o.m_allocation = nullptr;
@@ -151,6 +153,8 @@ namespace brassica::graph {
 			o.m_hasDefinedContents = false;
 			o.m_sampledBindlessIndex = 0;
 			o.m_storageBindlessIndex = 0;
+			o.m_mipViews.clear();
+			o.m_mipStorageIndices.clear();
 		}
 
 		PhysicalTexture& operator=(PhysicalTexture&& o) noexcept {
@@ -169,6 +173,8 @@ namespace brassica::graph {
 				m_hasDefinedContents = o.m_hasDefinedContents;
 				m_sampledBindlessIndex = o.m_sampledBindlessIndex;
 				m_storageBindlessIndex = o.m_storageBindlessIndex;
+				m_mipViews = std::move(o.m_mipViews);
+				m_mipStorageIndices = std::move(o.m_mipStorageIndices);
 
 				o.m_image = nullptr;
 				o.m_view = nullptr;
@@ -179,6 +185,8 @@ namespace brassica::graph {
 				o.m_hasDefinedContents = false;
 				o.m_sampledBindlessIndex = 0;
 				o.m_storageBindlessIndex = 0;
+				o.m_mipViews.clear();
+				o.m_mipStorageIndices.clear();
 			}
 			return *this;
 		}
@@ -241,6 +249,27 @@ namespace brassica::graph {
 
 		void SetStorageBindlessIndex(std::uint32_t index) { m_storageBindlessIndex = index; }
 
+		// Per-mip counterparts, populated only when CreateView built m_mipViews (desc.mips > 1
+		// with eStorage usage -- see CreateView). HasPerMipStorage() is what callers branch on to
+		// pick this family over the single-index family above; every mips == 1 resource (still
+		// everything except the terrain min/max chain) never touches these.
+		[[nodiscard]] bool HasPerMipStorage() const { return !m_mipViews.empty(); }
+
+		[[nodiscard]] std::uint32_t MipViewCount() const { return static_cast<std::uint32_t>(m_mipViews.size()); }
+
+		[[nodiscard]] vk::ImageView GetMipView(std::uint32_t mip) const { return m_mipViews[mip]; }
+
+		[[nodiscard]] std::uint32_t GetMipStorageBindlessIndex(std::uint32_t mip) const {
+			return mip < m_mipStorageIndices.size() ? m_mipStorageIndices[mip] : 0u;
+		}
+
+		void SetMipStorageBindlessIndex(std::uint32_t mip, std::uint32_t index) {
+			if (m_mipStorageIndices.size() <= mip) {
+				m_mipStorageIndices.resize(mip + 1, 0u);
+			}
+			m_mipStorageIndices[mip] = index;
+		}
+
 	private:
 		void CreateImage(VmaAllocation existingAllocation, vk::DeviceSize offsetInBlock) {
 			vk::ImageCreateInfo imageInfo = detail::BuildImageCreateInfo(m_desc);
@@ -277,21 +306,40 @@ namespace brassica::graph {
 			const auto format = static_cast<vk::Format>(
 				m_desc.formatCode ? m_desc.formatCode : static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Srgb)
 			);
+			const auto viewType =
+				is3D ? vk::ImageViewType::e3D : (is2DArray ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D);
+			const std::uint32_t mips = m_desc.mips ? m_desc.mips : 1;
+			const std::uint32_t layers = m_desc.layers ? m_desc.layers : 1;
+
 			vk::ImageViewCreateInfo viewInfo{
 				{},
 				m_image,
-				is3D ? vk::ImageViewType::e3D : (is2DArray ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D),
+				viewType,
 				format,
 				vk::ComponentMapping{},
-				vk::ImageSubresourceRange(
-					AspectFor(format),
-					0,
-					m_desc.mips ? m_desc.mips : 1,
-					0,
-					m_desc.layers ? m_desc.layers : 1
-				),
+				vk::ImageSubresourceRange(AspectFor(format), 0, mips, 0, layers),
 			};
 			m_view = m_device.createImageView(viewInfo);
+
+			// A storage-image descriptor requires levelCount == 1 (VUID-VkWriteDescriptorSet-
+			// descriptorType-04152) -- m_view above, spanning every mip, is only legal for the
+			// *sampled* descriptor. A resource with real per-mip storage usage (the terrain
+			// min/max chain's SPD writes) additionally needs one single-mip view per level.
+			const auto usage = m_desc.usageMask ? vk::ImageUsageFlags(m_desc.usageMask) : vk::ImageUsageFlags{};
+			if (mips > 1 && (usage & vk::ImageUsageFlagBits::eStorage)) {
+				m_mipViews.reserve(mips);
+				for (std::uint32_t mip = 0; mip < mips; ++mip) {
+					vk::ImageViewCreateInfo mipViewInfo{
+						{},
+						m_image,
+						viewType,
+						format,
+						vk::ComponentMapping{},
+						vk::ImageSubresourceRange(AspectFor(format), mip, 1, 0, layers),
+					};
+					m_mipViews.push_back(m_device.createImageView(mipViewInfo));
+				}
+			}
 		}
 
 		void Cleanup() {
@@ -302,6 +350,12 @@ namespace brassica::graph {
 				m_device.destroyImageView(m_view);
 				m_view = nullptr;
 			}
+			for (vk::ImageView& mipView : m_mipViews) {
+				if (mipView) {
+					m_device.destroyImageView(mipView);
+				}
+			}
+			m_mipViews.clear();
 			if (!m_image) {
 				return;
 			}
@@ -318,7 +372,6 @@ namespace brassica::graph {
 		VmaAllocator  m_allocator = nullptr;
 		vk::Image     m_image{};
 		vk::ImageView m_view{};
-		std::optional<vk::ImageView[]> m_views{};
 		VmaAllocation m_allocation = nullptr;
 		ResourceDesc  m_desc{};
 		Ownership     m_ownership = Ownership::Imported;
@@ -331,6 +384,15 @@ namespace brassica::graph {
 		bool                    m_hasDefinedContents{false};
 		std::uint32_t           m_sampledBindlessIndex{0};
 		std::uint32_t           m_storageBindlessIndex{0};
+
+		// Populated only when m_desc.mips > 1 and usage includes eStorage (see CreateView) --
+		// one single-mip view + bindless storage index per level, since a storage-image
+		// descriptor requires levelCount == 1 and m_view/m_storageBindlessIndex above span every
+		// mip at once (legal for the sampled descriptor, illegal for storage). Empty for every
+		// resource that doesn't need per-mip storage writes -- which, today, is everything
+		// except the terrain min/max chain.
+		std::vector<vk::ImageView>   m_mipViews{};
+		std::vector<std::uint32_t>   m_mipStorageIndices{};
 	};
 
 	// Move-only RAII owner of a Vulkan buffer. Same three ownership modes as PhysicalTexture,

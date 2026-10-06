@@ -53,20 +53,16 @@ namespace brassica {
 	// transient command pool/queue, unchanged); only the result flows through the graph.
 	struct TerrainTLAS {};
 
-	// The terrain clipmap's underlying GPU texture array, registered once (Engine::Init, via
-	// RegisterImportedTexture) rather than smuggled into DeferredNode/TerrainNode as raw
-	// vk::ImageView/vk::Sampler fields with no graph edge at all. Named distinctly from the
-	// brassica::TerrainClipmap class (terrain/TerrainClipmap.hpp), which owns and streams into
-	// the real image this tags -- same relationship as every other resource key vs. whatever
-	// physical object backs it. See that header's TerrainClipmapDesc for the desc a consumer's
-	// Read realization and the registration call both use.
+	// The terrain heightmap array -- a normal pass-owned persistent resource, Created<> by
+	// TerrainGenNode (terrain/TerrainManager.hpp's TerrainClipmapDesc) like any other persistent
+	// resource, not a hand-built C++ object imported into the graph. brassica::TerrainManager
+	// (same header) is unrelated to this image now -- it's just the CPU-side manager (numLODs/
+	// baseTexelSize config, Regenerate(), the async ground-height readback).
 	struct TerrainClipmapTexture {};
 
 	struct TerrainMinMaxTexture {};
 
 	struct TerrainBiomeTexture {};
-
-	struct TerrainTileVisibilityTexture {};
 
 	struct TerrainWeatherBiomeTexture {};
 
