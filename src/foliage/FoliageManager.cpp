@@ -183,12 +183,20 @@ namespace brassica {
 			row[4] = glm::vec4(p.colorVariability, p.enabled != 0u ? 1.0f : 0.0f, 0.0f, 0.0f);
 		}
 
+		// hostAccess defaults to None -- without Staged here, BeginHostWrite (PhysicalRegistry.hpp)
+		// returns an empty span for this texture and the host write silently never happens, leaving
+		// every biome permanently reading uninitialized memory (confirmed: this is what made every
+		// clump see enabled<0.5 and emit nothing). eTransferDst is required alongside Staged -- the
+		// write is a real vkCmdCopyBufferToImage. Same desc shape test_particle_system.cpp's
+		// PredefinedTextureNode test already proves end-to-end on a real device.
 		graph::ResourceDesc desc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
 			.width = kTexelsPerBiome,
 			.height = kFoliageBiomeCount,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
-			.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+			.usageMask =
+				static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
+			.hostAccess = graph::HostAccess::Staged,
 			.persistent = true,
 		};
 

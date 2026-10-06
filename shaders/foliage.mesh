@@ -540,26 +540,34 @@ void main() {
 		return;
 	}
 
-	// Continuous density/fade curve, scaled per-LOD-ring so every ring has the same relative
-	// falloff shape across its own extent -- replaces the old discrete 4/8/16/32-blade steps.
-	// The *same* stable hash drives both survival and fade (boidish's actual LOD-fade mechanism),
-	// so a clump near its range's edge shrinks toward zero height instead of popping at full size.
-	float ringRange = max(params.lodBaseRange, 1.0) * getLODScale(float(lodLevel));
-	float fallN = 1.0 + max(0.0, (distToCam - ringRange) / ringRange);
-	float threshold = 1.0 / pow(fallN, max(params.lodScaleFactor, 0.1));
-	float biomeDensity = max(bHWDF.z, 0.0);
-	float survivalRoll = pcg_hash(cellSeed + 7788u);
-	float survivalThreshold = clamp(threshold * biomeDensity * params.densityMultiplier, 0.0, 1.0);
-	if (survivalRoll > survivalThreshold) {
-		SetMeshOutputsEXT(0u, 0u);
-		return;
+	// Item count: same discrete thresholds the previous (working) version used, not a redesign --
+	// only the position (jittered world cell, above) and the fade below are new. A continuous
+	// hash-vs-threshold whole-clump survival roll was tried here and measured to cull nearly
+	// everything beyond ~2x lodBaseRange once biome density was multiplied in (lodBaseRange's
+	// default of 20 was never calibrated against a falloff anchored directly on it) -- removed
+	// rather than re-tuned blind, since invisible foliage is strictly worse than un-jittered
+	// foliage. biomeDensity still scales item count, just not whether the clump exists at all.
+	float lodRange = max(params.lodBaseRange, 1.0);
+	uint  bladesInTile = 32u;
+	if (lodLevel >= 4u || distToCam > lodRange * 7.5) {
+		bladesInTile = 4u;
+	} else if (lodLevel >= 2u || distToCam > lodRange * 3.0) {
+		bladesInTile = 8u;
+	} else if (lodLevel >= 1u || distToCam > lodRange * 1.5) {
+		bladesInTile = 16u;
 	}
-	float fade = clamp(survivalThreshold / max(survivalRoll, 1e-4) - 1.0, 0.0, 1.0);
+	float biomeDensity = max(bHWDF.z, 0.0);
+	uint  scaledBlades = uint(round(float(bladesInTile) * params.densityMultiplier * biomeDensity));
+	uint  itemsPerClump = clamp(scaledBlades / 4u, 1u, 8u);
 
-	// Items within the surviving clump also fall off continuously with fallN, independent of the
-	// clump-survival roll above.
-	const uint maxItems = 8u;
-	uint       itemsPerClump = clamp(uint(round(float(maxItems) / fallN)), 1u, maxItems);
+	// Fade: purely geometric, anchored to this LOD ring's own known radius (tileSize *
+	// tilesPerRow * 0.5) -- not a hash-driven ratio, so it can never collapse density to zero by
+	// accident the way the removed survival roll did. Only the outer 30% of each ring fades;
+	// the inner 70% renders at full height exactly as before. This is what actually fixes
+	// popping: a clump shrinks smoothly in that outer band instead of vanishing in one frame
+	// when its tile stops being dispatched (foliage.task's frustum/parent-nesting cull).
+	float ringHalfExtent = max(tileSize * float(max(params.gridParams.y, 1u)) * 0.5, 1.0);
+	float fade = 1.0 - smoothstep(ringHalfExtent * 0.7, ringHalfExtent, distToCam);
 
 	float windScale = params.windMultiplier * max(bRHWW.w, 0.0);
 	float rigidity = max(params.rigidityMultiplier * max(bRHWW.x, 0.1), 0.05);
