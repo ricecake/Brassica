@@ -1,5 +1,7 @@
 #version 460 core
+#define LIGHTS_BUFFER_WRITABLE
 #include "bindless.glsl"
+#include "lighting.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -39,5 +41,8 @@ void main() {
 	uint idx = gl_GlobalInvocationID.x;
 	if (idx < uPush.gridSize) {
 		uParticleGridHeads[idx] = -1;
+	}
+	if (idx < 240u) {
+		uLights[16u + idx].intensity = 0.0;
 	}
 }

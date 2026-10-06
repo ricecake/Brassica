@@ -97,7 +97,7 @@ void main() {
 	vec3 right = normalize(cross(up, forward));
 	up = cross(forward, right);
 
-	float size = (pType.size > 0.0) ? pType.size : ((p.type == 0u) ? 3.0 : ((p.type == 1u) ? 2.0 : 1.5));
+	float size = (pType.size > 0.0) ? pType.size : ((p.type == 0u) ? 3.0 : ((p.type == 1u) ? 2.0 : 1.2));
 	float halfSize = size * 0.5;
 
 	vec3 offsets[4] = vec3[4](
@@ -117,7 +117,10 @@ void main() {
 	}
 
 	float lifeRatio = clamp(p.lifetime / max(p.maxLifetime, 0.0001), 0.0, 1.0);
-	baseColor.a *= min(1.0, lifeRatio * 2.0);
+	float lifeFade = smoothstep(0.0, 0.15, lifeRatio) * smoothstep(1.0, 0.85, lifeRatio);
+	float distToCam = length(pos - camPos);
+	float distFade = smoothstep(300.0, 220.0, distToCam);
+	baseColor.a *= (lifeFade * distFade);
 
 	for (uint i = 0u; i < 4u; ++i) {
 		vec3 vWorldPos = pos + offsets[i];

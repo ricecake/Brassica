@@ -1148,7 +1148,7 @@ namespace brassica {
 			},
 			ParticleType{
 				.color = glm::vec4(0.9f, 1.0f, 0.3f, 1.0f),
-				.size = 1.5f,
+				.size = 1.2f,
 				.gravityScale = 0.0f,
 				.drag = 0.05f
 			},

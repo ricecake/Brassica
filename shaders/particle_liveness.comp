@@ -118,12 +118,12 @@ void main() {
 		uParticles[idx].maxLifetime = totalLifetime;
 		uParticles[idx].lifetime = totalLifetime - skippedTime;
 
-		// World-space ring spawn around camera view line
-		float rDist = 20.0 + hash1(idx * 13u + uFrameIndex) * 120.0;
+		// Spawn at outer ridges of visibility (180m - 280m distance) / newly disoccluded outer boundary
+		float rDist = 180.0 + hash1(idx * 13u + uFrameIndex) * 100.0;
 		float rAngle = hash1(idx * 17u + uFrameIndex) * 6.2831853;
 		float rHeight = (hash1(idx * 23u + uFrameIndex) - 0.5) * 40.0;
 
-		vec3 spawnCenter = camPos + camFwd * rDist + (camRight * cos(rAngle) + camUp * sin(rAngle)) * (rDist * 0.5);
+		vec3 spawnCenter = camPos + camFwd * rDist + (camRight * cos(rAngle) + camUp * sin(rAngle)) * (rDist * 0.6);
 		spawnCenter.y += rHeight;
 
 		if (pType == 0u) { // Birds (Above water)

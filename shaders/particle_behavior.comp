@@ -121,22 +121,27 @@ void main() {
 		) * 0.8;
 		p.position.xyz += (p.velocity.xyz + turb) * uPush.deltaTime;
 
-		// Emit point light into LightsBuffer when pulsing bright (sin(phase) > 0.3) if enableLights is true
-		float pulse = max(0.0, sin(phase));
-		if (uPush.enableLights != 0u && pulse > 0.3) {
-			uint lightSlot = atomicAdd(uLightCount, 1);
-			if (lightSlot < 256u) {
-				uLights[lightSlot].position = p.position.xyz;
-				uLights[lightSlot].intensity = 1.5 * pulse;
-				uLights[lightSlot].color = p.color.rgb * pulse * 2.0;
-				uLights[lightSlot].type = LIGHT_TYPE_POINT;
-				uLights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
-				uLights[lightSlot].innerCutoff = 0.0;
-				uLights[lightSlot].outerCutoff = 8.0;
-				uLights[lightSlot].flags = 0;
-				uLights[lightSlot]._pad0 = 0.0;
-				uLights[lightSlot]._pad1 = 0.0;
-			}
+		// Statically claim light slot (16u + idx) for the life of the particle
+		if (idx < 240u) {
+			atomicMax(uLightCount, 256u);
+			uint lightSlot = 16u + idx;
+			float pulse = max(0.0, sin(phase));
+			uLights[lightSlot].position = p.position.xyz;
+			uLights[lightSlot].intensity = (uPush.enableLights != 0u) ? (1.5 * pulse) : 0.0;
+			uLights[lightSlot].color = p.color.rgb * pulse * 2.0;
+			uLights[lightSlot].type = LIGHT_TYPE_POINT;
+			uLights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
+			uLights[lightSlot].innerCutoff = 0.0;
+			uLights[lightSlot].outerCutoff = 8.0;
+			uLights[lightSlot].flags = 0;
+			uLights[lightSlot]._pad0 = 0.0;
+			uLights[lightSlot]._pad1 = 0.0;
+		}
+	} else {
+		// Non-firefly particles (or expired fireflies) in the particle light range set intensity to 0
+		if (idx < 240u) {
+			uint lightSlot = 16u + idx;
+			uLights[lightSlot].intensity = 0.0;
 		}
 	}
 
