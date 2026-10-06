@@ -1,5 +1,7 @@
 #version 460 core
 #include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -59,6 +61,13 @@ layout(push_constant) uniform ParticleLivenessPushConstants {
 	uint  activeParticles;
 	uint  birdCutoff;
 	uint  fishCutoff;
+	// Terrain access for occlusion-aware respawn placement -- wiring only for now, not yet
+	// consumed here (that lands with the spawn-distribution rework).
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  weatherBiomeIndex;
+	uint  terrainTextureDim;
+	uint  terrainNumLevels;
 } uPush;
 
 float hash1(uint n) {

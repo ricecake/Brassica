@@ -10,6 +10,7 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -69,6 +70,10 @@ namespace brassica {
 		using Resources = graph::Declares<
 			graph::Create<TerrainWeatherBiomeTexture>,
 			graph::Create<TerrainWeatherPingPongTexture>>;
+
+		// See TerrainGenNode's identical comment: particle shaders now read terrain data at
+		// SubPhase::Prepare, so every terrain-producing node has to run at or before Prepare too.
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            initialShader;

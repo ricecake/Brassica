@@ -10,6 +10,7 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -46,6 +47,13 @@ namespace brassica {
 			graph::Create<TerrainMinMaxTexture>,
 			graph::Create<TerrainBiomeTexture>,
 			graph::Modify<TerrainTLAS>>;
+
+		// Prepare, not Default: ParticleSystemNode's prepare-phase nodes (ParticleLivenessNode/
+		// ParticleBehaviorNode) now Read<TerrainClipmapTexture>/Read<TerrainMinMaxTexture> for
+		// occlusion-aware spawning, and the graph validator rejects a later-phase producer
+		// satisfying an earlier-phase consumer's input (Graph.hpp's phase-ordering check) --
+		// terrain generation has to run early enough to produce before particles consume.
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
 		graph::PhysicalResourceRegistry* physicalRegistry = nullptr;

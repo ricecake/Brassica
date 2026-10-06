@@ -43,6 +43,14 @@ namespace brassica {
 		std::uint32_t activeParticles{8192};
 		std::uint32_t birdCutoff{2785};
 		std::uint32_t fishCutoff{5570};
+		// Appended, not interleaved -- see feedback_push_constant_struct_editing: new fields go
+		// at the end so GLSL/C++ offsets can't silently drift apart from hand-counting mid-struct.
+		// Terrain access for occlusion-aware respawn placement (Stage 3) -- wiring only for now.
+		std::uint32_t clipmapIndex{0};
+		std::uint32_t minMaxIndex{0};
+		std::uint32_t weatherBiomeIndex{0};
+		std::uint32_t terrainTextureDim{1024};
+		std::uint32_t terrainNumLevels{8};
 	};
 
 	struct ParticleBehaviorPushConstants {
@@ -51,6 +59,13 @@ namespace brassica {
 		std::uint32_t gridSize{1024};
 		float         cellSize{8.0f};
 		std::uint32_t enableLights{1};
+		// Appended -- same terrain access as ParticleLivenessPushConstants above, for a ground
+		// check during particle motion (Stage 3).
+		std::uint32_t clipmapIndex{0};
+		std::uint32_t minMaxIndex{0};
+		std::uint32_t terrainTextureDim{1024};
+		std::uint32_t terrainNumLevels{8};
+		float         waterLevel{0.0f};
 	};
 
 	struct ParticleRenderPushConstants {
@@ -355,7 +370,10 @@ namespace brassica {
 			graph::Create<AboveWaterParticleAliveBuffer>,
 			graph::Modify<AboveWaterParticleIndirectBuffer>,
 			graph::Create<UnderwaterParticleAliveBuffer>,
-			graph::Modify<UnderwaterParticleIndirectBuffer>>;
+			graph::Modify<UnderwaterParticleIndirectBuffer>,
+			graph::Read<TerrainClipmapTexture>,
+			graph::Read<TerrainMinMaxTexture>,
+			graph::Read<TerrainWeatherBiomeTexture>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
@@ -364,10 +382,16 @@ namespace brassica {
 		std::uint32_t            maxParticles{8192};
 		float                    deltaTime{0.016f};
 		float                    waterLevel{0.0f};
+		std::uint32_t            terrainTextureDim{1024};
+		std::uint32_t            terrainNumLevels{8};
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
 
-		void SetFrameParams(const render::NodeFrameParams& p) { waterLevel = p.waterLevel; }
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			waterLevel = p.waterLevel;
+			terrainTextureDim = p.terrainGridParams.w;
+			terrainNumLevels = p.terrainGridParams.x;
+		}
 
 		void Init(
 			const render::NodeServices&      services,
@@ -497,6 +521,11 @@ namespace brassica {
 				.activeParticles = activeCount,
 				.birdCutoff = birdCutoffIdx,
 				.fishCutoff = fishCutoffIdx,
+				.clipmapIndex = ctx.Index<TerrainClipmapTexture>(),
+				.minMaxIndex = ctx.Index<TerrainMinMaxTexture>(),
+				.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>(),
+				.terrainTextureDim = terrainTextureDim,
+				.terrainNumLevels = terrainNumLevels,
 			};
 			vkCmd.pushConstants(
 				resolved.layout,
@@ -634,7 +663,9 @@ namespace brassica {
 			graph::Read<UnderwaterParticleAliveBuffer>,
 			graph::Read<UnderwaterParticleIndirectBuffer>,
 			graph::Read<ParticleGridHeadsBuffer>,
-			graph::Read<ParticleGridNextBuffer>>;
+			graph::Read<ParticleGridNextBuffer>,
+			graph::Read<TerrainClipmapTexture>,
+			graph::Read<TerrainMinMaxTexture>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
@@ -644,8 +675,17 @@ namespace brassica {
 		std::uint32_t            gridSize{1024};
 		float                    cellSize{8.0f};
 		float                    deltaTime{0.016f};
+		float                    waterLevel{0.0f};
+		std::uint32_t            terrainTextureDim{1024};
+		std::uint32_t            terrainNumLevels{8};
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
+
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			waterLevel = p.waterLevel;
+			terrainTextureDim = p.terrainGridParams.w;
+			terrainNumLevels = p.terrainGridParams.x;
+		}
 
 		void Init(
 			const render::NodeServices&      services,
@@ -768,6 +808,11 @@ namespace brassica {
 				.gridSize = gridSize,
 				.cellSize = cellSize,
 				.enableLights = enableLights ? 1u : 0u,
+				.clipmapIndex = ctx.Index<TerrainClipmapTexture>(),
+				.minMaxIndex = ctx.Index<TerrainMinMaxTexture>(),
+				.terrainTextureDim = terrainTextureDim,
+				.terrainNumLevels = terrainNumLevels,
+				.waterLevel = waterLevel,
 			};
 			vkCmd.pushConstants(
 				resolved.layout,
@@ -1191,7 +1236,10 @@ namespace brassica {
 		// notice a real buffer change actually issues the update; the rest see it's already current.
 		detail::ParticleDescriptorCache sharedDescriptorCache{};
 
-		void SetFrameParams(const render::NodeFrameParams& p) { livenessNode.SetFrameParams(p); }
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			livenessNode.SetFrameParams(p);
+			behaviorNode.SetFrameParams(p);
+		}
 
 		void Init(const render::NodeServices& services) {
 			vk::Device device = services.device;

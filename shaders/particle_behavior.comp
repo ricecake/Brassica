@@ -1,7 +1,9 @@
 #version 460 core
 #define LIGHTS_BUFFER_WRITABLE
 #include "bindless.glsl"
+#include "common.glsl"
 #include "lighting.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -46,6 +48,13 @@ layout(push_constant) uniform ParticleBehaviorPushConstants {
 	uint  gridSize;
 	float cellSize;
 	uint  enableLights;
+	// Terrain access for a ground check during particle motion -- wiring only for now, not yet
+	// consumed here (that lands with the particle-system repair pass).
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  terrainTextureDim;
+	uint  terrainNumLevels;
+	float waterLevel;
 } uPush;
 
 uint hashCell(ivec3 cell, uint gridSize) {

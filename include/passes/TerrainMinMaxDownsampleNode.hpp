@@ -13,6 +13,7 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -106,6 +107,10 @@ namespace brassica {
 	// way, no self-modify auto-chain or version literal involved.
 	struct TerrainMinMaxDownsampleNode: render::NodeRegistrar<TerrainMinMaxDownsampleNode> {
 		using Resources = graph::Declares<graph::Modify<TerrainMinMaxTexture>>;
+
+		// See TerrainGenNode's identical comment: particle shaders now read terrain data at
+		// SubPhase::Prepare, so every terrain-producing node has to run at or before Prepare too.
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		// FFX SPD's fixed contract: one workgroup per 64x64 source tile. For MapDim = 1024 that's
 		// 16x16 tiles per slice -- matches the dispatch in Execute.

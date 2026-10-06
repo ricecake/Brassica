@@ -301,3 +301,59 @@ void main() {
 	std::vector<uint32_t> spirv(result.cbegin(), result.cend());
 	CHECK(!spirv.empty());
 }
+
+TEST_CASE("Terrain Occlusion Helper Consumers Compile") {
+	// Every direct (and, via terrain/generation.glsl, indirect) #include "terrain.glsl" consumer
+	// in the codebase -- terrain.glsl is a shared header, so a change there has to be checked
+	// against everything that pulls it in, not just the shaders this change set actually touched.
+	// A real, permanent regression check, not a throwaway. Must register the four
+	// BRASSICA_SAMPLER_* placeholders first or every SAMPLE_NEAREST/SAMPLE_LINEAR/
+	// SAMPLE_ARRAY_WRAP call site fails with a misleading "unexpected LEFT_BRACKET" instead of a
+	// real compile error.
+	brassica::Shader::ClearConstants();
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
+	struct Case {
+		const char*       path;
+		shaderc_shader_kind kind;
+	};
+	const Case cases[] = {
+		{"shaders/terrain.task", shaderc_glsl_task_shader},
+		{"shaders/terrain.mesh", shaderc_glsl_mesh_shader},
+		{"shaders/water.task", shaderc_glsl_task_shader},
+		{"shaders/water.mesh", shaderc_glsl_mesh_shader},
+		{"shaders/foliage.task", shaderc_glsl_task_shader},
+		{"shaders/foliage.mesh", shaderc_glsl_mesh_shader},
+		{"shaders/deferred.frag", shaderc_glsl_fragment_shader},
+		{"shaders/terrain_aabb.comp", shaderc_glsl_compute_shader},
+		{"shaders/terrain_gen.comp", shaderc_glsl_compute_shader},
+		{"shaders/particle_liveness.comp", shaderc_glsl_compute_shader},
+		{"shaders/particle_behavior.comp", shaderc_glsl_compute_shader},
+	};
+
+	for (const Case& c : cases) {
+		brassica::Shader shader;
+		bool             loaded = shader.LoadFromFile(c.path);
+		CHECK(loaded);
+		if (!loaded) {
+			continue;
+		}
+		shaderc::Compiler       compiler;
+		shaderc::CompileOptions options;
+		options.SetOptimizationLevel(shaderc_optimization_level_performance);
+		// Must match src/Shader.cpp's real CompileFromSource target exactly (vulkan_1_3/spirv_1_5)
+		// -- this test is only meaningful if it compiles against what the engine actually ships.
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+		auto res = compiler.CompileGlslToSpv(shader.GetSource(), c.kind, c.path, options);
+		if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
+			MESSAGE(c.path, " error: ", res.GetErrorMessage());
+		}
+		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
+	}
+
+	brassica::Shader::ClearConstants();
+}
