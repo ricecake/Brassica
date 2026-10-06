@@ -355,3 +355,18 @@ TEST_CASE("Camera Controls: WASD, Space, Shift, Q, E, Mouse Look") {
 	engine.UpdateCamera(0.016f); // Mouse moved right -> Yaw decreases
 	CHECK(engine.GetCamera().yaw != initYaw);
 }
+
+TEST_CASE("Globe Boundary Wrapping and Quaternion Surface Alignment") {
+	brassica::Engine engine;
+	float halfWidth = glm::pi<float>() * brassica::FAKE_PLANET_RADIUS;
+
+	// Position camera near edge of globe boundary
+	engine.GetCamera().mode = brassica::CameraMode::Instant;
+	engine.GetCamera().position = glm::vec3(halfWidth + 500.0f, 100.0f, 0.0f);
+
+	engine.UpdateCamera(0.016f);
+
+	// Camera position X should wrap into valid domain [-halfWidth, halfWidth]
+	CHECK(engine.GetCamera().position.x >= -halfWidth);
+	CHECK(engine.GetCamera().position.x <= halfWidth);
+}

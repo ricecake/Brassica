@@ -1,9 +1,13 @@
 #include "ImGuiManager.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <string>
 
+#include "EngineConstants.hpp"
+#include "ServiceLocator.hpp"
+#include "lighting/ILightManager.hpp"
 #include "spdlog/spdlog.h"
 
 #include "GLFW/glfw3.h"
@@ -219,9 +223,29 @@ namespace brassica {
 				float yawDeg = glm::degrees(camera.yaw);
 				float rollDeg = glm::degrees(camera.roll);
 
+				float gmtTime = 12.0f;
+				if (ServiceLocator::Instance().Has<ILightManager>()) {
+					auto lightMgr = ServiceLocator::Instance().Get<ILightManager>();
+					if (lightMgr) {
+						gmtTime = lightMgr->GetDayNightCycle().time;
+					}
+				}
+
+				glm::vec2 camUV = glm::vec2(camera.position.x, camera.position.z) / (2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS) + 0.5f;
+				glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
+				float longitude = std::atan2(camNormal.x, camNormal.z);
+				float deltaH = longitude * (12.0f / glm::pi<float>());
+				float localTime = std::fmod(gmtTime + deltaH + 24.0f, 24.0f);
+
+				int gmtH = static_cast<int>(std::floor(gmtTime)) % 24;
+				int gmtM = static_cast<int>(std::floor((gmtTime - std::floor(gmtTime)) * 60.0f)) % 60;
+				int locH = static_cast<int>(std::floor(localTime)) % 24;
+				int locM = static_cast<int>(std::floor((localTime - std::floor(localTime)) * 60.0f)) % 60;
+
 				ImGui::Text(
-					"Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | "
-					"%.1f FPS (%.2f ms)",
+					"GMT: %02d:%02d | Local: %02d:%02d | Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | %.1f FPS (%.2f ms)",
+					gmtH, gmtM,
+					locH, locM,
 					camera.position.x,
 					camera.position.y,
 					camera.position.z,

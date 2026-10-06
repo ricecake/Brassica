@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "EngineConstants.hpp"
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
@@ -547,6 +548,8 @@ namespace brassica {
 	}
 
 	void Engine::UpdateCamera(float deltaTime) {
+		glm::vec3 prevCamPos = camera.position;
+
 		// Poll GPU readback data first
 		PollReadbackData();
 
@@ -821,6 +824,33 @@ namespace brassica {
 		}
 		if (camera.position.y < -1024.0f) {
 			camera.position.y = -1024.0f;
+		}
+
+		// Update camera surface orientation alignment & handle globe boundary wrapping
+		float planetWidth = 2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS;
+		glm::vec2 prevUV = glm::vec2(prevCamPos.x, prevCamPos.z) / planetWidth + 0.5f;
+		glm::vec2 currUV = glm::vec2(camera.position.x, camera.position.z) / planetWidth + 0.5f;
+
+		glm::vec3 prevNormal = octahedral::octahedralUVToDirection(prevUV);
+		glm::vec3 currNormal = octahedral::octahedralUVToDirection(currUV);
+
+		float cosNormal = glm::dot(prevNormal, currNormal);
+		if (cosNormal < 0.999999f && cosNormal > -0.999999f) {
+			glm::vec3 rotAxis = glm::cross(prevNormal, currNormal);
+			if (glm::length(rotAxis) > 1e-6f) {
+				rotAxis = glm::normalize(rotAxis);
+				float angle = std::acos(std::clamp(cosNormal, -1.0f, 1.0f));
+				glm::quat deltaRot = glm::angleAxis(angle, rotAxis);
+				camera.orientation = glm::normalize(deltaRot * camera.orientation);
+			}
+		}
+
+		if (currUV.x < 0.0f || currUV.x > 1.0f || currUV.y < 0.0f || currUV.y > 1.0f) {
+			glm::vec3 dir = octahedral::octahedralUVToDirection(currUV);
+			glm::vec2 wrappedUV = octahedral::directionToOctahedralUV(dir);
+			camera.position.x = (wrappedUV.x - 0.5f) * planetWidth;
+			camera.position.z = (wrappedUV.y - 0.5f) * planetWidth;
+			terrainClipmap.Regenerate();
 		}
 
 		// Trigger new readback for next frame if clipmap image is initialized and has been populated/transitioned in frame graph
@@ -1516,8 +1546,8 @@ namespace brassica {
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
 		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
-		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
-		glm::vec3 camNormal = glm::normalize(camera.position - planetCenter);
+		glm::vec2 camUV = glm::vec2(camera.position.x, camera.position.z) / (2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS) + 0.5f;
+		glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
 
 		float     cosTheta = glm::dot(upRef, camNormal);
 		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);

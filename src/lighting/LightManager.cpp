@@ -140,20 +140,18 @@ namespace brassica {
 				_lights[1].azimuth = _cycle.moonAzimuth + erraticAzimuth;
 				_lights[1].UpdateDirectionFromAngles();
 
-				float sunVis = glm::sin(glm::radians(_lights[0].elevation));
-				float moonVis = glm::sin(glm::radians(_lights[1].elevation));
-
-				float sunFade = 1.0f;
-				if (sunVis > -0.10f) {
-					sunFade = 1.0f;
-				} else {
-					sunFade = 0.0f;
-				}
-				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
-				_lights[0].baseIntensity = 10.0f * sunFade;
-
 				glm::vec3 sunDir = glm::normalize(-_lights[0].direction);
 				glm::vec3 moonDir = glm::normalize(-_lights[1].direction);
+
+				float sunVis = sunDir.y;
+				float moonVis = moonDir.y;
+
+				// Lights fade only when geometrically blocked by the planet sphere horizon
+				float sunFade = glm::smoothstep(-0.02f, 0.01f, sunVis);
+				float moonFade = glm::smoothstep(-0.02f, 0.01f, moonVis);
+
+				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
+				_lights[0].baseIntensity = 10.0f * sunFade;
 
 				float cosPhase = glm::dot(sunDir, moonDir);
 				float phase = glm::clamp((-cosPhase + 1.0f) * 0.5f, 0.05f, 1.0f);
@@ -163,13 +161,6 @@ namespace brassica {
 
 				glm::vec3 sunFullRadiance = _lights[0].color * 10.0f;
 				_lights[1].color = sunFullRadiance * lunarAlbedo * phase * lunarTint;
-
-				float moonFade = 1.0f;
-				if (moonVis > 0.0f) {
-					moonFade = 1.0f;
-				} else {
-					moonFade = 0.0f;
-				}
 				_lights[1].baseIntensity = 1.0f * moonFade;
 
 				_cycle.nightFactor = glm::smoothstep(0.2f, -0.2f, sunVis);
