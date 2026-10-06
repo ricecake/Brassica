@@ -249,12 +249,18 @@ namespace brassica {
 		std::uint32_t                   gridSize{1024};
 		vk::DescriptorSetLayout         particleSetLayout;
 		vk::DescriptorSet               particleSet;
-		detail::ParticleDescriptorCache descriptorCache{};
+		detail::ParticleDescriptorCache* descriptorCache{nullptr};
 
-		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
+		void Init(
+			const render::NodeServices&      services,
+			vk::DescriptorSetLayout          setLayout,
+			vk::DescriptorSet                set,
+			detail::ParticleDescriptorCache& sharedCache
+		) {
 			pipelineLibrary = services.pipelineLibrary;
 			particleSetLayout = setLayout;
 			particleSet = set;
+			descriptorCache = &sharedCache;
 			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_reset.comp")) {
 				spdlog::critical("ParticleResetNode shader compilation failed.");
 				throw std::runtime_error("ParticleResetNode shader compilation failed.");
@@ -305,7 +311,7 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
 				}
 			}
 
@@ -342,7 +348,7 @@ namespace brassica {
 	};
 
 	struct ParticleLivenessNode {
-		detail::ParticleDescriptorCache descriptorCache{};
+		detail::ParticleDescriptorCache* descriptorCache{nullptr};
 		using Resources = graph::Declares<
 			graph::Modify<ParticleBuffer>,
 			graph::Read<ParticleTypeBuffer>,
@@ -363,10 +369,16 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) { waterLevel = p.waterLevel; }
 
-		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
+		void Init(
+			const render::NodeServices&      services,
+			vk::DescriptorSetLayout          setLayout,
+			vk::DescriptorSet                set,
+			detail::ParticleDescriptorCache& sharedCache
+		) {
 			pipelineLibrary = services.pipelineLibrary;
 			particleSetLayout = setLayout;
 			particleSet = set;
+			descriptorCache = &sharedCache;
 			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_liveness.comp")) {
 				spdlog::critical("ParticleLivenessNode shader compilation failed.");
 				throw std::runtime_error("ParticleLivenessNode shader compilation failed.");
@@ -442,7 +454,7 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
 				}
 			}
 
@@ -500,7 +512,7 @@ namespace brassica {
 	};
 
 	struct ParticleGridBuildNode {
-		detail::ParticleDescriptorCache descriptorCache{};
+		detail::ParticleDescriptorCache* descriptorCache{nullptr};
 		using Resources = graph::Declares<
 			graph::Read<ParticleBuffer>,
 			graph::Modify<ParticleGridHeadsBuffer>,
@@ -516,10 +528,16 @@ namespace brassica {
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
 
-		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
+		void Init(
+			const render::NodeServices&      services,
+			vk::DescriptorSetLayout          setLayout,
+			vk::DescriptorSet                set,
+			detail::ParticleDescriptorCache& sharedCache
+		) {
 			pipelineLibrary = services.pipelineLibrary;
 			particleSetLayout = setLayout;
 			particleSet = set;
+			descriptorCache = &sharedCache;
 			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_grid_build.comp")) {
 				spdlog::critical("ParticleGridBuildNode shader compilation failed.");
 				throw std::runtime_error("ParticleGridBuildNode shader compilation failed.");
@@ -566,7 +584,7 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
 				}
 			}
 
@@ -607,7 +625,7 @@ namespace brassica {
 	};
 
 	struct ParticleBehaviorNode {
-		detail::ParticleDescriptorCache descriptorCache{};
+		detail::ParticleDescriptorCache* descriptorCache{nullptr};
 		using Resources = graph::Declares<
 			graph::Modify<ParticleBuffer>,
 			graph::Read<ParticleTypeBuffer>,
@@ -629,10 +647,16 @@ namespace brassica {
 		vk::DescriptorSetLayout  particleSetLayout;
 		vk::DescriptorSet        particleSet;
 
-		void Init(const render::NodeServices& services, vk::DescriptorSetLayout setLayout, vk::DescriptorSet set) {
+		void Init(
+			const render::NodeServices&      services,
+			vk::DescriptorSetLayout          setLayout,
+			vk::DescriptorSet                set,
+			detail::ParticleDescriptorCache& sharedCache
+		) {
 			pipelineLibrary = services.pipelineLibrary;
 			particleSetLayout = setLayout;
 			particleSet = set;
+			descriptorCache = &sharedCache;
 			if (!compShader.CompileComputeFromFile(services.device, "shaders/particle_behavior.comp")) {
 				spdlog::critical("ParticleBehaviorNode shader compilation failed.");
 				throw std::runtime_error("ParticleBehaviorNode shader compilation failed.");
@@ -708,7 +732,7 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
 				}
 			}
 
@@ -1158,6 +1182,15 @@ namespace brassica {
 		ParticleGridBuildNode  gridBuildNode;
 		ParticleBehaviorNode   behaviorNode;
 
+		// One cache for the one particleSet all four nodes above share -- each node used to own
+		// its own ParticleDescriptorCache, which meant whichever of the four ran first in a given
+		// frame would vkUpdateDescriptorSets + bind particleSet, and the next one, still thinking
+		// *its* cache was stale, would vkUpdateDescriptorSets the exact same already-bound set
+		// again -- a real "VkDescriptorSet ... was destroyed or updated" validation error, not a
+		// hypothetical one. One shared cache instance means only the first node of the frame to
+		// notice a real buffer change actually issues the update; the rest see it's already current.
+		detail::ParticleDescriptorCache sharedDescriptorCache{};
+
 		void SetFrameParams(const render::NodeFrameParams& p) { livenessNode.SetFrameParams(p); }
 
 		void Init(const render::NodeServices& services) {
@@ -1189,10 +1222,10 @@ namespace brassica {
 			allocInfo.setSetLayouts(particleSetLayout);
 			particleSet = device.allocateDescriptorSets(allocInfo).front();
 
-			resetNode.Init(services, particleSetLayout, particleSet);
-			livenessNode.Init(services, particleSetLayout, particleSet);
-			gridBuildNode.Init(services, particleSetLayout, particleSet);
-			behaviorNode.Init(services, particleSetLayout, particleSet);
+			resetNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+			livenessNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+			gridBuildNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+			behaviorNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
 
 			auto& inner = m_subgraph.InnerGraph();
 			inner.RegisterRef(typeBufferNode);

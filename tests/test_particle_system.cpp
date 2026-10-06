@@ -280,17 +280,19 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 			.swapchainFormat = vk::Format::eR8G8B8A8Srgb,
 		};
 
+		detail::ParticleDescriptorCache sharedDescriptorCache{};
+
 		ParticleResetNode resetNode;
-		resetNode.Init(services, particleSetLayout, nullptr);
+		resetNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
 
 		ParticleLivenessNode livenessNode;
-		livenessNode.Init(services, particleSetLayout, nullptr);
+		livenessNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
 
 		ParticleGridBuildNode gridBuildNode;
-		gridBuildNode.Init(services, particleSetLayout, nullptr);
+		gridBuildNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
 
 		ParticleBehaviorNode behaviorNode;
-		behaviorNode.Init(services, particleSetLayout, nullptr);
+		behaviorNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
 
 		UnderwaterParticleRenderNode underwaterRenderNode;
 		underwaterRenderNode.Init(services);
@@ -385,10 +387,11 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		ParticleLivenessNode   livenessNode;
 		ParticleGridBuildNode  gridBuildNode;
 		ParticleBehaviorNode   behaviorNode;
-		resetNode.Init(services, particleSetLayout, particleSet);
-		livenessNode.Init(services, particleSetLayout, particleSet);
-		gridBuildNode.Init(services, particleSetLayout, particleSet);
-		behaviorNode.Init(services, particleSetLayout, particleSet);
+		detail::ParticleDescriptorCache sharedDescriptorCache{};
+		resetNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+		livenessNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+		gridBuildNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+		behaviorNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
 
 		graph::Graph g;
 		g.RegisterRef(seedParticleNode);
@@ -735,9 +738,10 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		ParticleResetNode      resetNode;
 		ParticleLivenessNode   livenessNode;
 		ParticleGridBuildNode  gridBuildNode;
-		resetNode.Init(services, particleSetLayout, particleSet);
-		livenessNode.Init(services, particleSetLayout, particleSet);
-		gridBuildNode.Init(services, particleSetLayout, particleSet);
+		detail::ParticleDescriptorCache sharedDescriptorCache{};
+		resetNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+		livenessNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+		gridBuildNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
 		livenessNode.maxParticles = 2;
 		gridBuildNode.maxParticles = 2;
 		livenessNode.waterLevel = 0.0f;

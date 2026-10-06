@@ -46,7 +46,7 @@ void main() {
 		particleColor *= pulse;
 	}
 
-	if (shapeAlpha < 0.02) {
+	if (shapeAlpha < 0.52) {
 		discard;
 	}
 

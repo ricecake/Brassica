@@ -16,6 +16,7 @@
 #include "graph/ResourceState.hpp"
 #include "graph/VulkanSeam.hpp"
 #include "IManager.hpp"
+#include "spdlog/spdlog.h"
 
 namespace brassica::graph {
 
@@ -1022,6 +1023,29 @@ namespace brassica::graph {
 				}
 				// About to replace this texture (e.g. a resize) -- its bindless slots, if any,
 				// become reusable once ProcessRetirements confirms it's safe, not immediately.
+				// Logged because a mismatch here that *isn't* a real resize is exactly the
+				// desc-mismatch/reprovision-while-in-use failure class this project keeps hitting
+				// (see memory project-brassica-graph-phase-lessons) -- cheap enough to leave in.
+				spdlog::warn(
+					"PhysicalRegistry::ProvisionTexture: reprovisioning '{}' on frame {} ({}x{}x{} fmt={} "
+					"usage={} mips={} layers={} -> {}x{}x{} fmt={} usage={} mips={} layers={})",
+					id->name,
+					frameIndex,
+					existingDesc.width,
+					existingDesc.height,
+					existingDesc.depth,
+					existingDesc.formatCode,
+					existingDesc.usageMask,
+					existingDesc.mips,
+					existingDesc.layers,
+					desc.width,
+					desc.height,
+					desc.depth,
+					desc.formatCode,
+					desc.usageMask,
+					desc.mips,
+					desc.layers
+				);
 				RetireBindlessIndices(*existingIt->second, frameIndex);
 			}
 
