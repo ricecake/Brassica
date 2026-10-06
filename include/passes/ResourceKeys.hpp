@@ -21,6 +21,8 @@ namespace brassica {
 
 	struct GBufferAlbedo {};
 
+	struct GBufferMaterial {};
+
 	struct GBufferDepth {};
 
 	struct ClusteredLighting {};

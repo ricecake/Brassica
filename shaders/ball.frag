@@ -10,9 +10,11 @@ layout(location = 2) in vec4 vColor;
 layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
+layout(location = 3) out vec4 outMaterial;
 
 void main() {
-    outPosition = vec4(vWorldPos - uCameraPosition.xyz, 1.0);
-    outNormal = vec4(normalize(vNormal), 0.0);
+    outPosition = vec4(vWorldPos - uCameraPosition.xyz, 0.0);
+    outNormal = vec4(normalize(vNormal), 1.0);
     outAlbedo = vec4(vColor.rgb, 1.0); // Bright blue material
+    outMaterial = vec4(0.0, 0.7, 0.0, 0.0);
 }
