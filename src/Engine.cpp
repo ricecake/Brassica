@@ -657,7 +657,6 @@ namespace brassica {
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_E)) {
 				camera.roll -= rollSpeed * deltaTime;
 			}
-			camera.UpdateOrientationFromEuler();
 
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_W)) {
 				moveDir += camera.GetForward();
@@ -844,17 +843,6 @@ namespace brassica {
 		glm::vec3 prevNormal = octahedral::octahedralUVToDirection(prevUV);
 		glm::vec3 currNormal = octahedral::octahedralUVToDirection(currUV);
 
-		float cosNormal = glm::dot(prevNormal, currNormal);
-		if (cosNormal < 0.999999f && cosNormal > -0.999999f) {
-			glm::vec3 rotAxis = glm::cross(prevNormal, currNormal);
-			if (glm::length(rotAxis) > 1e-6f) {
-				rotAxis = glm::normalize(rotAxis);
-				float angle = std::acos(std::clamp(cosNormal, -1.0f, 1.0f));
-				glm::quat deltaRot = glm::angleAxis(angle, rotAxis);
-				camera.orientation = glm::normalize(deltaRot * camera.orientation);
-				camera.SyncEulerFromOrientation();
-			}
-		}
 
 		if (currUV.x < 0.0f || currUV.x > 1.0f || currUV.y < 0.0f || currUV.y > 1.0f) {
 			glm::vec3 dir = octahedral::octahedralUVToDirection(currUV);
@@ -889,18 +877,8 @@ namespace brassica {
 				camera.velocity.z = glm::dot(v3d, ez_curr) / lenSqZ;
 			}
 
-			// Transform camera orientation into post-wrapped tangent frame
-			glm::mat3 M_prev(ex_prev, currNormal, ez_prev);
-			glm::mat3 M_curr(ex_curr, currNormal, ez_curr);
-			glm::mat3 R_frame = M_curr * glm::transpose(M_prev);
-			glm::quat Q_frame = glm::normalize(glm::quat_cast(R_frame));
-
-			camera.orientation = glm::normalize(Q_frame * camera.orientation);
-			camera.SyncEulerFromOrientation();
-
 			camera.position.x = (wrappedUV.x - 0.5f) * planetWidth;
 			camera.position.z = (wrappedUV.y - 0.5f) * planetWidth;
-			prevCamPos = camera.position;
 			terrainClipmap.Regenerate();
 		}
 

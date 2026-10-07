@@ -25,20 +25,22 @@ namespace brassica {
 		}
 
 		inline glm::vec2 directionToOctahedralUV(glm::vec3 dir) {
-			dir /= (std::abs(dir.x) + std::abs(dir.y) + std::abs(dir.z) + 1e-6f);
-			glm::vec2 oct = (dir.y >= 0.0f) ? glm::vec2(dir.x, dir.z) : octWrap(glm::vec2(dir.x, dir.z));
+			glm::vec3 rawDir(dir.x, dir.z, -dir.y);
+			rawDir /= (std::abs(rawDir.x) + std::abs(rawDir.y) + std::abs(rawDir.z) + 1e-6f);
+			glm::vec2 oct = (rawDir.y >= 0.0f) ? glm::vec2(rawDir.x, rawDir.z) : octWrap(glm::vec2(rawDir.x, rawDir.z));
 			return oct * 0.5f + 0.5f;
 		}
 
 		inline glm::vec3 octahedralUVToDirection(glm::vec2 uv) {
 			glm::vec2 oct = uv * 2.0f - 1.0f;
-			glm::vec3 dir = glm::vec3(oct.x, 1.0f - std::abs(oct.x) - std::abs(oct.y), oct.y);
-			if (dir.y < 0.0f) {
-				glm::vec2 wrapped = octWrap(glm::vec2(dir.x, dir.z));
-				dir.x = wrapped.x;
-				dir.z = wrapped.y;
+			glm::vec3 rawDir = glm::vec3(oct.x, 1.0f - std::abs(oct.x) - std::abs(oct.y), oct.y);
+			if (rawDir.y < 0.0f) {
+				glm::vec2 wrapped = octWrap(glm::vec2(rawDir.x, rawDir.z));
+				rawDir.x = wrapped.x;
+				rawDir.z = wrapped.y;
 			}
-			return glm::normalize(dir);
+			glm::vec3 nRaw = glm::normalize(rawDir);
+			return glm::vec3(nRaw.x, -nRaw.z, nRaw.y);
 		}
 
 	} // namespace octahedral

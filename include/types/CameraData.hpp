@@ -80,22 +80,11 @@ namespace brassica {
 
 		glm::vec3 GetRight() const { return orientation * glm::vec3(1.0f, 0.0f, 0.0f); }
 
-		void UpdateOrientationFromEuler() {
+		void UpdateOrientation() {
 			glm::quat qYaw = glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f));
 			glm::quat qPitch = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 			glm::quat qRoll = glm::angleAxis(roll, glm::vec3(0.0f, 0.0f, 1.0f));
 			orientation = glm::normalize(qYaw * qPitch * qRoll);
-		}
-
-		void SyncEulerFromOrientation() {
-			glm::vec3 euler = glm::eulerAngles(orientation);
-			pitch = euler.x;
-			yaw = euler.y;
-			roll = euler.z;
-		}
-
-		void UpdateOrientation() {
-			SyncEulerFromOrientation();
 		}
 
 		void UpdateMatrices(float aspect) {
