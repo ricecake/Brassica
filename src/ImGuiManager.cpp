@@ -95,7 +95,7 @@ namespace brassica {
 		initInfo.Queue = queue;
 		initInfo.DescriptorPool = m_descriptorPool;
 		initInfo.MinImageCount = 2;
-		initInfo.ImageCount = imageCount;
+		initInfo.ImageCount = std::max(2u, imageCount);
 		initInfo.UseDynamicRendering = true;
 		initInfo.PipelineInfoMain.PipelineRenderingCreateInfo
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;

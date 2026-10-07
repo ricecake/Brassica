@@ -119,6 +119,9 @@ namespace brassica {
 	}
 
 	void Engine::InitSwapchain() {
+		if (options.headless || !surface) {
+			return;
+		}
 		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
 		auto                  swap_ret = swapchainBuilder
 											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
@@ -164,6 +167,9 @@ namespace brassica {
 			glfwWaitEvents();
 		}
 
+		if (options.headless || !surface) {
+			return;
+		}
 		device.waitIdle();
 
 		for (auto view : swapchainImageViews) {
@@ -356,7 +362,10 @@ namespace brassica {
 			}
 
 			device.destroy();
-			instance.destroySurfaceKHR(surface);
+			if (surface) {
+				instance.destroySurfaceKHR(surface);
+				surface = nullptr;
+			}
 			vkb::destroy_instance(vkbInst);
 		}
 
@@ -925,7 +934,6 @@ namespace brassica {
 
 		if (options.headless) {
 			builder.set_headless(true);
-			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
 
 			uint32_t count = 0;
 			if (vk::enumerateInstanceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess &&
@@ -933,9 +941,11 @@ namespace brassica {
 				std::vector<vk::ExtensionProperties> exts(count);
 				if (vk::enumerateInstanceExtensionProperties(nullptr, &count, exts.data()) == vk::Result::eSuccess) {
 					for (const auto& ext : exts) {
-						if (std::string(ext.extensionName.data()) == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
+						std::string name(ext.extensionName.data());
+						if (name == VK_KHR_SURFACE_EXTENSION_NAME) {
+							builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
+						} else if (name == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
 							builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
-							break;
 						}
 					}
 				}
@@ -983,19 +993,15 @@ namespace brassica {
 			auto vkCreateHeadlessSurfaceEXT = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
 				vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT")
 			);
-			if (!vkCreateHeadlessSurfaceEXT) {
-				spdlog::critical("Failed to load vkCreateHeadlessSurfaceEXT function pointer.");
-				return false;
+			if (vkCreateHeadlessSurfaceEXT) {
+				VkHeadlessSurfaceCreateInfoEXT createInfo{};
+				createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+				VkSurfaceKHR c_surface = VK_NULL_HANDLE;
+				VkResult     res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
+				if (res == VK_SUCCESS) {
+					surface = c_surface;
+				}
 			}
-			VkHeadlessSurfaceCreateInfoEXT createInfo{};
-			createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
-			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
-			VkResult     res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
-			if (res != VK_SUCCESS) {
-				spdlog::critical("Failed to create headless surface: {}", static_cast<int>(res));
-				return false;
-			}
-			surface = c_surface;
 		} else {
 			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
 			VkResult     res = glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
@@ -1073,8 +1079,10 @@ namespace brassica {
 		features1.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
-		selector.set_surface(surface)
-			.set_minimum_version(chosenMajor, chosenMinor)
+		if (surface) {
+			selector.set_surface(surface);
+		}
+		selector.set_minimum_version(chosenMajor, chosenMinor)
 			.set_required_features(features1)
 			.set_required_features_13(features13)
 			.set_required_features_12(features12)
