@@ -1,4 +1,5 @@
 #include "common.glsl"
+#include "helpers/octahedral.glsl"
 #include "terrain.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 #include "lygia/generative/noised.glsl"
@@ -283,21 +284,9 @@ void evaluate_soft_voronoi(vec3 p, float k, int num_plates, out float out_height
 
 // Ensure FAKE_PLANET_RADIUS is in scope
 void evaluate_soft_voronoi_pseudosphere(vec3 p, float k, int num_plates, out float out_height, out vec3 out_grad_local) {
-    // 1. Map local XZ distances to radians (Longitude/Latitude)
-    float theta = p.x / FAKE_PLANET_RADIUS; // Longitude
-    float phi   = p.z / FAKE_PLANET_RADIUS; // Latitude
+    vec2 octUV = p.xz / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    vec3 P_geo = octahedralUVToDirection(octUV);
 
-    float sin_theta = sin(theta); float cos_theta = cos(theta);
-    float sin_phi   = sin(phi);   float cos_phi   = cos(phi);
-
-    // 2. Construct the geocentric unit vector
-    vec3 P_geo = vec3(
-        cos_phi * sin_theta,
-        sin_phi,
-        cos_phi * cos_theta
-    );
-
-    // 3. Evaluate the Softmax Voronoi (identical log-sum-exp logic)
     float max_dot = -1.0;
     for(int i = 0; i < num_plates; i++) {
         max_dot = max(max_dot, dot(P_geo, plates[i].seed_dir));
@@ -326,40 +315,25 @@ void evaluate_soft_voronoi_pseudosphere(vec3 p, float k, int num_plates, out flo
     out_height = sum_height / sum_weight;
     vec3 grad_geo = (grad_height - out_height * grad_weight) / sum_weight;
 
-    // 4. Translate the gradient back to the flat pseudo-sphere domain
-    // Partial derivative of P_geo with respect to surface distance X
-    vec3 dP_dx = vec3(
-         cos_phi * cos_theta,
-         0.0,
-        -cos_phi * sin_theta
-    ) / FAKE_PLANET_RADIUS;
+    const float eps = 1.0;
+    vec2 octUV_dx = (p.xz + vec2(eps, 0.0)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    vec2 octUV_dz = (p.xz + vec2(0.0, eps)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    vec3 dP_dx = (octahedralUVToDirection(octUV_dx) - P_geo) / eps;
+    vec3 dP_dz = (octahedralUVToDirection(octUV_dz) - P_geo) / eps;
 
-    // Partial derivative of P_geo with respect to surface distance Z
-    vec3 dP_dz = vec3(
-        -sin_phi * sin_theta,
-         cos_phi,
-        -sin_phi * cos_theta
-    ) / FAKE_PLANET_RADIUS;
-
-    // Dot the geocentric gradient with the Jacobian basis vectors
     out_grad_local = vec3(
         dot(grad_geo, dP_dx),
-        0.0, // Elevation (Y) does not influence the macro continent layout
+        0.0,
         dot(grad_geo, dP_dz)
     );
 }
 
 void evaluate_soft_voronoi_pseudosphere2(vec3 p, int num_plates, out float out_height, out vec3 out_grad_local) {
-    float theta = p.x / FAKE_PLANET_RADIUS;
-    float phi   = p.z / FAKE_PLANET_RADIUS;
-
-    float sin_theta = sin(theta); float cos_theta = cos(theta);
-    float sin_phi   = sin(phi);   float cos_phi   = cos(phi);
-
-    vec3 P_geo = vec3(cos_phi * sin_theta, sin_phi, cos_phi * cos_theta);
+    vec2 octUV = p.xz / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    vec3 P_geo = octahedralUVToDirection(octUV);
 
     // Pass 1: Log-Sum-Exp Trick adapted for per-plate 'k'
-    float max_kd = -1e20; // Must be very low, as (k * dot) can be highly negative
+    float max_kd = -1e20;
     for(int i = 0; i < num_plates; i++) {
         float kd = plates[i].k * dot(P_geo, plates[i].seed_dir);
         max_kd = max(max_kd, kd);
@@ -376,14 +350,12 @@ void evaluate_soft_voronoi_pseudosphere2(vec3 p, int num_plates, out float out_h
         float V = plates[i].height;
         float k_i = plates[i].k;
 
-        // Calculate the exponent with the specific plate's 'k'
         float kd = k_i * dot(P_geo, S);
         float w = exp(kd - max_kd);
 
         sum_weight += w;
         sum_height += w * V;
 
-        // The chain rule pulls k_i out of the exponent
         vec3 dw = k_i * w * S;
 
         grad_weight += dw;
@@ -393,9 +365,11 @@ void evaluate_soft_voronoi_pseudosphere2(vec3 p, int num_plates, out float out_h
     out_height = sum_height / sum_weight;
     vec3 grad_geo = (grad_height - out_height * grad_weight) / sum_weight;
 
-    // Pass 3: Project back to pseudo-sphere Jacobian
-    vec3 dP_dx = vec3( cos_phi * cos_theta, 0.0, -cos_phi * sin_theta) / FAKE_PLANET_RADIUS;
-    vec3 dP_dz = vec3(-sin_phi * sin_theta, cos_phi, -sin_phi * cos_theta) / FAKE_PLANET_RADIUS;
+    const float eps = 1.0;
+    vec2 octUV_dx = (p.xz + vec2(eps, 0.0)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    vec2 octUV_dz = (p.xz + vec2(0.0, eps)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    vec3 dP_dx = (octahedralUVToDirection(octUV_dx) - P_geo) / eps;
+    vec3 dP_dz = (octahedralUVToDirection(octUV_dz) - P_geo) / eps;
 
     out_grad_local = vec3(dot(grad_geo, dP_dx), 0.0, dot(grad_geo, dP_dz));
 }
@@ -454,14 +428,14 @@ void evaluate_tectonics_geocentric(
     out vec3 out_vel,     out mat3 out_J_vel,
     out vec3 P_geo, out vec3 dP_dx, out vec3 dP_dz)
 {
-    float theta = p_local.x / FAKE_PLANET_RADIUS;
-    float phi   = p_local.z / FAKE_PLANET_RADIUS;
-    float sin_t = sin(theta); float cos_t = cos(theta);
-    float sin_p = sin(phi);   float cos_p = cos(phi);
+    vec2 octUV = p_local.xz / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    P_geo = octahedralUVToDirection(octUV);
 
-    P_geo = vec3(cos_p * sin_t, sin_p, cos_p * cos_t);
-    dP_dx = vec3( cos_p * cos_t, 0.0, -cos_p * sin_t) / FAKE_PLANET_RADIUS;
-    dP_dz = vec3(-sin_p * sin_t, cos_p, -sin_p * cos_t) / FAKE_PLANET_RADIUS;
+    const float eps = 1.0;
+    vec2 octUV_dx = (p_local.xz + vec2(eps, 0.0)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    vec2 octUV_dz = (p_local.xz + vec2(0.0, eps)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
+    dP_dx = (octahedralUVToDirection(octUV_dx) - P_geo) / eps;
+    dP_dz = (octahedralUVToDirection(octUV_dz) - P_geo) / eps;
 
     // Pass 1: Dual Log-Sum-Exp Trick
     float max_kd_macro = -1e20;

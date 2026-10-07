@@ -60,9 +60,7 @@ void main() {
 	// Terrain slope gradient & Orographic lift
 	vec2 uv = (vec2(pixel) + 0.5) / float(dim);
 	vec3 dir = octahedralUVToDirection(uv);
-	float theta = atan(dir.x, dir.z);
-	float phi = asin(clamp(dir.y, -1.0, 1.0));
-	vec3 worldP = vec3(theta * FAKE_PLANET_RADIUS, 0.0, phi * FAKE_PLANET_RADIUS);
+	vec3 worldP = vec3((uv.x - 0.5) * 2.0 * PI * FAKE_PLANET_RADIUS, 0.0, (uv.y - 0.5) * 2.0 * PI * FAKE_PLANET_RADIUS);
 
 	float landMask = 0.0;
 	vec3 gradMask = vec3(0.0);
