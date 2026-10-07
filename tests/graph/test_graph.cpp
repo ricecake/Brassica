@@ -1033,7 +1033,7 @@ namespace {
 		using Resources = Declares<
 			Modify<GBufferAlbedo>,
 			Modify<GBufferNormal>,
-			Create<brassica::BallIndirectBuffer>
+			Create<brassica::EntityIndirectBuffer>
 		>;
 
 		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
@@ -1041,7 +1041,7 @@ namespace {
 	};
 } // namespace
 
-TEST_CASE("BallNode compiles smoothly in graph with GBuffer and Deferred nodes") {
+TEST_CASE("EntityNode compiles smoothly in graph with GBuffer and Deferred nodes") {
 	Graph graph;
 	graph.Register<GBufferPass>();
 	graph.Register<BallLikeNode>();
