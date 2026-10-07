@@ -109,19 +109,6 @@ void main() {
 		float ao         = normalSample.a > 0.0 ? normalSample.a : 1.0;
 		float emissivity = posSample.a;
 
-		if (params.weatherBiomeIndex > 0u) {
-			vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, pos);
-			float temp = weatherSample.r;
-			float moisture = weatherSample.g;
-			float severity = weatherSample.b;
-			float rainShadow = weatherSample.a;
-
-			float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
-			WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
-			albedo.rgb = mix(albedo.rgb, wb.color, 0.65);
-			roughness = mix(roughness, wb.roughness, 0.65);
-		}
-
 		Material material = Material(albedo.rgb, roughness, metallic, ao, emissivity, glint);
 
 		// Aerial perspective / underwater extinction is no longer applied here: it happens
