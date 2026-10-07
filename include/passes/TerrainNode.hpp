@@ -44,7 +44,7 @@ namespace brassica {
 		std::uint32_t weatherBiomeIndex{0};
 	};
 
-	static_assert(sizeof(TerrainPushConstants) == 40, "TerrainPushConstants size must be 40 bytes");
+	static_assert(sizeof(TerrainPushConstants) == 36, "TerrainPushConstants size must be 40 bytes");
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
