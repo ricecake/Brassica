@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <map>
 
+#include <glm/gtc/quaternion.hpp>
+#include "EngineConstants.hpp"
+
 namespace brassica {
 
 	static std::map<char, std::string> morseAlphabet = {
@@ -103,6 +106,10 @@ namespace brassica {
 	}
 
 	void LightManager::Update(float deltaTime) {
+		Update(deltaTime, glm::vec3(0.0f));
+	}
+
+	void LightManager::Update(float deltaTime, const glm::vec3& cameraPosition) {
 		if (_cycle.enabled) {
 			if (!_cycle.paused) {
 				_cycle.time += deltaTime * _cycle.speed;
@@ -140,8 +147,33 @@ namespace brassica {
 				_lights[1].azimuth = _cycle.moonAzimuth + erraticAzimuth;
 				_lights[1].UpdateDirectionFromAngles();
 
-				glm::vec3 sunDir = glm::normalize(-_lights[0].direction);
-				glm::vec3 moonDir = glm::normalize(-_lights[1].direction);
+				glm::vec3 sunDirGlobal = glm::normalize(-_lights[0].direction);
+				glm::vec3 moonDirGlobal = glm::normalize(-_lights[1].direction);
+
+				// Compute camera local planet normal from octahedral coordinates
+				glm::vec2 camUV = glm::vec2(cameraPosition.x, cameraPosition.z) / (2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS) + 0.5f;
+				glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
+
+				float cosTheta = glm::dot(glm::vec3(0.0f, 1.0f, 0.0f), camNormal);
+				glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
+				if (cosTheta < 0.99999f) {
+					if (cosTheta < -0.99999f) {
+						rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
+					} else {
+						glm::vec3 rotAxis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), camNormal);
+						float s = std::sqrt((1.0f + cosTheta) * 2.0f);
+						float invs = 1.0f / s;
+						rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
+					}
+				}
+				glm::quat invRotToCam = glm::inverse(rotToCam);
+
+				// Re-project global celestial directions into local topocentric camera frame
+				glm::vec3 sunDir = invRotToCam * sunDirGlobal;
+				glm::vec3 moonDir = invRotToCam * moonDirGlobal;
+
+				_lights[0].direction = -sunDir;
+				_lights[1].direction = -moonDir;
 
 				float sunVis = sunDir.y;
 				float moonVis = moonDir.y;

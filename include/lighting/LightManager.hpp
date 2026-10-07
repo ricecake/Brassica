@@ -60,6 +60,7 @@ namespace brassica {
 		std::vector<Light>&       GetLights() override;
 		const std::vector<Light>& GetLights() const override;
 		void                      Update(float deltaTime) override;
+		void                      Update(float deltaTime, const glm::vec3& cameraPosition) override;
 
 		glm::vec3 GetAmbientLight() const override { return _ambientLight; }
 

@@ -315,11 +315,11 @@ void evaluate_soft_voronoi_pseudosphere(vec3 p, float k, int num_plates, out flo
     out_height = sum_height / sum_weight;
     vec3 grad_geo = (grad_height - out_height * grad_weight) / sum_weight;
 
-    const float eps = 1.0;
-    vec2 octUV_dx = (p.xz + vec2(eps, 0.0)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
-    vec2 octUV_dz = (p.xz + vec2(0.0, eps)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
-    vec3 dP_dx = (octahedralUVToDirection(octUV_dx) - P_geo) / eps;
-    vec3 dP_dz = (octahedralUVToDirection(octUV_dz) - P_geo) / eps;
+    const float epsUV = 1e-4;
+    vec3 dP_du = (octahedralUVToDirection(octUV + vec2(epsUV, 0.0)) - octahedralUVToDirection(octUV - vec2(epsUV, 0.0))) / (2.0 * epsUV);
+    vec3 dP_dv = (octahedralUVToDirection(octUV + vec2(0.0, epsUV)) - octahedralUVToDirection(octUV - vec2(0.0, epsUV))) / (2.0 * epsUV);
+    vec3 dP_dx = dP_du / (2.0 * PI * FAKE_PLANET_RADIUS);
+    vec3 dP_dz = dP_dv / (2.0 * PI * FAKE_PLANET_RADIUS);
 
     out_grad_local = vec3(
         dot(grad_geo, dP_dx),
@@ -431,11 +431,11 @@ void evaluate_tectonics_geocentric(
     vec2 octUV = p_local.xz / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
     P_geo = octahedralUVToDirection(octUV);
 
-    const float eps = 1.0;
-    vec2 octUV_dx = (p_local.xz + vec2(eps, 0.0)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
-    vec2 octUV_dz = (p_local.xz + vec2(0.0, eps)) / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
-    dP_dx = (octahedralUVToDirection(octUV_dx) - P_geo) / eps;
-    dP_dz = (octahedralUVToDirection(octUV_dz) - P_geo) / eps;
+    const float epsUV = 1e-4;
+    vec3 dP_du = (octahedralUVToDirection(octUV + vec2(epsUV, 0.0)) - octahedralUVToDirection(octUV - vec2(epsUV, 0.0))) / (2.0 * epsUV);
+    vec3 dP_dv = (octahedralUVToDirection(octUV + vec2(0.0, epsUV)) - octahedralUVToDirection(octUV - vec2(0.0, epsUV))) / (2.0 * epsUV);
+    dP_dx = dP_du / (2.0 * PI * FAKE_PLANET_RADIUS);
+    dP_dz = dP_dv / (2.0 * PI * FAKE_PLANET_RADIUS);
 
     // Pass 1: Dual Log-Sum-Exp Trick
     float max_kd_macro = -1e20;

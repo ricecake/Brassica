@@ -657,6 +657,7 @@ namespace brassica {
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_E)) {
 				camera.roll -= rollSpeed * deltaTime;
 			}
+			camera.UpdateOrientationFromEuler();
 
 			if (defaultHandler->IsKeyPressed(GLFW_KEY_W)) {
 				moveDir += camera.GetForward();
@@ -851,14 +852,55 @@ namespace brassica {
 				float angle = std::acos(std::clamp(cosNormal, -1.0f, 1.0f));
 				glm::quat deltaRot = glm::angleAxis(angle, rotAxis);
 				camera.orientation = glm::normalize(deltaRot * camera.orientation);
+				camera.SyncEulerFromOrientation();
 			}
 		}
 
 		if (currUV.x < 0.0f || currUV.x > 1.0f || currUV.y < 0.0f || currUV.y > 1.0f) {
 			glm::vec3 dir = octahedral::octahedralUVToDirection(currUV);
 			glm::vec2 wrappedUV = octahedral::directionToOctahedralUV(dir);
+
+			constexpr float eps = 1e-4f;
+			glm::vec3 ex_prev = glm::normalize(
+				(octahedral::octahedralUVToDirection(currUV + glm::vec2(eps, 0.0f)) -
+				 octahedral::octahedralUVToDirection(currUV - glm::vec2(eps, 0.0f))) / (2.0f * eps)
+			);
+			glm::vec3 ez_prev = glm::normalize(
+				(octahedral::octahedralUVToDirection(currUV + glm::vec2(0.0f, eps)) -
+				 octahedral::octahedralUVToDirection(currUV - glm::vec2(0.0f, eps))) / (2.0f * eps)
+			);
+
+			glm::vec3 ex_curr = glm::normalize(
+				(octahedral::octahedralUVToDirection(wrappedUV + glm::vec2(eps, 0.0f)) -
+				 octahedral::octahedralUVToDirection(wrappedUV - glm::vec2(eps, 0.0f))) / (2.0f * eps)
+			);
+			glm::vec3 ez_curr = glm::normalize(
+				(octahedral::octahedralUVToDirection(wrappedUV + glm::vec2(0.0f, eps)) -
+				 octahedral::octahedralUVToDirection(wrappedUV - glm::vec2(0.0f, eps))) / (2.0f * eps)
+			);
+
+			glm::vec3 v3d = camera.velocity.x * ex_prev + camera.velocity.z * ez_prev;
+
+			float lenSqX = glm::dot(ex_curr, ex_curr);
+			float lenSqZ = glm::dot(ez_curr, ez_curr);
+
+			if (lenSqX > 1e-8f && lenSqZ > 1e-8f) {
+				camera.velocity.x = glm::dot(v3d, ex_curr) / lenSqX;
+				camera.velocity.z = glm::dot(v3d, ez_curr) / lenSqZ;
+			}
+
+			// Transform camera orientation into post-wrapped tangent frame
+			glm::mat3 M_prev(ex_prev, currNormal, ez_prev);
+			glm::mat3 M_curr(ex_curr, currNormal, ez_curr);
+			glm::mat3 R_frame = M_curr * glm::transpose(M_prev);
+			glm::quat Q_frame = glm::normalize(glm::quat_cast(R_frame));
+
+			camera.orientation = glm::normalize(Q_frame * camera.orientation);
+			camera.SyncEulerFromOrientation();
+
 			camera.position.x = (wrappedUV.x - 0.5f) * planetWidth;
 			camera.position.z = (wrappedUV.y - 0.5f) * planetWidth;
+			prevCamPos = camera.position;
 			terrainClipmap.Regenerate();
 		}
 
@@ -1412,7 +1454,7 @@ namespace brassica {
 		audioManager.UpdateState(audioState);
 		audioManager.Update(deltaTime);
 
-		lightManager.Update(deltaTime);
+		lightManager.Update(deltaTime, camera.position);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
 		FrameDetails frameDetails{

@@ -235,7 +235,7 @@ namespace brassica {
 				glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
 				float longitude = std::atan2(camNormal.x, camNormal.z);
 				float deltaH = longitude * (12.0f / glm::pi<float>());
-				float localTime = std::fmod(gmtTime + deltaH + 24.0f, 24.0f);
+				float localTime = std::fmod(std::fmod(gmtTime + deltaH, 24.0f) + 24.0f, 24.0f);
 
 				int gmtH = static_cast<int>(std::floor(gmtTime)) % 24;
 				int gmtM = static_cast<int>(std::floor((gmtTime - std::floor(gmtTime)) * 60.0f)) % 60;

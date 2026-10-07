@@ -91,7 +91,7 @@ namespace brassica::ui {
 						deltaH = longitude * (12.0f / glm::pi<float>());
 					}
 				}
-				float localTime = std::fmod(m_timeOfDay + deltaH + 24.0f, 24.0f);
+				float localTime = std::fmod(std::fmod(m_timeOfDay + deltaH, 24.0f) + 24.0f, 24.0f);
 				int locH = static_cast<int>(std::floor(localTime)) % 24;
 				int locM = static_cast<int>(std::floor((localTime - std::floor(localTime)) * 60.0f)) % 60;
 
