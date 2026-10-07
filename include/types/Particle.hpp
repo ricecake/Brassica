@@ -6,18 +6,19 @@
 
 namespace brassica {
 
-	// Particle definition holding position, velocity, misc, type, lifetime, and maxLifetime.
+	// Particle definition holding position, velocity, color, misc, type, lifetime, and maxLifetime.
 	struct Particle {
 		glm::vec4     position{0.0f, 50.0f, 0.0f, 1.0f}; // Default above terrain height (Y = 50.0)
 		glm::vec4     velocity{0.0f, 2.0f, 0.0f, 0.0f};  // Gentle upward velocity
-		glm::vec4     misc{0.0f};                        // Miscellaneous purpose vector
+		glm::vec4     color{1.0f, 0.95f, 0.7f, 1.0f};    // Particle color / glow
+		glm::vec4     misc{0.0f};                        // Miscellaneous purpose vector (x = phase, y = counter)
 		std::uint32_t type{0};
-		float         lifetime{5.0f}; // Marked alive initially (5.0s lifetime)
+		float         lifetime{5.0f};                    // Marked alive initially (5.0s lifetime)
 		float         maxLifetime{5.0f};
 		std::uint32_t padding{0};
 	};
 
-	static_assert(sizeof(Particle) == 64, "Particle struct must be 64 bytes (16-byte aligned for GLSL std430)");
+	static_assert(sizeof(Particle) == 80, "Particle struct must be 80 bytes (16-byte aligned for GLSL std430)");
 
 	// Particle type properties defining visual and physical characteristics for a particle type.
 	// Type 0: Birds (above water), Type 1: Fish (underwater).

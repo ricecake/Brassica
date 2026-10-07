@@ -19,6 +19,8 @@ void main() {
 	vec2 p = IN.uv - vec2(0.5);
 	float shapeAlpha = 0.0;
 
+	vec3 particleColor = IN.color.rgb;
+
 	if (inParticleType == 0u) { // Bird shape
 		float wingFlap = sin(IN.misc.x) * 0.35;
 		float wingY = abs(p.x) * wingFlap;
@@ -27,13 +29,21 @@ void main() {
 		float body = smoothstep(0.18, 0.05, length(p * vec2(2.5, 1.0)));
 		float wings = smoothstep(0.1, 0.01, distToWing) * step(abs(p.x), 0.45);
 		shapeAlpha = max(body, wings);
-	} else { // Fish shape
+	} else if (inParticleType == 1u) { // Fish shape
 		float tailWiggle = sin(IN.misc.x) * 0.4;
 		float tailY = (p.x + 0.1) * tailWiggle;
 
-		float body = smoothstep(0.22, 0.05, length(p * vec2(1.2, 2.5)));
+		float body = smoothstep(0.22, 0.05, length(p * vec2(1.5, 3.2)));
 		float tail = smoothstep(0.12, 0.01, abs(p.y - tailY)) * step(-0.45, p.x) * step(p.x, -0.1);
 		shapeAlpha = max(body, tail);
+	} else { // Firefly shape (Type 2): Small glowing vesica / ellipse
+		float vesicaD = max(length(p - vec2(0.08, 0.0)), length(p + vec2(0.08, 0.0)));
+		float core = smoothstep(0.38, 0.05, vesicaD);
+		float halo = exp(-vesicaD * 4.5) * 0.75;
+		shapeAlpha = clamp(core + halo, 0.0, 1.0);
+
+		float pulse = max(0.2, 0.5 + 0.5 * sin(IN.misc.x));
+		particleColor *= pulse;
 	}
 
 	if (shapeAlpha < 0.02) {
@@ -47,5 +57,5 @@ void main() {
 	float weight = clamp(10.0 / (1e-5 + pow(z / 150.0, 3.0)), 0.1, 1.0);
 
 	float finalAlpha = clamp(alpha * weight, 0.0, 1.0);
-	outColor = vec4(IN.color.rgb, finalAlpha);
+	outColor = vec4(particleColor, finalAlpha);
 }

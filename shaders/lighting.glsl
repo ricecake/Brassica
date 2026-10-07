@@ -46,11 +46,19 @@ struct Light {
 	float _pad1;
 };
 
+#ifdef LIGHTS_BUFFER_WRITABLE
+layout(std430, set = 0, binding = 2) buffer LightsBuffer {
+	uint  uLightCount;
+	uint  uLightPad[3];
+	Light uLights[];
+};
+#else
 layout(std430, set = 0, binding = 2) readonly buffer LightsBuffer {
 	uint  uLightCount;
 	uint  uLightPad[3];
 	Light uLights[];
 };
+#endif
 
 struct Cluster {
 	uint count;

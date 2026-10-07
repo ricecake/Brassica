@@ -99,6 +99,7 @@ vec3 calculateCirrusColor(
 }
 
 void main() {
+	return;
 	vec3 currentRadiance = SAMPLE_NEAREST(push.hdrColorIndex, inUV).rgb;
 	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, inUV);
 	vec3 relPos = SAMPLE_NEAREST(push.gPositionIndex, inUV).rgb;

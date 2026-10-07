@@ -16,8 +16,10 @@
 #include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
 #include "audio/AudioManager.hpp"
+#include "foliage/FoliageManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
+#include "particle/ParticleManager.hpp"
 #include "passes/AllNodes.hpp"
 #include "render/MaterialManager.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -26,9 +28,8 @@
 #include "ShaderWatcher.hpp"
 #include "SystemHandler.hpp"
 #include "TaskScheduler.h"
-#include "terrain/AsyncTerrainUploader.hpp"
 #include "terrain/TerrainAccelerationStructure.hpp"
-#include "terrain/TerrainClipmap.hpp"
+#include "terrain/TerrainManager.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/FrameDetails.hpp"
@@ -174,6 +175,13 @@ namespace brassica {
 
 		const AudioManager& GetAudioManager() const { return audioManager; }
 
+		FoliageManager& GetFoliageManager() { return foliageManager; }
+
+		const FoliageManager& GetFoliageManager() const { return foliageManager; }
+		ParticleManager& GetParticleManager() { return particleManager; }
+
+		const ParticleManager& GetParticleManager() const { return particleManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -215,19 +223,9 @@ namespace brassica {
 
 		const graph::PhysicalResourceRegistry& GetPhysicalRegistry() const { return physicalRegistry; }
 
-		// Async Image Region Readback methods
-		bool TriggerImageRegionReadbackAsync(
-			vk::Image image,
-			uint32_t arrayLayer,
-			uint32_t mipLevel,
-			vk::Offset2D offset,
-			vk::Extent2D extent,
-			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
-		);
+		TerrainManager& GetTerrainManager() { return terrainManager; }
 
-		void PollReadbackData();
-
-		bool GetLatestReadbackData(std::vector<glm::vec4>& outData, uint32_t& outWidth, uint32_t& outHeight) const;
+		const TerrainManager& GetTerrainManager() const { return terrainManager; }
 
 	private:
 		void InitWindow();
@@ -282,7 +280,9 @@ namespace brassica {
 		LightManager     lightManager;
 		LightningManager lightningManager;
 		AudioManager     audioManager;
+		FoliageManager   foliageManager;
 		MaterialManager  materialManager;
+		ParticleManager  particleManager;
 
 		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
 		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'
@@ -291,8 +291,7 @@ namespace brassica {
 
 		TerrainAccelerationStructure terrainAS;
 
-		TerrainClipmap       terrainClipmap;
-		AsyncTerrainUploader terrainUploader;
+		TerrainManager terrainManager;
 
 		uint32_t     globalSeed{0};
 		std::mt19937 rng;
@@ -362,25 +361,6 @@ namespace brassica {
 
 		entt::registry                              registry;
 		std::vector<std::shared_ptr<SystemHandler>> systemHandlers;
-
-		// Async Readback Transfer Queue Resources
-		vk::CommandPool   asyncTransferCommandPool{nullptr};
-		vk::CommandBuffer asyncTransferCommandBuffer{nullptr};
-		vk::Buffer        readbackStagingBuffer{nullptr};
-		VmaAllocation     readbackStagingAllocation{VK_NULL_HANDLE};
-		void*             readbackStagingMapped{nullptr};
-		vk::Semaphore     readbackTimelineSemaphore{nullptr};
-		uint64_t          readbackSubmittedTimelineValue{0};
-		uint64_t          readbackCompletedTimelineValue{0};
-		bool              readbackInFlight{false};
-
-		std::vector<glm::vec4> cachedReadbackData;
-		uint32_t               cachedReadbackWidth{0};
-		uint32_t               cachedReadbackHeight{0};
-		bool                   hasReadbackData{false};
-
-		void InitAsyncTransferResources();
-		void CleanupAsyncTransferResources();
 	};
 
 } // namespace brassica

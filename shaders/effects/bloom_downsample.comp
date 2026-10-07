@@ -176,7 +176,7 @@ void update_layer_ae(int layerIdx) {
 void main() {
 	ivec2 id = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 localId = ivec2(gl_LocalInvocationID.xy);
-	ivec2 mip0Size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outMip0Index)]);
+	ivec2 mip0Size = imageSize(uImagesGenericWrite[nonuniformEXT(push.outMip0Index)]);
 	ivec2 numGroups = ivec2(gl_NumWorkGroups.xy);
 
 	vec3 bloomColor = vec3(0.0);
@@ -258,8 +258,8 @@ void main() {
 			float weightSum = ltmWeights.x + ltmWeights.y + ltmWeights.z;
 			ltmWeights /= max(weightSum, 0.00001);
 
-			imageStore(uImagesRGBA32F[nonuniformEXT(push.outExpMip0Index)], id, vec4(ltmExposures, 1.0));
-			imageStore(uImagesRGBA32F[nonuniformEXT(push.outWgtMip0Index)], id, vec4(ltmWeights, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0Index)], id, vec4(ltmExposures, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0Index)], id, vec4(ltmWeights, 1.0));
 		}
 
 		// 2. Exposure calculation
@@ -331,7 +331,7 @@ void main() {
 
 		vec3 avgBloom = weightedColorSum / max(totalWeight, 0.0001);
 		bloomColor = max(avgBloom, maxExtractedColor * push.maxPoolingFactor);
-		imageStore(uImagesRGBA32F[nonuniformEXT(push.outMip0Index)], id, vec4(bloomColor, 1.0));
+		imageStore(uImagesGenericWrite[nonuniformEXT(push.outMip0Index)], id, vec4(bloomColor, 1.0));
 	}
 
 	s_mip[localId.x][localId.y] = bloomColor;
@@ -364,9 +364,9 @@ void main() {
 					  s_mip[localId.x + 1][localId.y + 1]) * 0.25;
 
 		ivec2 outId = id / 2;
-		ivec2 mip1Size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outMip1Index)]);
+		ivec2 mip1Size = imageSize(uImagesGenericWrite[nonuniformEXT(push.outMip1Index)]);
 		if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
-			imageStore(uImagesRGBA32F[nonuniformEXT(push.outMip1Index)], outId, vec4(bloomColor, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outMip1Index)], outId, vec4(bloomColor, 1.0));
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
@@ -380,8 +380,8 @@ void main() {
 						  s_ltmWgt[localId.x][localId.y + 1] +
 						  s_ltmWgt[localId.x + 1][localId.y + 1]) * 0.25;
 			if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outExpMip1Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outWgtMip1Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1Index)], outId, vec4(ltmExposures, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1Index)], outId, vec4(ltmWeights, 1.0));
 			}
 			s_ltmExp[localId.x][localId.y] = ltmExposures;
 			s_ltmWgt[localId.x][localId.y] = ltmWeights;
@@ -397,9 +397,9 @@ void main() {
 					  s_mip[localId.x + 2][localId.y + 2]) * 0.25;
 
 		ivec2 outId = id / 4;
-		ivec2 mip2Size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outMip2Index)]);
+		ivec2 mip2Size = imageSize(uImagesGenericWrite[nonuniformEXT(push.outMip2Index)]);
 		if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
-			imageStore(uImagesRGBA32F[nonuniformEXT(push.outMip2Index)], outId, vec4(bloomColor, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outMip2Index)], outId, vec4(bloomColor, 1.0));
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
@@ -413,8 +413,8 @@ void main() {
 						  s_ltmWgt[localId.x][localId.y + 2] +
 						  s_ltmWgt[localId.x + 2][localId.y + 2]) * 0.25;
 			if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outExpMip2Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outWgtMip2Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2Index)], outId, vec4(ltmExposures, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2Index)], outId, vec4(ltmWeights, 1.0));
 			}
 			s_ltmExp[localId.x][localId.y] = ltmExposures;
 			s_ltmWgt[localId.x][localId.y] = ltmWeights;
@@ -430,9 +430,9 @@ void main() {
 					  s_mip[localId.x + 4][localId.y + 4]) * 0.25;
 
 		ivec2 outId = id / 8;
-		ivec2 mip3Size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outMip3Index)]);
+		ivec2 mip3Size = imageSize(uImagesGenericWrite[nonuniformEXT(push.outMip3Index)]);
 		if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
-			imageStore(uImagesRGBA32F[nonuniformEXT(push.outMip3Index)], outId, vec4(bloomColor, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outMip3Index)], outId, vec4(bloomColor, 1.0));
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
@@ -446,8 +446,8 @@ void main() {
 						  s_ltmWgt[localId.x][localId.y + 4] +
 						  s_ltmWgt[localId.x + 4][localId.y + 4]) * 0.25;
 			if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outExpMip3Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outWgtMip3Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3Index)], outId, vec4(ltmExposures, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3Index)], outId, vec4(ltmWeights, 1.0));
 			}
 			s_ltmExp[localId.x][localId.y] = ltmExposures;
 			s_ltmWgt[localId.x][localId.y] = ltmWeights;
@@ -463,9 +463,9 @@ void main() {
 					  s_mip[localId.x + 8][localId.y + 8]) * 0.25;
 
 		ivec2 outId = id / 16;
-		ivec2 mip4Size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outMip4Index)]);
+		ivec2 mip4Size = imageSize(uImagesGenericWrite[nonuniformEXT(push.outMip4Index)]);
 		if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
-			imageStore(uImagesRGBA32F[nonuniformEXT(push.outMip4Index)], outId, vec4(bloomColor, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outMip4Index)], outId, vec4(bloomColor, 1.0));
 		}
 
 		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
@@ -478,8 +478,8 @@ void main() {
 						  s_ltmWgt[localId.x][localId.y + 8] +
 						  s_ltmWgt[localId.x + 8][localId.y + 8]) * 0.25;
 			if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outExpMip4Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesRGBA32F[nonuniformEXT(push.outWgtMip4Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4Index)], outId, vec4(ltmExposures, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4Index)], outId, vec4(ltmWeights, 1.0));
 			}
 		}
 	}

@@ -2,7 +2,6 @@
 #extension GL_EXT_nonuniform_qualifier : require
 #extension GL_KHR_shader_subgroup_quad : require
 #extension GL_KHR_shader_subgroup_vote : require // Required for subgroupAny
-#extension GL_KHR_shader_subgroup_clustered : require
 
 #include "bindless.glsl"
 #include "terrain/generation.glsl"
@@ -11,11 +10,10 @@ layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[]
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
-	uvec4 gridParams;           // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim (1088)
-	uint  clipmapStorageIdx;    // storage image index for TerrainClipmapTexture
-	uint  minMaxStorageIdx;     // storage image index for TerrainMinMaxTexture
-	uint  biomeStorageIdx;      // storage image index for TerrainBiomeTexture
-	uint  visibilityStorageIdx; // storage image index for TerrainTileVisibilityTexture
+	uvec4 gridParams;        // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uint  clipmapStorageIdx; // storage image index for TerrainClipmapTexture
+	uint  minMaxStorageIdx;  // storage image index for TerrainMinMaxTexture, mip 0
+	uint  biomeStorageIdx;   // storage image index for TerrainBiomeTexture
 	bool forceRegeneration;
 } push;
 
@@ -116,12 +114,6 @@ void main() {
 	float h_swap_diag = subgroupQuadSwapDiagonal(h);
 
 	if (is_dirty || push.forceRegeneration) {
-		float cluster_min = subgroupClusteredMin(h, 16);
-		float cluster_max = subgroupClusteredMax(h, 16);
-
-		float quad_min = min(min(h, h_swap_x), min(h_swap_y, h_swap_diag));
-		float quad_max = max(max(h, h_swap_x), max(h_swap_y, h_swap_diag));
-
 		float mean_h = (h + h_swap_x + h_swap_y + h_swap_diag) * 0.25;
 
 		float h2 = h * h;
@@ -135,8 +127,11 @@ void main() {
 		ivec3 storeCoord = ivec3(globalId.xy, lod);
 
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.clipmapStorageIdx)], storeCoord, vec4(h, normal.x, normal.y, normal.z));
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(cluster_min, cluster_max, quad_min, quad_max));
+		// RG32F, written through the formatless write-only alias (bindless.glsl) since this
+		// resource's real format isn't RGBA32F -- min == max == h at mip 0, the mip chain's base
+		// level; TerrainMinMaxDownsampleNode builds the real min/max reduction into mips 1+ from
+		// this.
+		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(h, h, 0.0, 0.0));
 		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, 1.0, land_mask));
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.visibilityStorageIdx)], storeCoord, vec4(1.0, 1.0, 1.0, 1.0));
 	}
 }

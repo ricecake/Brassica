@@ -18,6 +18,11 @@
 namespace brassica {
 
 	struct ClusterLightAssignmentNode: render::NodeRegistrar<ClusterLightAssignmentNode> {
+		// No kPhase -- runs at Phase::Default, and relies on that being later than
+		// SubPhase::Prepare (where ParticleBehaviorNode's firefly particles write real dynamic
+		// lights into the global light buffer) purely through phase ordering, with no declared
+		// graph edge between the two. If particle nodes are ever moved off Prepare, this node
+		// needs an explicit dependency added, or fireflies silently stop lighting anything.
 		using Resources = graph::Declares<graph::Create<ClusteredLighting>>;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;

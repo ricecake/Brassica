@@ -29,6 +29,13 @@ const mat3 GOLD = mat3(
 
 const int bayer4x4[16] = int[](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
 
+// Normalized [0, 1) ordered-dither threshold for screen pixel p -- for even (not clumpy) thinning
+// against a continuous [0, 1] coverage value, e.g. discard if bayerDither4x4(gl_FragCoord.xy) >= coverage.
+float bayerDither4x4(vec2 p) {
+	ivec2 cell = ivec2(p) & ivec2(3);
+	return float(bayer4x4[cell.y * 4 + cell.x]) / 16.0;
+}
+
 float safeDiv(float a, float b) {
 	return (b != 0.0) ? (a / b) : 0.0;
 }
@@ -252,6 +259,44 @@ uint encodeMorton2D(uvec2 coords) {
 uvec2 decodeMorton2D(uint code) {
 	return uvec2(unpart1by1(code), unpart1by1(code >> 1u));
 }
+
+// Expands a 10-bit integer into 30 bits by inserting 2 zeros after each bit.
+// Input range: [0, 1023]
+uint expandBits3D(uint v) {
+    v = (v | (v << 16)) & 0x030000FFu;
+    v = (v | (v <<  8)) & 0x0300F00Fu;
+    v = (v | (v <<  4)) & 0x030C30C3u;
+    v = (v | (v <<  2)) & 0x09249249u;
+    return v;
+}
+
+// Compacts a 30-bit Morton code back into a 10-bit integer by extracting every 3rd bit.
+uint compactBits3D(uint v) {
+    v = v & 0x09249249u;
+    v = (v | (v >>  2)) & 0x030C30C3u;
+    v = (v | (v >>  4)) & 0x0300F00Fu;
+    v = (v | (v >>  8)) & 0x030000FFu;
+    v = (v | (v >> 16)) & 0x000003FFu;
+    return v;
+}
+
+// ENCODER: Takes 3D spatial coordinates and returns a single 30-bit Morton code
+uint encodeMorton3D(uvec3 coords) {
+    uint xx = expandBits3D(coords.x);
+    uint yy = expandBits3D(coords.y);
+    uint zz = expandBits3D(coords.z);
+    return xx | (yy << 1) | (zz << 2);
+}
+
+// DECODER: Takes a 30-bit Morton code and restores the original 3D coordinates
+uvec3 decodeMorton3D(uint morton) {
+    uint x = compactBits3D(morton);
+    uint y = compactBits3D(morton >> 1);
+    uint z = compactBits3D(morton >> 2);
+    return uvec3(x, y, z);
+}
+
+
 
 uint mortonOwenScramble(uvec2 p, uint seed) {
 	uint morton = encodeMorton2D(p);
@@ -664,3 +709,48 @@ float dot_noise_fbm(vec3 p, int oct, float phase, out vec3 out_grad, out mat3 ou
     out_hessian = hessian / max_amp;
     return val / max_amp;
 }
+
+// float cloudPhase(float cosTheta) {
+// 	// Dual-lobe Henyey-Greenstein for forward and back scattering
+// 	// Blended with a large isotropic component to ensure visibility at all angles
+// 	float hg = mix(henyeyGreenstein(cloudPhaseG1, cosTheta), henyeyGreenstein(cloudPhaseG2, cosTheta), cloudPhaseAlpha);
+// 	return mix(hg, (1.0 / (4.0 * PI)), cloudPhaseIsotropic);
+// }
+
+// float beerPowder(float d, float local_d) {
+// 	// Approximation of multiple scattering (Beer-Powder law)
+// 	// Ensuring sunny side isn't black when d is small
+// 	return max(
+// 		exp(-d),
+// 		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (1.0 - exp(-local_d * cloudPowderLocalScale))
+// 	);
+// }
+
+float beerPowder(float d, float local_d) {
+	// Approximation of multiple scattering (Beer-Powder law)
+	// Ensuring sunny side isn't black when d is small
+	return max(
+		exp(-d),
+		exp(-d * 0.1) * 50 * (1.0 - exp(-local_d * 2.67))
+	);
+}
+
+// vec3 beerPowder(vec3 d, vec3 local_d) {
+// 	// Approximation of multiple scattering (Beer-Powder law)
+// 	// Ensuring sunny side isn't black when d is small
+// 	return max(
+// 		exp(-d),
+// 		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (vec3(1.0) - exp(-local_d * cloudPowderLocalScale))
+// 	);
+// }
+
+float schlickPhase(float cosTheta, float k) {
+    float kCos = k * cosTheta;
+    float denom = 1.0 - kCos;
+    return 0.079577 * (1.0 - k * k) / (denom * denom);
+}
+
+float dualLobeSchlick(float cosTheta, float kFwd, float kBck, float weight) {
+    return mix(schlickPhase(cosTheta, -kBck), schlickPhase(cosTheta, kFwd), weight);
+}
+

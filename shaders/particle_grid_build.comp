@@ -1,0 +1,57 @@
+#version 460 core
+#include "bindless.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct Particle {
+	vec4  position;
+	vec4  velocity;
+	vec4  color;
+	vec4  misc;
+	uint  type;
+	float lifetime;
+	float maxLifetime;
+	uint  padding;
+};
+
+layout(std430, set = 2, binding = 0) readonly buffer Particles {
+	Particle uParticles[];
+};
+
+layout(std430, set = 2, binding = 6) buffer ParticleGridHeads {
+	int uParticleGridHeads[];
+};
+
+layout(std430, set = 2, binding = 7) buffer ParticleGridNext {
+	int uParticleGridNext[];
+};
+
+layout(push_constant) uniform ParticleGridBuildPushConstants {
+	uint  maxParticles;
+	uint  gridSize;
+	float cellSize;
+} uPush;
+
+uint hashCell(ivec3 cell, uint gridSize) {
+	uvec3 p = uvec3(cell);
+	uint h = p.x * 73856093u ^ p.y * 19349663u ^ p.z * 83492791u;
+	return h % gridSize;
+}
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+	if (idx >= uPush.maxParticles) {
+		return;
+	}
+
+	if (uParticles[idx].lifetime <= 0.0) {
+		uParticleGridNext[idx] = -1;
+		return;
+	}
+
+	ivec3 cell = ivec3(floor(uParticles[idx].position.xyz / uPush.cellSize));
+	uint cellHash = hashCell(cell, uPush.gridSize);
+
+	int oldHead = atomicExchange(uParticleGridHeads[cellHash], int(idx));
+	uParticleGridNext[idx] = oldHead;
+}

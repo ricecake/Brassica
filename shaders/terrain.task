@@ -9,12 +9,17 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 #include "terrain.glsl"
 #include "helpers/culling.glsl"
 
+// Self-occlusion cull: skip emitting a sub-tile fully hidden behind a nearer, higher ridge.
+// Toggle via shader hot-reload, no C++ change needed.
+#ifndef TERRAIN_TASK_TERRAIN_OCCLUSION
+#define TERRAIN_TASK_TERRAIN_OCCLUSION 1
+#endif
+
 layout(push_constant) uniform TerrainPushConstants {
 	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
-	uint  visibilityIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
 }
@@ -120,6 +125,27 @@ void main() {
 				visible = false;
 			}
 		}
+
+#if TERRAIN_TASK_TERRAIN_OCCLUSION
+		// Only for tiles the near/low-LOD widening above never touches (skipHorizonCull's same
+		// lodLevel<=1 band stays untouched here too) -- a near tile is never worth the march.
+		if (visible && lodLevel >= 2u && params.minMaxIndex > 0u) {
+			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+				params.clipmapIndex,
+				params.minMaxIndex,
+				params.gridParams.w,
+				params.gridParams.x,
+				params.waterLevel
+			);
+			vec3 worldMinB = relMinB + uCameraPosition.xyz;
+			vec3 worldMaxB = relMaxB + uCameraPosition.xyz;
+			worldMaxB.y += meshletSize * 0.1 + 20.0; // ridge-edge slack so edges don't flicker
+			float occlusionSlack = meshletSize * 2.0 + 100.0;
+			if (isAABBOccludedByTerrain(occCtx, worldMinB, worldMaxB, occlusionSlack)) {
+				visible = false;
+			}
+		}
+#endif
 
 		if (visible) {
 			// 1. Sample Variance

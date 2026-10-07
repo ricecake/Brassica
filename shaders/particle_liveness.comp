@@ -1,11 +1,14 @@
 #version 460 core
 #include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct Particle {
 	vec4  position;
 	vec4  velocity;
+	vec4  color;
 	vec4  misc;
 	uint  type;
 	float lifetime;
@@ -55,6 +58,16 @@ layout(push_constant) uniform ParticleLivenessPushConstants {
 	uint  maxParticles;
 	float deltaTime;
 	float waterLevel;
+	uint  activeParticles;
+	uint  birdCutoff;
+	uint  fishCutoff;
+	// Terrain access for occlusion-aware respawn placement -- wiring only for now, not yet
+	// consumed here (that lands with the spawn-distribution rework).
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  weatherBiomeIndex;
+	uint  terrainTextureDim;
+	uint  terrainNumLevels;
 } uPush;
 
 float hash1(uint n) {
@@ -62,11 +75,30 @@ float hash1(uint n) {
 	return float((n * (n * n * 15731U + 789221U) + 1376312589U) & 0x7fffffffU) / 2147483648.0;
 }
 
+vec3 hash3(uint n) {
+	return vec3(hash1(n), hash1(n + 1013U), hash1(n + 2017U));
+}
+
+void advanceParticleTrajectory(inout Particle p, float dt) {
+	if (dt <= 0.001) return;
+	if (p.type == 0u) { // Birds
+		p.position.xyz += p.velocity.xyz * dt;
+		p.misc.x += dt * 3.0; // Flap phase
+	} else if (p.type == 1u) { // Fish
+		p.position.xyz += p.velocity.xyz * dt;
+		p.misc.x += dt * 2.0; // Tail wiggle phase
+	} else if (p.type == 2u) { // Fireflies
+		float phase = p.misc.x;
+		vec3 turb = vec3(sin(phase + dt), cos(phase * 0.7 + dt), sin(phase * 1.3 + dt)) * 0.5;
+		p.position.xyz += (p.velocity.xyz + turb) * dt;
+		p.misc.x += dt * 2.5;
+	}
+}
+
 void main() {
-	return;
 	uint idx = gl_GlobalInvocationID.x;
 
-	if (idx >= uPush.maxParticles) {
+	if (idx >= uPush.activeParticles || idx >= uPush.maxParticles) {
 		return;
 	}
 
@@ -75,52 +107,63 @@ void main() {
 	vec3 camRight = normalize(uInvViewMatrix[0].xyz);
 	vec3 camUp = normalize(uInvViewMatrix[1].xyz);
 
-	// Even indices are birds (type 0), odd indices are fish (type 1)
-	uint pType = (idx % 2u == 0u) ? 0u : 1u;
+	// Select type: Birds (0), Fish (1), Fireflies (2) based on allotment cutoffs
+	uint pType = 2u; // Fireflies default
+	if (idx < uPush.birdCutoff) {
+		pType = 0u; // Birds
+	} else if (idx < uPush.fishCutoff) {
+		pType = 1u; // Fish
+	}
+
 	uParticles[idx].type = pType;
 
 	float distToCam = length(uParticles[idx].position.xyz - camPos);
-	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 250.0;
+	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 300.0;
 
 	if (expired) {
-		uParticles[idx].lifetime = 8.0 + hash1(idx * 7u + uFrameIndex) * 8.0;
-		uParticles[idx].maxLifetime = uParticles[idx].lifetime;
+		float totalLifetime = 8.0 + hash1(idx * 7u + uFrameIndex) * 8.0;
+		float skippedTime = hash1(idx * 11u + uFrameIndex) * totalLifetime;
 
-		float rFwd   = 15.0 + hash1(idx * 13u + uFrameIndex) * 70.0;
-		float rRight = (hash1(idx * 17u + uFrameIndex) - 0.5) * 80.0;
-		float rUp    = (hash1(idx * 23u + uFrameIndex) - 0.5) * 40.0;
+		uParticles[idx].maxLifetime = totalLifetime;
+		uParticles[idx].lifetime = totalLifetime - skippedTime;
 
-		vec3 spawnCenter = camPos + camFwd * rFwd + camRight * rRight + camUp * rUp;
+		// Spawn at outer ridges of visibility (180m - 280m distance) / newly disoccluded outer boundary
+		float rDist = 180.0 + hash1(idx * 13u + uFrameIndex) * 100.0;
+		float rAngle = hash1(idx * 17u + uFrameIndex) * 6.2831853;
+		float rHeight = (hash1(idx * 23u + uFrameIndex) - 0.5) * 40.0;
+
+		vec3 spawnCenter = camPos + camFwd * rDist + (camRight * cos(rAngle) + camUp * sin(rAngle)) * (rDist * 0.6);
+		spawnCenter.y += rHeight;
 
 		if (pType == 0u) { // Birds (Above water)
-			spawnCenter.y = max(spawnCenter.y, max(camPos.y + 2.0, 5.0));
-			vec3 flyDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5));
-			uParticles[idx].velocity = vec4(flyDir * (12.0 + hash1(idx * 41u) * 8.0), 0.0);
+			spawnCenter.y = max(spawnCenter.y, max(camPos.y + 2.0, uPush.waterLevel + 5.0));
+			vec3 flyDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5) + vec3(0.0, 0.1, 0.0));
+			uParticles[idx].velocity = vec4(flyDir * (10.0 + hash1(idx * 41u) * 6.0), 0.0);
+			uParticles[idx].color = vec4(0.8, 0.85, 0.9, 1.0);
 			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0);
-		} else { // Fish (Underwater)
-			spawnCenter.y = min(spawnCenter.y, min(camPos.y - 2.0, -1.0));
+		} else if (pType == 1u) { // Fish (Underwater)
+			spawnCenter.y = min(spawnCenter.y, uPush.waterLevel - 1.5);
 			vec3 swimDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5));
-			uParticles[idx].velocity = vec4(swimDir * (5.0 + hash1(idx * 41u) * 5.0), 0.0);
+			uParticles[idx].velocity = vec4(swimDir * (4.0 + hash1(idx * 41u) * 4.0), 0.0);
+			uParticles[idx].color = vec4(0.4, 0.7, 0.9, 0.9);
 			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0);
+		} else { // Fireflies (Above water / ground level)
+			spawnCenter.y = max(spawnCenter.y, uPush.waterLevel + 1.0);
+			vec3 driftDir = (hash3(idx * 31u) - 0.5) * 1.5;
+			uParticles[idx].velocity = vec4(driftDir, 0.0);
+			uParticles[idx].color = vec4(0.9, 1.0, 0.3, 1.0); // Warm yellow-green glow
+			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0); // x = phase, y = flash counter
 		}
 
 		uParticles[idx].position = vec4(spawnCenter, 1.0);
+
+		// Fast-forward particle along its trajectory using skipped time to avoid spawning pops
+		advanceParticleTrajectory(uParticles[idx], skippedTime);
 	}
 
 	uParticles[idx].lifetime -= uPush.deltaTime;
 
 	if (uParticles[idx].lifetime > 0.0) {
-		// Crude depth sort, not a fixed bird=after/fish=before assumption: these two buffers are
-		// really "renders after water" and "renders before water" (AboveWaterParticleRenderNode
-		// runs at SubPhase::ParticleRender, after WaterNode; UnderwaterParticleRenderNode runs at
-		// SubPhase::UnderwaterParticleRender, before it -- see ParticleSystemNode.hpp). Whichever
-		// side of the water plane the particle is actually on relative to the CAMERA'S side is what
-		// decides that, not the particle's fixed bird/fish type: same side as the camera means no
-		// water surface is between them, so it should render crisp and unoccluded -- after water,
-		// so water's own blend does not cover it. Opposite side means the camera is looking at it
-		// through the water surface, so it needs to render before water, letting water's blend
-		// tint/dim it. This swaps which physical buffer a bird vs a fish lands in when the camera
-		// crosses the water plane -- exactly the point.
 		bool particleAboveWater = uParticles[idx].position.y > uPush.waterLevel;
 		bool cameraAboveWater = camPos.y > uPush.waterLevel;
 		bool rendersAfterWater = particleAboveWater == cameraAboveWater;

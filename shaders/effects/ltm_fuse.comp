@@ -14,7 +14,7 @@ layout(push_constant) uniform LtmFusePushConstants {
 
 void main() {
 	ivec2 id = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = imageSize(uImagesRGBA32F[nonuniformEXT(push.outFusedIndex)]);
+	ivec2 size = imageSize(uImagesGenericWrite[nonuniformEXT(push.outFusedIndex)]);
 	if (id.x >= size.x || id.y >= size.y) return;
 
 	vec2 uv = (vec2(id) + 0.5) / vec2(size);
@@ -50,5 +50,5 @@ void main() {
 		accum += dot(laplacian, w);
 	}
 
-	imageStore(uImagesRGBA32F[nonuniformEXT(push.outFusedIndex)], id, vec4(accum, 0.0, 0.0, 1.0));
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outFusedIndex)], id, vec4(accum, 0.0, 0.0, 1.0));
 }

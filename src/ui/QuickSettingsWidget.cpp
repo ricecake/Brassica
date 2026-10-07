@@ -3,8 +3,9 @@
 #include "ConfigManager.hpp"
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
+#include "particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/ITerrainClipmap.hpp"
+#include "terrain/ITerrainManager.hpp"
 #include "types/CameraData.hpp"
 
 namespace brassica::ui {
@@ -100,6 +101,21 @@ namespace brassica::ui {
 
 			ImGui::Separator();
 
+			// Particles
+			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Particles:");
+			if (ServiceLocator::Instance().Has<IParticleManager>()) {
+				auto particleMgr = ServiceLocator::Instance().Get<IParticleManager>();
+				bool particlesEnabled = particleMgr->IsEnabled();
+				if (ImGui::Checkbox("Enable Particles##Quick", &particlesEnabled)) {
+					particleMgr->SetEnabled(particlesEnabled);
+					if (cfg) {
+						cfg->SetAppSetting("particles_enabled", particlesEnabled);
+					}
+				}
+			}
+
+			ImGui::Separator();
+
 			// Terrain
 			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Terrain:");
 			if (ImGui::Checkbox("Render Terrain##Quick", &m_renderTerrain)) {
@@ -108,9 +124,9 @@ namespace brassica::ui {
 				}
 			}
 			if (ImGui::Button("Regenerate Terrain##Quick")) {
-				if (ServiceLocator::Instance().Has<ITerrainClipmap>()) {
-					auto terrainClipmap = ServiceLocator::Instance().Get<ITerrainClipmap>();
-					terrainClipmap->Regenerate();
+				if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+					auto terrainManager = ServiceLocator::Instance().Get<ITerrainManager>();
+					terrainManager->Regenerate();
 				}
 			}
 
