@@ -39,6 +39,7 @@ namespace {
 			graph::Create<GBufferPosition>,
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
+			graph::Create<GBufferMaterial>,
 			graph::Create<GBufferDepth>,
 			graph::Create<HdrColor>,
 			graph::Create<TerrainMinMaxTexture>>;

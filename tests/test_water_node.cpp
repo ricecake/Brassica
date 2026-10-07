@@ -28,9 +28,11 @@ namespace {
 			graph::Create<GBufferPosition>,
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
+			graph::Create<GBufferMaterial>,
 			graph::Create<GBufferDepth>,
 			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>>;
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<SkyViewLUT>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -42,6 +44,13 @@ namespace {
 					.key = graph::IdOf<GBufferPosition>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferMaterial>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
 				}
 			);
 			r.realizations.push_back(
@@ -88,6 +97,13 @@ namespace {
 						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
 						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
 					},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;
