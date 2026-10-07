@@ -111,6 +111,7 @@ namespace brassica {
 		virtual std::vector<Light>&       GetLights() = 0;
 		virtual const std::vector<Light>& GetLights() const = 0;
 		virtual void                      Update(float deltaTime) = 0;
+		virtual void                      Update(float deltaTime, const glm::vec3& cameraPosition) { (void)cameraPosition; Update(deltaTime); }
 
 		virtual glm::vec3 GetAmbientLight() const = 0;
 		virtual void      SetAmbientLight(const glm::vec3& ambient) = 0;

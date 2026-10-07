@@ -84,7 +84,7 @@ namespace brassica {
 			glm::quat qYaw = glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f));
 			glm::quat qPitch = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 			glm::quat qRoll = glm::angleAxis(roll, glm::vec3(0.0f, 0.0f, 1.0f));
-			orientation = qYaw * qPitch * qRoll;
+			orientation = glm::normalize(qYaw * qPitch * qRoll);
 		}
 
 		void UpdateMatrices(float aspect) {

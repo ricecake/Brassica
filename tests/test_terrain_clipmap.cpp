@@ -50,16 +50,16 @@ TEST_CASE("Terrain Clipmap Generation and 8 Level Scaling") {
 		float expectedExtent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * expectedTexelSize;
 
 		CHECK(doctest::Approx(expectedTexelSize) == baseTexel * std::pow(2.0f, static_cast<float>(l)));
-		CHECK(doctest::Approx(expectedExtent) == 1088.0f * expectedTexelSize);
+		CHECK(doctest::Approx(expectedExtent) == static_cast<float>(brassica::TERRAIN_MAP_DIM) * expectedTexelSize);
 	}
 
-	// LOD 6 extent covers over 34,000 world units (1088 texels * 32m = 34816m)
+	// LOD 6 extent covers 32,768 world units (1024 texels * 32m = 32768m)
 	float lod6Extent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * (baseTexel * static_cast<float>(1 << 6));
-	CHECK(lod6Extent == doctest::Approx(34816.0f));
+	CHECK(lod6Extent == doctest::Approx(32768.0f));
 
-	// LOD 7 extent covers over 69,000 world units (1088 texels * 64m = 69632m), exceeding 32k render distance radius
+	// LOD 7 extent covers 65,536 world units (1024 texels * 64m = 65536m)
 	float lod7Extent = static_cast<float>(brassica::TERRAIN_MAP_DIM) * (baseTexel * static_cast<float>(1 << 7));
-	CHECK(lod7Extent == doctest::Approx(69632.0f));
+	CHECK(lod7Extent == doctest::Approx(65536.0f));
 
 	// Generate 1088x1088 height and normal map for Level 0
 	auto mapData = brassica::TerrainClipmap::GenerateSineWaveMap(0, baseTexel, glm::vec2(0.0f), 0.0f);

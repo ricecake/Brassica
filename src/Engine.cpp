@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "EngineConstants.hpp"
 #include "spdlog/spdlog.h"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
@@ -118,6 +119,9 @@ namespace brassica {
 	}
 
 	void Engine::InitSwapchain() {
+		if (options.headless || !surface) {
+			return;
+		}
 		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
 		auto                  swap_ret = swapchainBuilder
 											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
@@ -163,6 +167,9 @@ namespace brassica {
 			glfwWaitEvents();
 		}
 
+		if (options.headless || !surface) {
+			return;
+		}
 		device.waitIdle();
 
 		for (auto view : swapchainImageViews) {
@@ -355,7 +362,10 @@ namespace brassica {
 			}
 
 			device.destroy();
-			instance.destroySurfaceKHR(surface);
+			if (surface) {
+				instance.destroySurfaceKHR(surface);
+				surface = nullptr;
+			}
 			vkb::destroy_instance(vkbInst);
 		}
 
@@ -547,6 +557,8 @@ namespace brassica {
 	}
 
 	void Engine::UpdateCamera(float deltaTime) {
+		glm::vec3 prevCamPos = camera.position;
+
 		// Poll GPU readback data first
 		PollReadbackData();
 
@@ -823,6 +835,56 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
+		// Handle globe boundary wrapping: when the camera's octahedral UV strays outside [0,1]^2,
+		// mirror it back onto the valid net (octahedral::wrapOctahedralUV -- the net's outer edges
+		// are fold lines, not a periodic boundary, so a naive decode-then-re-encode of the
+		// out-of-domain UV extrapolates past its valid piecewise-linear domain and introduces an
+		// uncontrolled lateral offset) and re-express velocity in the tangent frame at the new
+		// position, since the local basis can flip across a net fold.
+		float planetWidth = 2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS;
+		glm::vec2 prevUV = glm::vec2(prevCamPos.x, prevCamPos.z) / planetWidth + 0.5f;
+		glm::vec2 currUV = glm::vec2(camera.position.x, camera.position.z) / planetWidth + 0.5f;
+
+		if (currUV.x < 0.0f || currUV.x > 1.0f || currUV.y < 0.0f || currUV.y > 1.0f) {
+			glm::vec2 wrappedUV = octahedral::wrapOctahedralUV(currUV);
+
+			// prevUV is still valid/in-range (it's where the camera was before this frame's
+			// movement), so the pre-wrap tangent basis is evaluated there rather than at the
+			// out-of-domain currUV.
+			constexpr float eps = 1e-4f;
+			glm::vec3 ex_prev = glm::normalize(
+				(octahedral::octahedralUVToDirection(prevUV + glm::vec2(eps, 0.0f)) -
+				 octahedral::octahedralUVToDirection(prevUV - glm::vec2(eps, 0.0f))) / (2.0f * eps)
+			);
+			glm::vec3 ez_prev = glm::normalize(
+				(octahedral::octahedralUVToDirection(prevUV + glm::vec2(0.0f, eps)) -
+				 octahedral::octahedralUVToDirection(prevUV - glm::vec2(0.0f, eps))) / (2.0f * eps)
+			);
+
+			glm::vec3 ex_curr = glm::normalize(
+				(octahedral::octahedralUVToDirection(wrappedUV + glm::vec2(eps, 0.0f)) -
+				 octahedral::octahedralUVToDirection(wrappedUV - glm::vec2(eps, 0.0f))) / (2.0f * eps)
+			);
+			glm::vec3 ez_curr = glm::normalize(
+				(octahedral::octahedralUVToDirection(wrappedUV + glm::vec2(0.0f, eps)) -
+				 octahedral::octahedralUVToDirection(wrappedUV - glm::vec2(0.0f, eps))) / (2.0f * eps)
+			);
+
+			glm::vec3 v3d = camera.velocity.x * ex_prev + camera.velocity.z * ez_prev;
+
+			float lenSqX = glm::dot(ex_curr, ex_curr);
+			float lenSqZ = glm::dot(ez_curr, ez_curr);
+
+			if (lenSqX > 1e-8f && lenSqZ > 1e-8f) {
+				camera.velocity.x = glm::dot(v3d, ex_curr) / lenSqX;
+				camera.velocity.z = glm::dot(v3d, ez_curr) / lenSqZ;
+			}
+
+			camera.position.x = (wrappedUV.x - 0.5f) * planetWidth;
+			camera.position.z = (wrappedUV.y - 0.5f) * planetWidth;
+			terrainClipmap.Regenerate();
+		}
+
 		// Trigger new readback for next frame if clipmap image is initialized and has been populated/transitioned in frame graph
 		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
 		if (clipmapTex && clipmapTex->GetImage() && terrainClipmap.GetNumLODs() > 0 &&
@@ -895,7 +957,6 @@ namespace brassica {
 
 		if (options.headless) {
 			builder.set_headless(true);
-			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
 
 			uint32_t count = 0;
 			if (vk::enumerateInstanceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess &&
@@ -903,9 +964,11 @@ namespace brassica {
 				std::vector<vk::ExtensionProperties> exts(count);
 				if (vk::enumerateInstanceExtensionProperties(nullptr, &count, exts.data()) == vk::Result::eSuccess) {
 					for (const auto& ext : exts) {
-						if (std::string(ext.extensionName.data()) == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
+						std::string name(ext.extensionName.data());
+						if (name == VK_KHR_SURFACE_EXTENSION_NAME) {
+							builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
+						} else if (name == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
 							builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
-							break;
 						}
 					}
 				}
@@ -953,19 +1016,15 @@ namespace brassica {
 			auto vkCreateHeadlessSurfaceEXT = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
 				vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT")
 			);
-			if (!vkCreateHeadlessSurfaceEXT) {
-				spdlog::critical("Failed to load vkCreateHeadlessSurfaceEXT function pointer.");
-				return false;
+			if (vkCreateHeadlessSurfaceEXT) {
+				VkHeadlessSurfaceCreateInfoEXT createInfo{};
+				createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+				VkSurfaceKHR c_surface = VK_NULL_HANDLE;
+				VkResult     res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
+				if (res == VK_SUCCESS) {
+					surface = c_surface;
+				}
 			}
-			VkHeadlessSurfaceCreateInfoEXT createInfo{};
-			createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
-			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
-			VkResult     res = vkCreateHeadlessSurfaceEXT(instance, &createInfo, nullptr, &c_surface);
-			if (res != VK_SUCCESS) {
-				spdlog::critical("Failed to create headless surface: {}", static_cast<int>(res));
-				return false;
-			}
-			surface = c_surface;
 		} else {
 			VkSurfaceKHR c_surface = VK_NULL_HANDLE;
 			VkResult     res = glfwCreateWindowSurface(instance, window, nullptr, &c_surface);
@@ -1043,8 +1102,10 @@ namespace brassica {
 		features1.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
-		selector.set_surface(surface)
-			.set_minimum_version(chosenMajor, chosenMinor)
+		if (surface) {
+			selector.set_surface(surface);
+		}
+		selector.set_minimum_version(chosenMajor, chosenMinor)
 			.set_required_features(features1)
 			.set_required_features_13(features13)
 			.set_required_features_12(features12)
@@ -1374,7 +1435,7 @@ namespace brassica {
 		audioManager.UpdateState(audioState);
 		audioManager.Update(deltaTime);
 
-		lightManager.Update(deltaTime);
+		lightManager.Update(deltaTime, camera.position);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
 		FrameDetails frameDetails{
@@ -1516,8 +1577,8 @@ namespace brassica {
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
 		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
-		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
-		glm::vec3 camNormal = glm::normalize(camera.position - planetCenter);
+		glm::vec2 camUV = glm::vec2(camera.position.x, camera.position.z) / (2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS) + 0.5f;
+		glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
 
 		float     cosTheta = glm::dot(upRef, camNormal);
 		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);

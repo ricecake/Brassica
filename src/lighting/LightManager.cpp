@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <map>
 
+#include <glm/gtc/quaternion.hpp>
+#include "EngineConstants.hpp"
+
 namespace brassica {
 
 	static std::map<char, std::string> morseAlphabet = {
@@ -103,6 +106,12 @@ namespace brassica {
 	}
 
 	void LightManager::Update(float deltaTime) {
+		Update(deltaTime, glm::vec3(0.0f));
+	}
+
+	void LightManager::Update(float deltaTime, const glm::vec3& cameraPosition) {
+		_cameraPosition = cameraPosition;
+
 		if (_cycle.enabled) {
 			if (!_cycle.paused) {
 				_cycle.time += deltaTime * _cycle.speed;
@@ -113,13 +122,13 @@ namespace brassica {
 			}
 
 			if (_lights.size() >= 2 && _lights[0].type == DIRECTIONAL_LIGHT && _lights[1].type == DIRECTIONAL_LIGHT) {
-				// Sun
+				// Sun celestial direction
 				float sunAngleDeg = (_cycle.time / 24.0f) * 360.0f;
 				_lights[0].elevation = sunAngleDeg - 90.0f;
 				_lights[0].azimuth = 90.0f;
 				_lights[0].UpdateDirectionFromAngles();
 
-				// Moon
+				// Moon celestial direction
 				if (!_cycle.paused) {
 					_cycle.moonPhaseDays += deltaTime * _cycle.speed / 24.0f;
 				}
@@ -140,22 +149,41 @@ namespace brassica {
 				_lights[1].azimuth = _cycle.moonAzimuth + erraticAzimuth;
 				_lights[1].UpdateDirectionFromAngles();
 
-				float sunVis = glm::sin(glm::radians(_lights[0].elevation));
-				float moonVis = glm::sin(glm::radians(_lights[1].elevation));
+				glm::vec3 sunDirGlobal = glm::normalize(-_lights[0].direction);
+				glm::vec3 moonDirGlobal = glm::normalize(-_lights[1].direction);
 
-				float sunFade = 1.0f;
-				if (sunVis > -0.10f) {
-					sunFade = 1.0f;
-				} else {
-					sunFade = 0.0f;
+				// Compute camera local planet normal from octahedral coordinates
+				glm::vec2 camUV = glm::vec2(cameraPosition.x, cameraPosition.z) / (2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS) + 0.5f;
+				glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
+
+				float cosTheta = glm::dot(glm::vec3(0.0f, 1.0f, 0.0f), camNormal);
+				glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
+				if (cosTheta < 0.99999f) {
+					if (cosTheta < -0.99999f) {
+						rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
+					} else {
+						glm::vec3 rotAxis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), camNormal);
+						float s = std::sqrt((1.0f + cosTheta) * 2.0f);
+						float invs = 1.0f / s;
+						rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
+					}
 				}
+				glm::quat invRotToCam = glm::inverse(rotToCam);
+
+				glm::vec3 sunDirLocal = invRotToCam * sunDirGlobal;
+				glm::vec3 moonDirLocal = invRotToCam * moonDirGlobal;
+
+				float sunVis = sunDirLocal.y;
+				float moonVis = moonDirLocal.y;
+
+				// Lights fade only when geometrically blocked by the planet sphere horizon
+				float sunFade = glm::smoothstep(-0.02f, 0.01f, sunVis);
+				float moonFade = glm::smoothstep(-0.02f, 0.01f, moonVis);
+
 				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
 				_lights[0].baseIntensity = 10.0f * sunFade;
 
-				glm::vec3 sunDir = glm::normalize(-_lights[0].direction);
-				glm::vec3 moonDir = glm::normalize(-_lights[1].direction);
-
-				float cosPhase = glm::dot(sunDir, moonDir);
+				float cosPhase = glm::dot(sunDirLocal, moonDirLocal);
 				float phase = glm::clamp((-cosPhase + 1.0f) * 0.5f, 0.05f, 1.0f);
 
 				const float     lunarAlbedo = _cycle.lunarAlbedo;
@@ -163,13 +191,6 @@ namespace brassica {
 
 				glm::vec3 sunFullRadiance = _lights[0].color * 10.0f;
 				_lights[1].color = sunFullRadiance * lunarAlbedo * phase * lunarTint;
-
-				float moonFade = 1.0f;
-				if (moonVis > 0.0f) {
-					moonFade = 1.0f;
-				} else {
-					moonFade = 0.0f;
-				}
 				_lights[1].baseIntensity = 1.0f * moonFade;
 
 				_cycle.nightFactor = glm::smoothstep(0.2f, -0.2f, sunVis);
@@ -322,8 +343,32 @@ namespace brassica {
 		LightsSSBOData ssbo{};
 		uint32_t       count = static_cast<uint32_t>(std::min(_lights.size(), static_cast<size_t>(MAX_LIGHTS)));
 		ssbo.count = count;
+
+		glm::vec2 camUV = glm::vec2(_cameraPosition.x, _cameraPosition.z) / (2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS) + 0.5f;
+		glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
+
+		float cosTheta = glm::dot(glm::vec3(0.0f, 1.0f, 0.0f), camNormal);
+		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
+		if (cosTheta < 0.99999f) {
+			if (cosTheta < -0.99999f) {
+				rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
+			} else {
+				glm::vec3 rotAxis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), camNormal);
+				float s = std::sqrt((1.0f + cosTheta) * 2.0f);
+				float invs = 1.0f / s;
+				rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
+			}
+		}
+		glm::quat invRotToCam = glm::inverse(rotToCam);
+
 		for (uint32_t i = 0; i < count; ++i) {
-			ssbo.lights[i] = _lights[i].ToGPU();
+			Light gpuLight = _lights[i];
+			if (gpuLight.type == DIRECTIONAL_LIGHT) {
+				glm::vec3 sunDirGlobal = glm::normalize(-gpuLight.direction);
+				glm::vec3 sunDirLocal = invRotToCam * sunDirGlobal;
+				gpuLight.direction = -sunDirLocal;
+			}
+			ssbo.lights[i] = gpuLight.ToGPU();
 		}
 		return ssbo;
 	}

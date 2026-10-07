@@ -1,6 +1,7 @@
 #include "ui/QuickSettingsWidget.hpp"
 
 #include "ConfigManager.hpp"
+#include "EngineConstants.hpp"
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
@@ -74,6 +75,27 @@ namespace brassica::ui {
 				auto& cycle = lightMgr->GetDayNightCycle();
 				m_timeOfDay = cycle.time;
 				m_timePaused = cycle.paused;
+			}
+
+			{
+				int gmtH = static_cast<int>(std::floor(m_timeOfDay)) % 24;
+				int gmtM = static_cast<int>(std::floor((m_timeOfDay - std::floor(m_timeOfDay)) * 60.0f)) % 60;
+
+				float deltaH = 0.0f;
+				if (ServiceLocator::Instance().Has<CameraData>()) {
+					auto cam = ServiceLocator::Instance().Get<CameraData>();
+					if (cam) {
+						glm::vec2 camUV = glm::vec2(cam->position.x, cam->position.z) / (2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS) + 0.5f;
+						glm::vec3 camNormal = octahedral::octahedralUVToDirection(camUV);
+						float longitude = std::atan2(camNormal.x, camNormal.z);
+						deltaH = longitude * (12.0f / glm::pi<float>());
+					}
+				}
+				float localTime = std::fmod(std::fmod(m_timeOfDay + deltaH, 24.0f) + 24.0f, 24.0f);
+				int locH = static_cast<int>(std::floor(localTime)) % 24;
+				int locM = static_cast<int>(std::floor((localTime - std::floor(localTime)) * 60.0f)) % 60;
+
+				ImGui::Text("GMT: %02d:%02d | Local: %02d:%02d", gmtH, gmtM, locH, locM);
 			}
 
 			if (ImGui::SliderFloat("Time (24h)##Quick", &m_timeOfDay, 0.0f, 24.0f, "%.1f h")) {

@@ -60,6 +60,7 @@ namespace brassica {
 		std::vector<Light>&       GetLights() override;
 		const std::vector<Light>& GetLights() const override;
 		void                      Update(float deltaTime) override;
+		void                      Update(float deltaTime, const glm::vec3& cameraPosition) override;
 
 		glm::vec3 GetAmbientLight() const override { return _ambientLight; }
 
@@ -111,6 +112,7 @@ namespace brassica {
 		float _skyExposure = constants::Class::Lighting::DefaultSkyExposure;
 		float _starExposure = constants::Class::Lighting::DefaultStarExposure;
 		float _terrainExposure = constants::Class::Lighting::DefaultTerrainExposure;
+		glm::vec3 _cameraPosition{0.0f};
 	};
 
 } // namespace brassica
