@@ -112,6 +112,7 @@ namespace brassica {
 		float _skyExposure = constants::Class::Lighting::DefaultSkyExposure;
 		float _starExposure = constants::Class::Lighting::DefaultStarExposure;
 		float _terrainExposure = constants::Class::Lighting::DefaultTerrainExposure;
+		glm::vec3 _cameraPosition{0.0f};
 	};
 
 } // namespace brassica
