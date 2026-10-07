@@ -16,5 +16,5 @@ void main() {
     outPosition = vec4(vWorldPos - uCameraPosition.xyz, 0.0);
     outNormal = vec4(normalize(vNormal), 1.0);
     outAlbedo = vec4(vColor.rgb, 1.0);
-    outMaterial = vec4(0.0, 0.7, 0.0, 0.0);
+    outMaterial = vec4(0.05, 0.40, 0.0, 0.0);
 }

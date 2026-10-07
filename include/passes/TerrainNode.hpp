@@ -42,9 +42,10 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
 		float         waterLevel{0.0f};
+		std::uint32_t weatherBiomeIndex{0};
 	};
 
-	static_assert(sizeof(TerrainPushConstants) == 36, "TerrainPushConstants size must be 36 bytes");
+	static_assert(sizeof(TerrainPushConstants) == 40, "TerrainPushConstants size must be 40 bytes");
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
@@ -62,7 +63,8 @@ namespace brassica {
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>>;
+			graph::Read<TerrainTileVisibilityTexture>,
+			graph::Read<TerrainWeatherBiomeTexture>>;
 
 		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
 		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
@@ -170,6 +172,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{
