@@ -5,6 +5,7 @@
 #include "Engine.hpp"
 #include "passes/EntityNode.hpp"
 #include "SystemHandler.hpp"
+#include "types/EntityRenderComponent.hpp"
 #include "terrain/TerrainManager.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
@@ -15,7 +16,7 @@ namespace brassica {
 	public:
 		BallSystemHandler() { CreateEntityNode<BallSystemHandler>(); }
 
-		void Setup(Engine& engine, const FrameDetails& frameDetails) override {
+		void Setup(Engine& engine, const FrameDetails& /*frameDetails*/) override {
 			float targetX = 0.0f;
 			float targetZ = -20.0f;
 			// Approximation: the manager's last cached ground-height readback (near the camera,
@@ -28,19 +29,16 @@ namespace brassica {
 			transform.rotation = glm::vec3(0.0f);
 			transform.scale = glm::vec3(4.0f);
 
-			ballEntity = RegisterEntity(engine, transform);
-
 			ballColor = glm::vec4(0.0f, 0.4f, 1.0f, 1.0f); // Bright blue
 			rings = 8;
 			pointsPerRing = 12;
 
-			MeshTasksIndirectCommand cmd{};
-			cmd.groupCountX = 1;
-			cmd.groupCountY = 1;
-			cmd.groupCountZ = 1;
-			GetEntityNode().SetIndirectCommand(cmd);
+			EntityRenderComponent renderComp{};
+			renderComp.meshType = 0; // Sphere/Ball
+			renderComp.color = ballColor;
+			renderComp.params = glm::uvec4(rings, pointsPerRing, 0, 0);
 
-			UpdateRenderData(transform);
+			ballEntity = RegisterEntity(engine, transform, renderComp);
 		}
 
 		void UpdateEntity(entt::entity entity, Engine& engine, const FrameDetails& frameDetails) override {
@@ -63,20 +61,10 @@ namespace brassica {
 				transform->position.z = targetZ;
 				transform->position.y = terrainY + 12.0f +
 					static_cast<float>(std::sin(frameDetails.totalTime * 2.0)) * 2.0f;
-				UpdateRenderData(*transform);
 			}
 		}
 
 	private:
-		void UpdateRenderData(const TransformComponent& transform) {
-			EntityPushConstants push{};
-			push.positionAndScale = glm::vec4(transform.position, transform.scale.x);
-			push.color = ballColor;
-			push.params = glm::uvec4(rings, pointsPerRing, 0, 0);
-
-			GetEntityNode().SetPushConstants(push);
-		}
-
 		entt::entity ballEntity{entt::null};
 		glm::vec4    ballColor{0.0f, 0.4f, 1.0f, 1.0f};
 		uint32_t     rings{8};

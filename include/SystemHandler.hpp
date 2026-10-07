@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "passes/EntityNode.hpp"
+#include "types/EntityRenderComponent.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 #include <entt/entity/entity.hpp>
@@ -29,7 +30,9 @@ namespace brassica {
 		virtual void Setup(Engine& engine, const FrameDetails& frameDetails) = 0;
 
 		// Optional callbacks
-		virtual void PreFrame(Engine& /*engine*/, const FrameDetails& /*frameDetails*/) {}
+		virtual void PreFrame(Engine& engine, const FrameDetails& /*frameDetails*/) {
+			SyncRenderInstances(engine);
+		}
 
 		virtual void PostFrame(Engine& /*engine*/, const FrameDetails& /*frameDetails*/) {}
 
@@ -43,10 +46,20 @@ namespace brassica {
 			for (auto entity : m_entities) {
 				UpdateEntity(entity, engine, frameDetails);
 			}
+			SyncRenderInstances(engine);
 		}
 
-		// Registers a new entity in the entt registry with at least basic spatial details (TransformComponent)
-		entt::entity RegisterEntity(Engine& engine, const TransformComponent& transform = {});
+		// Synchronizes all active entities' transforms and render components with the entity render node
+		virtual void SyncRenderInstances(Engine& engine);
+
+		// Registers a new entity in the entt registry with spatial (TransformComponent) and render details (EntityRenderComponent)
+		entt::entity RegisterEntity(Engine& engine, const TransformComponent& transform = {}, const EntityRenderComponent& render = {});
+
+		// Removes an entity from this handler and destroys it in the entt registry
+		void RemoveEntity(Engine& engine, entt::entity entity);
+
+		// Clears all entities managed by this handler and destroys them in the entt registry
+		void ClearEntities(Engine& engine);
 
 		[[nodiscard]] const std::vector<entt::entity>& GetEntities() const { return m_entities; }
 

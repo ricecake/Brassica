@@ -128,6 +128,11 @@ namespace brassica {
 	struct CylinderIndexBuffer {};
 
 	template <typename Tag = struct DefaultEntityTag>
+	struct EntityInstanceBuffer {};
+
+	using BallInstanceBuffer = EntityInstanceBuffer<struct BallSystemHandlerTag>;
+
+	template <typename Tag = struct DefaultEntityTag>
 	struct EntityIndirectBuffer {};
 
 	using BallIndirectBuffer = EntityIndirectBuffer<struct BallSystemHandlerTag>;

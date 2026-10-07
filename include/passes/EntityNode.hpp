@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include "VulkanCompat.hpp"
 
@@ -18,13 +20,16 @@
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
+#include "types/EntityRenderComponent.hpp"
+#include "types/TransformComponent.hpp"
 
 namespace brassica {
 
 	struct EntityPushConstants {
-		glm::vec4  positionAndScale{0.0f, 15.0f, 0.0f, 3.0f};
-		glm::vec4  color{0.0f, 0.4f, 1.0f, 1.0f}; // Bright blue
-		glm::uvec4 params{8, 12, 0, 0};           // rings, pointsPerRing
+		std::uint64_t instanceBufferAddress{0}; // 64-bit device address
+		std::uint32_t baseInstanceIndex{0};     // base offset into the instance buffer for this batch
+		std::uint32_t totalInstances{0};        // total instances in this batch
+		std::uint32_t flags{0};                 // general rendering flags / params
 	};
 
 	using BallPushConstants = EntityPushConstants;
@@ -44,11 +49,18 @@ namespace brassica {
 		virtual void                      SetIndirectCommand(const MeshTasksIndirectCommand& cmd) = 0;
 		virtual EntityPushConstants&      GetPushConstants() = 0;
 		virtual MeshTasksIndirectCommand& GetIndirectCommand() = 0;
+
+		virtual void AddInstance(const TransformComponent& transform, const EntityRenderComponent& renderComp = {}) = 0;
+		virtual void ClearInstances() = 0;
 	};
 
 	template <typename Tag = struct DefaultEntityTag>
 	struct EntityNode: public IEntityNode {
-		using Resources = graph::Declares<GBuffer<graph::ModifyKey>, graph::Create<EntityIndirectBuffer<Tag>>>;
+		using Resources = graph::Declares<
+			GBuffer<graph::ModifyKey>,
+			graph::Create<EntityInstanceBuffer<Tag>>,
+			graph::Create<EntityIndirectBuffer<Tag>>
+		>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -56,6 +68,11 @@ namespace brassica {
 			.depthWrite = true,
 			.depthCompareOp = vk::CompareOp::eLess,
 			.enableShadingRate = false,
+		};
+
+		struct InternalInstance {
+			TransformComponent    transform;
+			EntityRenderComponent render;
 		};
 
 		TaskShader     taskShader;
@@ -67,6 +84,8 @@ namespace brassica {
 		EntityPushConstants          push{};
 		MeshTasksIndirectCommand     indirectCmd{0, 0, 0};
 
+		std::vector<InternalInstance> m_rawInstances;
+
 		void SetPushConstants(const EntityPushConstants& p) override { push = p; }
 
 		void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) override { indirectCmd = cmd; }
@@ -74,6 +93,14 @@ namespace brassica {
 		EntityPushConstants& GetPushConstants() override { return push; }
 
 		MeshTasksIndirectCommand& GetIndirectCommand() override { return indirectCmd; }
+
+		void AddInstance(const TransformComponent& transform, const EntityRenderComponent& renderComp = {}) override {
+			m_rawInstances.push_back({transform, renderComp});
+		}
+
+		void ClearInstances() override {
+			m_rawInstances.clear();
+		}
 
 		void RegisterInto(graph::Graph& graph) override { graph.RegisterRef(*this); }
 
@@ -105,7 +132,7 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.isActive = (indirectCmd.groupCountX > 0 || indirectCmd.groupCountY > 0 || indirectCmd.groupCountZ > 0);
+			r.isActive = true;
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -143,7 +170,19 @@ namespace brassica {
 				}
 			);
 
-			graph::ResourceDesc indirectDesc = graph::MappedStorageBufferDesc(sizeof(MeshTasksIndirectCommand));
+			std::size_t maxInstances = std::max<std::size_t>(m_rawInstances.size(), 1);
+			graph::ResourceDesc instanceDesc = graph::MappedStorageBufferDesc(sizeof(EntityInstanceData) * maxInstances);
+			instanceDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<EntityInstanceBuffer<Tag>>(),
+					.access = graph::AccessKind::Write,
+					.desc = instanceDesc,
+				}
+			);
+
+			std::size_t maxBatches = std::max<std::size_t>(m_rawInstances.size(), 1);
+			graph::ResourceDesc indirectDesc = graph::MappedStorageBufferDesc(sizeof(MeshTasksIndirectCommand) * maxBatches);
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -157,7 +196,56 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			ctx.WriteSpan<EntityIndirectBuffer<Tag>>(std::span<const MeshTasksIndirectCommand>(&indirectCmd, 1));
+			// Sort local instances by meshType to reduce state switches and batch efficiently
+			std::vector<InternalInstance> sortedInstances = m_rawInstances;
+			std::sort(sortedInstances.begin(), sortedInstances.end(), [](const InternalInstance& a, const InternalInstance& b) {
+				return a.render.meshType < b.render.meshType;
+			});
+
+			std::vector<EntityInstanceData>       gpuInstances;
+			std::vector<MeshTasksIndirectCommand> indirectCommands;
+
+			gpuInstances.reserve(sortedInstances.size());
+
+			for (const auto& inst : sortedInstances) {
+				EntityInstanceData gpuInst{};
+				gpuInst.positionAndScale = glm::vec4(inst.transform.position, inst.transform.scale.x);
+				gpuInst.color = inst.render.color;
+				gpuInst.params = inst.render.params;
+
+				gpuInstances.push_back(gpuInst);
+			}
+
+			if (!gpuInstances.empty()) {
+				indirectCommands.push_back(MeshTasksIndirectCommand{static_cast<std::uint32_t>(gpuInstances.size()), 1, 1});
+			} else if (indirectCmd.groupCountX > 0 || indirectCmd.groupCountY > 0 || indirectCmd.groupCountZ > 0) {
+				indirectCommands.push_back(indirectCmd);
+			}
+
+			if (!gpuInstances.empty()) {
+				ctx.WriteSpan<EntityInstanceBuffer<Tag>>(std::span<const EntityInstanceData>(gpuInstances.data(), gpuInstances.size()));
+			}
+			if (!indirectCommands.empty()) {
+				ctx.WriteSpan<EntityIndirectBuffer<Tag>>(std::span<const MeshTasksIndirectCommand>(indirectCommands.data(), indirectCommands.size()));
+			}
+
+			vk::Buffer    indirectBuf{nullptr};
+			std::uint64_t indirectOffset = 0;
+			std::uint64_t instanceDeviceAddress = 0;
+
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					if (auto physIndirect = registry->GetBuffer<EntityIndirectBuffer<Tag>>()) {
+						indirectBuf = physIndirect->GetBuffer();
+						indirectOffset = physIndirect->SliceStride() * (ctx.frameIndex % physIndirect->RingSlots());
+					}
+					if (auto physInst = registry->GetBuffer<EntityInstanceBuffer<Tag>>()) {
+						vk::BufferDeviceAddressInfo addrInfo{physInst->GetBuffer()};
+						instanceDeviceAddress = registry->GetDevice().getBufferAddress(addrInfo);
+						instanceDeviceAddress += physInst->SliceStride() * (ctx.frameIndex % physInst->RingSlots());
+					}
+				}
+			}
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{
@@ -204,6 +292,10 @@ namespace brassica {
 			vkCmd.setViewport(0, viewport);
 			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 
+			push.instanceBufferAddress = instanceDeviceAddress;
+			push.baseInstanceIndex = 0;
+			push.totalInstances = static_cast<std::uint32_t>(gpuInstances.size());
+
 			vkCmd.pushConstants(
 				resolved.layout,
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
@@ -212,27 +304,16 @@ namespace brassica {
 				&push
 			);
 
-			vk::Buffer    indirectBuf{nullptr};
-			std::uint64_t offset = 0;
-			if (ctx.resources) {
-				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					if (auto physBuf = registry->GetBuffer<EntityIndirectBuffer<Tag>>()) {
-						indirectBuf = physBuf->GetBuffer();
-						offset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
-					}
-				}
-			}
-
-			if (dls && dls->vkCmdDrawMeshTasksIndirectEXT && indirectBuf) {
+			if (dls && dls->vkCmdDrawMeshTasksIndirectEXT && indirectBuf && !indirectCommands.empty()) {
 				dls->vkCmdDrawMeshTasksIndirectEXT(
 					static_cast<VkCommandBuffer>(ctx.cmd.vkCmd),
 					static_cast<VkBuffer>(indirectBuf),
-					offset,
-					1,
+					indirectOffset,
+					static_cast<std::uint32_t>(indirectCommands.size()),
 					sizeof(MeshTasksIndirectCommand)
 				);
 			} else if (dls && dls->vkCmdDrawMeshTasksEXT) {
-				std::uint32_t groups = indirectCmd.groupCountX > 0 ? indirectCmd.groupCountX : 1;
+				std::uint32_t groups = !gpuInstances.empty() ? static_cast<std::uint32_t>(gpuInstances.size()) : (indirectCmd.groupCountX > 0 ? indirectCmd.groupCountX : 1);
 				vkCmd.drawMeshTasksEXT(groups, 1, 1, *dls);
 			}
 		}

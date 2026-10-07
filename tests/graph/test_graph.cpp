@@ -1081,6 +1081,8 @@ TEST_CASE("SystemHandler lifecycle, entity registration, and update callbacks") 
 	CHECK(mat[3][1] == doctest::Approx(2.0f));
 	CHECK(mat[3][2] == doctest::Approx(3.0f));
 
+	CHECK(handler.GetEntities().size() == 1);
+
 	brassica::FrameDetails details{
 		.deltaTime = 0.016f,
 		.totalTime = 1.0,

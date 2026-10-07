@@ -72,6 +72,9 @@ namespace brassica {
 		EntityPushConstants& GetPushConstants() override { return push; }
 		MeshTasksIndirectCommand& GetIndirectCommand() override { return indirectCmd; }
 
+		void AddInstance(const TransformComponent& /*transform*/, const EntityRenderComponent& /*renderComp*/ = {}) override {}
+		void ClearInstances() override {}
+
 		void SetMeshData(const std::vector<glm::vec3>& positions, const std::vector<glm::vec3>& normals, const std::vector<std::uint32_t>& indices) {
 			meshVertices.resize(positions.size());
 			for (size_t i = 0; i < positions.size(); ++i) {
