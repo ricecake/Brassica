@@ -34,6 +34,7 @@ namespace {
 			graph::Create<GBufferPosition>,
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
+			graph::Create<GBufferMaterial>,
 			graph::Create<GBufferDepth>,
 			graph::Create<HdrColor>>;
 
@@ -66,6 +67,13 @@ namespace {
 					.key = graph::IdOf<GBufferNormal>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferMaterial>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
 				}
 			);
 			r.realizations.push_back(

@@ -5,8 +5,8 @@
 #include "Engine.hpp"
 #include "passes/EntityNode.hpp"
 #include "SystemHandler.hpp"
-#include "terrain/TerrainClipmap.hpp"
 #include "types/EntityRenderComponent.hpp"
+#include "terrain/TerrainManager.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 
@@ -19,7 +19,10 @@ namespace brassica {
 		void Setup(Engine& engine, const FrameDetails& /*frameDetails*/) override {
 			float targetX = 0.0f;
 			float targetZ = -20.0f;
-			float terrainY = TerrainClipmap::SampleTerrain(targetX, targetZ, 0.5f).r;
+			// Approximation: the manager's last cached ground-height readback (near the camera,
+			// not necessarily exactly (targetX, targetZ)), not an exact per-point GPU query --
+			// acceptable for sandbox demo placement.
+			float terrainY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
 
 			TransformComponent transform{};
 			transform.position = glm::vec3(targetX, terrainY + 12.0f, targetZ);
@@ -52,7 +55,7 @@ namespace brassica {
 			if (transform) {
 				float targetX = 0.0f;
 				float targetZ = -20.0f;
-				float terrainY = TerrainClipmap::SampleTerrain(targetX, targetZ, 0.5f).r;
+				float terrainY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
 
 				transform->position.x = targetX;
 				transform->position.z = targetZ;

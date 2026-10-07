@@ -28,9 +28,11 @@ namespace {
 			graph::Create<GBufferPosition>,
 			graph::Create<GBufferAlbedo>,
 			graph::Create<GBufferNormal>,
+			graph::Create<GBufferMaterial>,
 			graph::Create<GBufferDepth>,
 			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>>;
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<SkyViewLUT>>;
 
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
@@ -42,6 +44,13 @@ namespace {
 					.key = graph::IdOf<GBufferPosition>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferMaterial>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
 				}
 			);
 			r.realizations.push_back(
@@ -76,7 +85,7 @@ namespace {
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainMinMaxTexture>(),
 					.access = graph::AccessKind::Write,
-					// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainClipmap.hpp), which also
+					// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainManager.hpp), which also
 					// requests eStorage for terrain_gen.comp's writer -- this fixture only needs
 					// WaterNode's read side, and this bindless set (below) declares no storage-image
 					// binding to write that second descriptor into.
@@ -85,9 +94,16 @@ namespace {
 						.width = 4,
 						.height = 4,
 						.layers = 2,
-						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
 						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
 					},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;

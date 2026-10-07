@@ -13,6 +13,7 @@
 // scheduler relative to WaterNode's SubPhase::WaterRender -- a Subgraph child's own kPhase only
 // orders it against its Subgraph siblings, never an outer sibling.
 // 16 -> 17: Added CirrusNode for thin cirrus cloud weather indicator layer.
+// 18 -> 20: Added CloudVolumeGenNode and CloudRenderNode.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 18);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 21);
 }

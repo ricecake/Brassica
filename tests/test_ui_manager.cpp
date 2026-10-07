@@ -4,7 +4,7 @@
 #include "ConfigManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/ITerrainClipmap.hpp"
+#include "terrain/ITerrainManager.hpp"
 #include "EngineConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/TonemapPushConstants.hpp"
@@ -49,7 +49,7 @@ namespace brassica {
 		CHECK(widget.m_drawCount == 1);
 	}
 
-	class MockTerrainClipmap: public ITerrainClipmap {
+	class MockTerrainManager: public ITerrainManager {
 	public:
 		void Initialize() override { m_initialized = true; }
 		void Shutdown() override { m_initialized = false; }
@@ -58,16 +58,16 @@ namespace brassica {
 		bool m_regenerated{false};
 	};
 
-	TEST_CASE("ITerrainClipmap Service Locator and Regeneration") {
+	TEST_CASE("ITerrainManager Service Locator and Regeneration") {
 		ServiceLocator locator;
 		ServiceLocator::SetInstance(&locator);
 
-		auto terrainMock = std::make_shared<MockTerrainClipmap>();
+		auto terrainMock = std::make_shared<MockTerrainManager>();
 		terrainMock->Initialize();
-		locator.Provide<ITerrainClipmap>(terrainMock);
+		locator.Provide<ITerrainManager>(terrainMock);
 
-		CHECK(locator.Has<ITerrainClipmap>());
-		auto retrieved = locator.Get<ITerrainClipmap>();
+		CHECK(locator.Has<ITerrainManager>());
+		auto retrieved = locator.Get<ITerrainManager>();
 		CHECK_FALSE(terrainMock->m_regenerated);
 
 		retrieved->Regenerate();

@@ -4,8 +4,6 @@
 #include "terrain/TerrainMapExporter.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <numbers>
 #include <vector>
 
 #include "Engine.hpp"
@@ -13,7 +11,6 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "spdlog/spdlog.h"
-#include "terrain/TerrainClipmap.hpp"
 
 namespace brassica {
 
@@ -24,60 +21,11 @@ namespace brassica {
 		float    planetRadius{600000.0f};
 	};
 
-	bool TerrainMapExporter::ExportCPU(const std::string& outputPath, uint32_t width, uint32_t height) {
-		std::vector<uint8_t> pixels(width * height * 4);
-
-		float planetRadius = 600000.0f; // 600km
-		float pi = std::numbers::pi_v<float>;
-
-		for (uint32_t y = 0; y < height; ++y) {
-			float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
-			float worldZ = (0.5f - v) * (pi * planetRadius);
-
-			for (uint32_t x = 0; x < width; ++x) {
-				float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
-				float worldX = (u - 0.5f) * (2.0f * pi * planetRadius);
-
-				glm::vec4 terrainSample = TerrainClipmap::SampleTerrain(worldX, worldZ, 0.5f);
-				float     h = terrainSample.r;
-				float     nx = terrainSample.g;
-				float     ny = terrainSample.b;
-				float     nz = terrainSample.a;
-
-				uint8_t r = 0, g = 0, b = 0, a = 255;
-				TerrainMapColorConfig::GetColor(h, nx, ny, nz, r, g, b, a);
-
-				size_t idx = (y * width + x) * 4;
-				pixels[idx + 0] = r;
-				pixels[idx + 1] = g;
-				pixels[idx + 2] = b;
-				pixels[idx + 3] = a;
-			}
-		}
-
-		int result = stbi_write_png(
-			outputPath.c_str(),
-			static_cast<int>(width),
-			static_cast<int>(height),
-			4,
-			pixels.data(),
-			static_cast<int>(width * 4)
-		);
-
-		if (result == 0) {
-			spdlog::error("Failed to write terrain map PNG to '{}'", outputPath);
-			return false;
-		}
-
-		spdlog::info("Successfully exported CPU terrain map ({}x{}) to '{}'", width, height, outputPath);
-		return true;
-	}
-
 	bool TerrainMapExporter::ExportGPU(Engine& engine, const std::string& outputPath, uint32_t width, uint32_t height) {
 		vk::Device device = engine.GetDevice();
 		if (!device) {
-			spdlog::warn("Vulkan device null; falling back to CPU terrain map exporter.");
-			return ExportCPU(outputPath, width, height);
+			spdlog::error("Vulkan device null; cannot export terrain map.");
+			return false;
 		}
 
 		try {
@@ -103,8 +51,8 @@ namespace brassica {
 			VmaAllocation imageAllocation = nullptr;
 			VkImageCreateInfo rawImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
 			if (vmaCreateImage(allocator, &rawImageInfo, &allocCreateInfo, &rawImage, &imageAllocation, nullptr) != VK_SUCCESS) {
-				spdlog::warn("vmaCreateImage failed for terrain map; falling back to CPU.");
-				return ExportCPU(outputPath, width, height);
+				spdlog::error("vmaCreateImage failed for terrain map export.");
+				return false;
 			}
 
 			vk::Image image(rawImage);
@@ -148,19 +96,20 @@ namespace brassica {
 			VmaAllocation     stagingAllocation = nullptr;
 			VmaAllocationInfo stagingResultInfo{};
 			if (vmaCreateBuffer(allocator, &bufferInfo, &stagingAllocInfo, &stagingBuffer, &stagingAllocation, &stagingResultInfo) != VK_SUCCESS) {
+				spdlog::error("vmaCreateBuffer failed for terrain map export staging buffer.");
 				device.destroyImageView(imageView);
 				vmaDestroyImage(allocator, image, imageAllocation);
-				return ExportCPU(outputPath, width, height);
+				return false;
 			}
 
 			// 3. Compile Compute Shader & Build Pipeline
 			ComputeShader mapShader;
 			if (!mapShader.CompileComputeFromFile(device, "shaders/terrain_map.comp")) {
-				spdlog::warn("shaders/terrain_map.comp compilation failed; falling back to CPU.");
+				spdlog::error("shaders/terrain_map.comp compilation failed.");
 				vmaDestroyBuffer(allocator, stagingBuffer, stagingAllocation);
 				device.destroyImageView(imageView);
 				vmaDestroyImage(allocator, image, imageAllocation);
-				return ExportCPU(outputPath, width, height);
+				return false;
 			}
 
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
@@ -277,14 +226,14 @@ namespace brassica {
 
 			if (stbiRes == 0) {
 				spdlog::error("Failed to write GPU terrain map PNG to '{}'", outputPath);
-				return ExportCPU(outputPath, width, height);
+				return false;
 			}
 
 			spdlog::info("Successfully exported GPU terrain map ({}x{}) to '{}'", width, height, outputPath);
 			return true;
 		} catch (const std::exception& err) {
-			spdlog::warn("GPU terrain map export error: {}; falling back to CPU.", err.what());
-			return ExportCPU(outputPath, width, height);
+			spdlog::error("GPU terrain map export error: {}", err.what());
+			return false;
 		}
 	}
 

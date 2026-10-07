@@ -652,9 +652,26 @@ TEST_CASE("ToDot renders nodes, recurses into a populated subgraph, and draws th
 	CHECK(dot.find("LightingPass") != std::string::npos);
 	CHECK(dot.find("TonemapPass") != std::string::npos);
 	CHECK(dot.find("cluster") != std::string::npos);
+	CHECK(dot.find("cluster_phase_") != std::string::npos);
 	CHECK(dot.find("[transfer]") != std::string::npos);
 	CHECK(dot.find("gold") != std::string::npos);
 	CHECK(dot.find("purple") != std::string::npos);
+}
+
+TEST_CASE("ToDot exports phase clusters and labels") {
+	Graph graph;
+	graph.Register<DeferredLikeNode>();
+	graph.Register<WaterLikeNode>();
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	std::string dot = ToDot(graph, "PhaseClusterTest");
+
+	CHECK(dot.find("cluster_phase_0") != std::string::npos);
+	CHECK(dot.find("cluster_phase_1000") != std::string::npos);
+	CHECK(dot.find("Phase 0 (Default / GBuffer)") != std::string::npos);
+	CHECK(dot.find("Phase 1000 (Late / UnderwaterStructuralTranslucentRender)") != std::string::npos);
 }
 
 TEST_CASE("Lighting structs alignment and size layout") {
@@ -1218,6 +1235,18 @@ TEST_CASE("ArgparseManager terrain map flag options") {
 	CHECK(argMgrCustom.Parse(argsCustom));
 	CHECK(argMgrCustom.GetRenderTerrainMap() == true);
 	CHECK(argMgrCustom.GetTerrainMapPath() == "custom_planet.png");
+}
+
+TEST_CASE("ArgparseManager print render graph flag options") {
+	brassica::ArgparseManager argMgr("TestApp", "1.0.0");
+	std::vector<std::string> args = {"TestApp", "--print-render-graph"};
+	CHECK(argMgr.Parse(args));
+	CHECK(argMgr.GetPrintRenderGraph() == true);
+
+	brassica::ArgparseManager argMgrAlias("TestApp", "1.0.0");
+	std::vector<std::string> argsAlias = {"TestApp", "--print-graphviz"};
+	CHECK(argMgrAlias.Parse(argsAlias));
+	CHECK(argMgrAlias.GetPrintRenderGraph() == true);
 }
 
 TEST_CASE("TerrainMapColorConfig elevation, slope, and water color tinting") {

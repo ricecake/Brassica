@@ -24,9 +24,6 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	uint  uFrameIndex;
 	uint  uGlobalSeed;
 	uint  uFrameRandom;
-
-	// Last frame's uViewProjMatrix -- see FrameUBO.hpp's previousViewProjMatrix for why. Available
-	// to any shader that needs to reproject a world-space point into last frame's screen space.
 	mat4  uPreviousViewProjMatrix;
 };
 
@@ -76,6 +73,17 @@ layout(set = 1, binding = 3, rgba32f) uniform image2D uImagesRGBA32F[];
 layout(set = 1, binding = 3) writeonly uniform image2D uImagesGenericWrite[];
 layout(set = 1, binding = 3) writeonly uniform image2DArray uImageArraysGenericWrite[];
 layout(set = 1, binding = 3) writeonly uniform image3D uImages3DGenericWrite[];
+// A real, format-qualified, coherent, read-write alias of the same binding 3 catalog -- for the
+// one case the writeonly formatless aliases above can't cover: a shader that needs to imageLoad
+// its own earlier imageStore within the same dispatch. FidelityFX SPD's single-surviving-
+// workgroup "coarse tail" (shaders/terrain_downsample.comp) does exactly this at its mip-6
+// handoff -- the elected workgroup reads back what every other workgroup just wrote, so the
+// value must actually round-trip, which a formatless declaration can't do here (this glslang
+// version only accepts formatless for writeonly, see the comment above). rg32f specifically
+// because the only resource that needs this today -- the terrain min/max mip chain -- is RG32F;
+// a different format needing this same capability would get its own aliased declaration, same
+// pattern as the rest of this file.
+layout(set = 1, binding = 3, rg32f) coherent uniform image2DArray uImageArraysRG32FCoherent[];
 // Binding 5: a real 3D-volume sampled catalog, independently sized/counted from bindings 0/1
 // (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,
 // not a 2D-array pressed into service for a volume it was never shaped for.

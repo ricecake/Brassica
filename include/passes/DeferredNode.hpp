@@ -38,8 +38,8 @@ namespace brassica {
 		std::uint32_t gDepthIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
-		std::uint32_t visibilityIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
+		std::uint32_t gMaterialIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -50,7 +50,6 @@ namespace brassica {
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainTileVisibilityTexture>,
 			graph::Read<TerrainWeatherBiomeTexture>,
 			graph::Read<TerrainTLAS>,
 			graph::Create<HdrColor>>;
@@ -110,13 +109,13 @@ namespace brassica {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
+			push.gMaterialIndex = ctx.Index<GBufferMaterial>();
 			push.gDepthIndex = ctx.Index<GBufferDepth>();
 			push.backgroundIndex = ctx.Index<AtmosphereRadiance>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.tlasIndex = ctx.Index<TerrainTLAS>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
-			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};

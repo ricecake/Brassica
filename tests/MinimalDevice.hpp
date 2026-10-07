@@ -132,6 +132,8 @@ namespace brassica::testing {
 				m_instance = nullptr;
 				return;
 			}
+
+			m_dls.init(m_instance, m_device);
 		}
 
 		~MinimalDevice() {
@@ -156,6 +158,8 @@ namespace brassica::testing {
 
 		[[nodiscard]] vk::Instance GetInstance() const { return m_instance; }
 
+		[[nodiscard]] vk::PhysicalDevice GetPhysicalDevice() const { return m_physicalDevice; }
+
 		[[nodiscard]] vk::Device GetDevice() const { return m_device; }
 
 		[[nodiscard]] VmaAllocator GetAllocator() const { return m_allocator; }
@@ -163,6 +167,8 @@ namespace brassica::testing {
 		[[nodiscard]] vk::Queue GetQueue() const { return m_queue; }
 
 		[[nodiscard]] uint32_t GetQueueFamily() const { return m_queueFamily; }
+
+		[[nodiscard]] const vk::DispatchLoaderDynamic& GetDls() const { return m_dls; }
 
 		[[nodiscard]] uint32_t GetValidationErrorCount() const { return m_errorCount; }
 
@@ -193,9 +199,10 @@ namespace brassica::testing {
 		vk::Instance       m_instance{};
 		vk::PhysicalDevice m_physicalDevice{};
 		vk::Device         m_device{};
-		vk::Queue          m_queue{};
-		uint32_t           m_queueFamily{0};
-		VmaAllocator       m_allocator{VK_NULL_HANDLE};
+		vk::Queue                  m_queue{};
+		uint32_t                   m_queueFamily{0};
+		VmaAllocator               m_allocator{VK_NULL_HANDLE};
+		vk::DispatchLoaderDynamic  m_dls{};
 
 		uint32_t m_errorCount{0};
 		uint32_t m_warningCount{0};
