@@ -16,6 +16,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  biomeIndex;
 	uint  visibilityIndex;
 	float waterLevel;
+	uint  weatherBiomeIndex;
 }
 params;
 

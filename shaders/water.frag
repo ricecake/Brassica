@@ -2,6 +2,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "clustered_lighting.glsl"
+#include "atmosphere/common.glsl"
 
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
@@ -17,6 +18,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  gNormalIndex;
 	uint  sceneColorIndex;
 	uint  minMaxIndex;
+	uint  gMaterialIndex;
+	uint  skyViewIndex;
 } params;
 
 void main() {
@@ -82,14 +85,7 @@ void main() {
 		baseNormal = isAboveWater ? vec3(0.0, 1.0, 0.0) : vec3(0.0, -1.0, 0.0);
 	}
 
-	// vec2 waveXZ = inWorldPos.xz;
-	// float t = uTime * smoothstep(800.0, 1800.0, distToCamWater) * max(1.0, 1000.0/distToCamWater);
-
-	// vec2 sinGrad = 0.25 * cross_noise_fbm(inWorldPos * 0.004 + abs(dot_noise(inWorldPos * 0.0025, t * 0.5)), 4, t * 0.25).xz;
-	// sinGrad *= smoothstep(1000.0, 2000.0, distToCamWater) * (1.0 - smoothstep(3000.0, 20000.0, distToCamWater));
-
-	// Ensure wave perturbation follows the flipped backface normal
-	vec3 waveNormal = baseNormal;//normalize(baseNormal + vec3(-sinGrad.x, 0.0, -sinGrad.y));
+	vec3 waveNormal = baseNormal;
 
 	float distToCam = distToCamWater;
 	float closeThreshold = 800.0;
@@ -142,40 +138,61 @@ void main() {
 	// Absorb the background light and add the water's scattered light
 	vec3 integratedColor = (refractedAlbedo.rgb * transmittance) + (waterBodyColor * (1.0 - transmittance));
 
-	// Water has no Lambertian diffuse term of its own (its visible color comes entirely from the
-	// volume-scattering/transmittance math above) -- zero albedo means evaluate_brdf's diffuse
-	// lobe contributes nothing and this reduces to a real Cook-Torrance specular highlight driven
-	// by every light in range (sun, moon, points/spots via the cluster grid), not just a hardcoded
-	// single directional "sun" reimplementing Blinn-Phong. Low roughness keeps the highlight tight,
-	// matching the old pow(NdotH, 256) sharpness; the wave normal's own noise perturbation already
-	// carries the surface's visual roughness.
-	Material waterMaterial = Material(vec3(0.0), 0.05, 0.0, 1.0, 0.0, 0.0);
-	vec3     shineColor =
-		isAboveWater ? evaluateClusteredLightContributionPBR(absWaterPos, waveNormal, waterMaterial).color : vec3(0.0);
+	// 5. PBR SPECULAR LIGHTING, GLINTS, & ATMOSPHERIC SKY REFLECTIONS
+	// Water has zero Lambertian diffuse term of its own (visible color comes from volume absorption/scattering).
+	// Low roughness keeps specular highlights sharp, while glint > 0 generates sparkling micro-facet highlights.
+	Material waterMaterial = Material(vec3(0.0), 0.035, 0.0, 1.0, 0.0, 2.5);
+	vec3 shineColor = isAboveWater ? evaluateClusteredLightContributionPBR(absWaterPos, waveNormal, waterMaterial).color : vec3(0.0);
 
+	// Physical Fresnel-Schlick for water (IOR = 1.333 -> F0 = 0.02037)
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
-	float fresnel = clamp(pow(1.0 - NdotV, 5.0), 0.02, 0.98);
+	float waterF0 = 0.02037;
+	float fresnel = waterF0 + (1.0 - waterF0) * pow(1.0 - NdotV, 5.0);
 
 	if (isTIR) {
 		fresnel = 1.0;
 	}
 
-	vec3 surfaceReflectionColor = isAboveWater ? vec3(0.65, 0.82, 1.0) : deepWaterColor;
-	vec3 finalColor = mix(integratedColor, surfaceReflectionColor, fresnel * 0.5) + shineColor;
+	// Environment / Sky reflection along the reflected view ray
+	vec3 surfaceReflectionColor = deepWaterColor;
+	if (isAboveWater) {
+		vec3 reflectDir = reflect(-viewDir, waveNormal);
+		vec3 skyReflectDir = reflectDir;
+		if (skyReflectDir.y < 0.01) {
+			skyReflectDir.y = max(0.01, skyReflectDir.y + 0.05 * (0.01 - skyReflectDir.y));
+			skyReflectDir = normalize(skyReflectDir);
+		}
 
+		vec3 skyColor = sampleSkyView(params.skyViewIndex, skyReflectDir);
+
+		if (reflectDir.y < 0.0) {
+			vec3 ambientGround = getSpatialAmbientSH(absWaterPos, waveNormal);
+			skyColor = mix(skyColor, ambientGround, clamp(-reflectDir.y * 2.0, 0.0, 1.0));
+		}
+
+		surfaceReflectionColor = skyColor;
+	}
+
+	vec3 specularReflective = mix(integratedColor, surfaceReflectionColor, fresnel) + shineColor;
+
+	// 6. FOAM RENDERING WITH SCENE LIGHTING INTEGRATION
 	float shoreFoam = clamp(1.0 - depthBelowWater / 2.2, 0.0, 1.0);
 	shoreFoam = pow(shoreFoam, 1.4);
 	float foamNoise = InterleavedGradientNoise(absWaterPos.xz * 3.5, int(uTime * 12.0));
 	shoreFoam *= 0.65 + 0.35 * foamNoise;
 
 	float crestFactor = clamp((1.0 - waveNormal.y) * 3.5, 0.0, 1.0);
-	float crestFoam = crestFactor * closeFactor;// * (0.5 + 0.5 * sin(uTime * 3.0 + inWorldPos.x * 0.5));
+	float crestFoam = crestFactor * closeFactor;
 
 	float totalFoam = clamp(shoreFoam * 1.25 + crestFoam * 0.6, 0.0, 1.0);
 	if (!isAboveWater) totalFoam *= 0.15; // Diminish foam visibility heavily from underneath
-	// totalFoam = 0.0;
-	vec3 foamColor = vec3(0.92, 0.96, 1.0);
-	finalColor = mix(finalColor, foamColor, totalFoam);
+
+	vec3 foamBaseColor = vec3(0.92, 0.96, 1.0);
+	Material foamMaterial = Material(foamBaseColor, 0.85, 0.0, 1.0, 0.0, 0.0);
+	vec3 litFoam = evaluateClusteredLightContributionPBR(absWaterPos, waveNormal, foamMaterial).color;
+	vec3 foamColor = max(litFoam, uAmbientLight.rgb * foamBaseColor);
+
+	vec3 finalColor = mix(specularReflective, foamColor, totalFoam);
 
 	// Output completely opaque fragment to overwrite the G-Buffer composite
 	outColor = vec4(finalColor, 1.0);

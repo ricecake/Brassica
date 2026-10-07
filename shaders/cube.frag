@@ -15,5 +15,5 @@ void main() {
 	gPosition = vec4(inPosition, 0.0);
 	gNormal = vec4(normalize(inNormal), 1.0);
 	gAlbedo = inAlbedo;
-	gMaterial = vec4(0.0, 0.7, 0.0, 0.0);
+	gMaterial = vec4(0.10, 0.35, 0.0, 0.0);
 }

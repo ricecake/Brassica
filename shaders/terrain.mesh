@@ -14,6 +14,8 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
 }
 params;
 
@@ -29,6 +31,7 @@ shared vec3 sharedPos[121];
 layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec4 outAlbedo[];
+layout(location = 3) out vec4 outMaterial[];
 
 
 vec3 getTerrainMapColor(float h, vec3 normal) {
@@ -131,12 +134,12 @@ void main() {
 
 	// Add minor local perturbations to mesh height and surface normals for close-up detail
 	vec2 microGrad = vec2(0.0);
-	float detailFreq = 0.5;
+	float detailFreq = 0.0125;
 	float microNoise = psrdnoise(morphedWorldXZ * detailFreq, vec2(0.0), 0.0, microGrad);
 	float lodFade = clamp(1.0 - (float(lodLevel) / 6.0), 0.0, 1.0);
 	float microAmplitude = lodFade;
-	height += microNoise * microAmplitude;
-	normal = normalize(normal + vec3(microGrad.x, 0.0, microGrad.y) * (0.05 * lodFade));
+	height += microNoise * microAmplitude * smoothstep(0.0, 1.0, height);
+	normal = normalize(normal + smoothstep(0.0, 1.0, height) * normalize(vec3(-microGrad.x, 1.0, -microGrad.y)) * (0.15 * lodFade));
 
 	uint lodDiff = morphLOD - lodLevel;
 	uint gridDim = 1u << lodDiff;
@@ -230,9 +233,64 @@ void main() {
 	// Modulo ensures safety if LODs exceed the array bounds
 	// vec3 lodColor = debugColors[lodLevel % 8u];
 
-	vec3 lodColor = getTerrainMapColor(height, normal);
+	vec3 absWorldPos = uCameraPosition.xyz + relWorldPos;
 
-	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
+	vec3 baseColor = getTerrainMapColor(height, normal);
+	float roughness = 0.75;
+	float metallic = 0.0;
+	float glint = 0.0;
+
+	if (params.weatherBiomeIndex > 0u) {
+		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, absWorldPos);
+		float temp = weatherSample.r;
+		float moisture = weatherSample.g;
+		float severity = weatherSample.b;
+		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+
+		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+		baseColor = mix(baseColor, wb.color, 0.125);
+		roughness = wb.roughness;
+	}
+
+	float slopeFactor = smoothstep(0.80, 0.30, normal.y);
+	if (slopeFactor > 0.0) {
+		vec3 cliffRockColor = vec3(0.35, 0.32, 0.29);
+		baseColor = mix(baseColor, cliffRockColor, slopeFactor * 0.85);
+		roughness = mix(roughness, 0.85, slopeFactor * 0.85);
+		metallic = mix(metallic, 0.02, slopeFactor * 0.85);
+	}
+
+	if (normal.y > 0.4) {
+		float distToWater = abs(height - params.waterLevel);
+		if (distToWater < 5.0) {
+			float shoreFactor = (1.0 - smoothstep(0.0, 5.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
+			vec3 sandColor = vec3(0.82, 0.75, 0.55);
+			baseColor = mix(baseColor, sandColor, shoreFactor * 0.8);
+			roughness = mix(roughness, 0.75, shoreFactor * 0.8);
+		}
+	}
+
+	if (height < params.waterLevel) {
+		float depth = params.waterLevel - height;
+		vec3 wetSand = vec3(0.65, 0.60, 0.45);
+		vec3 shallowReef = vec3(0.35, 0.60, 0.50);
+		vec3 deepOceanBed = vec3(0.12, 0.16, 0.20);
+
+		vec3 seafloorColor = mix(wetSand, shallowReef, smoothstep(0.5, 5.0, depth));
+		seafloorColor = mix(seafloorColor, deepOceanBed, smoothstep(12.0, 45.0, depth));
+		baseColor = mix(baseColor, seafloorColor, smoothstep(0.0, 3.0, depth));
+		roughness = mix(roughness, 0.50, smoothstep(0.0, 5.0, depth));
+	}
+
+	if (height > 2000.0) {
+		float snowFactor = smoothstep(2000.0, 3500.0, height) * smoothstep(0.2, 0.6, normal.y);
+		vec3 snowColor = vec3(0.92, 0.95, 0.98);
+		baseColor = mix(baseColor, snowColor, snowFactor);
+		roughness = mix(roughness, 0.30, snowFactor);
+	}
+
+	outAlbedo[vertexIndex] = vec4(baseColor, 1.0);
+	outMaterial[vertexIndex] = vec4(metallic, roughness, glint, 0.0);
 
 	// Only generate skirts on the absolute outer edges of the macro-slot
 	bool drawSkirtTop = (ly == 0) && (cy == 0);
@@ -261,7 +319,8 @@ void main() {
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);
 		outPosition[skirtIdx] = relSkirtPos;
 		outNormal[skirtIdx] = normal;
-		outAlbedo[skirtIdx] = vec4(lodColor, 1.0);
+		outAlbedo[skirtIdx] = vec4(baseColor, 1.0);
+		outMaterial[skirtIdx] = vec4(metallic, roughness, glint, 0.0);
 	}
 
 	if (lx < 10 && ly < 10) {
