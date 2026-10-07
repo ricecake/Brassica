@@ -43,6 +43,31 @@ namespace brassica {
 			return glm::vec3(nRaw.x, -nRaw.z, nRaw.y);
 		}
 
+		// Maps octahedral UV coordinates that have strayed outside [0, 1]^2 back onto the valid
+		// octahedron net. The net's outer edges are fold lines of the octahedron, not a periodic
+		// boundary, so a plain modulo wrap (or decoding+re-encoding the out-of-domain UV, which
+		// extrapolates octahedralUVToDirection past its valid piecewise-linear domain) produces a
+		// position with an uncontrolled lateral offset. Mirroring across the crossed edge is the
+		// correct, continuous continuation (verified: octahedralUVToDirection(1, y) ==
+		// octahedralUVToDirection(1, 1 - y), etc. for all four edges).
+		inline glm::vec2 wrapOctahedralUV(glm::vec2 uv) {
+			if (uv.x < 0.0f) {
+				uv.x = -uv.x;
+				uv.y = 1.0f - uv.y;
+			} else if (uv.x > 1.0f) {
+				uv.x = 2.0f - uv.x;
+				uv.y = 1.0f - uv.y;
+			}
+			if (uv.y < 0.0f) {
+				uv.y = -uv.y;
+				uv.x = 1.0f - uv.x;
+			} else if (uv.y > 1.0f) {
+				uv.y = 2.0f - uv.y;
+				uv.x = 1.0f - uv.x;
+			}
+			return uv;
+		}
+
 	} // namespace octahedral
 
 } // namespace brassica

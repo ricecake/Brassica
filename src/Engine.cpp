@@ -835,27 +835,30 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
-		// Update camera surface orientation alignment & handle globe boundary wrapping
+		// Handle globe boundary wrapping: when the camera's octahedral UV strays outside [0,1]^2,
+		// mirror it back onto the valid net (octahedral::wrapOctahedralUV -- the net's outer edges
+		// are fold lines, not a periodic boundary, so a naive decode-then-re-encode of the
+		// out-of-domain UV extrapolates past its valid piecewise-linear domain and introduces an
+		// uncontrolled lateral offset) and re-express velocity in the tangent frame at the new
+		// position, since the local basis can flip across a net fold.
 		float planetWidth = 2.0f * glm::pi<float>() * FAKE_PLANET_RADIUS;
 		glm::vec2 prevUV = glm::vec2(prevCamPos.x, prevCamPos.z) / planetWidth + 0.5f;
 		glm::vec2 currUV = glm::vec2(camera.position.x, camera.position.z) / planetWidth + 0.5f;
 
-		glm::vec3 prevNormal = octahedral::octahedralUVToDirection(prevUV);
-		glm::vec3 currNormal = octahedral::octahedralUVToDirection(currUV);
-
-
 		if (currUV.x < 0.0f || currUV.x > 1.0f || currUV.y < 0.0f || currUV.y > 1.0f) {
-			glm::vec3 dir = octahedral::octahedralUVToDirection(currUV);
-			glm::vec2 wrappedUV = octahedral::directionToOctahedralUV(dir);
+			glm::vec2 wrappedUV = octahedral::wrapOctahedralUV(currUV);
 
+			// prevUV is still valid/in-range (it's where the camera was before this frame's
+			// movement), so the pre-wrap tangent basis is evaluated there rather than at the
+			// out-of-domain currUV.
 			constexpr float eps = 1e-4f;
 			glm::vec3 ex_prev = glm::normalize(
-				(octahedral::octahedralUVToDirection(currUV + glm::vec2(eps, 0.0f)) -
-				 octahedral::octahedralUVToDirection(currUV - glm::vec2(eps, 0.0f))) / (2.0f * eps)
+				(octahedral::octahedralUVToDirection(prevUV + glm::vec2(eps, 0.0f)) -
+				 octahedral::octahedralUVToDirection(prevUV - glm::vec2(eps, 0.0f))) / (2.0f * eps)
 			);
 			glm::vec3 ez_prev = glm::normalize(
-				(octahedral::octahedralUVToDirection(currUV + glm::vec2(0.0f, eps)) -
-				 octahedral::octahedralUVToDirection(currUV - glm::vec2(0.0f, eps))) / (2.0f * eps)
+				(octahedral::octahedralUVToDirection(prevUV + glm::vec2(0.0f, eps)) -
+				 octahedral::octahedralUVToDirection(prevUV - glm::vec2(0.0f, eps))) / (2.0f * eps)
 			);
 
 			glm::vec3 ex_curr = glm::normalize(

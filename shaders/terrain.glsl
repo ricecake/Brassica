@@ -83,8 +83,7 @@ float sampleTerrainTileVisibility(
 // Sample octahedral weather and Whittaker biome texture
 vec4 sampleTerrainWeatherBiome(uint weatherStorageIdx, vec3 worldPos) {
 	vec2 octUV = worldPos.xz / (2.0 * PI * FAKE_PLANET_RADIUS) + 0.5;
-	vec3 dir = octahedralUVToDirection(octUV);
-	vec2 uv = directionToOctahedralUV(dir);
+	vec2 uv = wrapOctahedralUV(octUV);
 	return SAMPLE_LINEAR(weatherStorageIdx, uv);
 }
 

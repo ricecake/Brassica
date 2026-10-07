@@ -45,14 +45,14 @@ void calculateLightContribution(
 			attenuation *= smoothstep(1.0, 0.8, distance / max(outer_cutoff, 0.001));
 		}
 	} else if (type == LIGHT_TYPE_DIRECTIONAL) {
+		// Geometric horizon obstruction (sun/moon fading as the planet's curvature actually
+		// blocks them) is computed once per frame from the camera's octahedral position
+		// (LightManager::Update) and baked into light.intensity before this ever runs -- a
+		// per-fragment "self-shadow" here using frag_pos directly, anchored to world origin
+		// instead of the camera's local frame, would double up on that and go wrong once
+		// frag_pos is far from the origin (e.g. near the globe wrap boundary).
 		light_dir = normalize(-light_dir_param);
-		float planetRadius = 600000.0;
-		vec3 planetCenter = vec3(0.0, -planetRadius, 0.0);
-		vec3 fragToCenter = planetCenter - frag_pos;
-		float distToCenter = length(fragToCenter);
-		vec3 surfaceNormal = -fragToCenter / max(0.001, distToCenter);
-		float NdotL = dot(surfaceNormal, light_dir);
-		attenuation = smoothstep(-0.05, 0.05, NdotL);
+		attenuation = 1.0;
 	} else if (type == LIGHT_TYPE_SPOT) {
 		light_dir = normalize(light_pos - frag_pos);
 		float distance = length(light_pos - frag_pos);

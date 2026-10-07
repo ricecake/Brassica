@@ -26,4 +26,16 @@ vec3 octahedralUVToDirection(vec2 uv) {
 	return vec3(nRaw.x, -nRaw.z, nRaw.y);
 }
 
+// Maps octahedral UV coordinates that have strayed outside [0, 1]^2 back onto the valid
+// octahedron net. The net's outer edges are fold lines of the octahedron, not a periodic
+// boundary, so mirroring across the crossed edge (rather than a plain modulo wrap, or decoding
+// then re-encoding the out-of-domain UV) is the correct, continuous continuation.
+vec2 wrapOctahedralUV(vec2 uv) {
+	if (uv.x < 0.0) { uv.x = -uv.x; uv.y = 1.0 - uv.y; }
+	else if (uv.x > 1.0) { uv.x = 2.0 - uv.x; uv.y = 1.0 - uv.y; }
+	if (uv.y < 0.0) { uv.y = -uv.y; uv.x = 1.0 - uv.x; }
+	else if (uv.y > 1.0) { uv.y = 2.0 - uv.y; uv.x = 1.0 - uv.x; }
+	return uv;
+}
+
 #endif // OCTAHEDRAL_GLSL
