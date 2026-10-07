@@ -131,12 +131,12 @@ void main() {
 
 	// Add minor local perturbations to mesh height and surface normals for close-up detail
 	vec2 microGrad = vec2(0.0);
-	float detailFreq = 0.5;
+	float detailFreq = 0.0125;
 	float microNoise = psrdnoise(morphedWorldXZ * detailFreq, vec2(0.0), 0.0, microGrad);
 	float lodFade = clamp(1.0 - (float(lodLevel) / 6.0), 0.0, 1.0);
 	float microAmplitude = lodFade;
-	height += microNoise * microAmplitude;
-	normal = normalize(normal + vec3(microGrad.x, 0.0, microGrad.y) * (0.05 * lodFade));
+	height += microNoise * microAmplitude * smoothstep(0, 1.0, height);
+	normal = normalize(normal + smoothstep(0, 1.0, height)* normalize(vec3(microGrad.x, microGrad.y, -1)) * (0.15*lodFade));
 
 	uint lodDiff = morphLOD - lodLevel;
 	uint gridDim = 1u << lodDiff;
