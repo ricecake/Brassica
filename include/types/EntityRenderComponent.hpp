@@ -19,6 +19,9 @@ namespace brassica {
 		glm::vec4     rotation{0.0f, 0.0f, 0.0f, 0.0f}; // xyz = euler angles (radians)
 		std::uint64_t vertexBufferAddress{0};
 		std::uint64_t indexBufferAddress{0};
+		std::uint64_t meshletBufferAddress{0};
+		std::uint64_t meshletVertBufferAddress{0};
+		std::uint64_t meshletTriBufferAddress{0};
 	};
 
 	struct EntityRenderComponent {
@@ -28,6 +31,9 @@ namespace brassica {
 		glm::vec4      material{0.0f, 0.5f, 0.0f, 0.0f}; // metallic, roughness, glint, emissivity
 		std::uint64_t  vertexBufferAddress{0};
 		std::uint64_t  indexBufferAddress{0};
+		std::uint64_t  meshletBufferAddress{0};
+		std::uint64_t  meshletVertBufferAddress{0};
+		std::uint64_t  meshletTriBufferAddress{0};
 
 		std::uint32_t  version{1};
 		std::uint32_t  gpuVersion{0};

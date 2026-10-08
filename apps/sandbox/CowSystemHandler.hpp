@@ -11,6 +11,7 @@
 #include "types/EntityRenderComponent.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
+#include <vk_mem_alloc.h>
 
 namespace brassica {
 
@@ -34,6 +35,18 @@ namespace brassica {
 			vk::Buffer        indexBuffer{nullptr};
 			VmaAllocation     indexAlloc{nullptr};
 			std::uint64_t     indexBufferAddress{0};
+
+			vk::Buffer        meshletBuffer{nullptr};
+			VmaAllocation     meshletAlloc{nullptr};
+			std::uint64_t     meshletBufferAddress{0};
+
+			vk::Buffer        meshletVertBuffer{nullptr};
+			VmaAllocation     meshletVertAlloc{nullptr};
+			std::uint64_t     meshletVertBufferAddress{0};
+
+			vk::Buffer        meshletTriBuffer{nullptr};
+			VmaAllocation     meshletTriAlloc{nullptr};
+			std::uint64_t     meshletTriBufferAddress{0};
 		};
 
 		CowSystemHandler() = default;
@@ -106,10 +119,14 @@ namespace brassica {
 
 					renderComp->vertexBufferAddress = cow.vertexBufferAddress;
 					renderComp->indexBufferAddress = cow.indexBufferAddress;
+					renderComp->meshletBufferAddress = cow.meshletBufferAddress;
+					renderComp->meshletVertBufferAddress = cow.meshletVertBufferAddress;
+					renderComp->meshletTriBufferAddress = cow.meshletTriBufferAddress;
+
 					renderComp->meshParams = glm::uvec4(
 						static_cast<uint32_t>(m_cowModel->GetVertexCount()),
 						static_cast<uint32_t>(m_cowModel->GetTriangleCount()),
-						static_cast<uint32_t>(cow.animIndex),
+						static_cast<uint32_t>(m_cowModel->GetMeshletCount()),
 						0
 					);
 					renderComp->MarkDirty();
@@ -126,6 +143,18 @@ namespace brassica {
 				if (cow.indexBuffer) {
 					vmaDestroyBuffer(engine.GetAllocator(), cow.indexBuffer, cow.indexAlloc);
 					cow.indexBuffer = nullptr;
+				}
+				if (cow.meshletBuffer) {
+					vmaDestroyBuffer(engine.GetAllocator(), cow.meshletBuffer, cow.meshletAlloc);
+					cow.meshletBuffer = nullptr;
+				}
+				if (cow.meshletVertBuffer) {
+					vmaDestroyBuffer(engine.GetAllocator(), cow.meshletVertBuffer, cow.meshletVertAlloc);
+					cow.meshletVertBuffer = nullptr;
+				}
+				if (cow.meshletTriBuffer) {
+					vmaDestroyBuffer(engine.GetAllocator(), cow.meshletTriBuffer, cow.meshletTriAlloc);
+					cow.meshletTriBuffer = nullptr;
 				}
 			}
 			m_cows.clear();
@@ -209,18 +238,76 @@ namespace brassica {
 				vmaUnmapMemory(engine.GetAllocator(), cowData.indexAlloc);
 			}
 
+			// Allocate Meshlet storage buffers
+			VkBufferCreateInfo meshletBufInfo{
+				.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+				.size = m_cowModel->GetMeshlets().size() * sizeof(GPUMeshlet),
+				.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+				.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+			};
+			VkBuffer vkMeshletBuf{VK_NULL_HANDLE};
+			vmaCreateBuffer(engine.GetAllocator(), &meshletBufInfo, &vertAllocInfo, &vkMeshletBuf, &cowData.meshletAlloc, nullptr);
+			cowData.meshletBuffer = vkMeshletBuf;
+			cowData.meshletBufferAddress = engine.GetDevice().getBufferAddress(vk::BufferDeviceAddressInfo(cowData.meshletBuffer));
+
+			void* mappedMeshlets = nullptr;
+			vmaMapMemory(engine.GetAllocator(), cowData.meshletAlloc, &mappedMeshlets);
+			if (mappedMeshlets) {
+				std::memcpy(mappedMeshlets, m_cowModel->GetMeshlets().data(), m_cowModel->GetMeshlets().size() * sizeof(GPUMeshlet));
+				vmaUnmapMemory(engine.GetAllocator(), cowData.meshletAlloc);
+			}
+
+			VkBufferCreateInfo meshletVertBufInfo{
+				.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+				.size = m_cowModel->GetMeshletVertices().size() * sizeof(std::uint32_t),
+				.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+				.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+			};
+			VkBuffer vkMeshletVertBuf{VK_NULL_HANDLE};
+			vmaCreateBuffer(engine.GetAllocator(), &meshletVertBufInfo, &vertAllocInfo, &vkMeshletVertBuf, &cowData.meshletVertAlloc, nullptr);
+			cowData.meshletVertBuffer = vkMeshletVertBuf;
+			cowData.meshletVertBufferAddress = engine.GetDevice().getBufferAddress(vk::BufferDeviceAddressInfo(cowData.meshletVertBuffer));
+
+			void* mappedMeshletVerts = nullptr;
+			vmaMapMemory(engine.GetAllocator(), cowData.meshletVertAlloc, &mappedMeshletVerts);
+			if (mappedMeshletVerts) {
+				std::memcpy(mappedMeshletVerts, m_cowModel->GetMeshletVertices().data(), m_cowModel->GetMeshletVertices().size() * sizeof(std::uint32_t));
+				vmaUnmapMemory(engine.GetAllocator(), cowData.meshletVertAlloc);
+			}
+
+			VkBufferCreateInfo meshletTriBufInfo{
+				.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+				.size = m_cowModel->GetMeshletTriangles().size() * sizeof(std::uint8_t),
+				.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+				.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+			};
+			VkBuffer vkMeshletTriBuf{VK_NULL_HANDLE};
+			vmaCreateBuffer(engine.GetAllocator(), &meshletTriBufInfo, &vertAllocInfo, &vkMeshletTriBuf, &cowData.meshletTriAlloc, nullptr);
+			cowData.meshletTriBuffer = vkMeshletTriBuf;
+			cowData.meshletTriBufferAddress = engine.GetDevice().getBufferAddress(vk::BufferDeviceAddressInfo(cowData.meshletTriBuffer));
+
+			void* mappedMeshletTris = nullptr;
+			vmaMapMemory(engine.GetAllocator(), cowData.meshletTriAlloc, &mappedMeshletTris);
+			if (mappedMeshletTris) {
+				std::memcpy(mappedMeshletTris, m_cowModel->GetMeshletTriangles().data(), m_cowModel->GetMeshletTriangles().size() * sizeof(std::uint8_t));
+				vmaUnmapMemory(engine.GetAllocator(), cowData.meshletTriAlloc);
+			}
+
 			EntityRenderComponent renderComp{};
 			renderComp.meshType = EntityMeshType::Cow;
 			renderComp.color = glm::vec4(0.92f, 0.88f, 0.8f, 1.0f);
 			renderComp.meshParams = glm::uvec4(
 				static_cast<uint32_t>(m_cowModel->GetVertexCount()),
 				static_cast<uint32_t>(m_cowModel->GetTriangleCount()),
-				static_cast<uint32_t>(cowData.animIndex),
+				static_cast<uint32_t>(m_cowModel->GetMeshletCount()),
 				0
 			);
 			renderComp.material = glm::vec4(0.05f, 0.5f, 0.0f, 0.0f);
 			renderComp.vertexBufferAddress = cowData.vertexBufferAddress;
 			renderComp.indexBufferAddress = cowData.indexBufferAddress;
+			renderComp.meshletBufferAddress = cowData.meshletBufferAddress;
+			renderComp.meshletVertBufferAddress = cowData.meshletVertBufferAddress;
+			renderComp.meshletTriBufferAddress = cowData.meshletTriBufferAddress;
 
 			entt::entity entity = RegisterEntity(engine, transform, renderComp);
 			cowData.entity = entity;

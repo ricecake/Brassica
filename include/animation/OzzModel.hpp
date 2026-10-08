@@ -9,6 +9,8 @@
 #include <fastgltf/core.hpp>
 #include <fastgltf/types.hpp>
 
+#include <meshoptimizer.h>
+
 #include <ozz/animation/offline/animation_builder.h>
 #include <ozz/animation/offline/raw_animation.h>
 #include <ozz/animation/offline/raw_skeleton.h>
@@ -34,6 +36,13 @@ namespace brassica {
 	struct ModelVertex {
 		glm::vec4 position; // xyz = position, w = 1.0
 		glm::vec4 normal;   // xyz = normal, w = 0.0
+	};
+
+	struct GPUMeshlet {
+		std::uint32_t vertexOffset;
+		std::uint32_t triangleOffset;
+		std::uint32_t vertexCount;
+		std::uint32_t triangleCount;
 	};
 
 	struct OzzModelInstance {
@@ -66,8 +75,13 @@ namespace brassica {
 		[[nodiscard]] const std::vector<ModelVertex>&   GetRestVertices() const { return m_restVertices; }
 		[[nodiscard]] const std::vector<std::uint32_t>& GetIndices() const { return m_indices; }
 
+		[[nodiscard]] const std::vector<GPUMeshlet>&     GetMeshlets() const { return m_meshlets; }
+		[[nodiscard]] const std::vector<std::uint32_t>& GetMeshletVertices() const { return m_meshletVertices; }
+		[[nodiscard]] const std::vector<std::uint8_t>&  GetMeshletTriangles() const { return m_meshletTriangles; }
+
 		[[nodiscard]] std::size_t GetVertexCount() const { return m_restPositions.size(); }
 		[[nodiscard]] std::size_t GetTriangleCount() const { return m_indices.size() / 3; }
+		[[nodiscard]] std::size_t GetMeshletCount() const { return m_meshlets.size(); }
 
 		[[nodiscard]] const ozz::animation::Skeleton* GetSkeleton() const { return m_skeleton.get(); }
 		[[nodiscard]] std::size_t                     GetAnimationCount() const { return m_animations.size(); }
@@ -76,7 +90,7 @@ namespace brassica {
 
 	private:
 		void ProcessGLTF(const fastgltf::Asset& asset);
-		void OptimizeMesh();
+		void OptimizeMeshAndBuildMeshlets();
 
 		ozz::unique_ptr<ozz::animation::Skeleton> m_skeleton;
 		std::vector<AnimationClip>                 m_animations;
@@ -91,6 +105,11 @@ namespace brassica {
 		std::vector<std::uint16_t> m_jointIndices;
 		std::vector<float>         m_jointWeights;
 		std::vector<std::uint32_t> m_indices;
+
+		// Meshlet data
+		std::vector<GPUMeshlet>    m_meshlets;
+		std::vector<std::uint32_t> m_meshletVertices;
+		std::vector<std::uint8_t>  m_meshletTriangles;
 	};
 
 } // namespace brassica

@@ -60,7 +60,7 @@ namespace brassica {
 		}
 
 		ProcessGLTF(assetResult.get());
-		OptimizeMesh();
+		OptimizeMeshAndBuildMeshlets();
 		return true;
 	}
 
@@ -382,7 +382,7 @@ namespace brassica {
 		}
 	}
 
-	void OzzModel::OptimizeMesh() {
+	void OzzModel::OptimizeMeshAndBuildMeshlets() {
 		if (m_indices.empty() || m_restPositions.empty()) return;
 
 		std::size_t indexCount = m_indices.size();
@@ -458,6 +458,43 @@ namespace brassica {
 			m_restVertices[i].position = glm::vec4(optVerts[i].pos, 1.0f);
 			m_restVertices[i].normal = glm::vec4(optVerts[i].norm, 0.0f);
 		}
+
+		// 3. Build Meshlets using meshoptimizer
+		constexpr std::size_t maxVertices = 64;
+		constexpr std::size_t maxTriangles = 128;
+		constexpr float coneWeight = 0.0f;
+
+		std::size_t maxMeshlets = meshopt_buildMeshletsBound(indexCount, maxVertices, maxTriangles);
+
+		std::vector<meshopt_Meshlet> rawMeshlets(maxMeshlets);
+		m_meshletVertices.resize(maxMeshlets * maxVertices);
+		m_meshletTriangles.resize(maxMeshlets * maxTriangles * 3);
+
+		std::size_t meshletCount = meshopt_buildMeshlets(
+			rawMeshlets.data(),
+			m_meshletVertices.data(),
+			m_meshletTriangles.data(),
+			m_indices.data(),
+			indexCount,
+			&m_restVertices[0].position.x,
+			vertexCount,
+			sizeof(ModelVertex),
+			maxVertices,
+			maxTriangles,
+			coneWeight
+		);
+
+		m_meshlets.resize(meshletCount);
+		for (std::size_t i = 0; i < meshletCount; ++i) {
+			m_meshlets[i].vertexOffset = rawMeshlets[i].vertex_offset;
+			m_meshlets[i].triangleOffset = rawMeshlets[i].triangle_offset;
+			m_meshlets[i].vertexCount = rawMeshlets[i].vertex_count;
+			m_meshlets[i].triangleCount = rawMeshlets[i].triangle_count;
+		}
+
+		const auto& lastMeshlet = rawMeshlets[meshletCount - 1];
+		m_meshletVertices.resize(lastMeshlet.vertex_offset + lastMeshlet.vertex_count);
+		m_meshletTriangles.resize(lastMeshlet.triangle_offset + lastMeshlet.triangle_count * 3);
 	}
 
 	int OzzModel::FindAnimationIndex(const std::string& name) const {

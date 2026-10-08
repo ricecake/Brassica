@@ -325,6 +325,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     list(APPEND ALL_TEST_TARGETS ${TEST_NAME})
 endforeach()
 
+
 add_custom_target(tests)
 if(ALL_TEST_TARGETS)
     add_dependencies(tests ${ALL_TEST_TARGETS})
