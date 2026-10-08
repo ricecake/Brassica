@@ -1203,6 +1203,11 @@ namespace brassica {
 			render::NodeFrameParams frameParams{
 				.cameraPosition = camera.position,
 				.previousCameraPosition = camera.position,
+				.cameraForward = camera.GetForward(),
+				.cameraUp = camera.GetUp(),
+				.cameraRight = camera.GetRight(),
+				.fov = camera.fov,
+				.aspectRatio = camera.aspectRatio,
 				.forceRegeneration = false,
 				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
 				.waterLevel = 0.0f,
@@ -1535,6 +1540,11 @@ namespace brassica {
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,
 			.previousCameraPosition = previousCameraPosition,
+			.cameraForward = camera.GetForward(),
+			.cameraUp = camera.GetUp(),
+			.cameraRight = camera.GetRight(),
+			.fov = camera.fov,
+			.aspectRatio = camera.aspectRatio,
 			.terrainGridParams = terrainPush.gridParams,
 			.forceRegeneration = forceRegeneration,
 			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),

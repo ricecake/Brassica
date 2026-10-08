@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 
 #include "vulkan/vulkan.hpp"
@@ -20,12 +21,16 @@
 namespace brassica {
 
 	struct alignas(16) VolumetricRenderPushConstants {
+		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
+		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 0.0f};
+		alignas(16) glm::vec4 camRight{1.0f, 0.0f, 0.0f, 0.0f};
+		alignas(16) glm::vec4 fovAspect{1.0f, 1.777f, 0.0f, 0.0f}; // tanHalfFov, aspect
 		alignas(16) glm::uvec4 cascadeScatteringIdx{0xFFFFFFFFu};
 		alignas(16) glm::uvec4 cascadeExtinctionIdx{0xFFFFFFFFu};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gDepthIndex{0};
 		std::uint32_t hdrColorIndex{0};
-		float         maxDistance{800.0f};
+		float         maxDistance{12800.0f};
 	};
 
 	// Composites froxel volumetric scattering and extinction onto HdrColor.
@@ -75,8 +80,11 @@ namespace brassica {
 			fragShader.Destroy(device);
 		}
 
-		void SetFrameParams(const render::NodeFrameParams& /*p*/) {
-			// No frame params needed beyond push constants calculated in Execute
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			push.camForward = glm::vec4(p.cameraForward, 0.0f);
+			push.camUp = glm::vec4(p.cameraUp, 0.0f);
+			push.camRight = glm::vec4(p.cameraRight, 0.0f);
+			push.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {

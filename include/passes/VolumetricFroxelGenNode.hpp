@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 
 #include "vulkan/vulkan.hpp"
@@ -27,18 +28,22 @@ namespace brassica {
 
 	struct VolumetricFroxelGenPushConstants {
 		alignas(16) glm::vec4 cameraPos{0.0f};
+		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
+		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 0.0f};
+		alignas(16) glm::vec4 camRight{1.0f, 0.0f, 0.0f, 0.0f};
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};
 		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 1.0f};
-		alignas(16) glm::vec4 fogParams{0.05f, 0.01f, 0.0f, 0.6f}; // density, height falloff, base height, anisotropy g
+		alignas(16) glm::vec4 fogParams{0.015f, 0.005f, 0.0f, 0.6f}; // density, height falloff, base height, anisotropy g
+		alignas(16) glm::vec4 fovAspect{1.0f, 1.777f, 0.0f, 0.0f};   // tanHalfFov, aspect
 		alignas(16) glm::uvec4 cascadeScatteringIdx{0xFFFFFFFFu};
 		alignas(16) glm::uvec4 cascadeExtinctionIdx{0xFFFFFFFFu};
 		std::uint32_t noiseTextureIdx{0xFFFFFFFFu};
-		std::uint32_t transmittanceLUTIdx{0xFFFFFFFFu};
-		std::uint32_t skyViewLUTIdx{0xFFFFFFFFu};
-		std::uint32_t _padding{0};
+		std::uint32_t clipmapIndex{0xFFFFFFFFu};
+		std::uint32_t minMaxIndex{0xFFFFFFFFu};
+		std::uint32_t gridTextureDim{1024u};
 	};
 
-	// Manages 3 froxel grid cascades for volumetric fog and scattering.
+	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
 	// Operates in SubPhase::LightPreparation (Phase 500).
 	struct VolumetricFroxelGenNode: render::NodeRegistrar<VolumetricFroxelGenNode> {
 		using Resources = graph::Declares<
@@ -49,8 +54,8 @@ namespace brassica {
 			graph::Create<VolumetricCascade2Scattering>,
 			graph::Create<VolumetricCascade2Extinction>,
 			graph::Create<VolumetricNoiseTexture>,
-			graph::Read<TransmittanceLUT>,
-			graph::Read<SkyViewLUT>>;
+			graph::Read<TerrainClipmapTexture>,
+			graph::Read<TerrainMinMaxTexture>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
@@ -89,14 +94,19 @@ namespace brassica {
 			time = p.time;
 
 			genPush.cameraPos = glm::vec4(cameraPos, time);
+			genPush.camForward = glm::vec4(p.cameraForward, 0.0f);
+			genPush.camUp = glm::vec4(p.cameraUp, 0.0f);
+			genPush.camRight = glm::vec4(p.cameraRight, 0.0f);
+			genPush.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
 			genPush.sunDir = glm::vec4(p.sunDir, 1.0f);
 			genPush.sunColor = glm::vec4(p.sunRadiance, 1.0f);
+			genPush.gridTextureDim = p.terrainGridParams.w;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(9);
+			r.realizations.reserve(7);
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -145,20 +155,6 @@ namespace brassica {
 					.key = graph::IdOf<VolumetricNoiseTexture>(),
 					.access = graph::AccessKind::Write,
 					.desc = VolumetricNoiseDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
 				}
 			);
 
@@ -220,8 +216,8 @@ namespace brassica {
 			genPush.cascadeExtinctionIdx.z = ctx.StorageIndex<VolumetricCascade2Extinction>();
 
 			genPush.noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
-			genPush.transmittanceLUTIdx = ctx.Index<TransmittanceLUT>();
-			genPush.skyViewLUTIdx = ctx.Index<SkyViewLUT>();
+			genPush.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
+			genPush.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 
 			std::array<vk::PushConstantRange, 1> genPushRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricFroxelGenPushConstants)}
@@ -249,8 +245,8 @@ namespace brassica {
 				&genPush
 			);
 
-			// 64 / 8 = 8
-			vkCmd.dispatch(8, 8, 8);
+			// 64 / 8 = 8 workgroups per dimension x and y (z is integrated in shader column)
+			vkCmd.dispatch(8, 8, 1);
 		}
 	};
 
