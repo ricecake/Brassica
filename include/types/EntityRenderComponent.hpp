@@ -7,7 +7,8 @@ namespace brassica {
 
 	enum class EntityMeshType : std::uint32_t {
 		Ball = 0,
-		Cylinder = 1
+		Cylinder = 1,
+		Cow = 2
 	};
 
 	struct EntityInstanceData {
