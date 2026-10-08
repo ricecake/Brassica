@@ -17,6 +17,8 @@
 #include "passes/CloudVolumeGenNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"
+#include "passes/EntityNode.hpp"
+#include "passes/EntityPrepareNode.hpp"
 #include "passes/FoliageNode.hpp"
 #include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"

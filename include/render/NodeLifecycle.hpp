@@ -12,6 +12,7 @@
 #include "graph/Graph.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "VulkanCompat.hpp"
+#include <entt/entity/registry.hpp>
 
 namespace brassica {
 	class ShaderWatcher;
@@ -57,6 +58,7 @@ namespace brassica::render {
 		float      multiScatScale{1.0f};
 		float      cloudShadowIntensity{0.5f};
 		float      skyExposure{1.0f};
+		entt::registry* registry = nullptr;
 		// Not for shader delivery -- shaders read the real values from the global AtmosphereUBO
 		// (atmosphere/common.glsl, set 0 binding 4). This is here purely so
 		// AtmosphereRegenerationState::ShouldRegenerate (the 3 LUT nodes) has a current value to
@@ -134,6 +136,16 @@ namespace brassica::render {
 			for (auto& node : m_instances) {
 				node->SetFrameParams(params);
 			}
+		}
+
+		template <typename T>
+		T* GetNode() {
+			for (auto& node : m_instances) {
+				if (auto* lifecycle = dynamic_cast<NodeLifecycle<T>*>(node.get())) {
+					return &lifecycle->value;
+				}
+			}
+			return nullptr;
 		}
 
 		[[nodiscard]] std::size_t RegisteredTypeCount() const { return m_factories.size(); }

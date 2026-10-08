@@ -233,6 +233,11 @@ namespace brassica::graph {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 
+	template <ResourceRef... Ks>
+	struct PhaseOfT<Import<Ks...>> {
+		static constexpr Phase value = Phase::PreviousFrame;
+	};
+
 	// One CPU-write primitive for both buffers and textures -- ctx.WriteSpan<Key> (Execution.hpp)
 	// dispatches on whatever ResourceServices::BeginHostWrite resolves Key to (a buffer or a
 	// texture; see PhysicalRegistry.hpp), so this type never needs to know which. Cadence is just

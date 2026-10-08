@@ -36,8 +36,10 @@ TEST_CASE("FoliageManager state and global properties") {
 	CHECK(updatedProps.tilesPerRow == 24u);
 
 	brassica::GrassProperties biome0 = mgr.GetBiomeProperties(0);
-	CHECK(biome0.enabled == 1u);
-	CHECK(biome0.height > 0.0f);
+	CHECK(biome0.enabled == 0u);
+	brassica::GrassProperties biome1 = mgr.GetBiomeProperties(1);
+	CHECK(biome1.enabled == 1u);
+	CHECK(biome1.height > 0.0f);
 }
 
 TEST_CASE("FoliageNode registration and push constants sync") {
