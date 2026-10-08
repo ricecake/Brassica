@@ -12,11 +12,13 @@ namespace brassica {
 	};
 
 	struct EntityInstanceData {
-		glm::vec4  positionAndScale{0.0f, 0.0f, 0.0f, 1.0f};
-		glm::vec4  color{1.0f, 1.0f, 1.0f, 1.0f};
-		glm::uvec4 params{0, 0, 0, 0};   // x = meshTypeId, y = param1 (rings/vertexCount), z = param2 (pointsPerRing/triangleCount), w = flags
-		glm::vec4  material{0.0f, 0.5f, 0.0f, 0.0f}; // x = metallic, y = roughness, z = glint, w = emissivity
-		glm::vec4  rotation{0.0f, 0.0f, 0.0f, 0.0f}; // xyz = euler angles (radians)
+		glm::vec4     positionAndScale{0.0f, 0.0f, 0.0f, 1.0f};
+		glm::vec4     color{1.0f, 1.0f, 1.0f, 1.0f};
+		glm::uvec4    params{0, 0, 0, 0};   // x = meshTypeId, y = param1 (rings/vertexCount), z = param2 (pointsPerRing/triangleCount), w = flags
+		glm::vec4     material{0.0f, 0.5f, 0.0f, 0.0f}; // x = metallic, y = roughness, z = glint, w = emissivity
+		glm::vec4     rotation{0.0f, 0.0f, 0.0f, 0.0f}; // xyz = euler angles (radians)
+		std::uint64_t vertexBufferAddress{0};
+		std::uint64_t indexBufferAddress{0};
 	};
 
 	struct EntityRenderComponent {
@@ -24,6 +26,8 @@ namespace brassica {
 		glm::vec4      color{0.0f, 0.4f, 1.0f, 1.0f};
 		glm::uvec4     meshParams{8, 12, 0, 0}; // x = rings/vertexCount, y = pointsPerRing/triangleCount
 		glm::vec4      material{0.0f, 0.5f, 0.0f, 0.0f}; // metallic, roughness, glint, emissivity
+		std::uint64_t  vertexBufferAddress{0};
+		std::uint64_t  indexBufferAddress{0};
 
 		std::uint32_t  version{1};
 		std::uint32_t  gpuVersion{0};

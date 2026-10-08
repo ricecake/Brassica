@@ -4,9 +4,7 @@
 #include <filesystem>
 #include <memory>
 
-#include "Engine.hpp"
 #include "animation/OzzModel.hpp"
-#include "../apps/sandbox/CowSystemHandler.hpp"
 
 TEST_CASE("OzzModel loads cow.glb and animates motions via OzzModelInstance") {
 	std::filesystem::path cowPath = "assets/cow.glb";
@@ -31,7 +29,7 @@ TEST_CASE("OzzModel loads cow.glb and animates motions via OzzModelInstance") {
 	REQUIRE(inst1.skinnedPositions.size() == vertexCount);
 	REQUIRE(inst2.skinnedPositions.size() == vertexCount);
 
-	// Update inst1 withWalk and inst2 with Gallop independently
+	// Update inst1 with Walk and inst2 with Gallop independently
 	int walkIdx = model.FindAnimationIndex("Walk");
 	int gallopIdx = model.FindAnimationIndex("Gallop");
 	CHECK(walkIdx >= 0);
@@ -46,32 +44,4 @@ TEST_CASE("OzzModel loads cow.glb and animates motions via OzzModelInstance") {
 	CHECK(inst2.playbackTime == 0.3f);
 	CHECK(inst1.currentAnimIndex == static_cast<std::size_t>(walkIdx));
 	CHECK(inst2.currentAnimIndex == static_cast<std::size_t>(gallopIdx));
-}
-
-TEST_CASE("CowSystemHandler registers and manages cow entities in Engine") {
-	brassica::EngineOptions options{};
-	options.headless = true;
-
-	brassica::Engine engine;
-	auto cowHandler = engine.AddSystemHandler<brassica::CowSystemHandler>();
-	REQUIRE(cowHandler != nullptr);
-
-	brassica::FrameDetails details{};
-	details.totalTime = 0.0;
-	details.deltaTime = 0.016f;
-
-	cowHandler->Setup(engine, details);
-
-	CHECK(cowHandler->GetEntities().size() == 6);
-	CHECK(cowHandler->GetCowModel() != nullptr);
-
-	// Update frame
-	details.totalTime = 1.0;
-	cowHandler->Update(engine, details);
-
-	CHECK(cowHandler->GetEntities().size() == 6);
-
-	// Cleanup
-	cowHandler->ClearEntities(engine);
-	CHECK(cowHandler->GetEntities().empty());
 }

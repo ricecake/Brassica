@@ -31,13 +31,28 @@ layout(location = 3) out vec4 vMaterial[];
 struct EntityInstanceData {
     vec4 positionAndScale;
     vec4 color;
-    uvec4 params;   // x = meshType (0=Ball, 1=Cylinder, 2=Cow), y = param1, z = param2, w = animTime
-    vec4 material; // x = metallic, y = roughness, z = glint, w = animTime
+    uvec4 params;   // x = meshType (0=Ball, 1=Cylinder, 2=Cow), y = numVertices, z = numTriangles, w = flags
+    vec4 material; // x = metallic, y = roughness, z = glint, w = emissivity
     vec4 rotation; // xyz = euler angles (radians)
+    uint64_t vertexBufferAddress;
+    uint64_t indexBufferAddress;
 };
 
 layout(buffer_reference, std430) readonly buffer EntityBufferRef {
     EntityInstanceData instances[];
+};
+
+struct ModelVertex {
+    vec4 position; // xyz = position, w = 1.0
+    vec4 normal;   // xyz = normal, w = 0.0
+};
+
+layout(buffer_reference, std430) readonly buffer VertexBufferRef {
+    ModelVertex vertices[];
+};
+
+layout(buffer_reference, std430) readonly buffer IndexBufferRef {
+    uint indices[];
 };
 
 const float GOLDEN_ANGLE = 2.39996322972865332;
@@ -185,10 +200,15 @@ void main() {
             gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(i1, i2, i3);
         }
     } else {
-        // Cow model mesh generation (meshType == 2u)
-        // High-density quadruped cow mesh representation (64 vertices, 48 primitives) driven by animation time
-        uint numVertices = 64u;
-        uint numPrimitives = 48u;
+        // Cow GLB mesh model rendering using GPU storage buffer device addresses (meshType == 2u)
+        VertexBufferRef vertBuf = VertexBufferRef(inst.vertexBufferAddress);
+        IndexBufferRef idxBuf = IndexBufferRef(inst.indexBufferAddress);
+
+        uint totalModelVertices = inst.params.y;
+        uint totalModelTriangles = inst.params.z;
+
+        uint numVertices = min(totalModelVertices, 128u);
+        uint numPrimitives = min(totalModelTriangles, 256u);
 
         SetMeshOutputsEXT(numVertices, numPrimitives);
 
@@ -200,56 +220,11 @@ void main() {
         mat3 rotZ = mat3(cos(rot.z), -sin(rot.z), 0.0, sin(rot.z), cos(rot.z), 0.0, 0.0, 0.0, 1.0);
         mat3 rotMat = rotY * rotX * rotZ;
 
-        float animTime = material.w > 0.0 ? material.w : (float(inst.params.w) / 1000.0);
-        float legSwing = sin(animTime * 8.0) * 0.35;
-        float headBob = cos(animTime * 4.0) * 0.1;
-
+        // 1. Fetch vertices directly from host-mapped GPU storage buffer populated by OzzModelInstance CPU skinning
         for (uint i = tid; i < numVertices; i += 32u) {
-            vec3 localPos = vec3(0.0);
-            vec3 localNorm = vec3(0.0, 1.0, 0.0);
-
-            if (i < 16u) {
-                // Torso / Body cylinder ring segment
-                uint ring = i / 8u;
-                uint seg = i % 8u;
-                float angle = float(seg) * (2.0 * PI / 8.0);
-                float z = ring == 0u ? -1.2 : 1.2;
-                float radiusX = 0.8;
-                float radiusY = 0.7;
-
-                localNorm = normalize(vec3(cos(angle) * radiusY, sin(angle) * radiusX, 0.0));
-                localPos = vec3(cos(angle) * radiusX, 0.8 + sin(angle) * radiusY + headBob * 0.5, z);
-            } else if (i < 32u) {
-                // Head and Snout box
-                uint idx = i - 16u;
-                localPos.x = (idx & 1u) != 0u ? 0.45 : -0.45;
-                localPos.y = ((idx & 2u) != 0u ? 1.7 : 0.9) + headBob;
-                localPos.z = (idx & 4u) != 0u ? 1.9 : 1.1;
-                if ((idx & 8u) != 0u) { // Snout extension
-                    localPos.z += 0.3;
-                    localPos.y -= 0.2;
-                }
-                localNorm = normalize(vec3(localPos.x, localPos.y - 1.3, localPos.z - 1.4));
-            } else {
-                // 4 Detailed Legs driven by Ozz animation clip timing
-                uint legIdx = (i - 32u) / 8u;
-                uint vertIdx = (i - 32u) % 8u;
-                vec2 legBase = vec2((legIdx & 1u) != 0u ? 0.6 : -0.6, (legIdx & 2u) != 0u ? 0.8 : -0.8);
-
-                float height = (vertIdx < 4u) ? 0.5 : -0.7;
-                float legRadius = (vertIdx < 4u) ? 0.2 : 0.12;
-
-                uint corner = vertIdx % 4u;
-                float angle = float(corner) * (PI / 2.0) + PI / 4.0;
-
-                // Alternate front-left/back-right vs front-right/back-left leg strides
-                float stride = (legIdx == 0u || legIdx == 3u) ? legSwing : -legSwing;
-
-                localPos.x = legBase.x + cos(angle) * legRadius;
-                localPos.y = height;
-                localPos.z = legBase.y + sin(angle) * legRadius + (vertIdx >= 4u ? stride : 0.0);
-                localNorm = normalize(vec3(cos(angle), -0.2, sin(angle)));
-            }
+            ModelVertex vert = vertBuf.vertices[i];
+            vec3 localPos = vert.position.xyz;
+            vec3 localNorm = vert.normal.xyz;
 
             vec3 worldNorm = normalize(rotMat * localNorm);
             vec3 worldPos = center + rotMat * (localPos * scale);
@@ -264,42 +239,18 @@ void main() {
             vMaterial[i] = material;
         }
 
-        // Torso quads (16 tris)
-        for (uint p = tid; p < 8u; p += 32u) {
-            uint seg = p;
-            uint nextSeg = (seg + 1u) % 8u;
+        // 2. Fetch triangle index buffer
+        for (uint p = tid; p < numPrimitives; p += 32u) {
+            uint i0 = idxBuf.indices[p * 3u];
+            uint i1 = idxBuf.indices[p * 3u + 1u];
+            uint i2 = idxBuf.indices[p * 3u + 2u];
 
-            uint i0 = seg;
-            uint i1 = nextSeg;
-            uint i2 = 8u + seg;
-            uint i3 = 8u + nextSeg;
+            // Clamp indices to active vertex output count
+            i0 = min(i0, numVertices - 1u);
+            i1 = min(i1, numVertices - 1u);
+            i2 = min(i2, numVertices - 1u);
 
-            gl_PrimitiveTriangleIndicesEXT[p * 2u] = uvec3(i0, i2, i1);
-            gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(i1, i2, i3);
-        }
-
-        // Head / Snout quads (16 tris)
-        for (uint p = tid; p < 8u; p += 32u) {
-            uint i0 = 16u + p * 2u;
-            uint i1 = i0 + 1u;
-            uint i2 = i0 + 2u;
-            uint i3 = i0 + 3u;
-
-            gl_PrimitiveTriangleIndicesEXT[16u + p * 2u] = uvec3(i0, i1, i2);
-            gl_PrimitiveTriangleIndicesEXT[16u + p * 2u + 1u] = uvec3(i1, i2, i3);
-        }
-
-        // 4 Legs quads (16 tris)
-        for (uint p = tid; p < 8u; p += 32u) {
-            uint leg = p / 2u;
-            uint side = p % 2u;
-            uint i0 = 32u + leg * 8u + side * 2u;
-            uint i1 = i0 + 1u;
-            uint i2 = i0 + 4u;
-            uint i3 = i2 + 1u;
-
-            gl_PrimitiveTriangleIndicesEXT[32u + p * 2u] = uvec3(i0, i2, i1);
-            gl_PrimitiveTriangleIndicesEXT[32u + p * 2u + 1u] = uvec3(i1, i2, i3);
+            gl_PrimitiveTriangleIndicesEXT[p] = uvec3(i0, i1, i2);
         }
     }
 }

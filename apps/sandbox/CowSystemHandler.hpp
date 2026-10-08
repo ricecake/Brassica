@@ -25,6 +25,15 @@ namespace brassica {
 			float             motionChangeTimer{0.0f};
 			float             motionDuration{4.0f};
 			OzzModelInstance  modelInstance;
+
+			// Mapped storage buffers for GPU mesh rendering
+			vk::Buffer        vertexBuffer{nullptr};
+			VmaAllocation     vertexAlloc{nullptr};
+			std::uint64_t     vertexBufferAddress{0};
+
+			vk::Buffer        indexBuffer{nullptr};
+			VmaAllocation     indexAlloc{nullptr};
+			std::uint64_t     indexBufferAddress{0};
 		};
 
 		CowSystemHandler() = default;
@@ -62,6 +71,20 @@ namespace brassica {
 				// Update unique OzzModelInstance animation state for this individual cow
 				m_cowModel->UpdateInstance(cow.modelInstance, dt, cow.animIndex);
 
+				// Copy skinned vertices directly to host-mapped GPU storage buffer
+				if (cow.vertexAlloc && !cow.modelInstance.skinnedVertices.empty()) {
+					void* mapped = nullptr;
+					vmaMapMemory(engine.GetAllocator(), cow.vertexAlloc, &mapped);
+					if (mapped) {
+						std::memcpy(
+							mapped,
+							cow.modelInstance.skinnedVertices.data(),
+							cow.modelInstance.skinnedVertices.size() * sizeof(ModelVertex)
+						);
+						vmaUnmapMemory(engine.GetAllocator(), cow.vertexAlloc);
+					}
+				}
+
 				auto* transform = registry.try_get<TransformComponent>(cow.entity);
 				auto* renderComp = registry.try_get<EntityRenderComponent>(cow.entity);
 
@@ -81,17 +104,31 @@ namespace brassica {
 						transform->rotation.y = std::atan2(cow.velocity.x, cow.velocity.z);
 					}
 
-					float playbackTime = cow.modelInstance.playbackTime;
+					renderComp->vertexBufferAddress = cow.vertexBufferAddress;
+					renderComp->indexBufferAddress = cow.indexBufferAddress;
 					renderComp->meshParams = glm::uvec4(
 						static_cast<uint32_t>(m_cowModel->GetVertexCount()),
 						static_cast<uint32_t>(m_cowModel->GetTriangleCount()),
 						static_cast<uint32_t>(cow.animIndex),
-						static_cast<uint32_t>(playbackTime * 1000.0f)
+						0
 					);
-					renderComp->material.w = playbackTime;
 					renderComp->MarkDirty();
 				}
 			}
+		}
+
+		void Cleanup(Engine& engine) override {
+			for (auto& cow : m_cows) {
+				if (cow.vertexBuffer) {
+					vmaDestroyBuffer(engine.GetAllocator(), cow.vertexBuffer, cow.vertexAlloc);
+					cow.vertexBuffer = nullptr;
+				}
+				if (cow.indexBuffer) {
+					vmaDestroyBuffer(engine.GetAllocator(), cow.indexBuffer, cow.indexAlloc);
+					cow.indexBuffer = nullptr;
+				}
+			}
+			m_cows.clear();
 		}
 
 		[[nodiscard]] const OzzModel* GetCowModel() const { return m_cowModel.get(); }
@@ -109,21 +146,7 @@ namespace brassica {
 			transform.position = pos;
 			transform.scale = glm::vec3(1.5f);
 
-			EntityRenderComponent renderComp{};
-			renderComp.meshType = EntityMeshType::Cow;
-			renderComp.color = glm::vec4(0.92f, 0.88f, 0.8f, 1.0f);
-			renderComp.meshParams = glm::uvec4(
-				static_cast<uint32_t>(m_cowModel->GetVertexCount()),
-				static_cast<uint32_t>(m_cowModel->GetTriangleCount()),
-				static_cast<uint32_t>(index % m_cowModel->GetAnimationCount()),
-				0
-			);
-			renderComp.material = glm::vec4(0.05f, 0.5f, 0.0f, 0.0f);
-
-			entt::entity entity = RegisterEntity(engine, transform, renderComp);
-
 			CowInstanceData cowData{};
-			cowData.entity = entity;
 			cowData.spawnTime = currentTime;
 			cowData.basePos = transform.position;
 			cowData.velocity = glm::vec3(
@@ -135,6 +158,72 @@ namespace brassica {
 			cowData.motionChangeTimer = 0.0f;
 			cowData.motionDuration = 4.0f + static_cast<float>(index % 3);
 			cowData.modelInstance = m_cowModel->CreateInstance();
+
+			// Allocate Host-Mapped Vertex Buffer with Shader Device Address
+			VkBufferCreateInfo vertBufInfo{
+				.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+				.size = m_cowModel->GetVertexCount() * sizeof(ModelVertex),
+				.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+				.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+			};
+			VmaAllocationCreateInfo vertAllocInfo{
+				.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+				.usage = VMA_MEMORY_USAGE_AUTO,
+			};
+
+			VkBuffer vkVertBuf{VK_NULL_HANDLE};
+			vmaCreateBuffer(engine.GetAllocator(), &vertBufInfo, &vertAllocInfo, &vkVertBuf, &cowData.vertexAlloc, nullptr);
+			cowData.vertexBuffer = vkVertBuf;
+
+			vk::BufferDeviceAddressInfo vertBdaInfo(cowData.vertexBuffer);
+			cowData.vertexBufferAddress = engine.GetDevice().getBufferAddress(vertBdaInfo);
+
+			// Allocate Host-Mapped Index Buffer with Shader Device Address
+			VkBufferCreateInfo idxBufInfo{
+				.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+				.size = m_cowModel->GetIndices().size() * sizeof(std::uint32_t),
+				.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+				.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+			};
+			VmaAllocationCreateInfo idxAllocInfo{
+				.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+				.usage = VMA_MEMORY_USAGE_AUTO,
+			};
+
+			VkBuffer vkIdxBuf{VK_NULL_HANDLE};
+			vmaCreateBuffer(engine.GetAllocator(), &idxBufInfo, &idxAllocInfo, &vkIdxBuf, &cowData.indexAlloc, nullptr);
+			cowData.indexBuffer = vkIdxBuf;
+
+			vk::BufferDeviceAddressInfo idxBdaInfo(cowData.indexBuffer);
+			cowData.indexBufferAddress = engine.GetDevice().getBufferAddress(idxBdaInfo);
+
+			// Upload static index data once
+			void* mappedIdx = nullptr;
+			vmaMapMemory(engine.GetAllocator(), cowData.indexAlloc, &mappedIdx);
+			if (mappedIdx) {
+				std::memcpy(
+					mappedIdx,
+					m_cowModel->GetIndices().data(),
+					m_cowModel->GetIndices().size() * sizeof(std::uint32_t)
+				);
+				vmaUnmapMemory(engine.GetAllocator(), cowData.indexAlloc);
+			}
+
+			EntityRenderComponent renderComp{};
+			renderComp.meshType = EntityMeshType::Cow;
+			renderComp.color = glm::vec4(0.92f, 0.88f, 0.8f, 1.0f);
+			renderComp.meshParams = glm::uvec4(
+				static_cast<uint32_t>(m_cowModel->GetVertexCount()),
+				static_cast<uint32_t>(m_cowModel->GetTriangleCount()),
+				static_cast<uint32_t>(cowData.animIndex),
+				0
+			);
+			renderComp.material = glm::vec4(0.05f, 0.5f, 0.0f, 0.0f);
+			renderComp.vertexBufferAddress = cowData.vertexBufferAddress;
+			renderComp.indexBufferAddress = cowData.indexBufferAddress;
+
+			entt::entity entity = RegisterEntity(engine, transform, renderComp);
+			cowData.entity = entity;
 
 			m_cows.push_back(cowData);
 		}

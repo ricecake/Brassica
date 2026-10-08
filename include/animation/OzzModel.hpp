@@ -31,6 +31,11 @@ namespace brassica {
 		float                                         duration{0.0f};
 	};
 
+	struct ModelVertex {
+		glm::vec4 position; // xyz = position, w = 1.0
+		glm::vec4 normal;   // xyz = normal, w = 0.0
+	};
+
 	struct OzzModelInstance {
 		float       playbackTime{0.0f};
 		std::size_t currentAnimIndex{0};
@@ -39,8 +44,9 @@ namespace brassica {
 		std::vector<ozz::math::Float4x4>     modelMatrices;
 		std::vector<ozz::math::Float4x4>     skinningMatrices;
 
-		std::vector<glm::vec3> skinnedPositions;
-		std::vector<glm::vec3> skinnedNormals;
+		std::vector<glm::vec3>   skinnedPositions;
+		std::vector<glm::vec3>   skinnedNormals;
+		std::vector<ModelVertex> skinnedVertices;
 	};
 
 	class OzzModel {
@@ -57,6 +63,7 @@ namespace brassica {
 
 		[[nodiscard]] const std::vector<glm::vec3>&     GetRestPositions() const { return m_restPositions; }
 		[[nodiscard]] const std::vector<glm::vec3>&     GetRestNormals() const { return m_restNormals; }
+		[[nodiscard]] const std::vector<ModelVertex>&   GetRestVertices() const { return m_restVertices; }
 		[[nodiscard]] const std::vector<std::uint32_t>& GetIndices() const { return m_indices; }
 
 		[[nodiscard]] std::size_t GetVertexCount() const { return m_restPositions.size(); }
@@ -69,6 +76,7 @@ namespace brassica {
 
 	private:
 		void ProcessGLTF(const fastgltf::Asset& asset);
+		void OptimizeMesh();
 
 		ozz::unique_ptr<ozz::animation::Skeleton> m_skeleton;
 		std::vector<AnimationClip>                 m_animations;
@@ -79,6 +87,7 @@ namespace brassica {
 		// Rest pose & Skinning data
 		std::vector<glm::vec3>     m_restPositions;
 		std::vector<glm::vec3>     m_restNormals;
+		std::vector<ModelVertex>   m_restVertices;
 		std::vector<std::uint16_t> m_jointIndices;
 		std::vector<float>         m_jointWeights;
 		std::vector<std::uint32_t> m_indices;

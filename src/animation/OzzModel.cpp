@@ -14,6 +14,8 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 
+#include <meshoptimizer.h>
+
 #include <ozz/base/maths/simd_math.h>
 #include <ozz/base/maths/soa_transform.h>
 
@@ -58,6 +60,7 @@ namespace brassica {
 		}
 
 		ProcessGLTF(assetResult.get());
+		OptimizeMesh();
 		return true;
 	}
 
@@ -379,6 +382,84 @@ namespace brassica {
 		}
 	}
 
+	void OzzModel::OptimizeMesh() {
+		if (m_indices.empty() || m_restPositions.empty()) return;
+
+		std::size_t indexCount = m_indices.size();
+		std::size_t vertexCount = m_restPositions.size();
+
+		// 1. Optimize vertex cache
+		std::vector<std::uint32_t> cacheOptIndices(indexCount);
+		meshopt_optimizeVertexCache(cacheOptIndices.data(), m_indices.data(), indexCount, vertexCount);
+
+		// 2. Build temporary struct for overdraw / fetch optimization
+		struct TempVert {
+			glm::vec3 pos;
+			glm::vec3 norm;
+			std::uint16_t j[4];
+			float w[3];
+		};
+
+		std::vector<TempVert> tempVerts(vertexCount);
+		for (std::size_t i = 0; i < vertexCount; ++i) {
+			tempVerts[i].pos = m_restPositions[i];
+			tempVerts[i].norm = m_restNormals[i];
+			tempVerts[i].j[0] = m_jointIndices[i * 4 + 0];
+			tempVerts[i].j[1] = m_jointIndices[i * 4 + 1];
+			tempVerts[i].j[2] = m_jointIndices[i * 4 + 2];
+			tempVerts[i].j[3] = m_jointIndices[i * 4 + 3];
+			tempVerts[i].w[0] = m_jointWeights[i * 3 + 0];
+			tempVerts[i].w[1] = m_jointWeights[i * 3 + 1];
+			tempVerts[i].w[2] = m_jointWeights[i * 3 + 2];
+		}
+
+		// Optimize overdraw
+		std::vector<std::uint32_t> overdrawOptIndices(indexCount);
+		meshopt_optimizeOverdraw(
+			overdrawOptIndices.data(),
+			cacheOptIndices.data(),
+			indexCount,
+			&tempVerts[0].pos.x,
+			vertexCount,
+			sizeof(TempVert),
+			1.05f
+		);
+
+		// Optimize vertex fetch
+		std::vector<TempVert> optVerts(vertexCount);
+		meshopt_optimizeVertexFetch(
+			optVerts.data(),
+			overdrawOptIndices.data(),
+			indexCount,
+			tempVerts.data(),
+			vertexCount,
+			sizeof(TempVert)
+		);
+
+		m_indices = std::move(overdrawOptIndices);
+
+		m_restPositions.resize(vertexCount);
+		m_restNormals.resize(vertexCount);
+		m_jointIndices.resize(vertexCount * 4);
+		m_jointWeights.resize(vertexCount * 3);
+		m_restVertices.resize(vertexCount);
+
+		for (std::size_t i = 0; i < vertexCount; ++i) {
+			m_restPositions[i] = optVerts[i].pos;
+			m_restNormals[i] = optVerts[i].norm;
+			m_jointIndices[i * 4 + 0] = optVerts[i].j[0];
+			m_jointIndices[i * 4 + 1] = optVerts[i].j[1];
+			m_jointIndices[i * 4 + 2] = optVerts[i].j[2];
+			m_jointIndices[i * 4 + 3] = optVerts[i].j[3];
+			m_jointWeights[i * 3 + 0] = optVerts[i].w[0];
+			m_jointWeights[i * 3 + 1] = optVerts[i].w[1];
+			m_jointWeights[i * 3 + 2] = optVerts[i].w[2];
+
+			m_restVertices[i].position = glm::vec4(optVerts[i].pos, 1.0f);
+			m_restVertices[i].normal = glm::vec4(optVerts[i].norm, 0.0f);
+		}
+	}
+
 	int OzzModel::FindAnimationIndex(const std::string& name) const {
 		auto it = m_animNameToIndex.find(name);
 		if (it != m_animNameToIndex.end()) {
@@ -402,6 +483,7 @@ namespace brassica {
 		inst.skinningMatrices.resize(numJoints);
 		inst.skinnedPositions = m_restPositions;
 		inst.skinnedNormals = m_restNormals;
+		inst.skinnedVertices = m_restVertices;
 
 		return inst;
 	}
@@ -471,6 +553,16 @@ namespace brassica {
 			skinningJob.out_normals_stride = sizeof(glm::vec3);
 
 			skinningJob.Run();
+
+			// Sync skinned positions and normals into ModelVertex buffer
+			std::size_t vertexCount = m_restPositions.size();
+			if (instance.skinnedVertices.size() != vertexCount) {
+				instance.skinnedVertices.resize(vertexCount);
+			}
+			for (std::size_t i = 0; i < vertexCount; ++i) {
+				instance.skinnedVertices[i].position = glm::vec4(instance.skinnedPositions[i], 1.0f);
+				instance.skinnedVertices[i].normal = glm::vec4(instance.skinnedNormals[i], 0.0f);
+			}
 		}
 	}
 
