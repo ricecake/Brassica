@@ -2007,7 +2007,7 @@ namespace brassica {
 		bindings[5]
 			.setBinding(5)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
-			.setDescriptorCount(8)
+			.setDescriptorCount(32)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 6: bindless storage buffers (no single canonical GLSL declaration -- each
 		// consumer aliases its own struct at this binding, same idiom as uImagesRGBA32F's
@@ -2040,7 +2040,7 @@ namespace brassica {
 		// resource's descriptor is written once at creation and read for the rest of its life,
 		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
 		std::array<vk::DescriptorPoolSize, 5> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 8},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 32},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
