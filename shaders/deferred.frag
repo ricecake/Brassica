@@ -116,26 +116,26 @@ void main() {
 		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material).color;
 		// hdrColor *= clamp(dot(-uLights[0].direction, norm), 0, 1);
 
-		if(uLights[0].intensity >0) {
-		TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-			params.clipmapIndex,
-			params.minMaxIndex,
-			params.gridParams.w,
-			params.gridParams.x,
-			0.0
-		);
-		float hitDist = 0.0;
-		bool hit = traceTerrainOcclusion(
-			occCtx,
-			pos+uLights[0].direction,
-			-uLights[0].direction,
-			2500,
-			hitDist
-		);
-		if (hit) {
-			hdrColor *= mix(1.0, smoothstep(-25, 100, hitDist), clamp(uLights[0].intensity, 0, 1));
-		}
-		}
+		// if(uLights[0].intensity >0) {
+		// 	TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+		// 		params.clipmapIndex,
+		// 		params.minMaxIndex,
+		// 		params.gridParams.w,
+		// 		params.gridParams.x,
+		// 		0.0
+		// 	);
+		// 	float hitDist = 0.0;
+		// 	bool hit = traceTerrainOcclusion(
+		// 		occCtx,
+		// 		pos+uLights[0].direction,
+		// 		-uLights[0].direction,
+		// 		2500,
+		// 		hitDist
+		// 	);
+		// 	if (hit) {
+		// 		hdrColor *= mix(1.0, smoothstep(-25, 100, hitDist), clamp(uLights[0].intensity, 0, 1));
+		// 	}
+		// }
 
 	}
 
