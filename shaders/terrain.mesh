@@ -288,6 +288,11 @@ void main() {
 		roughness = mix(roughness, 0.30, snowFactor);
 	}
 
+	if (length(offsetDist) < 500) {
+		// baseColor = vec3(1,0,1);
+		baseColor = hueShift(baseColor, psrdnoise(morphedWorldXZ*10));// / texelSize(lodLevel)));
+	}
+
 	outAlbedo[vertexIndex] = vec4(baseColor, 1.0);
 	outMaterial[vertexIndex] = vec4(metallic, roughness, glint, 0.0);
 

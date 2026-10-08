@@ -1,3 +1,5 @@
+#include "lygia/generative/random.glsl"
+
 const float FAKE_PLANET_RADIUS = 600000.0; // 600km radius (1/10th scale planet)
 const float PI = 3.14159265359;
 const float PHI = 1.618033988749894848204586834;
@@ -754,3 +756,119 @@ float dualLobeSchlick(float cosTheta, float kFwd, float kBck, float weight) {
     return mix(schlickPhase(cosTheta, -kBck), schlickPhase(cosTheta, kFwd), weight);
 }
 
+struct HierarchicalWorleyData2D {
+    float f1_dist;
+    float f2_dist;
+    vec2 f1_pos;
+    vec2 f2_pos;
+    float f1_level;
+    float f2_level;
+    float f1_id;
+    float f2_id;
+    vec2 p;
+};
+
+HierarchicalWorleyData2D hierarchicalWorleyTiled(in vec2 p, in float period) {
+    vec2 n = floor(p);
+
+    float f1_dist = 100.0;
+    float f2_dist = 100.0;
+    vec2 f1_pos = vec2(0.0);
+    vec2 f2_pos = vec2(0.0);
+    float f1_level = 0.0;
+    float f2_level = 0.0;
+    float f1_id = 0.0;
+    float f2_id = 0.0;
+
+    for(int j = -1; j <= 1; j++) {
+        for(int i = -1; i <= 1; i++) {
+            vec2 g1 = n + vec2(float(i), float(j));
+            vec2 wrapped_g1 = mod(g1, period); // Tile Level 0
+
+            vec3 rr = random3(wrapped_g1);
+            vec2 o = g1 + rr.xy;
+            vec2 r = p - o;
+            float d = dot(r, r);
+            float z = rr.z;
+
+            if(z < 0.75) {
+                float id = z + wrapped_g1.x + wrapped_g1.y * 7.0;
+                if(d < f1_dist) {
+                    f2_dist = f1_dist; f2_pos = f1_pos; f2_level = f1_level; f2_id = f1_id;
+                    f1_dist = d; f1_pos = o; f1_level = 0.0; f1_id = id;
+                } else if(d < f2_dist) {
+                    f2_dist = d; f2_pos = o; f2_level = 0.0; f2_id = id;
+                }
+            } else {
+                for(int l = 0; l < 2; l++) {
+                    for(int k = 0; k < 2; k++) {
+                        vec2 g2 = g1 + vec2(float(k), float(l)) / 2.0;
+                        vec2 wrapped_g2 = mod(g2 * 2.0, period * 2.0); // Tile Level 1
+
+                        rr = random3(wrapped_g2);
+                        o = g2 + rr.xy / 2.0;
+                        r = p - o;
+                        d = dot(r, r);
+                        z = rr.z;
+
+                        if(z < 0.8) {
+                            float id = z + wrapped_g2.x + wrapped_g2.y * 7.0;
+                            if(d < f1_dist) {
+                                f2_dist = f1_dist; f2_pos = f1_pos; f2_level = f1_level; f2_id = f1_id;
+                                f1_dist = d; f1_pos = o; f1_level = 1.0; f1_id = id;
+                            } else if(d < f2_dist) {
+                                f2_dist = d; f2_pos = o; f2_level = 1.0; f2_id = id;
+                            }
+                        } else {
+                            for(int ny = 0; ny < 2; ny++) {
+                                for(int mx = 0; mx < 2; mx++) {
+                                    vec2 g3 = g2 + vec2(float(mx), float(ny)) / 4.0;
+                                    vec2 wrapped_g3 = mod(g3 * 4.0, period * 4.0); // Tile Level 2
+
+                                    rr = random3(wrapped_g3);
+                                    o = g3 + rr.xy / 4.0;
+                                    r = p - o;
+                                    d = dot(r, r);
+                                    z = rr.z;
+
+                                    if(z < 0.8) {
+                                        float id = z + wrapped_g3.x + wrapped_g3.y * 7.0;
+                                        if(d < f1_dist) {
+                                            f2_dist = f1_dist; f2_pos = f1_pos; f2_level = f1_level; f2_id = f1_id;
+                                            f1_dist = d; f1_pos = o; f1_level = 2.0; f1_id = id;
+                                        } else if(d < f2_dist) {
+                                            f2_dist = d; f2_pos = o; f2_level = 2.0; f2_id = id;
+                                        }
+                                    } else {
+                                        for(int ty = 0; ty < 2; ty++) {
+                                            for(int sx = 0; sx < 2; sx++) {
+                                                vec2 g4 = g3 + vec2(float(sx), float(ty)) / 8.0;
+                                                vec2 wrapped_g4 = mod(g4 * 8.0, period * 8.0); // Tile Level 3
+
+                                                rr = random3(wrapped_g4);
+                                                o = g4 + rr.xy / 8.0;
+                                                r = p - o;
+                                                d = dot(r, r);
+                                                z = rr.z;
+
+                                                float id = z + wrapped_g4.x + wrapped_g4.y * 7.0;
+                                                if(d < f1_dist) {
+                                                    f2_dist = f1_dist; f2_pos = f1_pos; f2_level = f1_level; f2_id = f1_id;
+                                                    f1_dist = d; f1_pos = o; f1_level = 3.0; f1_id = id;
+                                                } else if(d < f2_dist) {
+                                                    f2_dist = d; f2_pos = o; f2_level = 3.0; f2_id = id;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return HierarchicalWorleyData2D(sqrt(f1_dist), sqrt(f2_dist), f1_pos, f2_pos, f1_level, f2_level, f1_id, f2_id, p);
+}
