@@ -14,14 +14,20 @@ layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 
 void main() {
-	// Ordered-dither against the per-item LOD fade (foliage.mesh) instead of a hard alpha
-	// cutoff -- an item near its clump's survival boundary thins out across several pixels
-	// rather than popping fully in/out in one frame. Fern's leaflet cutout reuses the same UV.y
-	// coordinate the frond taper already carries, for a cheap foliage-texture-less leaflet look.
 	float coverage = inFade;
-	if (inMaterialType == 1u) { // Fern: leaflet gaps along the frond length
-		coverage *= step(0.5, fract(inUV.y * 10.0));
+	if (inMaterialType == 1u) { // Fern: boidish serrated leaflet gaps along frond edges
+		float u = inUV.x * 2.0 - 1.0;
+		float v = inUV.y;
+		float distFromCenter = abs(u);
+		if (distFromCenter > 0.15) {
+			float leafletLine = sin(v * 60.0 - distFromCenter * 5.0);
+			float leafMask = smoothstep(-0.2, 0.2, leafletLine);
+			if (leafMask < 0.3) {
+				discard;
+			}
+		}
 	}
+
 	if (bayerDither4x4(gl_FragCoord.xy) >= coverage) {
 		discard;
 	}
@@ -36,7 +42,7 @@ void main() {
 		roughness = 0.85;
 	} else if (inMaterialType == 4u) { // Seaweed
 		roughness = 0.25;
-	} else if (inMaterialType == 5u) { // Simple Bush
+	} else if (inMaterialType == 5u) { // Bush
 		roughness = 0.6;
 	}
 	outPosition = vec4(relPos, 1.0);
