@@ -87,11 +87,9 @@ namespace brassica {
 
 			// 3. Populate indirect command
 			std::uint32_t totalCount = static_cast<std::uint32_t>(m_batchedInstances.size());
-			m_indirectCommand = MeshTasksIndirectCommand{
-				.groupCountX = totalCount > 0 ? totalCount : 0,
-				.groupCountY = 1,
-				.groupCountZ = 1
-			};
+			m_indirectCommand.groupCountX = totalCount > 0 ? totalCount : 0;
+			m_indirectCommand.groupCountY = 1;
+			m_indirectCommand.groupCountZ = 1;
 			ctx.WriteSpan<EntityIndirectBuffer>(
 				std::span<const MeshTasksIndirectCommand>(&m_indirectCommand, 1)
 			);
@@ -140,7 +138,10 @@ namespace brassica {
 				inst.material = renderComp.material;
 				inst.rotation = glm::vec4(transform.rotation, 0.0f);
 
-				entries.push_back(Entry{entity, inst});
+				Entry entry{};
+				entry.entity = entity;
+				entry.inst = inst;
+				entries.push_back(entry);
 
 				renderComp.gpuVersion = renderComp.version;
 				renderComp.isDirty = false;

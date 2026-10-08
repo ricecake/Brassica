@@ -149,11 +149,10 @@ namespace brassica {
 				return;
 			}
 
-			EntityPushConstants push{
-				.entityBufferAddress = bufferAddress,
-				.totalInstances = totalInstances,
-				.baseInstanceIndex = 0
-			};
+			EntityPushConstants push{};
+			push.entityBufferAddress = bufferAddress;
+			push.totalInstances = totalInstances;
+			push.baseInstanceIndex = 0;
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{

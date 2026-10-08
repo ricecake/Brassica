@@ -1200,24 +1200,23 @@ namespace brassica {
 		if (options.printRenderGraph) {
 			spdlog::info("Render graph export requested.");
 
-			render::NodeFrameParams frameParams{
-				.cameraPosition = camera.position,
-				.previousCameraPosition = camera.position,
-				.forceRegeneration = false,
-				.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
-				.waterLevel = 0.0f,
-				.sunDir = glm::vec3(0.0f, 1.0f, 0.0f),
-				.sunRadiance = glm::vec3(3.0f, 2.94f, 2.76f),
-				.moonDir = glm::vec3(0.0f, -1.0f, 0.0f),
-				.moonRadiance = glm::vec3(0.1f, 0.12f, 0.16f),
-				.time = 0.0f,
-				.worldScale = 1.0f,
-				.multiScatScale = 1.0f,
-				.cloudShadowIntensity = 0.5f,
-				.skyExposure = lightManager.GetSkyExposure(),
-				.registry = &registry,
-				.atmosphere = atmosphere,
-			};
+			render::NodeFrameParams frameParams{};
+			frameParams.cameraPosition = camera.position;
+			frameParams.previousCameraPosition = camera.position;
+			frameParams.forceRegeneration = false;
+			frameParams.waterColor = glm::vec3(0.05f, 0.45f, 0.85f);
+			frameParams.waterLevel = 0.0f;
+			frameParams.sunDir = glm::vec3(0.0f, 1.0f, 0.0f);
+			frameParams.sunRadiance = glm::vec3(3.0f, 2.94f, 2.76f);
+			frameParams.moonDir = glm::vec3(0.0f, -1.0f, 0.0f);
+			frameParams.moonRadiance = glm::vec3(0.1f, 0.12f, 0.16f);
+			frameParams.time = 0.0f;
+			frameParams.worldScale = 1.0f;
+			frameParams.multiScatScale = 1.0f;
+			frameParams.cloudShadowIntensity = 0.5f;
+			frameParams.skyExposure = lightManager.GetSkyExposure();
+			frameParams.registry = &registry;
+			frameParams.atmosphere = atmosphere;
 			auto& nodeRegistry = render::EngineNodeRegistry::Instance();
 			nodeRegistry.SetFrameParamsAll(frameParams);
 
@@ -1532,25 +1531,24 @@ namespace brassica {
 		glm::vec3 sunDir = invRotToCam * sunDirGlobal;
 		glm::vec3 moonDir = invRotToCam * moonDirGlobal;
 
-		render::NodeFrameParams frameParams{
-			.cameraPosition = camera.position,
-			.previousCameraPosition = previousCameraPosition,
-			.terrainGridParams = terrainPush.gridParams,
-			.forceRegeneration = forceRegeneration,
-			.waterColor = glm::vec3(0.05f, 0.45f, 0.85f),
-			.waterLevel = 0.0f,
-			.sunDir = sunDir,
-			.sunRadiance = sunRadiance,
-			.moonDir = moonDir,
-			.moonRadiance = moonRadiance,
-			.time = ubo.time,
-			.worldScale = 1.0f,
-			.multiScatScale = 1.0f,
-			.cloudShadowIntensity = 0.5f,
-			.skyExposure = lightManager.GetSkyExposure(),
-			.registry = &registry,
-			.atmosphere = atmosphere,
-		};
+		render::NodeFrameParams frameParams{};
+		frameParams.cameraPosition = camera.position;
+		frameParams.previousCameraPosition = previousCameraPosition;
+		frameParams.terrainGridParams = terrainPush.gridParams;
+		frameParams.forceRegeneration = forceRegeneration;
+		frameParams.waterColor = glm::vec3(0.05f, 0.45f, 0.85f);
+		frameParams.waterLevel = 0.0f;
+		frameParams.sunDir = sunDir;
+		frameParams.sunRadiance = sunRadiance;
+		frameParams.moonDir = moonDir;
+		frameParams.moonRadiance = moonRadiance;
+		frameParams.time = ubo.time;
+		frameParams.worldScale = 1.0f;
+		frameParams.multiScatScale = 1.0f;
+		frameParams.cloudShadowIntensity = 0.5f;
+		frameParams.skyExposure = lightManager.GetSkyExposure();
+		frameParams.registry = &registry;
+		frameParams.atmosphere = atmosphere;
 		auto& nodeRegistry = render::EngineNodeRegistry::Instance();
 		nodeRegistry.SetFrameParamsAll(frameParams);
 
