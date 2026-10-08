@@ -40,6 +40,11 @@ namespace brassica::render {
 	struct NodeFrameParams {
 		glm::vec3  cameraPosition{0.0f};
 		glm::vec3  previousCameraPosition{-9999.0f};
+		glm::vec3  cameraForward{0.0f, 0.0f, -1.0f};
+		glm::vec3  cameraUp{0.0f, 1.0f, 0.0f};
+		glm::vec3  cameraRight{1.0f, 0.0f, 0.0f};
+		float      fov{1.2f};
+		float      aspectRatio{1.7777778f};
 		glm::uvec4 terrainGridParams{
 			constants::Class::Terrain::DefaultMaxLODs,
 			constants::Class::Terrain::MeshletsPerRow,

@@ -31,6 +31,41 @@ namespace brassica {
 		};
 	}
 
+	struct VolumetricCascade0Scattering {};
+	struct VolumetricCascade0Extinction {};
+	struct VolumetricCascade1Scattering {};
+	struct VolumetricCascade1Extinction {};
+	struct VolumetricCascade2Scattering {};
+	struct VolumetricCascade2Extinction {};
+
+	struct VolumetricNoiseTexture {};
+
+	inline graph::ResourceDesc VolumetricFroxelDesc() {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image3D,
+			.width = 64,
+			.height = 64,
+			.depth = 64,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
+	inline graph::ResourceDesc VolumetricNoiseDesc() {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = 512,
+			.height = 512,
+			.depth = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
 	struct Swapchain {};
 
 	struct HdrColor {};
