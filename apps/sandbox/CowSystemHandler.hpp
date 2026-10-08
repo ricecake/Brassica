@@ -17,13 +17,14 @@ namespace brassica {
 	class CowSystemHandler : public SystemHandler {
 	public:
 		struct CowInstanceData {
-			entt::entity entity{entt::null};
-			float        spawnTime{0.0f};
-			glm::vec3    basePos{0.0f};
-			glm::vec3    velocity{0.0f};
-			std::size_t  animIndex{0};
-			float        motionChangeTimer{0.0f};
-			float        motionDuration{4.0f};
+			entt::entity      entity{entt::null};
+			float             spawnTime{0.0f};
+			glm::vec3         basePos{0.0f};
+			glm::vec3         velocity{0.0f};
+			std::size_t       animIndex{0};
+			float             motionChangeTimer{0.0f};
+			float             motionDuration{4.0f};
+			OzzModelInstance  modelInstance;
 		};
 
 		CowSystemHandler() = default;
@@ -58,8 +59,8 @@ namespace brassica {
 					cow.motionDuration = 3.0f + static_cast<float>(rand() % 4);
 				}
 
-				// Update model animation state for this cow's current animation
-				m_cowModel->Update(dt, cow.animIndex);
+				// Update unique OzzModelInstance animation state for this individual cow
+				m_cowModel->UpdateInstance(cow.modelInstance, dt, cow.animIndex);
 
 				auto* transform = registry.try_get<TransformComponent>(cow.entity);
 				auto* renderComp = registry.try_get<EntityRenderComponent>(cow.entity);
@@ -80,12 +81,14 @@ namespace brassica {
 						transform->rotation.y = std::atan2(cow.velocity.x, cow.velocity.z);
 					}
 
+					float playbackTime = cow.modelInstance.playbackTime;
 					renderComp->meshParams = glm::uvec4(
 						static_cast<uint32_t>(m_cowModel->GetVertexCount()),
 						static_cast<uint32_t>(m_cowModel->GetTriangleCount()),
 						static_cast<uint32_t>(cow.animIndex),
-						0
+						static_cast<uint32_t>(playbackTime * 1000.0f)
 					);
+					renderComp->material.w = playbackTime;
 					renderComp->MarkDirty();
 				}
 			}
@@ -108,14 +111,14 @@ namespace brassica {
 
 			EntityRenderComponent renderComp{};
 			renderComp.meshType = EntityMeshType::Cow;
-			renderComp.color = glm::vec4(0.9f, 0.85f, 0.7f, 1.0f);
+			renderComp.color = glm::vec4(0.92f, 0.88f, 0.8f, 1.0f);
 			renderComp.meshParams = glm::uvec4(
 				static_cast<uint32_t>(m_cowModel->GetVertexCount()),
 				static_cast<uint32_t>(m_cowModel->GetTriangleCount()),
 				static_cast<uint32_t>(index % m_cowModel->GetAnimationCount()),
 				0
 			);
-			renderComp.material = glm::vec4(0.1f, 0.6f, 0.0f, 0.0f);
+			renderComp.material = glm::vec4(0.05f, 0.5f, 0.0f, 0.0f);
 
 			entt::entity entity = RegisterEntity(engine, transform, renderComp);
 
@@ -131,11 +134,12 @@ namespace brassica {
 			cowData.animIndex = index % m_cowModel->GetAnimationCount();
 			cowData.motionChangeTimer = 0.0f;
 			cowData.motionDuration = 4.0f + static_cast<float>(index % 3);
+			cowData.modelInstance = m_cowModel->CreateInstance();
 
 			m_cows.push_back(cowData);
 		}
 
-		std::unique_ptr<OzzModel>  m_cowModel;
+		std::unique_ptr<OzzModel>    m_cowModel;
 		std::vector<CowInstanceData> m_cows;
 	};
 

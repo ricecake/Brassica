@@ -8,7 +8,7 @@
 #include "animation/OzzModel.hpp"
 #include "../apps/sandbox/CowSystemHandler.hpp"
 
-TEST_CASE("OzzModel loads cow.glb and animates motions") {
+TEST_CASE("OzzModel loads cow.glb and animates motions via OzzModelInstance") {
 	std::filesystem::path cowPath = "assets/cow.glb";
 	if (!std::filesystem::exists(cowPath)) {
 		cowPath = "../assets/cow.glb";
@@ -25,20 +25,27 @@ TEST_CASE("OzzModel loads cow.glb and animates motions") {
 	CHECK(vertexCount > 0);
 	CHECK(triangleCount > 0);
 
-	auto initPositions = model.GetPositions();
-	REQUIRE(initPositions.size() == vertexCount);
+	auto inst1 = model.CreateInstance();
+	auto inst2 = model.CreateInstance();
 
-	// Update animation
-	model.Update(0.5f, 0); // First animation clip (e.g. Walk / Attack)
-	auto animatedPositions = model.GetPositions();
-	REQUIRE(animatedPositions.size() == vertexCount);
+	REQUIRE(inst1.skinnedPositions.size() == vertexCount);
+	REQUIRE(inst2.skinnedPositions.size() == vertexCount);
 
-	// Test animation switching
+	// Update inst1 withWalk and inst2 with Gallop independently
 	int walkIdx = model.FindAnimationIndex("Walk");
+	int gallopIdx = model.FindAnimationIndex("Gallop");
 	CHECK(walkIdx >= 0);
-	model.Update(0.0f, static_cast<std::size_t>(walkIdx)); // Switches animation and resets time
-	model.Update(0.5f, static_cast<std::size_t>(walkIdx)); // Advances playback time
-	CHECK(model.GetPlaybackTime() > 0.0f);
+	CHECK(gallopIdx >= 0);
+
+	model.UpdateInstance(inst1, 0.0f, static_cast<std::size_t>(walkIdx));
+	model.UpdateInstance(inst2, 0.0f, static_cast<std::size_t>(gallopIdx));
+	model.UpdateInstance(inst1, 0.2f, static_cast<std::size_t>(walkIdx));
+	model.UpdateInstance(inst2, 0.3f, static_cast<std::size_t>(gallopIdx));
+
+	CHECK(inst1.playbackTime == 0.2f);
+	CHECK(inst2.playbackTime == 0.3f);
+	CHECK(inst1.currentAnimIndex == static_cast<std::size_t>(walkIdx));
+	CHECK(inst2.currentAnimIndex == static_cast<std::size_t>(gallopIdx));
 }
 
 TEST_CASE("CowSystemHandler registers and manages cow entities in Engine") {

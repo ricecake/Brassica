@@ -65,16 +65,14 @@ namespace brassica {
 		// 1. Process Skeletons / Joints
 		ozz::animation::offline::RawSkeleton rawSkeleton;
 
-		std::vector<int> gltfNodeToJointIndex(asset.nodes.size(), -1);
-		std::vector<std::size_t> skinJointNodeIndices;
+		std::vector<int> gltfNodeToSkinJointIndex(asset.nodes.size(), -1);
 
 		if (!asset.skins.empty()) {
 			const auto& skin = asset.skins[0];
-			skinJointNodeIndices.assign(skin.joints.begin(), skin.joints.end());
 
 			// Map skin joints
 			for (std::size_t i = 0; i < skin.joints.size(); ++i) {
-				gltfNodeToJointIndex[skin.joints[i]] = static_cast<int>(i);
+				gltfNodeToSkinJointIndex[skin.joints[i]] = static_cast<int>(i);
 			}
 
 			// Build joint hierarchy for Ozz RawSkeleton
@@ -83,7 +81,7 @@ namespace brassica {
 				std::size_t nodeIdx = skin.joints[i];
 				const auto& node = asset.nodes[nodeIdx];
 				for (std::size_t childNodeIdx : node.children) {
-					int childJointIdx = gltfNodeToJointIndex[childNodeIdx];
+					int childJointIdx = gltfNodeToSkinJointIndex[childNodeIdx];
 					if (childJointIdx >= 0) {
 						isChild[childJointIdx] = true;
 					}
@@ -120,7 +118,7 @@ namespace brassica {
 				}
 
 				for (std::size_t childNodeIdx : node.children) {
-					int childJointIdx = gltfNodeToJointIndex[childNodeIdx];
+					int childJointIdx = gltfNodeToSkinJointIndex[childNodeIdx];
 					if (childJointIdx >= 0) {
 						rawJoint.children.push_back(self(self, childNodeIdx));
 					}
@@ -155,42 +153,66 @@ namespace brassica {
 		}
 
 		std::size_t numJoints = m_skeleton->num_joints();
-		m_localTransforms.resize(m_skeleton->num_soa_joints());
-		m_modelMatrices.resize(numJoints);
-		m_skinningMatrices.resize(numJoints);
 		m_inverseBindPoses.resize(numJoints);
+
+		// Build GLTF Skin Joint Index -> Ozz Skeleton Joint Index mapping
+		std::vector<int> gltfSkinJointToOzzJoint(numJoints, 0);
+		for (std::size_t skinJointIdx = 0; skinJointIdx < numJoints; ++skinJointIdx) {
+			std::size_t nodeIdx = asset.skins[0].joints[skinJointIdx];
+			const std::string& name = asset.nodes[nodeIdx].name.c_str();
+			for (int ozzIdx = 0; ozzIdx < static_cast<int>(numJoints); ++ozzIdx) {
+				if (std::string(m_skeleton->joint_names()[ozzIdx]) == name) {
+					gltfSkinJointToOzzJoint[skinJointIdx] = ozzIdx;
+					break;
+				}
+			}
+		}
 
 		// Read Inverse Bind Matrices if available
 		if (!asset.skins.empty() && asset.skins[0].inverseBindMatrices.has_value()) {
 			const auto& accessor = asset.accessors[asset.skins[0].inverseBindMatrices.value()];
-			std::size_t ibmIndex = 0;
+			std::size_t skinJointIndex = 0;
 			fastgltf::iterateAccessor<glm::mat4>(asset, accessor, [&](glm::mat4 ibm) {
-				if (ibmIndex < numJoints) {
+				if (skinJointIndex < numJoints) {
+					int ozzIdx = gltfSkinJointToOzzJoint[skinJointIndex];
 					for (int c = 0; c < 4; ++c) {
-						m_inverseBindPoses[ibmIndex].cols[c] = ozz::math::simd_float4::Load(ibm[c][0], ibm[c][1], ibm[c][2], ibm[c][3]);
+						m_inverseBindPoses[ozzIdx].cols[c] = ozz::math::simd_float4::Load(ibm[c][0], ibm[c][1], ibm[c][2], ibm[c][3]);
 					}
-					ibmIndex++;
+					skinJointIndex++;
 				}
 			});
 		} else {
 			// Compute default inverse bind poses from rest pose
-			for (std::size_t i = 0; i < numJoints; ++i) {
-				m_localTransforms[i / 4] = m_skeleton->joint_rest_poses()[i / 4];
+			std::vector<ozz::math::SoaTransform> restSoa(m_skeleton->num_soa_joints());
+			std::vector<ozz::math::Float4x4> restModel(numJoints);
+			for (std::size_t i = 0; i < m_skeleton->num_soa_joints(); ++i) {
+				restSoa[i] = m_skeleton->joint_rest_poses()[i];
 			}
 			ozz::animation::LocalToModelJob ltmBindJob;
 			ltmBindJob.skeleton = m_skeleton.get();
-			ltmBindJob.input = ozz::make_span(m_localTransforms);
-			ltmBindJob.output = ozz::make_span(m_modelMatrices);
+			ltmBindJob.input = ozz::make_span(restSoa);
+			ltmBindJob.output = ozz::make_span(restModel);
 			ltmBindJob.Run();
 
 			for (std::size_t i = 0; i < numJoints; ++i) {
-				m_inverseBindPoses[i] = ozz::math::Invert(m_modelMatrices[i]);
+				m_inverseBindPoses[i] = ozz::math::Invert(restModel[i]);
 			}
 		}
 
 		// 2. Process Animations
 		m_animations.clear();
 		m_animNameToIndex.clear();
+
+		std::vector<int> gltfNodeToOzzJointIndex(asset.nodes.size(), -1);
+		for (std::size_t nodeIdx = 0; nodeIdx < asset.nodes.size(); ++nodeIdx) {
+			const std::string& name = asset.nodes[nodeIdx].name.c_str();
+			for (int ozzIdx = 0; ozzIdx < static_cast<int>(numJoints); ++ozzIdx) {
+				if (std::string(m_skeleton->joint_names()[ozzIdx]) == name) {
+					gltfNodeToOzzJointIndex[nodeIdx] = ozzIdx;
+					break;
+				}
+			}
+		}
 
 		for (const auto& gltfAnim : asset.animations) {
 			ozz::animation::offline::RawAnimation rawAnim;
@@ -203,8 +225,8 @@ namespace brassica {
 
 			for (const auto& channel : gltfAnim.channels) {
 				if (!channel.nodeIndex.has_value()) continue;
-				int jointIdx = gltfNodeToJointIndex[channel.nodeIndex.value()];
-				if (jointIdx < 0 || jointIdx >= static_cast<int>(numJoints)) continue;
+				int ozzJointIdx = gltfNodeToOzzJointIndex[channel.nodeIndex.value()];
+				if (ozzJointIdx < 0 || ozzJointIdx >= static_cast<int>(numJoints)) continue;
 
 				const auto& sampler = gltfAnim.samplers[channel.samplerIndex];
 				const auto& inputAcc = asset.accessors[sampler.inputAccessor];
@@ -217,7 +239,7 @@ namespace brassica {
 					if (timeVal > maxDuration) maxDuration = timeVal;
 				});
 
-				auto& track = rawAnim.tracks[jointIdx];
+				auto& track = rawAnim.tracks[ozzJointIdx];
 
 				if (channel.path == fastgltf::AnimationPath::Translation) {
 					std::size_t idx = 0;
@@ -302,15 +324,15 @@ namespace brassica {
 					m_restNormals.resize(m_restPositions.size(), glm::vec3(0.0f, 1.0f, 0.0f));
 				}
 
-				// Joint Indices (4 per vertex)
+				// Joint Indices (4 per vertex, remapped from GLTF skin joint -> Ozz skeleton joint)
 				auto jointIt = prim.findAttribute("JOINTS_0");
 				if (jointIt != prim.attributes.end()) {
 					const auto& jointAcc = asset.accessors[jointIt->accessorIndex];
 					fastgltf::iterateAccessor<glm::uvec4>(asset, jointAcc, [&](glm::uvec4 j) {
-						m_jointIndices.push_back(static_cast<std::uint16_t>(j.x));
-						m_jointIndices.push_back(static_cast<std::uint16_t>(j.y));
-						m_jointIndices.push_back(static_cast<std::uint16_t>(j.z));
-						m_jointIndices.push_back(static_cast<std::uint16_t>(j.w));
+						m_jointIndices.push_back(static_cast<std::uint16_t>(gltfSkinJointToOzzJoint[j.x]));
+						m_jointIndices.push_back(static_cast<std::uint16_t>(gltfSkinJointToOzzJoint[j.y]));
+						m_jointIndices.push_back(static_cast<std::uint16_t>(gltfSkinJointToOzzJoint[j.z]));
+						m_jointIndices.push_back(static_cast<std::uint16_t>(gltfSkinJointToOzzJoint[j.w]));
 					});
 				} else {
 					for (std::size_t i = 0; i < primVertexCount; ++i) {
@@ -355,12 +377,6 @@ namespace brassica {
 				vertexOffset += static_cast<std::uint32_t>(primVertexCount);
 			}
 		}
-
-		m_skinnedPositions = m_restPositions;
-		m_skinnedNormals = m_restNormals;
-
-		// Perform initial update at t=0
-		Update(0.0f, 0);
 	}
 
 	int OzzModel::FindAnimationIndex(const std::string& name) const {
@@ -376,44 +392,58 @@ namespace brassica {
 		return -1;
 	}
 
-	void OzzModel::Update(float dt, const std::string& animName) {
-		int idx = FindAnimationIndex(animName);
-		Update(dt, idx >= 0 ? static_cast<std::size_t>(idx) : 0);
+	OzzModelInstance OzzModel::CreateInstance() const {
+		OzzModelInstance inst;
+		if (!m_skeleton) return inst;
+
+		std::size_t numJoints = m_skeleton->num_joints();
+		inst.localTransforms.resize(m_skeleton->num_soa_joints());
+		inst.modelMatrices.resize(numJoints);
+		inst.skinningMatrices.resize(numJoints);
+		inst.skinnedPositions = m_restPositions;
+		inst.skinnedNormals = m_restNormals;
+
+		return inst;
 	}
 
-	void OzzModel::Update(float dt, std::size_t animIndex) {
+	void OzzModel::UpdateInstance(OzzModelInstance& instance, float dt, const std::string& animName) const {
+		int idx = FindAnimationIndex(animName);
+		UpdateInstance(instance, dt, idx >= 0 ? static_cast<std::size_t>(idx) : 0);
+	}
+
+	void OzzModel::UpdateInstance(OzzModelInstance& instance, float dt, std::size_t animIndex) const {
 		if (!m_skeleton || m_animations.empty()) return;
 
-		if (animIndex != m_currentAnimIndex) {
-			m_currentAnimIndex = animIndex % m_animations.size();
-			m_playbackTime = 0.0f;
+		if (animIndex != instance.currentAnimIndex) {
+			instance.currentAnimIndex = animIndex % m_animations.size();
+			instance.playbackTime = 0.0f;
 		} else {
-			m_playbackTime += dt;
+			instance.playbackTime += dt;
 		}
 
-		const auto& clip = m_animations[m_currentAnimIndex];
+		const auto& clip = m_animations[instance.currentAnimIndex];
 		if (clip.duration > 0.0f) {
-			m_playbackTime = std::fmod(m_playbackTime, clip.duration);
+			instance.playbackTime = std::fmod(instance.playbackTime, clip.duration);
 		}
 
 		// 1. Sampling Job
 		ozz::animation::SamplingJob samplingJob;
 		samplingJob.animation = clip.animation.get();
-		samplingJob.ratio = clip.duration > 0.0f ? (m_playbackTime / clip.duration) : 0.0f;
-		samplingJob.output = ozz::make_span(m_localTransforms);
+		samplingJob.ratio = clip.duration > 0.0f ? (instance.playbackTime / clip.duration) : 0.0f;
+		samplingJob.output = ozz::make_span(instance.localTransforms);
 		samplingJob.Run();
 
 		// 2. Local-To-Model Job
 		ozz::animation::LocalToModelJob ltmJob;
 		ltmJob.skeleton = m_skeleton.get();
-		ltmJob.input = ozz::make_span(m_localTransforms);
-		ltmJob.output = ozz::make_span(m_modelMatrices);
+		ltmJob.input = ozz::make_span(instance.localTransforms);
+		ltmJob.output = ozz::make_span(instance.modelMatrices);
 		ltmJob.Run();
 
 		// 3. Compute skinning matrices = model_matrix * inverse_bind_pose
 		std::size_t numJoints = m_skeleton->num_joints();
 		for (std::size_t i = 0; i < numJoints; ++i) {
-			m_skinningMatrices[i] = m_modelMatrices[i] * m_inverseBindPoses[i];
+			instance.skinningMatrices[i] = instance.modelMatrices[i] * m_inverseBindPoses[i];
 		}
 
 		// 4. Skinning Job
@@ -422,7 +452,7 @@ namespace brassica {
 			skinningJob.vertex_count = static_cast<int>(m_restPositions.size());
 			skinningJob.influences_count = 4;
 
-			skinningJob.joint_matrices = ozz::make_span(m_skinningMatrices);
+			skinningJob.joint_matrices = ozz::make_span(instance.skinningMatrices);
 
 			skinningJob.joint_indices = ozz::make_span(m_jointIndices);
 			skinningJob.joint_indices_stride = sizeof(std::uint16_t) * 4;
@@ -432,12 +462,12 @@ namespace brassica {
 
 			skinningJob.in_positions = ozz::span<const float>(reinterpret_cast<const float*>(m_restPositions.data()), m_restPositions.size() * 3);
 			skinningJob.in_positions_stride = sizeof(glm::vec3);
-			skinningJob.out_positions = ozz::span<float>(reinterpret_cast<float*>(m_skinnedPositions.data()), m_skinnedPositions.size() * 3);
+			skinningJob.out_positions = ozz::span<float>(reinterpret_cast<float*>(instance.skinnedPositions.data()), instance.skinnedPositions.size() * 3);
 			skinningJob.out_positions_stride = sizeof(glm::vec3);
 
 			skinningJob.in_normals = ozz::span<const float>(reinterpret_cast<const float*>(m_restNormals.data()), m_restNormals.size() * 3);
 			skinningJob.in_normals_stride = sizeof(glm::vec3);
-			skinningJob.out_normals = ozz::span<float>(reinterpret_cast<float*>(m_skinnedNormals.data()), m_skinnedNormals.size() * 3);
+			skinningJob.out_normals = ozz::span<float>(reinterpret_cast<float*>(instance.skinnedNormals.data()), instance.skinnedNormals.size() * 3);
 			skinningJob.out_normals_stride = sizeof(glm::vec3);
 
 			skinningJob.Run();
