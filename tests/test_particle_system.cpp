@@ -34,6 +34,16 @@ namespace {
 		return -1;
 	}
 
+	struct PrepTerrainProducer {
+		using Resources = graph::Declares<
+			graph::Create<TerrainMinMaxTexture>,
+			graph::Create<TerrainClipmapTexture>,
+			graph::Create<TerrainWeatherBiomeTexture>>;
+		static constexpr graph::Phase kPhase = graph::Phase::PreviousFrame;
+		graph::Recipe Setup(const graph::FrameContext&) { return graph::Recipe{.domain = graph::ExecutionDomain::Host}; }
+		void Execute(graph::NodeContext&) {}
+	};
+
 	struct DeferredShadingProducer {
 		using Resources = graph::Declares<
 			graph::Create<GBufferPosition>,
@@ -42,7 +52,7 @@ namespace {
 			graph::Create<GBufferMaterial>,
 			graph::Create<GBufferDepth>,
 			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>>;
+			graph::Create<SkyViewLUT>>;
 
 		static constexpr graph::Phase kPhase = graph::Phase::Default;
 
@@ -140,6 +150,7 @@ TEST_CASE("ParticleManager state, proportions, cutoffs, and reflection validatio
 TEST_CASE("Underwater and AboveWater particle render nodes schedule before and after WaterNode") {
 	graph::Graph graph;
 	graph.Register<DeferredShadingProducer>();
+	graph.Register<PrepTerrainProducer>();
 	graph.Register<graph::Import<
 		ParticleBuffer,
 		ParticleTypeBuffer,
@@ -191,6 +202,7 @@ TEST_CASE("Underwater and AboveWater particle render nodes schedule before and a
 TEST_CASE("ParticleSystemNode executes in SubPhase::Prepare before DeferredNode in Phase::Default") {
 	graph::Graph graph;
 	graph.Register<DeferredShadingProducer>();
+	graph.Register<PrepTerrainProducer>();
 	graph.Register<graph::Import<ParticleTypeBuffer>>();
 
 	ParticleSystemNode particleNode;

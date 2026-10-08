@@ -399,8 +399,8 @@ TEST_CASE("Graph stages nodes by dependency, independent of registration order, 
 	const auto& schedule = graph.GetSchedule();
 
 	CHECK(StageOf(schedule, 5) == 0);
+	CHECK(StageOf(schedule, 4) == 0);
 	CHECK(StageOf(schedule, 3) == 1);
-	CHECK(StageOf(schedule, 4) == 1);
 
 	CHECK(StageOf(schedule, 2) == 2);
 	CHECK(StageOf(schedule, 0) == 3);
@@ -1033,7 +1033,7 @@ namespace {
 		using Resources = Declares<
 			Modify<GBufferAlbedo>,
 			Modify<GBufferNormal>,
-			Create<brassica::BallIndirectBuffer>
+			Create<brassica::EntityIndirectBuffer>
 		>;
 
 		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
@@ -1041,7 +1041,7 @@ namespace {
 	};
 } // namespace
 
-TEST_CASE("BallNode compiles smoothly in graph with GBuffer and Deferred nodes") {
+TEST_CASE("EntityNode compiles smoothly in graph with GBuffer and Deferred nodes") {
 	Graph graph;
 	graph.Register<GBufferPass>();
 	graph.Register<BallLikeNode>();

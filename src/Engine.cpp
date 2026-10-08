@@ -1215,6 +1215,7 @@ namespace brassica {
 				.multiScatScale = 1.0f,
 				.cloudShadowIntensity = 0.5f,
 				.skyExposure = lightManager.GetSkyExposure(),
+				.registry = &registry,
 				.atmosphere = atmosphere,
 			};
 			auto& nodeRegistry = render::EngineNodeRegistry::Instance();
@@ -1227,11 +1228,6 @@ namespace brassica {
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
-			for (auto& handler : systemHandlers) {
-				if (handler) {
-					handler->GetEntityNode().RegisterInto(frameGraph);
-				}
-			}
 			vk::Extent2D extent = GetSwapchainExtent();
 			graph::FrameContext ctx{
 				.width = extent.width > 0 ? extent.width : 1280u,
@@ -1552,6 +1548,7 @@ namespace brassica {
 			.multiScatScale = 1.0f,
 			.cloudShadowIntensity = 0.5f,
 			.skyExposure = lightManager.GetSkyExposure(),
+			.registry = &registry,
 			.atmosphere = atmosphere,
 		};
 		auto& nodeRegistry = render::EngineNodeRegistry::Instance();
@@ -1562,11 +1559,6 @@ namespace brassica {
 		materialManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
-		for (auto& handler : systemHandlers) {
-			if (handler) {
-				handler->GetEntityNode().RegisterInto(frameGraph);
-			}
-		}
 
 		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
 		graph::PhysicalExecutionBackend backend(physicalRegistry);

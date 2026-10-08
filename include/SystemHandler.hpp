@@ -3,14 +3,11 @@
 #include <memory>
 #include <vector>
 
-#include "passes/EntityNode.hpp"
+#include "VulkanCompat.hpp"
+#include "types/EntityRenderComponent.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 #include <entt/entity/entity.hpp>
-
-namespace vk {
-	class Device;
-}
 
 namespace brassica {
 
@@ -40,55 +37,38 @@ namespace brassica {
 
 		// Default frame update iterating entities managed by this handler
 		virtual void Update(Engine& engine, const FrameDetails& frameDetails) {
-			for (auto entity : m_entities) {
+			auto it = m_entities.begin();
+			while (it != m_entities.end()) {
+				auto entity = *it;
 				UpdateEntity(entity, engine, frameDetails);
+				// If UpdateEntity destroyed the entity, check valid or let handler manage m_entities
+				++it;
 			}
 		}
 
-		// Registers a new entity in the entt registry with at least basic spatial details (TransformComponent)
-		entt::entity RegisterEntity(Engine& engine, const TransformComponent& transform = {});
+		// Registers a new entity in the entt registry with TransformComponent and EntityRenderComponent
+		entt::entity RegisterEntity(
+			Engine& engine,
+			const TransformComponent& transform = {},
+			const EntityRenderComponent& renderComp = {}
+		);
+
+		// Unregisters and destroys an entity from the registry and m_entities list
+		void UnregisterEntity(Engine& engine, entt::entity entity);
+
+		// Clears all entities managed by this SystemHandler from registry
+		void ClearEntities(Engine& engine);
+
+		// Marks an entity dirty to signal render buffer update
+		void MarkEntityDirty(Engine& engine, entt::entity entity);
 
 		[[nodiscard]] const std::vector<entt::entity>& GetEntities() const { return m_entities; }
 
-		[[nodiscard]] IEntityNode& GetEntityNode() {
-			if (!m_entityNode) {
-				m_entityNode = std::make_shared<EntityNode<SystemHandler>>();
-			}
-			return *m_entityNode;
-		}
-
-		[[nodiscard]] const IEntityNode& GetEntityNode() const {
-			if (!m_entityNode) {
-				m_entityNode = std::make_shared<EntityNode<SystemHandler>>();
-			}
-			return *m_entityNode;
-		}
-
-		virtual void InitNode(const render::NodeServices& services) {
-			if (!m_nodeInitialized) {
-				GetEntityNode().Init(services);
-				m_nodeInitialized = true;
-			}
-		}
-
-		virtual void DestroyNode(const vk::Device& device) {
-			if (m_entityNode && m_nodeInitialized) {
-				m_entityNode->Destroy(device);
-				m_nodeInitialized = false;
-			}
-		}
-
-		[[nodiscard]] bool IsNodeInitialized() const { return m_nodeInitialized; }
+		virtual void InitNode(const render::NodeServices& /*services*/) {}
+		virtual void DestroyNode(const vk::Device& /*device*/) {}
 
 	protected:
-		template <typename Tag>
-		void CreateEntityNode() {
-			m_entityNode = std::make_shared<EntityNode<Tag>>();
-		}
-
-		std::vector<entt::entity>            m_entities;
-		mutable std::shared_ptr<IEntityNode> m_entityNode;
-		bool                                 m_nodeInitialized{false};
+		std::vector<entt::entity> m_entities;
 	};
 
 } // namespace brassica

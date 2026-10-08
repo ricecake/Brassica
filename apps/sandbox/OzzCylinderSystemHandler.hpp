@@ -1,12 +1,13 @@
 #pragma once
 
 #include <cmath>
+#include <vector>
 
+#include "animation/SkinnedCylinder.hpp"
 #include "Engine.hpp"
 #include "SystemHandler.hpp"
-#include "animation/SkinnedCylinder.hpp"
-#include "passes/OzzCylinderNode.hpp"
 #include "terrain/TerrainManager.hpp"
+#include "types/EntityRenderComponent.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 
@@ -14,91 +15,107 @@ namespace brassica {
 
 	class OzzCylinderSystemHandler: public SystemHandler {
 	public:
-		OzzCylinderSystemHandler() {
-			m_entityNode = std::make_shared<OzzCylinderNode<struct OzzCylinderTag>>();
-		}
+		struct CylinderInstanceData {
+			entt::entity entity{entt::null};
+			float        spawnTime{0.0f};
+			float        lifespan{6.0f};
+			glm::vec3    basePos{0.0f};
+			glm::vec3    velocity{0.0f};
+		};
+
+		OzzCylinderSystemHandler() = default;
 
 		void Setup(Engine& engine, const FrameDetails& frameDetails) override {
-			float targetX = 6.0f;
-			float targetZ = -20.0f;
-			// Approximation: the manager's last cached ground-height readback (near the camera,
-			// not necessarily exactly (targetX, targetZ)), not an exact per-point GPU query --
-			// acceptable for sandbox demo placement.
-			float terrainY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
-
-			TransformComponent transform{};
-			transform.position = glm::vec3(targetX, terrainY + 8.0f, targetZ);
-			transform.rotation = glm::vec3(0.0f);
-			transform.scale = glm::vec3(3.0f);
-
-			cylinderEntity = RegisterEntity(engine, transform);
-
-			cylinderColor = glm::vec4(0.9f, 0.4f, 0.1f, 1.0f); // Bright orange
-
-			MeshTasksIndirectCommand cmd{};
-			cmd.groupCountX = 1;
-			cmd.groupCountY = 1;
-			cmd.groupCountZ = 1;
-			GetCylinderNode().SetIndirectCommand(cmd);
-
-			UpdateRenderData(transform, frameDetails.totalTime);
+			m_spawnTimer = 0.0f;
+			for (int i = 0; i < 4; ++i) {
+				SpawnCylinder(engine, static_cast<float>(frameDetails.totalTime) - i * 1.0f);
+			}
 		}
 
-		void UpdateEntity(entt::entity entity, Engine& engine, const FrameDetails& frameDetails) override {
-			if (entity != cylinderEntity) {
-				return;
+		void Update(Engine& engine, const FrameDetails& frameDetails) override {
+			float currentTime = static_cast<float>(frameDetails.totalTime);
+			float dt = frameDetails.deltaTime > 0.0f ? frameDetails.deltaTime : 0.016f;
+
+			m_cylinder.Update(currentTime);
+
+			m_spawnTimer += dt;
+			if (m_spawnTimer >= m_spawnInterval && m_cylinders.size() < m_maxCylinders) {
+				m_spawnTimer = 0.0f;
+				SpawnCylinder(engine, currentTime);
 			}
 
 			auto& registry = engine.GetRegistry();
-			if (!registry.valid(entity)) {
-				return;
-			}
+			float terrainY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
 
-			m_cylinder.Update(static_cast<float>(frameDetails.totalTime));
+			for (auto it = m_cylinders.begin(); it != m_cylinders.end();) {
+				float age = currentTime - it->spawnTime;
+				if (age >= it->lifespan || !registry.valid(it->entity)) {
+					UnregisterEntity(engine, it->entity);
+					it = m_cylinders.erase(it);
+					continue;
+				}
 
-			auto* transform = registry.try_get<TransformComponent>(entity);
-			if (transform) {
-				float targetX = 6.0f;
-				float targetZ = -20.0f;
-				float terrainY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
+				auto* transform = registry.try_get<TransformComponent>(it->entity);
+				auto* renderComp = registry.try_get<EntityRenderComponent>(it->entity);
 
-				transform->position.x = targetX;
-				transform->position.z = targetZ;
-				transform->position.y = terrainY + 8.0f;
-				UpdateRenderData(*transform, frameDetails.totalTime);
+				if (transform && renderComp) {
+					it->basePos += it->velocity * dt;
+					transform->position = it->basePos;
+					transform->position.y = terrainY + 6.0f + std::cos(age * 2.0f + it->basePos.x) * 1.5f;
+					transform->rotation.y = age * 0.5f;
+
+					renderComp->color.a = std::sin(age / it->lifespan * 3.14159f);
+					renderComp->MarkDirty();
+				}
+
+				++it;
 			}
 		}
 
 		[[nodiscard]] const SkinnedCylinder& GetSkinnedCylinder() const { return m_cylinder; }
 
-	protected:
-		OzzCylinderNode<struct OzzCylinderTag>& GetCylinderNode() {
-			if (!m_entityNode) {
-				m_entityNode = std::make_shared<OzzCylinderNode<struct OzzCylinderTag>>();
-			}
-			return static_cast<OzzCylinderNode<struct OzzCylinderTag>&>(*m_entityNode);
-		}
-
 	private:
-		void UpdateRenderData(const TransformComponent& transform, double totalTime) {
-			EntityPushConstants push{};
-			push.positionAndScale = glm::vec4(transform.position, transform.scale.x);
-			push.color = cylinderColor;
-			push.params = glm::uvec4(
+		void SpawnCylinder(Engine& engine, float currentTime) {
+			float offset = static_cast<float>(m_cylinders.size()) * 4.0f - 6.0f;
+			float terrainY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
+
+			TransformComponent transform{};
+			transform.position = glm::vec3(offset, terrainY + 6.0f, -25.0f + (m_cylinders.size() % 2) * 4.0f);
+			transform.scale = glm::vec3(2.5f);
+
+			EntityRenderComponent renderComp{};
+			renderComp.meshType = EntityMeshType::Cylinder;
+			renderComp.color = glm::vec4(
+				0.9f - (m_cylinders.size() % 3) * 0.2f,
+				0.4f + (m_cylinders.size() % 2) * 0.3f,
+				0.1f + (m_cylinders.size() % 3) * 0.2f,
+				1.0f
+			);
+			renderComp.meshParams = glm::uvec4(
 				static_cast<uint32_t>(m_cylinder.GetVertexCount()),
 				static_cast<uint32_t>(m_cylinder.GetTriangleCount()),
 				0,
 				0
 			);
+			renderComp.material = glm::vec4(0.2f, 0.4f, 0.0f, 0.0f);
 
-			auto& node = GetCylinderNode();
-			node.SetMeshData(m_cylinder.GetPositions(), m_cylinder.GetNormals(), m_cylinder.GetIndices());
-			node.SetPushConstants(push);
+			entt::entity entity = RegisterEntity(engine, transform, renderComp);
+
+			CylinderInstanceData cylData{};
+			cylData.entity = entity;
+			cylData.spawnTime = currentTime;
+			cylData.lifespan = 5.0f + (m_cylinders.size() % 3) * 1.5f;
+			cylData.basePos = transform.position;
+			cylData.velocity = glm::vec3((m_cylinders.size() % 2 == 0 ? -1.0f : 1.0f) * 1.2f, 0.0f, 0.5f);
+
+			m_cylinders.push_back(cylData);
 		}
 
-		entt::entity    cylinderEntity{entt::null};
-		glm::vec4       cylinderColor{0.9f, 0.4f, 0.1f, 1.0f};
-		SkinnedCylinder m_cylinder;
+		std::vector<CylinderInstanceData> m_cylinders;
+		SkinnedCylinder                    m_cylinder;
+		float                              m_spawnTimer{0.0f};
+		float                              m_spawnInterval{1.5f};
+		std::size_t                        m_maxCylinders{8};
 	};
 
 } // namespace brassica

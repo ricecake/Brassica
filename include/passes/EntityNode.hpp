@@ -5,50 +5,31 @@
 
 #include "VulkanCompat.hpp"
 
+#include "graph/Declaration.hpp"
+#include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/EntityPrepareNode.hpp"
+#include "passes/RenderPhases.hpp"
+#include "passes/ResourceGroups.hpp"
+#include "passes/ResourceKeys.hpp"
+#include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
-#include <glm/glm.hpp>
-
-#include "graph/Declaration.hpp"
-#include "graph/Execution.hpp"
-#include "passes/ResourceGroups.hpp"
-#include "passes/ResourceKeys.hpp"
-#include "render/NodeLifecycle.hpp"
+#include "types/EntityRenderComponent.hpp"
 
 namespace brassica {
 
-	struct EntityPushConstants {
-		glm::vec4  positionAndScale{0.0f, 15.0f, 0.0f, 3.0f};
-		glm::vec4  color{0.0f, 0.4f, 1.0f, 1.0f}; // Bright blue
-		glm::uvec4 params{8, 12, 0, 0};           // rings, pointsPerRing
-	};
+	struct EntityNode : render::NodeRegistrar<EntityNode> {
+		using Resources = graph::Declares<
+			GBuffer<graph::ModifyKey>,
+			graph::Read<EntityInstanceBuffer>,
+			graph::Read<EntityIndirectBuffer>
+		>;
 
-	using BallPushConstants = EntityPushConstants;
-
-	struct MeshTasksIndirectCommand {
-		std::uint32_t groupCountX{1};
-		std::uint32_t groupCountY{1};
-		std::uint32_t groupCountZ{1};
-	};
-
-	struct IEntityNode {
-		virtual ~IEntityNode() = default;
-		virtual void                      Init(const render::NodeServices& services) = 0;
-		virtual void                      Destroy(vk::Device device) = 0;
-		virtual void                      RegisterInto(graph::Graph& graph) = 0;
-		virtual void                      SetPushConstants(const EntityPushConstants& p) = 0;
-		virtual void                      SetIndirectCommand(const MeshTasksIndirectCommand& cmd) = 0;
-		virtual EntityPushConstants&      GetPushConstants() = 0;
-		virtual MeshTasksIndirectCommand& GetIndirectCommand() = 0;
-	};
-
-	template <typename Tag = struct DefaultEntityTag>
-	struct EntityNode: public IEntityNode {
-		using Resources = graph::Declares<GBuffer<graph::ModifyKey>, graph::Create<EntityIndirectBuffer<Tag>>>;
+		static constexpr graph::Phase kPhase = SubPhase::GBuffer;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -64,25 +45,21 @@ namespace brassica {
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
 		const DispatchLoaderDynamic* dls = nullptr;
-		EntityPushConstants          push{};
-		MeshTasksIndirectCommand     indirectCmd{0, 0, 0};
 
-		void SetPushConstants(const EntityPushConstants& p) override { push = p; }
+		std::uint64_t m_overrideBufferAddress{0};
+		std::uint32_t m_overrideTotalInstances{0};
 
-		void SetIndirectCommand(const MeshTasksIndirectCommand& cmd) override { indirectCmd = cmd; }
+		void SetEntityData(std::uint64_t addr, std::uint32_t count) {
+			m_overrideBufferAddress = addr;
+			m_overrideTotalInstances = count;
+		}
 
-		EntityPushConstants& GetPushConstants() override { return push; }
-
-		MeshTasksIndirectCommand& GetIndirectCommand() override { return indirectCmd; }
-
-		void RegisterInto(graph::Graph& graph) override { graph.RegisterRef(*this); }
-
-		void Init(const render::NodeServices& services) override {
+		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			dls = services.dispatchLoader;
-			if (!taskShader.CompileTaskFromFile(services.device, "shaders/ball.task") ||
-			    !meshShader.CompileMeshFromFile(services.device, "shaders/ball.mesh") ||
-			    !fragShader.CompileFragmentFromFile(services.device, "shaders/ball.frag")) {
+			if (!taskShader.CompileTaskFromFile(services.device, "shaders/entity.task") ||
+			    !meshShader.CompileMeshFromFile(services.device, "shaders/entity.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/entity.frag")) {
 				spdlog::critical("EntityNode shader compilation failed.");
 				throw std::runtime_error("EntityNode shader compilation failed.");
 			}
@@ -97,7 +74,7 @@ namespace brassica {
 			watcher.RegisterShader(&fragShader);
 		}
 
-		void Destroy(vk::Device device) override {
+		void Destroy(vk::Device device) {
 			taskShader.Destroy(device);
 			meshShader.Destroy(device);
 			fragShader.Destroy(device);
@@ -105,7 +82,6 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.isActive = (indirectCmd.groupCountX > 0 || indirectCmd.groupCountY > 0 || indirectCmd.groupCountZ > 0);
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -143,21 +119,41 @@ namespace brassica {
 				}
 			);
 
-			graph::ResourceDesc indirectDesc = graph::MappedStorageBufferDesc(sizeof(MeshTasksIndirectCommand));
-			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<EntityIndirectBuffer<Tag>>(),
-					.access = graph::AccessKind::Write,
-					.desc = indirectDesc,
-				}
-			);
-
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			ctx.WriteSpan<EntityIndirectBuffer<Tag>>(std::span<const MeshTasksIndirectCommand>(&indirectCmd, 1));
+			vk::Buffer    indirectBuf{nullptr};
+			std::uint64_t indirectOffset = 0;
+
+			std::uint64_t bufferAddress = m_overrideBufferAddress;
+			std::uint32_t totalInstances = m_overrideTotalInstances;
+
+			if (bufferAddress == 0 || totalInstances == 0) {
+				if (auto* prepNode = render::EngineNodeRegistry::Instance().GetNode<EntityPrepareNode>()) {
+					bufferAddress = prepNode->GetBufferDeviceAddress();
+					totalInstances = prepNode->GetTotalInstances();
+				}
+			}
+
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					if (auto physBuf = registry->GetBuffer<EntityIndirectBuffer>()) {
+						indirectBuf = physBuf->GetBuffer();
+						indirectOffset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
+					}
+				}
+			}
+
+			if (totalInstances == 0) {
+				return;
+			}
+
+			EntityPushConstants push{
+				.entityBufferAddress = bufferAddress,
+				.totalInstances = totalInstances,
+				.baseInstanceIndex = 0
+			};
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{
@@ -212,32 +208,20 @@ namespace brassica {
 				&push
 			);
 
-			vk::Buffer    indirectBuf{nullptr};
-			std::uint64_t offset = 0;
-			if (ctx.resources) {
-				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					if (auto physBuf = registry->GetBuffer<EntityIndirectBuffer<Tag>>()) {
-						indirectBuf = physBuf->GetBuffer();
-						offset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
-					}
-				}
-			}
-
 			if (dls && dls->vkCmdDrawMeshTasksIndirectEXT && indirectBuf) {
 				dls->vkCmdDrawMeshTasksIndirectEXT(
 					static_cast<VkCommandBuffer>(ctx.cmd.vkCmd),
 					static_cast<VkBuffer>(indirectBuf),
-					offset,
+					indirectOffset,
 					1,
 					sizeof(MeshTasksIndirectCommand)
 				);
 			} else if (dls && dls->vkCmdDrawMeshTasksEXT) {
-				std::uint32_t groups = indirectCmd.groupCountX > 0 ? indirectCmd.groupCountX : 1;
-				vkCmd.drawMeshTasksEXT(groups, 1, 1, *dls);
+				vkCmd.drawMeshTasksEXT(totalInstances, 1, 1, *dls);
 			}
 		}
 	};
 
-	using BallNode = EntityNode<struct BallSystemHandlerTag>;
+	BRASSICA_REGISTER_NODE(EntityNode);
 
 } // namespace brassica

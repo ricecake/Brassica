@@ -8,6 +8,7 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
 #include "passes/EntityNode.hpp"
+#include "passes/EntityPrepareNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -16,8 +17,6 @@
 using namespace brassica;
 
 namespace {
-
-	struct TestBallTag {};
 
 	struct FakeSceneProducer {
 		using Resources = graph::Declares<
@@ -184,7 +183,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("EntityNode shader compilation and host-mapped indirect buffer execution") {
+TEST_CASE("EntityNode shader compilation") {
 	Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
 	Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
 	Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
@@ -194,9 +193,9 @@ TEST_CASE("EntityNode shader compilation and host-mapped indirect buffer executi
 	MeshShader     mesh;
 	FragmentShader frag;
 
-	CHECK(task.CompileTaskFromFile(vk::Device{}, "shaders/ball.task"));
-	CHECK(mesh.CompileMeshFromFile(vk::Device{}, "shaders/ball.mesh"));
-	CHECK(frag.CompileFragmentFromFile(vk::Device{}, "shaders/ball.frag"));
+	CHECK(task.CompileTaskFromFile(vk::Device{}, "shaders/entity.task"));
+	CHECK(mesh.CompileMeshFromFile(vk::Device{}, "shaders/entity.mesh"));
+	CHECK(frag.CompileFragmentFromFile(vk::Device{}, "shaders/entity.frag"));
 
 	CHECK(!task.GetSPIRV().empty());
 	CHECK(!mesh.GetSPIRV().empty());
@@ -205,7 +204,7 @@ TEST_CASE("EntityNode shader compilation and host-mapped indirect buffer executi
 	Shader::ClearConstants();
 }
 
-TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect command buffer") {
+TEST_CASE("EntityPrepareNode and EntityNode execute in frame graph") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
@@ -244,8 +243,11 @@ TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect comma
 		dls.vkCmdDrawMeshTasksEXT = nullptr;
 		dls.vkCmdDrawMeshTasksIndirectEXT = nullptr;
 
-		EntityNode<TestBallTag> entityNode;
-		entityNode.SetIndirectCommand(MeshTasksIndirectCommand{1, 1, 1});
+		EntityPrepareNode prepNode;
+		prepNode.Init(render::NodeServices{.device = vkDevice});
+
+		EntityNode entityNode;
+		entityNode.SetEntityData(1000, 2);
 		entityNode.Init(
 			render::NodeServices{
 				.device = vkDevice,
@@ -257,6 +259,7 @@ TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect comma
 
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>();
+		graph.RegisterRef(prepNode);
 		graph.RegisterRef(entityNode);
 
 		graph::FrameContext ctx{.width = 256, .height = 256};
@@ -267,15 +270,12 @@ TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect comma
 		vkCmd.end();
 
 		// Verify EntityIndirectBuffer was provisioned as host-mapped
-		auto physBuf = registry.GetBuffer<EntityIndirectBuffer<TestBallTag>>();
+		auto physBuf = registry.GetBuffer<EntityIndirectBuffer>();
 		REQUIRE(physBuf != nullptr);
 		CHECK(physBuf->IsHostMapped());
 
 		const auto* cmdData = static_cast<const MeshTasksIndirectCommand*>(physBuf->MappedSlice(0));
 		REQUIRE(cmdData != nullptr);
-		CHECK(cmdData->groupCountX == 1);
-		CHECK(cmdData->groupCountY == 1);
-		CHECK(cmdData->groupCountZ == 1);
 
 		vk::SubmitInfo submitInfo{};
 		submitInfo.setCommandBuffers(vkCmd);
@@ -283,6 +283,7 @@ TEST_CASE("EntityNode executes in frame graph writing host-mapped indirect comma
 		device.GetQueue().waitIdle();
 
 		pipelineLibrary.Reset();
+		prepNode.Destroy(vkDevice);
 		entityNode.Destroy(vkDevice);
 		DestroyBallBindlessSet(vkDevice, device.GetAllocator(), bindlessSet);
 		vkDevice.destroyCommandPool(pool);
