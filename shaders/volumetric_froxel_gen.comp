@@ -1,0 +1,90 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "clustered_lighting.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(push_constant) uniform VolumetricFroxelGenPushConstants {
+	vec4  cameraPos;            // x, y, z = camera position, w = time
+	vec4  sunDir;               // x, y, z = sun direction, w = sun intensity
+	vec4  sunColor;             // rgb = sun color/radiance
+	vec4  fogParams;            // x = fog density, y = fog height falloff, z = fog base height, w = phase anisotropy g
+	uvec4 cascadeScatteringIdx; // x, y, z = bindless storage indices for cascade 0, 1, 2 scattering
+	uvec4 cascadeExtinctionIdx; // x, y, z = bindless storage indices for cascade 0, 1, 2 extinction
+	uint  noiseTextureIdx;      // bindless index for VolumetricNoiseTexture
+	uint  transmittanceLUTIdx;  // bindless index for TransmittanceLUT
+	uint  skyViewLUTIdx;        // bindless index for SkyViewLUT
+	uint  _padding;
+} push;
+
+void main() {
+	uvec3 vox = gl_GlobalInvocationID;
+	if (vox.x >= 64 || vox.y >= 64 || vox.z >= 64) return;
+
+	// 3 Cascades covering different ranges: C0 = 50m, C1 = 200m, C2 = 800m
+	float cascadeRanges[3] = float[3](50.0, 200.0, 800.0);
+
+	for (int c = 0; c < 3; ++c) {
+		uint scatIdx = push.cascadeScatteringIdx[c];
+		uint extIdx = push.cascadeExtinctionIdx[c];
+		if (scatIdx == 0xFFFFFFFFu || extIdx == 0xFFFFFFFFu) continue;
+
+		float maxDist = cascadeRanges[c];
+
+		// Calculate normalized froxel coordinates
+		vec3 normVox = (vec3(vox) + vec3(0.5)) / 64.0;
+		vec3 relPos = vec3(
+			(normVox.x - 0.5) * maxDist * 2.0,
+			(normVox.y - 0.5) * maxDist * 2.0,
+			normVox.z * maxDist
+		);
+
+		vec3 worldPos = push.cameraPos.xyz + relPos;
+
+		// Sample logarithmically proportioned 2D noise map
+		vec2 noiseUV = worldPos.xz * (0.001 * pow(2.0, float(c)));
+		vec4 noiseVal = vec4(0.5);
+		if (push.noiseTextureIdx != 0xFFFFFFFFu) {
+			noiseVal = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.noiseTextureIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), noiseUV, 0.0);
+		}
+		float noiseMod = noiseVal.r * 0.5 + noiseVal.g * 0.25 + noiseVal.b * 0.125 + noiseVal.a * 0.125;
+
+		// Analytical exponential height fog
+		float fogBase = push.fogParams.z;
+		float fogFalloff = push.fogParams.y;
+		float baseDensity = push.fogParams.x;
+
+		float heightDiff = max(0.0, worldPos.y - fogBase);
+		float density = baseDensity * exp(-fogFalloff * heightDiff) * clamp(noiseMod * 1.5, 0.1, 2.0);
+
+		// Participating media properties: RGB scattering, scalar extinction, emissivity
+		vec3 scatteringCoeff = vec3(density * 0.8, density * 0.85, density * 0.9);
+		float extinctionCoeff = density * 1.0;
+		float emissivity = 0.02 * density; // Emissivity parameter in spare channel
+
+		// Volumetric illumination (Sun + Sky)
+		vec3 viewDir = normalize(relPos);
+		float cosTheta = dot(-viewDir, push.sunDir.xyz);
+		float phase = henyeyGreenstein(push.fogParams.w, cosTheta);
+
+		vec3 inLight = push.sunColor.rgb * push.sunDir.w;
+		vec3 scatteringRGB = scatteringCoeff * (inLight * phase) + vec3(emissivity);
+
+		// Store scattering + emissivity in Texture 1 (RGB = scattering, A = emissivity)
+		imageStore(
+			uImages3DGenericWrite[nonuniformEXT(scatIdx)],
+			ivec3(vox),
+			vec4(scatteringRGB, emissivity)
+		);
+
+		// Store extinction coefficient in Texture 2 (RGB/A = extinction)
+		imageStore(
+			uImages3DGenericWrite[nonuniformEXT(extIdx)],
+			ivec3(vox),
+			vec4(vec3(extinctionCoeff), 1.0)
+		);
+	}
+}

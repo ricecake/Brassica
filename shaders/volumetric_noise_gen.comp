@@ -1,0 +1,36 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "lygia/generative/psrdnoise.glsl"
+#include "common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(push_constant) uniform VolumetricNoiseGenPushConstants {
+	uint  noiseStorageIdx;
+	float time;
+} push;
+
+void main() {
+	uvec2 pos = gl_GlobalInvocationID.xy;
+	if (pos.x >= 512 || pos.y >= 512) return;
+
+	vec2 uv = vec2(pos) / 512.0;
+
+	// Logarithmically proportioned multi-octave 2D noise map
+	// Scales: 2.0, 4.0, 8.0, 16.0
+	float scale0 = 2.0;
+	float scale1 = 4.0;
+	float scale2 = 8.0;
+	float scale3 = 16.0;
+
+	float n0 = psrdnoise(uv * scale0, vec2(0.0), push.time * 0.05);
+	float n1 = psrdnoise(uv * scale1, vec2(0.0), push.time * 0.10);
+	float n2 = psrdnoise(uv * scale2, vec2(0.0), push.time * 0.20);
+	float n3 = psrdnoise(uv * scale3, vec2(0.0), push.time * 0.40);
+
+	vec4 noiseVal = vec4(n0, n1, n2, n3) * 0.5 + vec4(0.5);
+
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.noiseStorageIdx)], ivec2(pos), noiseVal);
+}
