@@ -527,6 +527,7 @@ void evaluate_tectonics_geocentric(
     float sum_N2_crump = sum_w2_crump * inv_W_crump2;
 
     float raw_fault = 1.0 - sum_N2_crump;
+    float hotspot_mask = smoothstep(0.52, 0.65, raw_fault);
     float max_fault_expected = 0.55; // Slightly above 0.5 to account for 3-plate intersections
 
     // smoothstep(0.0, max_fault_expected, raw_fault)
@@ -558,7 +559,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
 
     // A low k_crumple (e.g., 8.0 - 15.0) spreads the fault_mask and velocity field
     // hundreds of kilometers wide, while coastlines remain sharp.
-    float k_crumple = 450.0;
+    float k_crumple = 350.0;
 
     evaluate_tectonics_geocentric(p_tectonic, k_crumple,
         base_h, grad_base_h,
@@ -631,8 +632,18 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // Product rule for the WIDE fault-masked ridges
     // Because fault_mask now comes from k_crumple, the mountain ranges will naturally
     // spill out far beyond the sharp tectonic borders.
-    float ridge_h = raw_ridge * fault_mask;
-    vec3 grad_ridge = (grad_ridge_warped * fault_mask) + (raw_ridge * grad_fault);
+
+    // After evaluating raw_ridge and grad_ridge_warped
+    float exponent = 2.5;
+    float massive_ridge = pow(abs(raw_ridge), exponent);
+    vec3 grad_massive_ridge = exponent * pow(abs(raw_ridge), exponent - 1.0) * sign(raw_ridge) * grad_ridge_warped;
+
+    // Apply fault mask
+    float ridge_h = massive_ridge * fault_mask;
+    vec3 grad_ridge = (grad_massive_ridge * fault_mask) + (massive_ridge * grad_fault);
+
+    // float ridge_h = raw_ridge * fault_mask;
+    // vec3 grad_ridge = (grad_ridge_warped * fault_mask) + (raw_ridge * grad_fault);
 
     vec4 raw_smin_shelf = smax_quad_deriv(vec4(continent_h, grad_continent_h), vec4(hill_h, grad_hill_h), 0.25);
 
