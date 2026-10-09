@@ -391,9 +391,10 @@ namespace brassica::graph {
 				StagingSlot&        slot = stagingIt->second.slots[frameIndex % brassica::FRAME_OVERLAP];
 				vk::CommandBuffer   vkCmd(static_cast<VkCommandBuffer>(cmd.vkCmd));
 				const ResourceDesc& desc = tex->GetDesc();
+				const auto          aspect = AspectFor(static_cast<vk::Format>(desc.formatCode));
 				vk::BufferImageCopy region{};
 				region.setBufferOffset(0)
-					.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+					.setImageSubresource(vk::ImageSubresourceLayers{aspect, 0, 0, 1})
 					.setImageExtent({desc.width, desc.height, std::max(1u, desc.depth)});
 				vkCmd.copyBufferToImage(slot.buffer, tex->GetImage(), tex->GetCurrentLayout(), region);
 			}

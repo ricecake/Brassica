@@ -1225,6 +1225,7 @@ namespace brassica {
 			frameGraph.Register<graph::Import<TerrainTLAS>>();
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+			frameGraph.Register<graph::Import<graph::History<HiZTexture>>>();
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
@@ -1556,6 +1557,7 @@ namespace brassica {
 
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		frameGraph.Register<graph::Import<graph::History<HiZTexture>>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);

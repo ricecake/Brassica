@@ -7,10 +7,37 @@
 // handles into a shared blackboard; the new model has no separate blackboard, cross-pass resource
 // sharing is just these keys plus Declares<Create/Read/Modify<K>...> on each node.
 
+#include <algorithm>
+#include <cmath>
+
 #include "graph/Execution.hpp"
 #include "vulkan/vulkan.hpp"
 
 namespace brassica {
+
+	struct HiZTexture {};
+
+	inline graph::ResourceDesc HiZTextureDesc(std::uint32_t width, std::uint32_t height, std::uint32_t mips = 0) {
+		std::uint32_t calculatedMips = mips;
+		if (calculatedMips == 0) {
+			const std::uint32_t maxDim = (std::max)(width, height);
+			calculatedMips = maxDim > 0 ? static_cast<std::uint32_t>(std::floor(std::log2(static_cast<float>(maxDim)))) + 1 : 1;
+		}
+		calculatedMips = (std::min)(calculatedMips, 12u);
+
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = calculatedMips,
+			.layers = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
 
 	struct CloudVolumeCascade0 {};
 

@@ -26,24 +26,24 @@
 namespace brassica {
 
 	// Mirrors shaders/terrain_downsample.comp's push_constant block exactly. Offsets verified via
-	// spirv-dis against the real compiled shader (0, 4, 8, 16, 24; size 64) rather than hand math
-	// -- GLSL's push-constant rules align uvec2 to 8 bytes, which glm::uvec2 does NOT get for
-	// free in C++ (alignof(glm::uvec2) == 4 here), hence the explicit _pad0.
+	// spirv-dis against the real compiled shader (0, 4, 8, 12, 16; size 56) rather than hand math.
+	// No vec/uvec members here, so plain 4-byte-aligned scalars/array -- no padding needed, unlike
+	// the old workGroupOffset-carrying layout this replaced.
 	struct TerrainDownsamplePushConstants {
 		std::uint32_t srcIndex{0};      // bindless SAMPLED index for TerrainMinMaxTexture (mip 0 read)
 		std::uint32_t mips{10};         // SPD output mip count -- our mip 1..10 for MapDim = 1024
-		std::uint32_t numWorkGroups{0}; // workgroups dispatched per slice (excludes Z/slice dim)
-		std::uint32_t _pad0{0};
-		glm::uvec2    workGroupOffset{0, 0};        // (0,0) until incremental dirty-rect dispatch lands
+		std::uint32_t isFullRebuild{1}; // 1 = every tile dirty (first frame/force/resize), 0 = subregion
+		std::uint32_t textureDim{constants::Class::Terrain::MapDim}; // per-layer map width, for the
+		                                                              // shader's own dirty-tile test
 		std::array<std::uint32_t, 10> mipIndices{}; // bindless STORAGE indices for our mip 1..10
 	};
 
 	static_assert(offsetof(TerrainDownsamplePushConstants, srcIndex) == 0);
 	static_assert(offsetof(TerrainDownsamplePushConstants, mips) == 4);
-	static_assert(offsetof(TerrainDownsamplePushConstants, numWorkGroups) == 8);
-	static_assert(offsetof(TerrainDownsamplePushConstants, workGroupOffset) == 16);
-	static_assert(offsetof(TerrainDownsamplePushConstants, mipIndices) == 24);
-	static_assert(sizeof(TerrainDownsamplePushConstants) == 64, "TerrainDownsamplePushConstants size must be 64 bytes");
+	static_assert(offsetof(TerrainDownsamplePushConstants, isFullRebuild) == 8);
+	static_assert(offsetof(TerrainDownsamplePushConstants, textureDim) == 12);
+	static_assert(offsetof(TerrainDownsamplePushConstants, mipIndices) == 16);
+	static_assert(sizeof(TerrainDownsamplePushConstants) == 56, "TerrainDownsamplePushConstants size must be 56 bytes");
 
 	namespace detail {
 
@@ -105,6 +105,13 @@ namespace brassica {
 	// this node Modifies<TerrainMinMaxTexture> (consumes mip 0, produces mips 1-10) -- an entirely
 	// ordinary producer/consumer edge, which Graph::CollectEdges orders and barriers the normal
 	// way, no self-modify auto-chain or version literal involved.
+	//
+	// Execute always dispatches the full tile grid (every slice), but shaders/terrain_downsample.
+	// comp's main() derives the same per-layer toroidal dirty region terrain_gen.comp used to
+	// update mip 0 and makes every non-dirty workgroup return before it ever touches SPD -- so on
+	// a typical moving-camera frame, most of the 16x16-per-slice workgroups are a handful of ALU
+	// ops instead of a full downsample. isFullRebuild (the push field) forces every tile dirty on
+	// the first dispatch, an explicit regeneration, or a gridParams change.
 	struct TerrainMinMaxDownsampleNode: render::NodeRegistrar<TerrainMinMaxDownsampleNode> {
 		using Resources = graph::Declares<graph::Modify<TerrainMinMaxTexture>>;
 
@@ -132,6 +139,13 @@ namespace brassica {
 		};
 		bool hasUpdate{true};
 		bool forceRegeneration{true};
+
+		// Tracks whether the last dispatch actually ran a full rebuild, so a gridParams change
+		// (which reprovisions TerrainMinMaxTexture with a different layer count or width --
+		// PhysicalRegistry::ProvisionTexture's desc-mismatch path) or the very first dispatch
+		// forces a full rebuild instead of trusting coarse mips that may not exist yet.
+		bool       hasDispatched{false};
+		glm::uvec4 lastDispatchedGridParams{0, 0, 0, 0};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -243,14 +257,21 @@ namespace brassica {
 				counterSet.set,
 			};
 
+			// A gridParams change reprovisions TerrainMinMaxTexture with a different layer count or
+			// width (PhysicalRegistry::ProvisionTexture's desc-mismatch path), so last frame's
+			// coarse mips are gone -- that, the very first dispatch, and an explicit
+			// forceRegeneration all mean the shader must treat every tile as dirty rather than
+			// trust a subregion rebuild against mips that may not exist.
+			bool isFullRebuild = forceRegeneration || !hasDispatched || gridParams != lastDispatchedGridParams;
+
 			push.srcIndex = ctx.Index<TerrainMinMaxTexture>();
 			for (std::uint32_t mip = 0; mip < kOutputMips; ++mip) {
 				push.mipIndices[mip] = ctx.StorageIndex<TerrainMinMaxTexture>(mip + 1);
 			}
 			push.mips = kOutputMips;
+			push.isFullRebuild = isFullRebuild ? 1u : 0u;
+			push.textureDim = gridParams.w;
 			std::uint32_t tilesPerAxis = (gridParams.w + kTileSize - 1) / kTileSize;
-			push.numWorkGroups = tilesPerAxis * tilesPerAxis;
-			push.workGroupOffset = glm::uvec2(0, 0);
 
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainDownsamplePushConstants)}
@@ -279,6 +300,9 @@ namespace brassica {
 			);
 
 			vkCmd.dispatch(tilesPerAxis, tilesPerAxis, gridParams.x);
+
+			hasDispatched = true;
+			lastDispatchedGridParams = gridParams;
 		}
 	};
 

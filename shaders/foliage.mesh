@@ -682,7 +682,10 @@ void main() {
 
 		vec3  basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
 		float heightScale = bHWDF.x * fade;
-		float widthScale = bHWDF.y;
+		// Must shrink with fade the same way heightScale does -- leaving width full-size while
+		// height shrinks toward the LOD ring's outer edge turns each item into a tall thin sliver
+		// right before it fades out, instead of shrinking uniformly.
+		float widthScale = bHWDF.y * fade;
 		vec3  sway = vec3(windStrength, 0.0, windStrength);
 
 		if (foliageType == 3u) {

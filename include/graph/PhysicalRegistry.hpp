@@ -939,6 +939,16 @@ namespace brassica::graph {
 		// caveat this same header's Provision loop does not protect against), which would destroy
 		// exactly the contents History exists to preserve.
 		//
+		// Shared by ProvisionTexture's own early-return and ProvisionTemporalPairs below -- the same
+		// seven fields matter in both places (ResourceState.hpp's Derive*State derives every barrier
+		// decision from usageMask, so a stale mask must never silently survive a desc-mismatch
+		// check), and a single definition means the two can't drift apart from each other.
+		static bool ImageDescMatches(const ResourceDesc& a, const ResourceDesc& b) {
+			return a.width == b.width && a.height == b.height && a.depth == b.depth &&
+				a.formatCode == b.formatCode && a.usageMask == b.usageMask && a.mips == b.mips &&
+				a.layers == b.layers;
+		}
+
 		// Runs once per Provision() call, before the ordinary collection/provisioning loops below:
 		// by the time those loops see K or History<K>, m_textures/m_buffers already holds this
 		// frame's correctly-assigned slot for each, and ProvisionTexture/ProvisionBuffer's own
@@ -971,13 +981,24 @@ namespace brassica::graph {
 					m_buffers[historyId] = pair[1 - parity];
 				} else {
 					auto& pair = m_temporalTexturePairs[base];
-					if (!pair[0]) {
+					// Bypasses ProvisionTexture entirely (this pair's own check below is its
+					// equivalent of ProvisionTexture's desc-match early return), so a genuine
+					// mismatch (most commonly a window resize) must be handled here too, not just
+					// on first creation -- otherwise this pair never notices the resize at all and
+					// keeps handing out its original-size textures forever, while the *separate*
+					// per-key provisioning loop below (acting on each node's own plain Create/Read
+					// realization of the same two ids) correctly notices the mismatch every single
+					// frame and replaces them -- a real, confirmed, every-frame vkDestroyImage-
+					// while-still-in-use crash, each side fighting the other's fix one frame later.
+					if (!pair[0] || !ImageDescMatches(pair[0]->GetDesc(), desc)) {
+						if (pair[0]) {
+							RetireBindlessIndices(*pair[0], frameIndex);
+							RetireBindlessIndices(*pair[1], frameIndex);
+						}
 						pair[0] = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
 						pair[1] = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
-						// Bypasses ProvisionTexture entirely (this pair's own !pair[0] check is
-						// its equivalent of ProvisionTexture's desc-match early return), so it
-						// must assign bindless indices itself -- otherwise a History<K> pair
-						// would silently never get one at all.
+						// Must assign bindless indices itself -- otherwise a History<K> pair would
+						// silently never get one at all.
 						AssignAndWriteBindlessIndices(*pair[0]);
 						AssignAndWriteBindlessIndices(*pair[1]);
 					}
@@ -1015,10 +1036,7 @@ namespace brassica::graph {
 				// keep the stale texture, and every barrier decision downstream derives from
 				// GetDesc().usageMask (ResourceState.hpp's Derive*State), so a stale mask would
 				// then quietly mis-barrier every future access to this key.
-				if (existingDesc.width == desc.width && existingDesc.height == desc.height &&
-				    existingDesc.depth == desc.depth && existingDesc.formatCode == desc.formatCode &&
-				    existingDesc.usageMask == desc.usageMask && existingDesc.mips == desc.mips &&
-				    existingDesc.layers == desc.layers) {
+				if (ImageDescMatches(existingDesc, desc)) {
 					return; // already provisioned with a matching description
 				}
 				// About to replace this texture (e.g. a resize) -- its bindless slots, if any,
