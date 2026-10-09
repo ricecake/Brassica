@@ -531,7 +531,16 @@ namespace brassica {
 	}
 
 	void OzzModel::UpdateInstance(OzzModelInstance& instance, float dt, std::size_t animIndex) const {
-		if (!m_skeleton || m_animations.empty()) return;
+		if (!m_skeleton) return;
+
+		if (m_animations.empty()) {
+			if (instance.skinnedVertices.empty() && !m_restVertices.empty()) {
+				instance.skinnedVertices = m_restVertices;
+				instance.skinnedPositions = m_restPositions;
+				instance.skinnedNormals = m_restNormals;
+			}
+			return;
+		}
 
 		if (animIndex != instance.currentAnimIndex) {
 			instance.currentAnimIndex = animIndex % m_animations.size();

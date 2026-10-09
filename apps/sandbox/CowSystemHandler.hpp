@@ -55,6 +55,11 @@ namespace brassica {
 			m_cowModel = std::make_unique<OzzModel>("assets/cow.glb");
 
 			m_cows.clear();
+			if (!m_cowModel || m_cowModel->GetVertexCount() == 0 || m_cowModel->GetMeshletCount() == 0) {
+				spdlog::warn("CowSystemHandler: m_cowModel asset is invalid or empty.");
+				return;
+			}
+
 			std::size_t cowCount = 6;
 			float currentTime = static_cast<float>(frameDetails.totalTime);
 
@@ -64,7 +69,7 @@ namespace brassica {
 		}
 
 		void Update(Engine& engine, const FrameDetails& frameDetails) override {
-			if (!m_cowModel || m_cowModel->GetAnimationCount() == 0) return;
+			if (!m_cowModel || m_cowModel->GetVertexCount() == 0) return;
 
 			float currentTime = static_cast<float>(frameDetails.totalTime);
 			float dt = frameDetails.deltaTime > 0.0f ? frameDetails.deltaTime : 0.016f;
@@ -74,15 +79,17 @@ namespace brassica {
 			for (auto& cow : m_cows) {
 				if (!registry.valid(cow.entity)) continue;
 
-				cow.motionChangeTimer += dt;
-				if (cow.motionChangeTimer >= cow.motionDuration) {
-					cow.motionChangeTimer = 0.0f;
-					cow.animIndex = (cow.animIndex + 1) % m_cowModel->GetAnimationCount();
-					cow.motionDuration = 3.0f + static_cast<float>(rand() % 4);
-				}
+				if (m_cowModel->GetAnimationCount() > 0) {
+					cow.motionChangeTimer += dt;
+					if (cow.motionChangeTimer >= cow.motionDuration) {
+						cow.motionChangeTimer = 0.0f;
+						cow.animIndex = (cow.animIndex + 1) % m_cowModel->GetAnimationCount();
+						cow.motionDuration = 3.0f + static_cast<float>(rand() % 4);
+					}
 
-				// Update unique OzzModelInstance animation state for this individual cow
-				m_cowModel->UpdateInstance(cow.modelInstance, dt, cow.animIndex);
+					// Update unique OzzModelInstance animation state for this individual cow
+					m_cowModel->UpdateInstance(cow.modelInstance, dt, cow.animIndex);
+				}
 
 				// Copy skinned vertices directly to host-mapped GPU storage buffer
 				if (cow.vertexAlloc && !cow.modelInstance.skinnedVertices.empty()) {
@@ -108,7 +115,7 @@ namespace brassica {
 					if (std::abs(cow.basePos.x) > 40.0f) cow.velocity.x *= -1.0f;
 					if (std::abs(cow.basePos.z) > 40.0f) cow.velocity.z *= -1.0f;
 
-					float groundY = engine.GetTerrainManager().GetCachedGroundHeight(cow.basePos.x);
+					float groundY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
 
 					transform->position = cow.basePos;
 					transform->position.y = groundY + 0.5f;
@@ -164,11 +171,13 @@ namespace brassica {
 
 	private:
 		void SpawnCow(Engine& engine, float currentTime, std::size_t index) {
+			if (!m_cowModel || m_cowModel->GetVertexCount() == 0 || m_cowModel->GetMeshletCount() == 0) return;
+
 			float angle = static_cast<float>(index) * (2.0f * 3.14159f / 6.0f);
 			float radius = 15.0f + static_cast<float>(index % 3) * 5.0f;
 
 			glm::vec3 pos(std::cos(angle) * radius, 0.0f, std::sin(angle) * radius - 15.0f);
-			float groundY = engine.GetTerrainManager().GetCachedGroundHeight(pos.x);
+			float groundY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
 			pos.y = groundY + 0.5f;
 
 			TransformComponent transform{};
@@ -183,7 +192,7 @@ namespace brassica {
 				0.0f,
 				std::cos(angle * 2.0f) * 1.5f
 			);
-			cowData.animIndex = index % m_cowModel->GetAnimationCount();
+			cowData.animIndex = m_cowModel->GetAnimationCount() > 0 ? (index % m_cowModel->GetAnimationCount()) : 0;
 			cowData.motionChangeTimer = 0.0f;
 			cowData.motionDuration = 4.0f + static_cast<float>(index % 3);
 			cowData.modelInstance = m_cowModel->CreateInstance();
@@ -206,6 +215,20 @@ namespace brassica {
 
 			vk::BufferDeviceAddressInfo vertBdaInfo(cowData.vertexBuffer);
 			cowData.vertexBufferAddress = engine.GetDevice().getBufferAddress(vertBdaInfo);
+
+			// Upload initial vertex data
+			if (cowData.vertexAlloc && !cowData.modelInstance.skinnedVertices.empty()) {
+				void* mappedVerts = nullptr;
+				vmaMapMemory(engine.GetAllocator(), cowData.vertexAlloc, &mappedVerts);
+				if (mappedVerts) {
+					std::memcpy(
+						mappedVerts,
+						cowData.modelInstance.skinnedVertices.data(),
+						cowData.modelInstance.skinnedVertices.size() * sizeof(ModelVertex)
+					);
+					vmaUnmapMemory(engine.GetAllocator(), cowData.vertexAlloc);
+				}
+			}
 
 			// Allocate Host-Mapped Index Buffer with Shader Device Address
 			VkBufferCreateInfo idxBufInfo{
