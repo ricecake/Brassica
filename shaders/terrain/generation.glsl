@@ -525,26 +525,21 @@ void evaluate_tectonics_geocentric(
 
     // Fault Mask: 1.0 - sum( (w/W)^2 )
     float sum_N2_crump = sum_w2_crump * inv_W_crump2;
-// Old: out_fault = 1.0 - sum_N2_crump;
 
-// New: Remap the raw mask so that 0.5 becomes 1.0 using a smooth curve
-float raw_fault = 1.0 - sum_N2_crump;
-float max_fault_expected = 0.55; // Slightly above 0.5 to account for 3-plate intersections
+    float raw_fault = 1.0 - sum_N2_crump;
+    float max_fault_expected = 0.55; // Slightly above 0.5 to account for 3-plate intersections
 
-// smoothstep(0.0, max_fault_expected, raw_fault)
-float t_fault = clamp(raw_fault / max_fault_expected, 0.0, 1.0);
-out_fault = t_fault * t_fault * (3.0 - 2.0 * t_fault);
+    // smoothstep(0.0, max_fault_expected, raw_fault)
+    float t_fault = clamp(raw_fault / max_fault_expected, 0.0, 1.0);
+    out_fault = t_fault * t_fault * (3.0 - 2.0 * t_fault);
 
-// Chain rule for the new smoothstep mask
-float d_smooth_fault = 6.0 * t_fault * (1.0 - t_fault) / max_fault_expected;
+    // Chain rule for the new smoothstep mask
+    float d_smooth_fault = 6.0 * t_fault * (1.0 - t_fault) / max_fault_expected;
 
-vec3 raw_grad_f = -(grad_w2_crump - 2.0 * sum_N2_crump * sum_w_crump * grad_w_crump) * inv_W_crump2;
-out_grad_f = raw_grad_f * d_smooth_fault;
+    vec3 raw_grad_f = -(grad_w2_crump - 2.0 * sum_N2_crump * sum_w_crump * grad_w_crump) * inv_W_crump2;
+    out_grad_f = raw_grad_f * d_smooth_fault;
 }
 
-// float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
-//     vec3 warp_v = vec3(0.0);
-// 	float warp_s = psrdnoise(2*p_local/FAKE_PLANET_RADIUS, vec3(0), 0.0, warp_v);
 
 float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength, TerrainConfig config, out vec3 out_normal) {
 
@@ -554,7 +549,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // float warp_s = psrdnoise(4*p_local / FAKE_PLANET_RADIUS, vec3(0.0), 0.0, warp_v);
     // vec3 p_tectonic = p_local + 20000.0 * smoothstep(-0.5, 0.75, warp_s) * normalize(vec3(warp_v.z, 0.0, warp_v.x));
 
-	vec3 p_tectonic = p_local + 20000.0 * cross_noise_fbm(4*p_local / FAKE_PLANET_RADIUS, 6, 0.0);
+	vec3 p_tectonic = p_local + 20000.0 * cross_noise_fbm(16*p_local / FAKE_PLANET_RADIUS, 6, 0.0); // 16 or 32 work well
 
     // 1. Evaluate Dual-Temperature Tectonics
     float base_h, fault_mask;
@@ -581,35 +576,55 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // Because k_crumple is such a low-frequency, ultra-smooth field, we can safely
     // treat the gradient of this specific uplift layer as near-zero to avoid
     // needing the Hessian of the Voronoi cells, without causing visible lighting errors.
-// Isolate violent collisions (highly negative I1)
-// Adjust the -2.0 based on the magnitude of your velocity drift speed
-float collision_intensity = smoothstep(-0.5, -2.0, I1);
 
-// Aggressively push the base crust up.
-// A multiplier of 0.4 means a collision can push a lowland plate (0.2)
-// all the way up to a highland plateau (0.6) before any noise is added.
-float uplift = collision_intensity * 0.4;
-base_h += uplift;
+    // Isolate violent collisions (highly negative I1)
+    // Adjust the -2.0 based on the magnitude of your velocity drift speed
+    float collision_intensity = smoothstep(-0.5, -2.0, I1);
+
+    // Aggressively push the base crust up.
+    // A multiplier of 0.4 means a collision can push a lowland plate (0.2)
+    // all the way up to a highland plateau (0.6) before any noise is added.
+    float uplift = collision_intensity * 0.4;
+    base_h += uplift;
 
     // 3. Base Continent Topography (Rolling Hills & Plains)
     float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
     vec3 P_noise = P_geo * radius_scale;
 
     vec3 grad_base_noise;
-    // float base_noise = dot_noise_fbm(P_noise, 4, phase, grad_base_noise);
-	vec4 raw_base_noise = noised(P_noise);
-	float base_noise = raw_base_noise.x;
-	grad_base_noise = raw_base_noise.yzw;
+    float base_noise = dot_noise_fbm(P_noise, 5, phase+32, grad_base_noise);
+	// vec4 raw_base_noise = noised(P_noise);
+	// float base_noise = raw_base_noise.x;
+	// grad_base_noise = raw_base_noise.yzw;
 
     float base_noise_amp = 0.95;
     float continent_h = base_noise * base_noise_amp;
     vec3 grad_continent_h = grad_base_noise * base_noise_amp;
+
+    // Define the stable interior mask
+    float interior_mask = 1.0 - fault_mask;
+    vec3 grad_interior_mask = -grad_fault;
+
+    // vec4 raw_hill_noise = noised(P_noise);
+    // float raw_hills = raw_hill_noise.x;
+    // vec3 grad_raw_hills = raw_hill_noise.yzw;
+    vec3 grad_raw_hills;
+    float raw_hills = dot_noise_fbm(P_noise, 4, phase+89, grad_raw_hills);
+
+    // Apply the inverted envelope for rolling hills
+    float hill_profile = pow(1.0 - abs(raw_hills), 2.0);
+    vec3 grad_hill_profile = -2.0 * (1.0 - abs(raw_hills)) * sign(raw_hills) * grad_raw_hills;
+
+    // Product rule: Height * Mask
+    float hill_h = hill_profile * interior_mask;
+    vec3 grad_hill_h = (grad_hill_profile * interior_mask) + (hill_profile * grad_interior_mask);
 
     // 4. Tectonic Domain Warping & Ridges (Wide Crumple Zones)
     vec3 P_warped = P_noise + vel * warp_strength;
     mat3 J_warp = mat3(radius_scale) + J_vel * warp_strength;
 
     vec3 grad_raw_ridge;
+    // float raw_ridge = psrdnoise(P_warped, vec3(0), phase + 42.0, grad_raw_ridge);
     float raw_ridge = dot_noise_fbm(P_warped, 6, phase + 42.0, grad_raw_ridge);
     vec3 grad_ridge_warped = transpose(J_warp) * grad_raw_ridge;
 
@@ -619,9 +634,11 @@ base_h += uplift;
     float ridge_h = raw_ridge * fault_mask;
     vec3 grad_ridge = (grad_ridge_warped * fault_mask) + (raw_ridge * grad_fault);
 
+    vec4 raw_smin_shelf = smax_quad_deriv(vec4(continent_h, grad_continent_h), vec4(hill_h, grad_hill_h), 0.25);
+
     // 5. Final Composition
-    float final_h = base_h + continent_h + ridge_h;
-    vec3 final_grad_geo = grad_base_h + grad_continent_h + grad_ridge;
+    float final_h = base_h + raw_smin_shelf.x + ridge_h;
+    vec3 final_grad_geo = grad_base_h + raw_smin_shelf.yzw + grad_ridge;
 
     // 6. Resolve to Local Normal
     float true_height = remap(final_h, 0.0, 1.0, config.min_height, config.max_height);

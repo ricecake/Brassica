@@ -28,6 +28,16 @@ const mat3 GOLD = mat3(
 //     +0.772087367, +0.494042493, +0.399753815
 // );
 
+// Computes the quadratic smooth maximum and its analytical derivative weights.
+// Returns a vec3:
+//   res.x = smoothly blended max value
+//   res.y = weight for derivative of 'a' (da/dx)
+//   res.z = weight for derivative of 'b' (db/dx)
+vec4 smax_quad_deriv(vec4 a, vec4 b, float k) {
+    float h = clamp(0.5 + 0.5 * (a.x - b.x) / k, 0.0, 1.0);
+    float val = mix(b.x, a.x, h) + k * h * (1.0 - h);
+    return vec4(val, a.yzw * h + b.yzw * (1.0 - h));
+}
 
 const int bayer4x4[16] = int[](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
 
