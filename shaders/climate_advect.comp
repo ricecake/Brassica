@@ -48,10 +48,11 @@ void main() {
 		float phi = asin(clamp(dir.y, -1.0, 1.0));
 		vec3 worldP = vec3(theta * FAKE_PLANET_RADIUS, 0.0, phi * FAKE_PLANET_RADIUS);
 
-		float landMask = 0.0;
 		vec3 gradMask = vec3(0.0);
-		evaluate_soft_voronoi_pseudosphere2(worldP, 32, landMask, gradMask);
-		float landVal = clamp(landMask, 0.0, 1.0);
+
+		TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
+		float elevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask);
+		float landVal = clamp(elevation, 0.0, 1.0);
 
 		// Ocean moisture replenishment
 		if (landVal < 0.2) {

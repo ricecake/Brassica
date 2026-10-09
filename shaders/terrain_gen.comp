@@ -78,12 +78,12 @@ void main() {
 	// eval_terrain(p, con, h, normal);
 	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal);
 
-	mat3 warpGrad;
-	vec3 scaleGrad;
-	HierarchicalWorleyData2D worley = hierarchicalWorleyTiled((p.xz+16*cross_noise_fbm(p/1024, 3, 0.0, warpGrad).xz)/(256), 4096);
-	h+= 32*abs(dot_noise_fbm(p/1024, 4, 0, scaleGrad))*(1.0 - worley.f1_dist);
+	// mat3 warpGrad;
+	// vec3 scaleGrad;
+	// HierarchicalWorleyData2D worley = hierarchicalWorleyTiled((p.xz+16*cross_noise_fbm(p/1024, 3, 0.0, warpGrad).xz)/(256), 4096);
+	// h+= 32*abs(dot_noise_fbm(p/1024, 4, 0, scaleGrad))*(1.0 - worley.f1_dist);
 
-	normal = normalize(0.707*32*vec3(worley.p - worley.f1_pos, 1.0)+normal);
+	// normal = normalize(0.707*32*vec3(worley.p - worley.f1_pos, 1.0)+normal);
 
 	// // Add minor local perturbations to mesh height and surface normals for close-up detail
 	// vec2 microGrad = vec2(0.0);

@@ -238,8 +238,10 @@ void main() {
 		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
 
 		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
-		baseColor = mix(baseColor, wb.color, 0.125);
-		roughness = wb.roughness;
+		// baseColor = wb.color;
+		// roughness = wb.roughness;
+		baseColor = mix(baseColor, wb.color, 0.5);
+		roughness = mix(1.0, wb.roughness, 0.5);
 	}
 
 	float slopeFactor = smoothstep(0.80, 0.30, normal.y);
@@ -281,7 +283,9 @@ void main() {
 
 	if (length(offsetDist) < 500) {
 		// baseColor = vec3(1,0,1);
-		baseColor = hueShift(baseColor, psrdnoise(morphedWorldXZ*0.5));// / texelSize(lodLevel)));
+		float noise = psrdnoise(morphedWorldXZ*0.5);
+		roughness *= noise * 0.5 +0.5;
+		baseColor = hueShift(baseColor, noise);// / texelSize(lodLevel)));
 	}
 
 	outAlbedo[vertexIndex] = vec4(baseColor, 1.0);
