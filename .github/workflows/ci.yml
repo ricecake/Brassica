@@ -135,8 +135,10 @@ jobs:
           cp -r "${{ steps.strings.outputs.workspace-dir }}/shaders" release/brassica-${{ matrix.artifact_name }}/ || true
           mkdir -p release/brassica-${{ matrix.artifact_name }}/external
           cp -r "${{ steps.strings.outputs.workspace-dir }}/external/lygia" release/brassica-${{ matrix.artifact_name }}/external/ || true
+          cp -r "${{ steps.strings.outputs.workspace-dir }}/external/ffx-spd" release/brassica-${{ matrix.artifact_name }}/external/ || true
           mkdir -p release/brassica-${{ matrix.artifact_name }}/shaders/external
           cp -r "${{ steps.strings.outputs.workspace-dir }}/external/lygia" release/brassica-${{ matrix.artifact_name }}/shaders/external/ || true
+          cp -r "${{ steps.strings.outputs.workspace-dir }}/external/ffx-spd" release/brassica-${{ matrix.artifact_name }}/shaders/external/ || true
           cp "${{ steps.strings.outputs.workspace-dir }}/README.md" release/brassica-${{ matrix.artifact_name }}/ || true
           cd release
           tar -czvf brassica-${{ matrix.artifact_name }}.tar.gz brassica-${{ matrix.artifact_name }}
@@ -166,6 +168,12 @@ jobs:
             Copy-Item -Path "${{ steps.strings.outputs.workspace-dir }}/external/lygia" -Destination "release/brassica-${{ matrix.artifact_name }}/external/" -Recurse
             New-Item -ItemType Directory -Force -Path "release/brassica-${{ matrix.artifact_name }}/shaders/external"
             Copy-Item -Path "${{ steps.strings.outputs.workspace-dir }}/external/lygia" -Destination "release/brassica-${{ matrix.artifact_name }}/shaders/external/" -Recurse
+          }
+          if (Test-Path "${{ steps.strings.outputs.workspace-dir }}/external/ffx-spd") {
+            New-Item -ItemType Directory -Force -Path "release/brassica-${{ matrix.artifact_name }}/external"
+            Copy-Item -Path "${{ steps.strings.outputs.workspace-dir }}/external/ffx-spd" -Destination "release/brassica-${{ matrix.artifact_name }}/external/" -Recurse
+            New-Item -ItemType Directory -Force -Path "release/brassica-${{ matrix.artifact_name }}/shaders/external"
+            Copy-Item -Path "${{ steps.strings.outputs.workspace-dir }}/external/ffx-spd" -Destination "release/brassica-${{ matrix.artifact_name }}/shaders/external/" -Recurse
           }
           Copy-Item -Path "${{ steps.strings.outputs.workspace-dir }}/README.md" -Destination "release/brassica-${{ matrix.artifact_name }}/" -ErrorAction SilentlyContinue
 
