@@ -26,6 +26,7 @@ namespace brassica {
 		alignas(16) glm::vec4 cascadeCenterPos[3]{};
 		alignas(16) glm::ivec4 cascadeGridOffset[3]{};
 		std::uint32_t forceRegeneration{1};
+		float cadencePhase{0.0f};
 	};
 
 	struct CloudVolumeCascadeState {
@@ -150,6 +151,7 @@ namespace brassica {
 				push.cascadeStorageIdx.z = ctx.StorageIndex<CloudVolumeCascade2>();
 				push.cameraPos = glm::vec4(cameraPos, 1.0f);
 				push.forceRegeneration = forceRegeneration ? 1 : 0;
+				push.cadencePhase = static_cast<float>(frameCount / 30) * 0.1f;
 
 				std::array<vk::PushConstantRange, 1> pushConstantRanges{
 					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudVolumeGenPushConstants)}
