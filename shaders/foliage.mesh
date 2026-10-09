@@ -33,7 +33,7 @@ layout(push_constant) uniform FoliagePushConstants {
 	float waterLevel;
 	uint  terrainNumLevels;
 	uint  foliageFlags; // bit 0: terrain occlusion culling
-	float padding0;
+	uint  hizIndex; // unused here -- HiZ occlusion is task-shader-only; keeps layout matching foliage.task
 }
 params;
 
@@ -71,6 +71,37 @@ vec3 rotateVector(vec3 v, vec3 axis, float angle) {
 	return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
 }
 
+// Ported from boidish's getWindDeflectionAngleAndAxis: bends a blade like a rigid rod pivoting
+// at its base (rotation) instead of shearing its cross-sections sideways by a fixed offset
+// (the old `+ sway * t*t` approach), so it keeps its real length under wind instead of
+// stretching. windMag/windDir come from this clump's already-computed scalar sway (Brassica has
+// no wind-field texture to sample a real per-blade wind vector from, unlike boidish); rigidity
+// resists weak wind entirely (threshold) and soft-clamps strong wind (tanh) instead of letting
+// it swing without bound. Per-blade tilt/sway variety (itemSeed-driven, matching boidish's own
+// windHash(seed+8888u)/windHash(seed+4321u) pattern) keeps blades from all swaying in lockstep.
+vec3 bendBladeVertex(vec3 initialRelativePos, float v, float windMag, vec3 windDir, float rigidity, uint itemSeed) {
+	float clampedRigidity = clamp(rigidity, 0.0, 0.99);
+	const float maxDeflection = 1.3;
+	float windThreshold = clampedRigidity * 2.0;
+	float effectiveWindStrength = max(0.0, windMag - windThreshold);
+	float resistedWindStrength = maxDeflection * tanh(effectiveWindStrength * 0.15 / maxDeflection);
+
+	float bendFactor = 1.0 - clampedRigidity;
+	float windBendAngle = bendFactor * resistedWindStrength * pow(v, 1.2) * smoothstep(0.05, 1.0, v);
+
+	float tiltFactor = (pcg_hash(itemSeed + 8888u) * 2.0 - 1.0) * 0.15;
+	float tiltAngle = tiltFactor * v;
+	float randomSway = (pcg_hash(itemSeed + 4321u) * 2.0 - 1.0) * 0.05 * v * v;
+
+	vec3 combinedDeflection = vec3(randomSway, 0.0, tiltAngle) + windDir * windBendAngle;
+	float totalBendAngle = length(combinedDeflection);
+	if (totalBendAngle <= 0.0001) {
+		return initialRelativePos;
+	}
+	vec3 rotationAxis = normalize(cross(vec3(0.0, 1.0, 0.0), normalize(combinedDeflection)));
+	return rotateVector(initialRelativePos, rotationAxis, totalBendAngle);
+}
+
 void emitBladeItem(
 	vec3  basePos,
 	float heightScale,
@@ -86,6 +117,7 @@ void emitBladeItem(
 	vec4  bColorTop,
 	vec4  bColorBottom,
 	float colorVariability,
+	float rigidity,
 	float fade,
 	inout uint vCount,
 	inout uint pCount
@@ -96,6 +128,15 @@ void emitBladeItem(
 		height *= 2.2;
 		width *= 1.5;
 	}
+	// Boidish-style distance width boost: without it, a blade thin enough to look right up
+	// close shrinks under a pixel and shimmers/vanishes at range long before its LOD ring fade
+	// would otherwise hide it.
+	width *= 1.0 + 2.0 * smoothstep(64.0, 128.0, distToCam);
+
+	// windMag/windDir: this clump's scalar sway reinterpreted as a 2D wind vector (Brassica has
+	// no wind-field texture to sample a real one from, unlike boidish's getWindAtPosition).
+	float windMag = length(sway.xz);
+	vec3  windDir = (windMag > 0.001) ? normalize(vec3(sway.x, 0.0, sway.z)) : vec3(1.0, 0.0, 0.0);
 
 	vec4 bottomColor = bColorBottom;
 	vec4 topColor = bColorTop;
@@ -112,7 +153,10 @@ void emitBladeItem(
 	vec3  camRightHoriz = vec3(-viewDirHoriz.z, 0.0, viewDirHoriz.x);
 	vec3  bladeDir = vec3(cos(angle), 0.0, sin(angle));
 	vec3  fixedSide = vec3(-bladeDir.z, 0.0, bladeDir.x);
-	float facingBlend = clamp(distToCam / 40.0, 0.0, 1.0);
+	// Boidish billboard floor: never less than 75% camera-facing, even right up close -- a purely
+	// fixed-orientation blade can go edge-on (and visually vanish) whenever the camera direction
+	// happens to line up with it, which clamp(dist/40,0,1)'s 0%-at-distance-0 floor allowed.
+	float facingBlend = max(0.75, smoothstep(5.5, 50.0, distToCam));
 	vec3  sideAxis = normalize(mix(fixedSide, camRightHoriz, facingBlend));
 	float taperExp = (foliageType == 4u) ? 1.5 : 2.0;
 
@@ -122,7 +166,8 @@ void emitBladeItem(
 	for (uint s = 0u; s < 6u; ++s) {
 		float t = crossV[s];
 		float halfW = width * (1.0 - pow(t, taperExp)) * 0.5;
-		vec3  centerAtT = basePos + vec3(0.0, height * t, 0.0) + sway * (t * t);
+		vec3  bentOffset = bendBladeVertex(vec3(0.0, height * t, 0.0), t, windMag, windDir, rigidity, itemSeed);
+		vec3  centerAtT = basePos + bentOffset;
 		vec3  left = centerAtT - sideAxis * halfW;
 		vec3  right = centerAtT + sideAxis * halfW;
 		vec4  col = mix(bottomColor, topColor, t);
@@ -171,7 +216,9 @@ void emitFlowerItem(
 	inout uint pCount
 ) {
 	float height = (0.6 + pcg_hash(itemSeed + 2u) * 0.4) * heightScale * params.lengthMultiplier * 1.2;
-	float width = (0.05 + pcg_hash(itemSeed + 3u) * 0.03) * widthScale * params.widthMultiplier;
+	// Widened from the original (0.05 + hash*0.03) -- the head profile below sizes itself off
+	// `height`, not `width`, so this only thickens the stem.
+	float width = (0.09 + pcg_hash(itemSeed + 3u) * 0.05) * widthScale * params.widthMultiplier;
 
 	vec3 fwdDir = vec3(cos(angle), 0.0, sin(angle));
 	vec3 sideDir = vec3(-fwdDir.z, 0.0, fwdDir.x) * width * 0.5;
@@ -702,7 +749,7 @@ void main() {
 		} else {
 			emitBladeItem(
 				basePos, heightScale, widthScale, foliageType, angle, distToCam, sway, params.windTime, itemWorldXZ,
-				itemSeed, terrainNormal, bColorTop, bColorBottom, bCVE.x, fade, vCount, pCount
+				itemSeed, terrainNormal, bColorTop, bColorBottom, bCVE.x, rigidity, fade, vCount, pCount
 			);
 		}
 	}

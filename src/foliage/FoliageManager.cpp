@@ -96,7 +96,7 @@ namespace brassica {
 			.colorBottom = glm::vec4(0.55f, 0.60f, 0.55f, 1.0f),
 			.height = 0.3f, .width = 0.04f, .rigidity = 0.7f,
 			.heightVariance = 0.2f, .widthVariance = 0.05f, .density = 0.15f,
-			.colorVariability = 0.1f, .windInfluence = 0.6f, .enabled = 0u, .flowerRatio = 0.0f,
+			.colorVariability = 0.1f, .windInfluence = 0.6f, .enabled = 1u, .flowerRatio = 0.0f,
 		};
 		m_biomeProps[1] = GrassProperties{ // Tundra
 			.colorTop = glm::vec4(0.45f, 0.48f, 0.30f, 1.0f),

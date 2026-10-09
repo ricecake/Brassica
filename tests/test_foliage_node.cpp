@@ -35,10 +35,14 @@ TEST_CASE("FoliageManager state and global properties") {
 	CHECK(updatedProps.maxLODs == 10u);
 	CHECK(updatedProps.tilesPerRow == 24u);
 
-	brassica::GrassProperties biome0 = mgr.GetBiomeProperties(0);
-	CHECK(biome0.enabled == 0u);
+	// All 10 biomes are enabled by default -- a biome's weather classification can legitimately
+	// drift into any of them over a long session (shaders/helpers/whittaker.glsl), and one left
+	// disabled by default meant foliage could silently vanish wherever that happened.
+	for (std::uint32_t i = 0; i < brassica::kFoliageBiomeCount; ++i) {
+		brassica::GrassProperties biome = mgr.GetBiomeProperties(i);
+		CHECK(biome.enabled == 1u);
+	}
 	brassica::GrassProperties biome1 = mgr.GetBiomeProperties(1);
-	CHECK(biome1.enabled == 1u);
 	CHECK(biome1.height > 0.0f);
 }
 
