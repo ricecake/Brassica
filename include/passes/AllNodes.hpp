@@ -20,6 +20,7 @@
 #include "passes/EntityNode.hpp"
 #include "passes/EntityPrepareNode.hpp"
 #include "passes/FoliageNode.hpp"
+#include "passes/HiZDownsampleNode.hpp"
 #include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/SkyBackgroundNode.hpp"
