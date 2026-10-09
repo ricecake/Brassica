@@ -1,0 +1,65 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform ClimateBlendPushConstants {
+	uint  inWeatherMapAStorageIdx; // Coverage Map A (previous state)
+	uint  inWeatherMapBStorageIdx; // Coverage Map B (target state)
+	uint  outWeatherStorageIdx;    // Blended Weather Coverage display texture (TerrainWeatherBiomeTexture)
+	uint  inBiomeMapAStorageIdx;   // Biome Map A (previous state)
+	uint  inBiomeMapBStorageIdx;   // Biome Map B (target state)
+	uint  outBiomeStorageIdx;      // Blended Biome display texture (TerrainBiomeTexture)
+	uint  textureDim;              // 2048
+	float blendFactor;             // 0.0 to 1.0 transition factor
+	uint  frameCounter;            // Frame counter for dither phase
+	uint  ditherDivisor;           // 8 (or 1 for full non-dithered copy)
+} push;
+
+void main() {
+	uvec2 pixel = gl_GlobalInvocationID.xy;
+	if (pixel.x >= push.textureDim || pixel.y >= push.textureDim) {
+		return;
+	}
+
+	// 1/8th pixel dithering check using Morton 2D encoding
+	if (push.ditherDivisor > 1u) {
+		uint linearIdx = encodeMorton2D(pixel);
+		if ((linearIdx % push.ditherDivisor) != (push.frameCounter % push.ditherDivisor)) {
+			return;
+		}
+	}
+
+	ivec2 coord = ivec2(pixel);
+	float t = clamp(push.blendFactor, 0.0, 1.0);
+
+	// Blend Weather Coverage Map
+	if (push.outWeatherStorageIdx != 0xFFFFFFFFu && push.inWeatherMapAStorageIdx != 0xFFFFFFFFu && push.inWeatherMapBStorageIdx != 0xFFFFFFFFu) {
+		vec4 weatherA = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inWeatherMapAStorageIdx)], coord);
+		vec4 weatherB = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inWeatherMapBStorageIdx)], coord);
+		vec4 blendedWeather = mix(weatherA, weatherB, t);
+
+		imageStore(
+			uImageStorageRGBA32F[nonuniformEXT(push.outWeatherStorageIdx)],
+			coord,
+			blendedWeather
+		);
+	}
+
+	// Blend Biome Map
+	if (push.outBiomeStorageIdx != 0xFFFFFFFFu && push.inBiomeMapAStorageIdx != 0xFFFFFFFFu && push.inBiomeMapBStorageIdx != 0xFFFFFFFFu) {
+		vec4 biomeA = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inBiomeMapAStorageIdx)], coord);
+		vec4 biomeB = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inBiomeMapBStorageIdx)], coord);
+		vec4 blendedBiome = mix(biomeA, biomeB, t);
+
+		imageStore(
+			uImageStorageRGBA32F[nonuniformEXT(push.outBiomeStorageIdx)],
+			coord,
+			blendedBiome
+		);
+	}
+}

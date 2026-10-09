@@ -14,6 +14,7 @@ layout(push_constant) uniform CloudVolumeGenPushConstants {
 	vec4  cascadeCenterPos[3];  // x, z = center world position for cascade 0, 1, 2
 	ivec4 cascadeGridOffset[3]; // x, y = toroidal grid offset (voxels) for cascade 0, 1, 2
 	uint  forceRegeneration;
+	float cadencePhase;         // Seed/phase derived from update cadence
 } push;
 
 void main() {
@@ -94,7 +95,7 @@ void main() {
 			float fade = clamp((wavelength - 2.0 * voxelSize) / (2.0 * voxelSize), 0.0, 1.0);
 			if (fade <= 0.0) break;
 
-			float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), uTime * 0.125);
+			float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), push.cadencePhase);
 
 			density += n * amplitude * fade;
 			maxAmplitude += amplitude * fade;
