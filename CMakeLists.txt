@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
 project(Brassica VERSION 1.0 LANGUAGES CXX)
 
 # 1. Output Directories & Standards
@@ -129,6 +132,7 @@ add_subdirectory(external/doctest)
 add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
 add_subdirectory(external/geometry-central)
+set(CMAKE_POLICY_DEFAULT_CMP0000 NEW)
 add_subdirectory(external/ozz-animation)
 if(TARGET eigen)
     target_compile_definitions(eigen INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
@@ -320,6 +324,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME} WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     list(APPEND ALL_TEST_TARGETS ${TEST_NAME})
 endforeach()
+
 
 add_custom_target(tests)
 if(ALL_TEST_TARGETS)

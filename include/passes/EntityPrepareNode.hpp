@@ -139,6 +139,11 @@ namespace brassica {
 				);
 				inst.material = renderComp.material;
 				inst.rotation = glm::vec4(transform.rotation, 0.0f);
+				inst.vertexBufferAddress = renderComp.vertexBufferAddress;
+				inst.indexBufferAddress = renderComp.indexBufferAddress;
+				inst.meshletBufferAddress = renderComp.meshletBufferAddress;
+				inst.meshletVertBufferAddress = renderComp.meshletVertBufferAddress;
+				inst.meshletTriBufferAddress = renderComp.meshletTriBufferAddress;
 
 				entries.push_back(Entry{entity, inst});
 

@@ -4,6 +4,7 @@
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_8bit_storage : require
 
 #include "common.glsl"
 #include "bindless.glsl"
@@ -19,6 +20,7 @@ layout(push_constant) uniform PushConstants {
 
 struct TaskPayload {
     uint instanceIndex;
+    uint meshletIndex;
 };
 
 taskPayloadSharedEXT TaskPayload IN;
@@ -31,13 +33,46 @@ layout(location = 3) out vec4 vMaterial[];
 struct EntityInstanceData {
     vec4 positionAndScale;
     vec4 color;
-    uvec4 params;   // x = meshType (0=Ball, 1=Cylinder), y = param1, z = param2, w = flags
+    uvec4 params;   // x = meshType (0=Ball, 1=Cylinder, 2=Cow), y = numVertices, z = numTriangles, w = numMeshlets
     vec4 material; // x = metallic, y = roughness, z = glint, w = emissivity
     vec4 rotation; // xyz = euler angles (radians)
+    uint64_t vertexBufferAddress;
+    uint64_t indexBufferAddress;
+    uint64_t meshletBufferAddress;
+    uint64_t meshletVertBufferAddress;
+    uint64_t meshletTriBufferAddress;
 };
 
 layout(buffer_reference, std430) readonly buffer EntityBufferRef {
     EntityInstanceData instances[];
+};
+
+struct ModelVertex {
+    vec4 position; // xyz = position, w = 1.0
+    vec4 normal;   // xyz = normal, w = 0.0
+};
+
+struct GPUMeshlet {
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+};
+
+layout(buffer_reference, std430) readonly buffer VertexBufferRef {
+    ModelVertex vertices[];
+};
+
+layout(buffer_reference, std430) readonly buffer MeshletBufferRef {
+    GPUMeshlet meshlets[];
+};
+
+layout(buffer_reference, std430) readonly buffer MeshletVertBufferRef {
+    uint vertices[];
+};
+
+layout(buffer_reference, std430) readonly buffer MeshletTriBufferRef {
+    uint8_t triangles[];
 };
 
 const float GOLDEN_ANGLE = 2.39996322972865332;
@@ -130,7 +165,7 @@ void main() {
             gl_PrimitiveTriangleIndicesEXT[bottomOffset + k] = uvec3(southPole, lastRingStart + k, lastRingStart + nextK);
         }
 
-    } else {
+    } else if (meshType == 1u) {
         // Cylinder mesh generation (Procedural / Parametric Cylinder)
         uint segments = 12u;
         uint stacks = 4u;
@@ -183,6 +218,58 @@ void main() {
 
             gl_PrimitiveTriangleIndicesEXT[p * 2u] = uvec3(i0, i2, i1);
             gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(i1, i2, i3);
+        }
+    } else {
+        // Cow GLB mesh model rendering using meshoptimizer Meshlets (meshType == 2u)
+        VertexBufferRef vertBuf = VertexBufferRef(inst.vertexBufferAddress);
+        MeshletBufferRef meshletBuf = MeshletBufferRef(inst.meshletBufferAddress);
+        MeshletVertBufferRef meshletVertBuf = MeshletVertBufferRef(inst.meshletVertBufferAddress);
+        MeshletTriBufferRef meshletTriBuf = MeshletTriBufferRef(inst.meshletTriBufferAddress);
+
+        uint meshletIdx = gl_WorkGroupID.x;
+        GPUMeshlet m = meshletBuf.meshlets[meshletIdx];
+
+        uint numVertices = m.vertexCount;
+        uint numPrimitives = m.triangleCount;
+
+        SetMeshOutputsEXT(numVertices, numPrimitives);
+
+        uint tid = gl_LocalInvocationIndex;
+
+        vec3 rot = inst.rotation.xyz;
+        mat3 rotX = mat3(1.0, 0.0, 0.0, 0.0, cos(rot.x), -sin(rot.x), 0.0, sin(rot.x), cos(rot.x));
+        mat3 rotY = mat3(cos(rot.y), 0.0, sin(rot.y), 0.0, 1.0, 0.0, -sin(rot.y), 0.0, cos(rot.y));
+        mat3 rotZ = mat3(cos(rot.z), -sin(rot.z), 0.0, sin(rot.z), cos(rot.z), 0.0, 0.0, 0.0, 1.0);
+        mat3 rotMat = rotY * rotX * rotZ;
+
+        // Fetch and transform vertices for this meshlet
+        for (uint i = tid; i < numVertices; i += 32u) {
+            uint globalVertIdx = meshletVertBuf.vertices[m.vertexOffset + i];
+            ModelVertex vert = vertBuf.vertices[globalVertIdx];
+            vec3 localPos = vert.position.xyz;
+            vec3 localNorm = vert.normal.xyz;
+
+            vec3 worldNorm = normalize(rotMat * localNorm);
+            vec3 worldPos = center + rotMat * (localPos * scale);
+
+            float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
+            worldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
+
+            gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(worldPos, 1.0);
+            vWorldPos[i] = worldPos;
+            vNormal[i] = worldNorm;
+            vColor[i] = color;
+            vMaterial[i] = material;
+        }
+
+        // Fetch micro-triangle indices for this meshlet
+        for (uint p = tid; p < numPrimitives; p += 32u) {
+            uint triOffset = m.triangleOffset + p * 3u;
+            uint i0 = uint(meshletTriBuf.triangles[triOffset]);
+            uint i1 = uint(meshletTriBuf.triangles[triOffset + 1u]);
+            uint i2 = uint(meshletTriBuf.triangles[triOffset + 2u]);
+
+            gl_PrimitiveTriangleIndicesEXT[p] = uvec3(i0, i1, i2);
         }
     }
 }
