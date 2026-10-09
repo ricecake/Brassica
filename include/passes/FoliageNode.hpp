@@ -53,7 +53,7 @@ namespace brassica {
 		float         waterLevel{0.0f};
 		std::uint32_t terrainNumLevels{8};
 		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling
-		float         padding0{0.0f};
+		std::uint32_t hizIndex{0};     // bindless index for History<HiZTexture>
 	};
 
 	static_assert(sizeof(FoliagePushConstants) == 112, "FoliagePushConstants size must be 112 bytes");
@@ -61,6 +61,7 @@ namespace brassica {
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::ModifyKey>,
+			graph::Read<graph::History<HiZTexture>>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
@@ -174,6 +175,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			push.hizIndex = ctx.Index<graph::History<HiZTexture>>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();

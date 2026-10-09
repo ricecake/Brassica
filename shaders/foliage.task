@@ -34,7 +34,7 @@ layout(push_constant) uniform FoliagePushConstants {
 	float waterLevel;
 	uint  terrainNumLevels;
 	uint  foliageFlags; // bit 0: terrain occlusion culling
-	float padding0;
+	uint  hizIndex;
 }
 params;
 
@@ -115,23 +115,28 @@ void main() {
 			}
 		}
 
-		// Self-occlusion cull: a tile fully hidden behind nearer, higher terrain is never worth
-		// dispatching a mesh workgroup for. Skipped for the nearest ring (lodLevel 0) the same way
-		// terrain.task skips it -- a near tile is never worth the march either. Toggle via
-		// FoliageState::enableOcclusionCulling (foliageFlags bit 0).
-		if (visible && lodLevel >= 1u && params.minMaxIndex > 0u && (params.foliageFlags & 1u) != 0u) {
-			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-				params.clipmapIndex,
-				params.minMaxIndex,
-				params.gridParams.w,
-				params.terrainNumLevels,
-				params.waterLevel
-			);
-			vec3 worldMinB = relMinB + uCameraPosition.xyz;
-			vec3 worldMaxB = relMaxB + uCameraPosition.xyz;
-			float occlusionSlack = tileSize * 2.0 + 50.0;
-			if (isAABBOccludedByTerrain(occCtx, worldMinB, worldMaxB, occlusionSlack)) {
-				visible = false;
+		// Self-occlusion cull: a tile fully hidden behind nearer, higher scene geometry or terrain is never worth
+		// dispatching a mesh workgroup for. Skipped for the nearest ring (lodLevel 0).
+		// Toggle via FoliageState::enableOcclusionCulling (foliageFlags bit 0).
+		if (visible && lodLevel >= 1u && (params.foliageFlags & 1u) != 0u) {
+			if (params.hizIndex > 0u) {
+				if (isAABBOccludedByHiZ(relMinB, relMaxB, viewProjRel, params.hizIndex)) {
+					visible = false;
+				}
+			} else if (params.minMaxIndex > 0u) {
+				TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+					params.clipmapIndex,
+					params.minMaxIndex,
+					params.gridParams.w,
+					params.terrainNumLevels,
+					params.waterLevel
+				);
+				vec3 worldMinB = relMinB + uCameraPosition.xyz;
+				vec3 worldMaxB = relMaxB + uCameraPosition.xyz;
+				float occlusionSlack = tileSize * 2.0 + 50.0;
+				if (isAABBOccludedByTerrain(occCtx, worldMinB, worldMaxB, occlusionSlack)) {
+					visible = false;
+				}
 			}
 		}
 
