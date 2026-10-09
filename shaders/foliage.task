@@ -121,7 +121,6 @@ void main() {
 		// FoliageState::enableOcclusionCulling (foliageFlags bit 0).
 		if (visible && lodLevel >= 1u && params.minMaxIndex > 0u && (params.foliageFlags & 1u) != 0u) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-				params.clipmapIndex,
 				params.minMaxIndex,
 				params.gridParams.w,
 				params.terrainNumLevels,
