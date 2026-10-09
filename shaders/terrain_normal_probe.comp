@@ -1,14 +1,8 @@
 #version 460
 
 // Test-only fixture for tests/test_terrain_normal.cpp -- not a production render pass. Isolates
-// evaluate_terrain_normal (common.glsl) so its sign convention can be checked against a real
-// device (MoltenVK included -- this needs no mesh shader/ray query/AS, so it's a plain core
-// Vulkan 1.3 dispatch through brassica::testing::MinimalDevice) instead of only reasoned about
-// statically.
-//
-// For each input point, writes both the function-under-test's normal and an independently
-// computed central-difference height gradient, so the test can compare their signs without
-// duplicating evaluate_terrain_normal's own math.
+// evaluate_terrain_analytical (terrain/generation.glsl) so its sign convention can be checked against a real
+// device through brassica::testing::MinimalDevice instead of only reasoned about statically.
 
 #include "terrain/generation.glsl"
 #include "common.glsl"
@@ -21,7 +15,7 @@ layout(std430, set = 0, binding = 0) readonly buffer PointsBuffer {
 pointsBuf;
 
 layout(std430, set = 0, binding = 1) writeonly buffer NormalsBuffer {
-	vec4 normals[]; // xyz = evaluate_terrain_normal's result, w unused
+	vec4 normals[]; // xyz = evaluate_terrain_analytical's result, w unused
 }
 normalsBuf;
 
@@ -49,13 +43,14 @@ void main() {
 	TerrainConfig cfg =
 		TerrainConfig(push.spatial_scale, push.min_height, push.max_height, push.ridge_weight, push.biome_bleed);
 
-	vec3 tetraNormal = evaluate_terrain_normal(p, push.phase, push.warp_strength, push.eps, cfg);
+	vec3 tetraNormal = vec3(0.0, 1.0, 0.0);
+	float h = evaluate_terrain_analytical(p, push.phase, push.warp_strength, cfg, tetraNormal);
 
-	float unusedBiome, unusedMask;
-	float hxp = evaluate_terrain(p + vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
-	float hxm = evaluate_terrain(p - vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
-	float hzp = evaluate_terrain(p + vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
-	float hzm = evaluate_terrain(p - vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, unusedBiome, unusedMask);
+	vec3 normalXp, normalXm, normalZp, normalZm;
+	float hxp = evaluate_terrain_analytical(p + vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, normalXp);
+	float hxm = evaluate_terrain_analytical(p - vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, normalXm);
+	float hzp = evaluate_terrain_analytical(p + vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, normalZp);
+	float hzm = evaluate_terrain_analytical(p - vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, normalZm);
 
 	float dHdx = (hxp - hxm) / (2.0 * push.eps);
 	float dHdz = (hzp - hzm) / (2.0 * push.eps);
