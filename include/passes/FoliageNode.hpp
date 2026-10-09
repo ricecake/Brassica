@@ -53,7 +53,7 @@ namespace brassica {
 		float         waterLevel{0.0f};
 		std::uint32_t terrainNumLevels{8};
 		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling
-		float         padding0{0.0f};
+		std::uint32_t hizIndex{0};     // bindless index for History<HiZTexture>
 	};
 
 	static_assert(sizeof(FoliagePushConstants) == 112, "FoliagePushConstants size must be 112 bytes");
@@ -61,6 +61,7 @@ namespace brassica {
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::ModifyKey>,
+			graph::Read<graph::History<HiZTexture>>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
@@ -73,7 +74,12 @@ namespace brassica {
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
 			.depthWrite = true,
-			.depthCompareOp = vk::CompareOp::eGreaterOrEqual,
+			// Engine convention is standard Z (0=near, 1=far; see Engine.cpp's plain
+			// glm::perspective, no reverse-Z remap), matching TerrainNode/WaterNode/EntityNode's
+			// eLess (and GraphicsPipelineState's own default) -- eGreaterOrEqual here was backwards,
+			// so foliage only ever drew where it was farther than or equal to whatever terrain had
+			// already written, i.e. almost nowhere a normal above-ground camera could see it.
+			.depthCompareOp = vk::CompareOp::eLess,
 			.enableShadingRate = false,
 		};
 
@@ -168,12 +174,24 @@ namespace brassica {
 						.key = graph::IdOf<GBufferDepth>(),
 						.access = graph::AccessKind::ReadWrite,
 						.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+					},
+					// A History<K> realization has no producer within this frame's own schedule --
+					// PhysicalRegistry::ProvisionTemporalPairs only forms the ping-ponged pair (and
+					// assigns its bindless index) from a *reader's* own realization, since
+					// PreviousFrame/Import nodes declare the key but push no realization of their
+					// own. Without this, hizIndex above always resolves to the bindless fallback (0),
+					// silently disabling the whole HiZ occlusion path in foliage.task.
+					graph::ResourceRealization{
+						.key = graph::IdOf<graph::History<HiZTexture>>(),
+						.access = graph::AccessKind::Read,
+						.desc = HiZTextureDesc(ctx.width, ctx.height),
 					}
 				}
 			};
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			push.hizIndex = ctx.Index<graph::History<HiZTexture>>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();

@@ -73,6 +73,7 @@ TEST_CASE("FoliageNode registration and push constants sync") {
 	CHECK(node.push.gridParams.x == 12u);
 	CHECK(node.push.gridParams.y == 16u);
 	CHECK(node.push.gridParams.z == 12u * 16u * 16u);
+	CHECK(node.push.hizIndex == 0u);
 
 	brassica::ServiceLocator::SetInstance(nullptr);
 }

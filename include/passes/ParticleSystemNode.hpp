@@ -288,7 +288,7 @@ namespace brassica {
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext&) {
-			bool active = false;
+			bool active = true;
 			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
 				auto mgr = ServiceLocator::Instance().Get<IParticleManager>();
 				if (mgr && !mgr->IsEnabled()) {

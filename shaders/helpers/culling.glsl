@@ -1,6 +1,7 @@
 #ifndef BRASSICA_CULLING_GLSL
 #define BRASSICA_CULLING_GLSL
 
+#include "bindless.glsl"
 #include "common.glsl"
 
 // Check AABB against frustum planes in camera-relative space (camera at origin).
@@ -65,6 +66,106 @@ bool isBeyondHorizon(float tileDist, float tileMaxYAboveRef, float camAltitudeAb
 	float b = max(tileMaxYAboveRef, 0.0);
 	float horizonSum = sqrt(2.0 * FAKE_PLANET_RADIUS * camAltitudeAboveRef) + sqrt(2.0 * FAKE_PLANET_RADIUS * b);
 	return tileDist > horizonSum + slack;
+}
+
+// HiZ AABB Occlusion Culling for standard depth buffers (0.0 = near, 1.0 = far -- this engine's
+// actual convention: Engine.cpp builds its projection with plain glm::perspective, no reverse-Z
+// remap, and GraphicsPipelineState's own default depthCompareOp is eLess, matching every other
+// node that writes GBufferDepth. Smallest NDC depth = point CLOSEST to camera here, not largest).
+// relMinB, relMaxB: Camera-relative AABB bounds (camera at origin).
+// viewProjRel: View-projection matrix in camera-relative space.
+// hizIndex: Bindless sampled texture index for RG32F HiZ texture (x = minDepth, y = maxDepth).
+bool isAABBOccludedByHiZ(vec3 relMinB, vec3 relMaxB, mat4 viewProjRel, uint hizIndex) {
+	if (hizIndex == 0u) {
+		return false;
+	}
+
+	vec3 corners[8];
+	corners[0] = vec3(relMinB.x, relMinB.y, relMinB.z);
+	corners[1] = vec3(relMaxB.x, relMinB.y, relMinB.z);
+	corners[2] = vec3(relMinB.x, relMaxB.y, relMinB.z);
+	corners[3] = vec3(relMaxB.x, relMaxB.y, relMinB.z);
+	corners[4] = vec3(relMinB.x, relMinB.y, relMaxB.z);
+	corners[5] = vec3(relMaxB.x, relMinB.y, relMaxB.z);
+	corners[6] = vec3(relMinB.x, relMaxB.y, relMaxB.z);
+	corners[7] = vec3(relMaxB.x, relMaxB.y, relMaxB.z);
+
+	vec2 minUV = vec2(1.0);
+	vec2 maxUV = vec2(0.0);
+	float aabbMinDepth = 1.0; // Standard Z: smallest NDC depth = point CLOSEST to camera
+
+	for (int i = 0; i < 8; ++i) {
+		vec4 clipPos = viewProjRel * vec4(corners[i], 1.0);
+		if (clipPos.w <= 0.001) {
+			return false; // Near plane intersection or behind camera
+		}
+		vec3 ndc = clipPos.xyz / clipPos.w;
+		vec2 uv = ndc.xy * 0.5 + 0.5;
+
+		minUV = min(minUV, uv);
+		maxUV = max(maxUV, uv);
+		aabbMinDepth = min(aabbMinDepth, ndc.z);
+	}
+
+	minUV = clamp(minUV, vec2(0.0), vec2(1.0));
+	maxUV = clamp(maxUV, vec2(0.0), vec2(1.0));
+
+	if (minUV.x >= maxUV.x || minUV.y >= maxUV.y) {
+		return false;
+	}
+
+	ivec2 hizTexSize = textureSize(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		0
+	);
+	if (hizTexSize.x <= 0 || hizTexSize.y <= 0) {
+		return false;
+	}
+
+	vec2 sizeInPixels = (maxUV - minUV) * vec2(hizTexSize);
+	float maxDim = max(sizeInPixels.x, sizeInPixels.y);
+	float mipLevel = ceil(log2(max(maxDim, 1.0)));
+	int maxMip = textureQueryLevels(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP])
+	) - 1;
+	mipLevel = clamp(mipLevel, 0.0, float(max(maxMip, 0)));
+
+	vec2 uv00 = minUV;
+	vec2 uv10 = vec2(maxUV.x, minUV.y);
+	vec2 uv01 = vec2(minUV.x, maxUV.y);
+	vec2 uv11 = maxUV;
+
+	vec2 d00 = textureLod(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		uv00,
+		mipLevel
+	).rg;
+	vec2 d10 = textureLod(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		uv10,
+		mipLevel
+	).rg;
+	vec2 d01 = textureLod(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		uv01,
+		mipLevel
+	).rg;
+	vec2 d11 = textureLod(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		uv11,
+		mipLevel
+	).rg;
+
+	// Standard Z: .g channel is maxDepth (furthest scene surface depth in that region) -- the
+	// conservative upper bound every pixel in the region is guaranteed to be at or in front of.
+	float maxSceneDepth = max(max(d00.y, d10.y), max(d01.y, d11.y));
+
+	if (maxSceneDepth >= 1.0) {
+		return false; // region touches the far plane/background -- can't claim full occlusion
+	}
+
+	const float depthSlack = 0.0005;
+	return (maxSceneDepth + depthSlack) < aabbMinDepth;
 }
 
 #endif // BRASSICA_CULLING_GLSL
