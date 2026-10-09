@@ -148,8 +148,8 @@ void main() {
 	barrier();
 
 	if (threadID == 0) {
-		// 4 clumps per tile -- see foliage.mesh, which now gives each clump its own mesh
+		// 16 clumps per tile -- see foliage.mesh, which now gives each clump its own mesh
 		// workgroup/vertex budget instead of sharing one 128-vertex budget across a whole tile.
-		EmitMeshTasksEXT(min(tileCount, 32u) * 4u, 1, 1);
+		EmitMeshTasksEXT(min(tileCount, 32u) * 16u, 1, 1);
 	}
 }
