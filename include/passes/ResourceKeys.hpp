@@ -96,6 +96,10 @@ namespace brassica {
 
 	struct TerrainWeatherMapBTexture {};
 
+	struct TerrainBiomeMapATexture {};
+
+	struct TerrainBiomeMapBTexture {};
+
 	// Per-biome foliage properties (color/height/width/density/flowerRatio/...), one texel-row
 	// per Whittaker biome index (shaders/helpers/whittaker.glsl, 0-9) -- FoliageManager-owned,
 	// written host-side via a PredefinedTextureNode whenever the UI changes a biome's properties.

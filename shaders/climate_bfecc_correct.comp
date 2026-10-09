@@ -11,7 +11,7 @@ layout(push_constant) uniform ClimateBFECCCorrectPushConstants {
 	uint  forwardStorageIdx;  // phi1 (the forward-advected state)
 	uint  originalStorageIdx; // phi0 (the original state before advection)
 	uint  outStorageIdx;      // phi0_tilde (the corrected state, overwritten in place)
-	uint  textureDim;         // 4096
+	uint  textureDim;         // 1024
 	float dt;                 // Advection step size
 } push;
 

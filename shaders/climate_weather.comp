@@ -3,37 +3,42 @@
 
 #include "bindless.glsl"
 #include "common.glsl"
+#include "helpers/whittaker.glsl"
 #include "terrain/generation.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform ClimateWeatherPushConstants {
-	uint climateStorageIdx; // Input advected climate storage image
-	uint outStorageIdx;     // Output final weather & coverage map storage image
-	uint textureDim;        // 4096
+	uint climateStorageIdx;     // Input 1024x1024 advected climate storage image
+	uint weatherOutStorageIdx;  // Output 2048x2048 weather coverage storage image
+	uint biomeOutStorageIdx;    // Output 2048x2048 Whittaker biome storage image
+	uint simTextureDim;         // 1024
+	uint outTextureDim;         // 2048
 	uint pad;
 } push;
 
 void main() {
 	uvec2 pixel = gl_GlobalInvocationID.xy;
-	if (pixel.x >= push.textureDim || pixel.y >= push.textureDim) {
+	if (pixel.x >= push.outTextureDim || pixel.y >= push.outTextureDim) {
 		return;
 	}
 
-	ivec2 coord = ivec2(pixel);
-	int dim = int(push.textureDim);
+	vec2 uv = (vec2(pixel) + 0.5) / float(push.outTextureDim);
+	int simDim = int(push.simTextureDim);
 
-	vec4 centerData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coord);
+	ivec2 simCoord = ivec2(clamp(uv * float(simDim), vec2(0.0), vec2(float(simDim - 1))));
+
+	vec4 centerData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], simCoord);
 	float temp = centerData.r;
 	float moisture = centerData.g;
 	vec2 wind = centerData.ba;
 
-	// Neighbor sampling for spatial derivatives
-	ivec2 coordR = ivec2((coord.x + 1) % dim, coord.y);
-	ivec2 coordL = ivec2((coord.x - 1 + dim) % dim, coord.y);
-	ivec2 coordU = ivec2(coord.x, (coord.y + 1) % dim);
-	ivec2 coordD = ivec2(coord.x, (coord.y - 1 + dim) % dim);
+	// Neighbor sampling for spatial derivatives in 1024 sim space
+	ivec2 coordR = ivec2((simCoord.x + 1) % simDim, simCoord.y);
+	ivec2 coordL = ivec2((simCoord.x - 1 + simDim) % simDim, simCoord.y);
+	ivec2 coordU = ivec2(simCoord.x, (simCoord.y + 1) % simDim);
+	ivec2 coordD = ivec2(simCoord.x, (simCoord.y - 1 + simDim) % simDim);
 
 	vec4 dataR = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordR);
 	vec4 dataL = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordL);
@@ -41,22 +46,21 @@ void main() {
 	vec4 dataD = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordD);
 
 	// Partial derivatives of wind field
-	float dwx_du = (dataR.b - dataL.b) * 0.5 * float(dim);
-	float dwx_dv = (dataU.b - dataD.b) * 0.5 * float(dim);
-	float dwy_du = (dataR.a - dataL.a) * 0.5 * float(dim);
-	float dwy_dv = (dataU.a - dataD.a) * 0.5 * float(dim);
+	float dwx_du = (dataR.b - dataL.b) * 0.5 * float(simDim);
+	float dwx_dv = (dataU.b - dataD.b) * 0.5 * float(simDim);
+	float dwy_du = (dataR.a - dataL.a) * 0.5 * float(simDim);
+	float dwy_dv = (dataU.a - dataD.a) * 0.5 * float(simDim);
 
 	float divergence = dwx_du + dwy_dv;
 	float curl = dwy_du - dwx_dv;
 	float shear = sqrt((dwx_du - dwy_dv) * (dwx_du - dwy_dv) + (dwx_dv + dwy_du) * (dwx_dv + dwy_du));
 
 	// Temperature gradient magnitude
-	float dT_du = (dataR.r - dataL.r) * 0.5 * float(dim);
-	float dT_dv = (dataU.r - dataD.r) * 0.5 * float(dim);
+	float dT_du = (dataR.r - dataL.r) * 0.5 * float(simDim);
+	float dT_dv = (dataU.r - dataD.r) * 0.5 * float(simDim);
 	float tempGrad = length(vec2(dT_du, dT_dv));
 
 	// Terrain slope gradient & Orographic lift in 2D Planar world space
-	vec2 uv = (vec2(pixel) + 0.5) / float(dim);
 	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
 	vec2 worldXZ = (uv - 0.5) * worldExtent;
 	vec3 worldP = vec3(worldXZ.x, 0.0, worldXZ.y);
@@ -86,14 +90,23 @@ void main() {
 	float thunderstormSeverity = clamp(moistureContent * tempGrad * 0.3 + abs(curl) * 0.2 + shear * 0.2 + convergenceBoost, 0.0, 1.0);
 	float lightningPropensity = clamp(thunderstormSeverity * cloudCoverage, 0.0, 1.0);
 
-	// Store final weather simulation output:
-	// r = Cloud Coverage
-	// g = Weather Type
-	// b = Moisture Content
-	// a = Lightning Propensity
+	// Whittaker Biome derivation
+	float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+	WhittakerBiome wb = evaluateWhittakerBiome(temp, moistureContent, thunderstormSeverity, precipType);
+
+	ivec2 outCoord = ivec2(pixel);
+
+	// Store Weather Map output: r = Coverage, g = Weather Type, b = Moisture Content, a = Lightning Propensity
 	imageStore(
-		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
-		coord,
+		uImageStorageRGBA32F[nonuniformEXT(push.weatherOutStorageIdx)],
+		outCoord,
 		vec4(cloudCoverage, weatherType, moistureContent, lightningPropensity)
+	);
+
+	// Store Biome Map output: r = Normalized Biome Index (0..1), g = Roughness, b = Snow Cover, a = Moisture
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.biomeOutStorageIdx)],
+		outCoord,
+		vec4(clamp(wb.biomeIndex / 9.0, 0.0, 1.0), wb.roughness, wb.snowCover, moistureContent)
 	);
 }

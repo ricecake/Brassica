@@ -21,15 +21,23 @@
 
 namespace brassica {
 
+	namespace constants::Weather {
+		constexpr std::uint32_t kSimTextureDim = 1024;
+		constexpr std::uint32_t kCoverageTextureDim = 2048;
+		constexpr std::uint32_t kBiomeTextureDim = 2048;
+		constexpr std::uint32_t kBlendDitherDivisor = 8;
+		constexpr std::uint32_t kUpdateInterval = 300;
+	}
+
 	struct ClimateInitialPushConstants {
 		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{4096};
+		std::uint32_t textureDim{constants::Weather::kSimTextureDim};
 	};
 
 	struct ClimateAdvectPushConstants {
 		std::uint32_t inStorageIdx{0};
 		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{4096};
+		std::uint32_t textureDim{constants::Weather::kSimTextureDim};
 		float         dt{1.0f};
 	};
 
@@ -37,27 +45,33 @@ namespace brassica {
 		std::uint32_t forwardStorageIdx{0};
 		std::uint32_t originalStorageIdx{0};
 		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{4096};
+		std::uint32_t textureDim{constants::Weather::kSimTextureDim};
 		float         dt{1.0f};
 	};
 
 	struct ClimateWeatherPushConstants {
 		std::uint32_t climateStorageIdx{0};
-		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{4096};
+		std::uint32_t weatherOutStorageIdx{0};
+		std::uint32_t biomeOutStorageIdx{0};
+		std::uint32_t simTextureDim{constants::Weather::kSimTextureDim};
+		std::uint32_t outTextureDim{constants::Weather::kCoverageTextureDim};
 		std::uint32_t pad{0};
 	};
 
 	struct ClimateBlendPushConstants {
-		std::uint32_t inMapAStorageIdx{0};
-		std::uint32_t inMapBStorageIdx{0};
-		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{4096};
+		std::uint32_t inWeatherMapAStorageIdx{0};
+		std::uint32_t inWeatherMapBStorageIdx{0};
+		std::uint32_t outWeatherStorageIdx{0};
+		std::uint32_t inBiomeMapAStorageIdx{0};
+		std::uint32_t inBiomeMapBStorageIdx{0};
+		std::uint32_t outBiomeStorageIdx{0};
+		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
 		float         blendFactor{0.0f};
+		std::uint32_t frameCounter{0};
+		std::uint32_t ditherDivisor{constants::Weather::kBlendDitherDivisor};
 	};
 
-	// Marked persistent: weather textures survive across frames.
-	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim = 4096) {
+	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim) {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
 			.width = dim,
@@ -76,7 +90,10 @@ namespace brassica {
 			graph::Create<TerrainWeatherBiomeTexture>,
 			graph::Create<TerrainWeatherPingPongTexture>,
 			graph::Create<TerrainWeatherMapATexture>,
-			graph::Create<TerrainWeatherMapBTexture>>;
+			graph::Create<TerrainWeatherMapBTexture>,
+			graph::Create<TerrainBiomeTexture>,
+			graph::Create<TerrainBiomeMapATexture>,
+			graph::Create<TerrainBiomeMapBTexture>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
@@ -91,8 +108,6 @@ namespace brassica {
 		bool          hasEverGenerated{false};
 		std::uint32_t frameCounter{0};
 		std::uint32_t lastSimFrame{0};
-		std::uint32_t updateInterval{300};
-		std::uint32_t textureDim{4096};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -139,28 +154,63 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(textureDim),
+					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainWeatherPingPongTexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(textureDim),
+					.desc = WeatherBiomeImageDesc(constants::Weather::kSimTextureDim),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainWeatherMapATexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(textureDim),
+					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainWeatherMapBTexture>(),
 					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(textureDim),
+					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainBiomeTexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainBiomeMapATexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainBiomeMapBTexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWeatherMapATexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWeatherMapBTexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
 				}
 			);
 			return r;
@@ -172,7 +222,8 @@ namespace brassica {
 			ComputeShader&                                 shader,
 			const std::array<vk::DescriptorSetLayout, 2>&  setLayouts,
 			const std::array<vk::DescriptorSet, 2>&        boundSets,
-			const PushT&                                   push
+			const PushT&                                   push,
+			std::uint32_t                                  dispatchDim
 		) {
 			std::array<vk::PushConstantRange, 1> pushRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushT)}
@@ -193,11 +244,12 @@ namespace brassica {
 			}
 			vkCmd.pushConstants(res.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushT), &push);
 
-			std::uint32_t groupCount = (textureDim + 15) / 16;
+			std::uint32_t groupCount = (dispatchDim + 15) / 16;
 			vkCmd.dispatch(groupCount, groupCount, 1);
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
@@ -209,10 +261,13 @@ namespace brassica {
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
-			std::uint32_t mainIdx = ctx.StorageIndex<TerrainWeatherBiomeTexture>();
-			std::uint32_t pingPongIdx = ctx.StorageIndex<TerrainWeatherPingPongTexture>();
-			std::uint32_t mapAIdx = ctx.StorageIndex<TerrainWeatherMapATexture>();
-			std::uint32_t mapBIdx = ctx.StorageIndex<TerrainWeatherMapBTexture>();
+			std::uint32_t mainWeatherIdx = ctx.StorageIndex<TerrainWeatherBiomeTexture>();
+			std::uint32_t pingPongSimIdx = ctx.StorageIndex<TerrainWeatherPingPongTexture>();
+			std::uint32_t weatherMapAIdx = ctx.StorageIndex<TerrainWeatherMapATexture>();
+			std::uint32_t weatherMapBIdx = ctx.StorageIndex<TerrainWeatherMapBTexture>();
+			std::uint32_t mainBiomeIdx   = ctx.StorageIndex<TerrainBiomeTexture>();
+			std::uint32_t biomeMapAIdx   = ctx.StorageIndex<TerrainBiomeMapATexture>();
+			std::uint32_t biomeMapBIdx   = ctx.StorageIndex<TerrainBiomeMapBTexture>();
 
 			auto insertComputeBarrier = [&](vk::CommandBuffer cmd) {
 				vk::MemoryBarrier2 barrier{};
@@ -226,170 +281,205 @@ namespace brassica {
 				cmd.pipelineBarrier2(depInfo);
 			};
 
-			bool shouldRunSimulation = forceRegeneration || !hasEverGenerated || (frameCounter == 1) || (frameCounter % updateInterval == 0);
+			std::uint32_t cycleFrame = (frameCounter % constants::Weather::kUpdateInterval);
 
-			if (shouldRunSimulation) {
-				if (!hasEverGenerated || forceRegeneration) {
-					DispatchCompute(
-						vkCmd,
-						initialShader,
-						setLayouts,
-						boundSets,
-						ClimateInitialPushConstants{.outStorageIdx = pingPongIdx, .textureDim = textureDim}
-					);
-					insertComputeBarrier(vkCmd);
+			if (!hasEverGenerated || forceRegeneration) {
+				// Initial baseline generation
+				DispatchCompute(
+					vkCmd,
+					initialShader,
+					setLayouts,
+					boundSets,
+					ClimateInitialPushConstants{.outStorageIdx = pingPongSimIdx, .textureDim = constants::Weather::kSimTextureDim},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					// BFECC advection
-					DispatchCompute(
-						vkCmd,
-						advectShader,
-						setLayouts,
-						boundSets,
-						ClimateAdvectPushConstants{
-							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				// Advect simulation state
+				DispatchCompute(
+					vkCmd,
+					advectShader,
+					setLayouts,
+					boundSets,
+					ClimateAdvectPushConstants{
+						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+					},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					DispatchCompute(
-						vkCmd,
-						correctShader,
-						setLayouts,
-						boundSets,
-						ClimateBFECCCorrectPushConstants{
-							.forwardStorageIdx = mainIdx,
-							.originalStorageIdx = pingPongIdx,
-							.outStorageIdx = pingPongIdx,
-							.textureDim = textureDim,
-							.dt = 1.0f,
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				DispatchCompute(
+					vkCmd,
+					correctShader,
+					setLayouts,
+					boundSets,
+					ClimateBFECCCorrectPushConstants{
+						.forwardStorageIdx = mainWeatherIdx,
+						.originalStorageIdx = pingPongSimIdx,
+						.outStorageIdx = pingPongSimIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 1.0f,
+					},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					DispatchCompute(
-						vkCmd,
-						advectShader,
-						setLayouts,
-						boundSets,
-						ClimateAdvectPushConstants{
-							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				DispatchCompute(
+					vkCmd,
+					advectShader,
+					setLayouts,
+					boundSets,
+					ClimateAdvectPushConstants{
+						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+					},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					DispatchCompute(
-						vkCmd,
-						advectShader,
-						setLayouts,
-						boundSets,
-						ClimateAdvectPushConstants{
-							.inStorageIdx = mainIdx, .outStorageIdx = pingPongIdx, .textureDim = textureDim, .dt = 0.0f
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				DispatchCompute(
+					vkCmd,
+					advectShader,
+					setLayouts,
+					boundSets,
+					ClimateAdvectPushConstants{
+						.inStorageIdx = mainWeatherIdx, .outStorageIdx = pingPongSimIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 0.0f
+					},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					// Output initial weather simulation state into Map A and Map B
-					DispatchCompute(
-						vkCmd,
-						weatherShader,
-						setLayouts,
-						boundSets,
-						ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mapBIdx, .textureDim = textureDim}
-					);
-					insertComputeBarrier(vkCmd);
+				// Output initial weather and biome maps to Map A and Map B
+				DispatchCompute(
+					vkCmd,
+					weatherShader,
+					setLayouts,
+					boundSets,
+					ClimateWeatherPushConstants{
+						.climateStorageIdx = pingPongSimIdx,
+						.weatherOutStorageIdx = weatherMapBIdx,
+						.biomeOutStorageIdx = biomeMapBIdx,
+						.simTextureDim = constants::Weather::kSimTextureDim,
+						.outTextureDim = constants::Weather::kCoverageTextureDim
+					},
+					constants::Weather::kCoverageTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					DispatchCompute(
-						vkCmd,
-						weatherShader,
-						setLayouts,
-						boundSets,
-						ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mapAIdx, .textureDim = textureDim}
-					);
-					insertComputeBarrier(vkCmd);
+				DispatchCompute(
+					vkCmd,
+					weatherShader,
+					setLayouts,
+					boundSets,
+					ClimateWeatherPushConstants{
+						.climateStorageIdx = pingPongSimIdx,
+						.weatherOutStorageIdx = weatherMapAIdx,
+						.biomeOutStorageIdx = biomeMapAIdx,
+						.simTextureDim = constants::Weather::kSimTextureDim,
+						.outTextureDim = constants::Weather::kCoverageTextureDim
+					},
+					constants::Weather::kCoverageTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					hasEverGenerated = true;
-				} else {
-					// Blend Map B into Map A so Map A becomes the starting point of the new fade cycle
-					DispatchCompute(
-						vkCmd,
-						blendShader,
-						setLayouts,
-						boundSets,
-						ClimateBlendPushConstants{
-							.inMapAStorageIdx = mapAIdx,
-							.inMapBStorageIdx = mapBIdx,
-							.outStorageIdx = mapAIdx,
-							.textureDim = textureDim,
-							.blendFactor = 1.0f,
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				hasEverGenerated = true;
+				lastSimFrame = frameCounter;
+			} else if (cycleFrame == 1) {
+				// Staggered step 1: Before simulation, promote Map B target to Map A start
+				DispatchCompute(
+					vkCmd,
+					blendShader,
+					setLayouts,
+					boundSets,
+					ClimateBlendPushConstants{
+						.inWeatherMapAStorageIdx = weatherMapAIdx,
+						.inWeatherMapBStorageIdx = weatherMapBIdx,
+						.outWeatherStorageIdx = weatherMapAIdx,
+						.inBiomeMapAStorageIdx = biomeMapAIdx,
+						.inBiomeMapBStorageIdx = biomeMapBIdx,
+						.outBiomeStorageIdx = biomeMapAIdx,
+						.textureDim = constants::Weather::kCoverageTextureDim,
+						.blendFactor = 1.0f,
+						.frameCounter = 0,
+						.ditherDivisor = 1
+					},
+					constants::Weather::kCoverageTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					// Advect simulation state forward
-					DispatchCompute(
-						vkCmd,
-						advectShader,
-						setLayouts,
-						boundSets,
-						ClimateAdvectPushConstants{
-							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				// Execute simulation advection on 1024x1024 simulation state
+				DispatchCompute(
+					vkCmd,
+					advectShader,
+					setLayouts,
+					boundSets,
+					ClimateAdvectPushConstants{
+						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+					},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					DispatchCompute(
-						vkCmd,
-						correctShader,
-						setLayouts,
-						boundSets,
-						ClimateBFECCCorrectPushConstants{
-							.forwardStorageIdx = mainIdx,
-							.originalStorageIdx = pingPongIdx,
-							.outStorageIdx = pingPongIdx,
-							.textureDim = textureDim,
-							.dt = 1.0f,
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				DispatchCompute(
+					vkCmd,
+					correctShader,
+					setLayouts,
+					boundSets,
+					ClimateBFECCCorrectPushConstants{
+						.forwardStorageIdx = mainWeatherIdx,
+						.originalStorageIdx = pingPongSimIdx,
+						.outStorageIdx = pingPongSimIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 1.0f,
+					},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					DispatchCompute(
-						vkCmd,
-						advectShader,
-						setLayouts,
-						boundSets,
-						ClimateAdvectPushConstants{
-							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
-						}
-					);
-					insertComputeBarrier(vkCmd);
+				DispatchCompute(
+					vkCmd,
+					advectShader,
+					setLayouts,
+					boundSets,
+					ClimateAdvectPushConstants{
+						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+					},
+					constants::Weather::kSimTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 
-					DispatchCompute(
-						vkCmd,
-						advectShader,
-						setLayouts,
-						boundSets,
-						ClimateAdvectPushConstants{
-							.inStorageIdx = mainIdx, .outStorageIdx = pingPongIdx, .textureDim = textureDim, .dt = 0.0f
-						}
-					);
-					insertComputeBarrier(vkCmd);
-
-					// Generate new simulation output into Map B (Target)
-					DispatchCompute(
-						vkCmd,
-						weatherShader,
-						setLayouts,
-						boundSets,
-						ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mapBIdx, .textureDim = textureDim}
-					);
-					insertComputeBarrier(vkCmd);
-				}
+				DispatchCompute(
+					vkCmd,
+					advectShader,
+					setLayouts,
+					boundSets,
+					ClimateAdvectPushConstants{
+						.inStorageIdx = mainWeatherIdx, .outStorageIdx = pingPongSimIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 0.0f
+					},
+					constants::Weather::kSimTextureDim
+				);
+			} else if (cycleFrame == 2) {
+				// Staggered step 2: Compute new weather and biome outputs into Target Map B
+				DispatchCompute(
+					vkCmd,
+					weatherShader,
+					setLayouts,
+					boundSets,
+					ClimateWeatherPushConstants{
+						.climateStorageIdx = pingPongSimIdx,
+						.weatherOutStorageIdx = weatherMapBIdx,
+						.biomeOutStorageIdx = biomeMapBIdx,
+						.simTextureDim = constants::Weather::kSimTextureDim,
+						.outTextureDim = constants::Weather::kCoverageTextureDim
+					},
+					constants::Weather::kCoverageTextureDim
+				);
+				insertComputeBarrier(vkCmd);
 				lastSimFrame = frameCounter;
 			}
 
-			// Smoothly blend Map A into Map B over updateInterval frames
+			// Every frame: 1/8th dithered blend pass of Map A -> Map B into main display textures
 			float blendFactor = std::clamp(
-				static_cast<float>(frameCounter - lastSimFrame) / static_cast<float>(updateInterval),
+				static_cast<float>(frameCounter - lastSimFrame) / static_cast<float>(constants::Weather::kUpdateInterval),
 				0.0f,
 				1.0f
 			);
@@ -400,12 +490,18 @@ namespace brassica {
 				setLayouts,
 				boundSets,
 				ClimateBlendPushConstants{
-					.inMapAStorageIdx = mapAIdx,
-					.inMapBStorageIdx = mapBIdx,
-					.outStorageIdx = mainIdx,
-					.textureDim = textureDim,
+					.inWeatherMapAStorageIdx = weatherMapAIdx,
+					.inWeatherMapBStorageIdx = weatherMapBIdx,
+					.outWeatherStorageIdx = mainWeatherIdx,
+					.inBiomeMapAStorageIdx = biomeMapAIdx,
+					.inBiomeMapBStorageIdx = biomeMapBIdx,
+					.outBiomeStorageIdx = mainBiomeIdx,
+					.textureDim = constants::Weather::kCoverageTextureDim,
 					.blendFactor = blendFactor,
-				}
+					.frameCounter = frameCounter,
+					.ditherDivisor = constants::Weather::kBlendDitherDivisor
+				},
+				constants::Weather::kCoverageTextureDim
 			);
 		}
 	};
