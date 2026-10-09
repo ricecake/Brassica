@@ -11,7 +11,15 @@ namespace brassica {
 		Cow = 2
 	};
 
-	struct EntityInstanceData {
+	// alignas(16): must match the GPU std430 stride of the GLSL EntityInstanceData
+	// (entity.task/entity.mesh) exactly. That struct mixes vec4 members (16-byte base
+	// alignment) with trailing uint64_t buffer addresses (8-byte), so std430 rounds its
+	// stride up to 128 bytes. Without forcing the same alignment here, glm::vec4 (whose
+	// alignof is 4 in this build -- no GLM_FORCE_ALIGNED_GENTYPES) lets the compiler pack
+	// this struct into 120 bytes, so every instance past index 0 gets read 8 bytes short
+	// per index on the GPU side -- including the buffer-reference addresses, which then
+	// point at garbage and hang the GPU when dereferenced.
+	struct alignas(16) EntityInstanceData {
 		glm::vec4     positionAndScale{0.0f, 0.0f, 0.0f, 1.0f};
 		glm::vec4     color{1.0f, 1.0f, 1.0f, 1.0f};
 		glm::uvec4    params{0, 0, 0, 0};   // x = meshTypeId, y = param1 (rings/vertexCount), z = param2 (pointsPerRing/triangleCount), w = flags
