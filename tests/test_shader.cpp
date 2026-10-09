@@ -331,6 +331,7 @@ TEST_CASE("Terrain Occlusion Helper Consumers Compile") {
 		{"shaders/deferred.frag", shaderc_glsl_fragment_shader},
 		{"shaders/terrain_aabb.comp", shaderc_glsl_compute_shader},
 		{"shaders/terrain_gen.comp", shaderc_glsl_compute_shader},
+		{"shaders/terrain_downsample.comp", shaderc_glsl_compute_shader},
 		{"shaders/particle_liveness.comp", shaderc_glsl_compute_shader},
 		{"shaders/particle_behavior.comp", shaderc_glsl_compute_shader},
 	};

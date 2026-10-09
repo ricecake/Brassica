@@ -15,6 +15,7 @@
 // 16 -> 17: Added CirrusNode for thin cirrus cloud weather indicator layer.
 // 18 -> 20: Added CloudVolumeGenNode and CloudRenderNode.
 // 20 -> 24: Replaced per-handler EntityNode with auto-registered EntityPrepareNode and EntityNode.
+// 24 -> 25: Added HiZDownsampleNode.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 24);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 25);
 }

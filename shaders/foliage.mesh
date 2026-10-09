@@ -63,6 +63,14 @@ vec4 fetchBiomeTexel(uint biomeTableIndex, uint biomeIdx, uint texelX) {
 	);
 }
 
+// Rodrigues' rotation formula for 3D vector rotation around arbitrary axis
+vec3 rotateVector(vec3 v, vec3 axis, float angle) {
+	if (abs(angle) < 1e-5) return v;
+	float s = sin(angle);
+	float c = cos(angle);
+	return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}
+
 void emitBladeItem(
 	vec3  basePos,
 	float heightScale,
@@ -104,15 +112,14 @@ void emitBladeItem(
 	vec3  camRightHoriz = vec3(-viewDirHoriz.z, 0.0, viewDirHoriz.x);
 	vec3  bladeDir = vec3(cos(angle), 0.0, sin(angle));
 	vec3  fixedSide = vec3(-bladeDir.z, 0.0, bladeDir.x);
-	// Camera-facing blend: close blades keep their random orientation (visual variety); distant
-	// blades rotate toward facing the camera so they don't thin to an edge-on sliver and vanish.
 	float facingBlend = clamp(distToCam / 40.0, 0.0, 1.0);
 	vec3  sideAxis = normalize(mix(fixedSide, camRightHoriz, facingBlend));
-	float taperExp = (foliageType == 4u) ? 1.5 : 2.2;
+	float taperExp = (foliageType == 4u) ? 1.5 : 2.0;
 
-	uint        vBase = vCount;
-	const float crossV[4] = float[4](0.0, 0.333, 0.667, 1.0);
-	for (uint s = 0u; s < 4u; ++s) {
+	uint vBase = vCount;
+	// 5 segments along blade (6 cross-sections = 12 vertices, 10 triangles)
+	const float crossV[6] = float[6](0.0, 0.2, 0.4, 0.6, 0.8, 1.0);
+	for (uint s = 0u; s < 6u; ++s) {
 		float t = crossV[s];
 		float halfW = width * (1.0 - pow(t, taperExp)) * 0.5;
 		vec3  centerAtT = basePos + vec3(0.0, height * t, 0.0) + sway * (t * t);
@@ -140,14 +147,14 @@ void emitBladeItem(
 	}
 
 	uint pBase = pCount;
-	for (uint s = 0u; s < 3u; ++s) {
+	for (uint s = 0u; s < 5u; ++s) {
 		uint i0 = vBase + s * 2u;
 		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
 		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
 	}
 
-	vCount += 8u;
-	pCount += 6u;
+	vCount += 12u;
+	pCount += 10u;
 }
 
 void emitFlowerItem(
@@ -163,107 +170,113 @@ void emitFlowerItem(
 	inout uint vCount,
 	inout uint pCount
 ) {
-	float height = (0.5 + pcg_hash(itemSeed + 2u) * 0.3) * heightScale * params.lengthMultiplier;
-	float width = (0.05 + pcg_hash(itemSeed + 3u) * 0.02) * widthScale * params.widthMultiplier;
+	float height = (0.6 + pcg_hash(itemSeed + 2u) * 0.4) * heightScale * params.lengthMultiplier * 1.2;
+	float width = (0.05 + pcg_hash(itemSeed + 3u) * 0.03) * widthScale * params.widthMultiplier;
 
-	vec3 bladeDir = vec3(cos(angle), 0.0, sin(angle));
-	vec3 sideDir = vec3(-bladeDir.z, 0.0, bladeDir.x) * width * 0.5;
-
-	vec3 basePt = basePos;
-	vec3 tipPt = basePos + vec3(0.0, height, 0.0) + sway;
+	vec3 fwdDir = vec3(cos(angle), 0.0, sin(angle));
+	vec3 sideDir = vec3(-fwdDir.z, 0.0, fwdDir.x) * width * 0.5;
 
 	uint vBase = vCount;
-	// Stem: 2 cross-sections, 1 quad.
-	vec3 stemVerts[4] = vec3[4](basePt - sideDir, basePt + sideDir, tipPt - sideDir * 0.5, tipPt + sideDir * 0.5);
-	vec4 stemColor = bColorBottom;
-	for (uint i = 0u; i < 4u; ++i) {
-		vec3 viewP = mat3(uViewMatrix) * stemVerts[i];
-		gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
-		outWorldPos[vBase + i] = stemVerts[i] + uCameraPosition.xyz;
-		outNormal[vBase + i] = terrainNormal;
-		outUV[vBase + i] = vec2(float(i & 1u), float(i >> 1u) * 0.5);
-		outColor[vBase + i] = stemColor;
-		outMaterialType[vBase + i] = 2u;
-		outFade[vBase + i] = fade;
-	}
-	gl_PrimitiveTriangleIndicesEXT[pCount] = uvec3(vBase, vBase + 1u, vBase + 2u);
-	gl_PrimitiveTriangleIndicesEXT[pCount + 1u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
+	// Stem: 3 segments (4 cross-sections = 8 vertices, 6 triangles)
+	const float stemV[4] = float[4](0.0, 0.3, 0.6, 0.85);
+	for (uint s = 0u; s < 4u; ++s) {
+		float t = stemV[s];
+		vec3  stemCenter = basePos + vec3(0.0, height * t, 0.0) + sway * (t * t);
+		vec3  left = stemCenter - sideDir * (1.0 - t * 0.3);
+		vec3  right = stemCenter + sideDir * (1.0 - t * 0.3);
 
-	// Head: 4 real boidish-style profiles (Diamond/Bell/Star/Heart), picked per-item -- a radius
-	// pattern around the stem tip, not just a scaled-down blade.
+		vec3 viewL = mat3(uViewMatrix) * left;
+		gl_MeshVerticesEXT[vBase + s * 2u].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+		outWorldPos[vBase + s * 2u] = left + uCameraPosition.xyz;
+		outNormal[vBase + s * 2u] = terrainNormal;
+		outUV[vBase + s * 2u] = vec2(0.0, t);
+		outColor[vBase + s * 2u] = bColorBottom;
+		outMaterialType[vBase + s * 2u] = 2u;
+		outFade[vBase + s * 2u] = fade;
+
+		vec3 viewR = mat3(uViewMatrix) * right;
+		gl_MeshVerticesEXT[vBase + s * 2u + 1u].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+		outWorldPos[vBase + s * 2u + 1u] = right + uCameraPosition.xyz;
+		outNormal[vBase + s * 2u + 1u] = terrainNormal;
+		outUV[vBase + s * 2u + 1u] = vec2(1.0, t);
+		outColor[vBase + s * 2u + 1u] = bColorBottom;
+		outMaterialType[vBase + s * 2u + 1u] = 2u;
+		outFade[vBase + s * 2u + 1u] = fade;
+	}
+
+	for (uint s = 0u; s < 3u; ++s) {
+		uint i0 = vBase + s * 2u;
+		gl_PrimitiveTriangleIndicesEXT[pCount + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
+		gl_PrimitiveTriangleIndicesEXT[pCount + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+	}
+	pCount += 6u;
+
+	// Boidish Flower Head Profile: 4 profile styles (Diamond, Bell, Star, Heart)
 	uint  headProfile = uint(pcg_hash(itemSeed + 8u) * 4.0) & 3u;
-	float headSize = height * 0.5;
-	vec3  up = vec3(0.0, 1.0, 0.0);
-	vec3  right = sideDir / max(length(sideDir), 1e-4);
-	vec3  fwd = cross(right, up);
-
-	vec3 petalDir[4];
-	if (headProfile == 0u) { // Diamond: 4 points at compass directions
-		petalDir[0] = right;
-		petalDir[1] = fwd;
-		petalDir[2] = -right;
-		petalDir[3] = -fwd;
-	} else if (headProfile == 1u) { // Bell: wider, downward-drooping outer points
-		petalDir[0] = normalize(right - up * 0.4);
-		petalDir[1] = normalize(fwd - up * 0.4);
-		petalDir[2] = normalize(-right - up * 0.4);
-		petalDir[3] = normalize(-fwd - up * 0.4);
-	} else if (headProfile == 2u) { // Star: diagonals, sharper
-		petalDir[0] = normalize(right + fwd);
-		petalDir[1] = normalize(fwd - right);
-		petalDir[2] = normalize(-right - fwd);
-		petalDir[3] = normalize(right - fwd);
-	} else { // Heart: two lobes forward, point back
-		petalDir[0] = normalize(right + fwd * 0.6);
-		petalDir[1] = normalize(-right + fwd * 0.6);
-		petalDir[2] = -fwd;
-		petalDir[3] = up * 0.2 + fwd * 0.3; // small notch toward center
-	}
+	float headSize = height * 0.45;
+	vec3  tipCenter = basePos + vec3(0.0, height, 0.0) + sway;
 
 	float hue = pcg_hash(itemSeed + 9u);
 	vec4  petalColor;
 	if (hue < 0.25) {
-		petalColor = vec4(0.95, 0.85, 0.20, 1.0); // Yellow
-	} else if (hue < 0.5) {
-		petalColor = vec4(0.95, 0.30, 0.50, 1.0); // Pink
+		petalColor = vec4(0.98, 0.85, 0.15, 1.0); // Sunflower Yellow
+	} else if (hue < 0.50) {
+		petalColor = vec4(0.95, 0.25, 0.55, 1.0); // Vivid Pink
 	} else if (hue < 0.75) {
-		petalColor = vec4(0.55, 0.35, 0.85, 1.0); // Purple
+		petalColor = vec4(0.55, 0.30, 0.90, 1.0); // Deep Lavender
 	} else {
-		petalColor = vec4(0.90, 0.90, 0.95, 1.0); // White
+		petalColor = vec4(0.95, 0.95, 0.98, 1.0); // Porcelain White
 	}
-	vec4 centerColor = mix(petalColor, vec4(1.0, 0.95, 0.5, 1.0), 0.6); // center glow
+	vec4 centerColor = vec4(0.98, 0.80, 0.20, 1.0); // Golden center disk
 
-	uint vHeadBase = vBase + 4u;
-	vec3 centerPos = tipPt;
-	vec3 cView = mat3(uViewMatrix) * centerPos;
-	gl_MeshVerticesEXT[vHeadBase].gl_Position = uProjMatrix * vec4(cView, 1.0);
-	outWorldPos[vHeadBase] = centerPos + uCameraPosition.xyz;
-	outNormal[vHeadBase] = terrainNormal;
-	outUV[vHeadBase] = vec2(0.5, 0.5);
-	outColor[vHeadBase] = centerColor;
-	outMaterialType[vHeadBase] = 2u;
-	outFade[vHeadBase] = fade;
+	// Center disk vertex
+	uint vHeadCenter = vBase + 8u;
+	vec3 viewC = mat3(uViewMatrix) * tipCenter;
+	gl_MeshVerticesEXT[vHeadCenter].gl_Position = uProjMatrix * vec4(viewC, 1.0);
+	outWorldPos[vHeadCenter] = tipCenter + uCameraPosition.xyz;
+	outNormal[vHeadCenter] = vec3(0.0, 1.0, 0.0);
+	outUV[vHeadCenter] = vec2(0.5, 0.5);
+	outColor[vHeadCenter] = centerColor;
+	outMaterialType[vHeadCenter] = 2u;
+	outFade[vHeadCenter] = fade;
 
-	for (uint i = 0u; i < 4u; ++i) {
-		vec3 petalPos = centerPos + petalDir[i] * headSize;
-		vec3 pView = mat3(uViewMatrix) * petalPos;
-		gl_MeshVerticesEXT[vHeadBase + 1u + i].gl_Position = uProjMatrix * vec4(pView, 1.0);
-		outWorldPos[vHeadBase + 1u + i] = petalPos + uCameraPosition.xyz;
-		outNormal[vHeadBase + 1u + i] = terrainNormal;
-		outUV[vHeadBase + 1u + i] = vec2(0.5, 0.5) + petalDir[i].xz * 0.5;
-		outColor[vHeadBase + 1u + i] = petalColor;
-		outMaterialType[vHeadBase + 1u + i] = 2u;
-		outFade[vHeadBase + 1u + i] = fade;
+	// 8 radial petal vertices around flower head
+	uint vPetalBase = vBase + 9u;
+	for (uint i = 0u; i < 8u; ++i) {
+		float pAngle = float(i) * (TAU / 8.0);
+		float radProfile = 1.0;
+		float dropY = 0.0;
+
+		if (headProfile == 0u) { // Diamond
+			radProfile = (i % 2u == 0u) ? 1.0 : 0.5;
+		} else if (headProfile == 1u) { // Bell
+			radProfile = 0.85;
+			dropY = -headSize * 0.35;
+		} else if (headProfile == 2u) { // Star
+			radProfile = (i % 2u == 0u) ? 1.1 : 0.35;
+		} else { // Heart / Wide
+			radProfile = 0.6 + 0.5 * sin(pAngle * 2.0);
+		}
+
+		vec3 pOffset = vec3(cos(pAngle) * radProfile, dropY / headSize, sin(pAngle) * radProfile) * headSize;
+		vec3 pPos = tipCenter + pOffset;
+
+		vec3 viewP = mat3(uViewMatrix) * pPos;
+		gl_MeshVerticesEXT[vPetalBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+		outWorldPos[vPetalBase + i] = pPos + uCameraPosition.xyz;
+		outNormal[vPetalBase + i] = normalize(vec3(cos(pAngle), 0.5, sin(pAngle)));
+		outUV[vPetalBase + i] = vec2(0.5) + vec2(cos(pAngle), sin(pAngle)) * 0.5;
+		outColor[vPetalBase + i] = petalColor;
+		outMaterialType[vPetalBase + i] = 2u;
+		outFade[vPetalBase + i] = fade;
+
+		uint pIdx = pCount + i;
+		uint nextI = (i + 1u) % 8u;
+		gl_PrimitiveTriangleIndicesEXT[pIdx] = uvec3(vHeadCenter, vPetalBase + i, vPetalBase + nextI);
 	}
 
-	uint pHeadBase = pCount + 2u;
-	gl_PrimitiveTriangleIndicesEXT[pHeadBase] = uvec3(vHeadBase, vHeadBase + 1u, vHeadBase + 2u);
-	gl_PrimitiveTriangleIndicesEXT[pHeadBase + 1u] = uvec3(vHeadBase, vHeadBase + 2u, vHeadBase + 3u);
-	gl_PrimitiveTriangleIndicesEXT[pHeadBase + 2u] = uvec3(vHeadBase, vHeadBase + 3u, vHeadBase + 4u);
-	gl_PrimitiveTriangleIndicesEXT[pHeadBase + 3u] = uvec3(vHeadBase, vHeadBase + 4u, vHeadBase + 1u);
-
-	vCount += 9u;
-	pCount += 6u;
+	vCount += 17u;
+	pCount += 8u;
 }
 
 void emitFernItem(
@@ -280,138 +293,160 @@ void emitFernItem(
 	inout uint vCount,
 	inout uint pCount
 ) {
-	float height = (0.9 + pcg_hash(itemSeed + 2u) * 0.5) * heightScale * params.lengthMultiplier * 1.2;
-	float width = (0.08 + pcg_hash(itemSeed + 3u) * 0.04) * widthScale * params.widthMultiplier * 1.8;
+	float height = (1.0 + pcg_hash(itemSeed + 2u) * 0.5) * heightScale * params.lengthMultiplier * 1.3;
+	float width = (0.10 + pcg_hash(itemSeed + 3u) * 0.05) * widthScale * params.widthMultiplier * 1.8;
 
-	vec4 fernBottom = mix(vec4(0.04, 0.20, 0.06, 1.0), bColorBottom, 0.4);
-	vec4 fernTop = mix(vec4(0.15, 0.60, 0.15, 1.0), bColorTop, 0.4);
+	vec4 fernBottom = mix(vec4(0.03, 0.18, 0.05, 1.0), bColorBottom, 0.35);
+	vec4 fernTop = mix(vec4(0.12, 0.58, 0.14, 1.0), bColorTop, 0.35);
 
-	uint        vBase = vCount;
-	uint        pBase = pCount;
-	const float crossV[3] = float[3](0.0, 0.5, 1.0);
+	uint vBase = vCount;
+	uint pBase = pCount;
 
-	for (uint f = 0u; f < 4u; ++f) {
-		float frondAngle = angle + float(f) * (TAU / 4.0) + (pcg_hash(itemSeed + 20u + f) * 0.3 - 0.15);
-		vec3  frondDir = vec3(cos(frondAngle), 0.0, sin(frondAngle));
-		vec3  frondSide = vec3(-frondDir.z, 0.0, frondDir.x);
-		float frondLen = height * (0.7 + pcg_hash(itemSeed + 30u + f) * 0.3);
+	// Boidish 6-frond fern rosette structure
+	const float crossV[5] = float[5](0.0, 0.25, 0.50, 0.75, 1.0);
 
-		uint fBase = vBase + f * 6u;
-		for (uint s = 0u; s < 3u; ++s) {
-			float t = crossV[s];
-			// Arched, tapered frond: rises mostly upward while curving outward then back in --
-			// not a straight flat blade, and not a literal re-derivation of boidish's exact
-			// curve, just the same "arched, tapered" shape.
-			float arch = sin(t * 2.0) - 0.3 * t * t;
-			vec3  alongPos = basePos + vec3(0.0, frondLen * (0.4 + 0.6 * t), 0.0) + frondDir * (frondLen * 0.35 * arch) +
-							 sway * (t * t);
-			float wT = (t < 0.3) ? (t / 0.3) : (1.0 - (t - 0.3) / 0.7);
-			float halfW = (width * wT + 0.01) * 0.5;
-			vec3  left = alongPos - frondSide * halfW;
-			vec3  right = alongPos + frondSide * halfW;
-			vec4  col = mix(fernBottom, fernTop, t);
+	for (uint f = 0u; f < 6u; ++f) {
+		float frondYaw = angle + float(f) * (TAU / 6.0) + (pcg_hash(itemSeed + 20u + f) * 0.25 - 0.125);
+		vec3  forward = vec3(sin(frondYaw), 0.0, cos(frondYaw));
+		vec3  right = vec3(cos(frondYaw), 0.0, -sin(frondYaw));
 
-			uint li = fBase + s * 2u;
-			vec3 viewLeft = mat3(uViewMatrix) * left;
-			gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewLeft, 1.0);
-			outWorldPos[li] = left + uCameraPosition.xyz;
-			outNormal[li] = terrainNormal;
-			outUV[li] = vec2(0.0, t);
+		float frondLen = height * (0.75 + pcg_hash(itemSeed + 30u + f) * 0.35);
+		float heightScaleF = frondLen * 0.45;
+
+		uint fVertBase = vBase + f * 10u;
+		for (uint s = 0u; s < 5u; ++s) {
+			float v = crossV[s];
+
+			// Boidish frond width profile: thin base, swells at 30% length, tapers to point
+			float widthProfile = smoothstep(0.0, 0.3, v) * (1.0 - v);
+			float halfW = width * 1.8 * widthProfile;
+
+			// Boidish arching equation
+			float x_fwd = v * frondLen;
+			float y_up = heightScaleF * (sin(v * 2.0) - 0.3 * v * v);
+
+			vec3 unbentPos = basePos + forward * x_fwd + vec3(0.0, y_up, 0.0) + sway * (v * v);
+
+			// Wind deflection rotation
+			float windBendAngle = sway.x * 0.6 * pow(v, 1.2);
+			vec3  relPos = unbentPos - basePos;
+			vec3  bentRelPos = rotateVector(relPos, right, windBendAngle);
+			vec3  frondPos = basePos + bentRelPos;
+
+			// Frond tangent and normal calculation
+			vec3 tangent = normalize(forward * frondLen + vec3(0.0, heightScaleF * (2.0 * cos(v * 2.0) - 0.6 * v), 0.0));
+			vec3 norm = normalize(cross(tangent, right));
+			if (norm.y < 0.0) norm = -norm;
+			norm = rotateVector(norm, right, windBendAngle);
+
+			vec3  leftPt = frondPos - right * halfW;
+			vec3  rightPt = frondPos + right * halfW;
+			vec4  col = mix(fernBottom, fernTop, v);
+
+			uint li = fVertBase + s * 2u;
+			vec3 viewL = mat3(uViewMatrix) * leftPt;
+			gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+			outWorldPos[li] = leftPt + uCameraPosition.xyz;
+			outNormal[li] = norm;
+			outUV[li] = vec2(0.0, v);
 			outColor[li] = col;
 			outMaterialType[li] = 1u;
 			outFade[li] = fade;
 
 			uint ri = li + 1u;
-			vec3 viewRight = mat3(uViewMatrix) * right;
-			gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewRight, 1.0);
-			outWorldPos[ri] = right + uCameraPosition.xyz;
-			outNormal[ri] = terrainNormal;
-			outUV[ri] = vec2(1.0, t);
+			vec3 viewR = mat3(uViewMatrix) * rightPt;
+			gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+			outWorldPos[ri] = rightPt + uCameraPosition.xyz;
+			outNormal[ri] = norm;
+			outUV[ri] = vec2(1.0, v);
 			outColor[ri] = col;
 			outMaterialType[ri] = 1u;
 			outFade[ri] = fade;
 		}
 
-		uint fp = pBase + f * 4u;
-		for (uint s = 0u; s < 2u; ++s) {
-			uint i0 = fBase + s * 2u;
+		uint fp = pBase + f * 8u;
+		for (uint s = 0u; s < 4u; ++s) {
+			uint i0 = fVertBase + s * 2u;
 			gl_PrimitiveTriangleIndicesEXT[fp + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
 			gl_PrimitiveTriangleIndicesEXT[fp + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
 		}
 	}
 
-	vCount += 24u;
-	pCount += 16u;
+	vCount += 60u;
+	pCount += 48u;
 }
 
 void emitRockItem(
 	vec3 basePos, float angle, uint itemSeed, inout uint vCount, inout uint pCount
 ) {
-	float rockScale = (0.4 + pcg_hash(itemSeed + 2u) * 0.8) * params.lengthMultiplier;
+	float rockScale = (0.5 + pcg_hash(itemSeed + 2u) * 0.9) * params.lengthMultiplier;
 	vec3  rockSize = vec3(
-		 rockScale * (0.8 + pcg_hash(itemSeed + 3u) * 0.4) * params.widthMultiplier,
-		 rockScale * (0.5 + pcg_hash(itemSeed + 5u) * 0.5),
-		 rockScale * (0.8 + pcg_hash(itemSeed + 6u) * 0.4) * params.widthMultiplier
+		 rockScale * (0.85 + pcg_hash(itemSeed + 3u) * 0.5) * params.widthMultiplier,
+		 rockScale * (0.60 + pcg_hash(itemSeed + 5u) * 0.5),
+		 rockScale * (0.85 + pcg_hash(itemSeed + 6u) * 0.5) * params.widthMultiplier
 	);
 	vec4 rockColor = vec4(
-		0.42 + pcg_hash(itemSeed + 7u) * 0.12,
-		0.40 + pcg_hash(itemSeed + 8u) * 0.10,
-		0.38 + pcg_hash(itemSeed + 9u) * 0.10,
+		0.38 + pcg_hash(itemSeed + 7u) * 0.12,
+		0.36 + pcg_hash(itemSeed + 8u) * 0.10,
+		0.34 + pcg_hash(itemSeed + 9u) * 0.10,
 		1.0
 	);
 
 	uint vBase = vCount;
-	vec3 hSize = rockSize * 0.5;
-	vec3 center = basePos + vec3(0.0, hSize.y * 0.6, 0.0);
+	vec3 center = basePos + vec3(0.0, rockSize.y * 0.5, 0.0);
 
-	// Same box topology as before, but every vertex gets its own small jittered perturbation so
-	// a clump of rocks doesn't read as identical boxes at different scales.
-	vec3 boxVerts[8] = vec3[8](
-		center + vec3(-hSize.x, -hSize.y, -hSize.z),
-		center + vec3(hSize.x, -hSize.y, -hSize.z),
-		center + vec3(hSize.x, hSize.y, -hSize.z),
-		center + vec3(-hSize.x, hSize.y, -hSize.z),
-		center + vec3(-hSize.x, -hSize.y, hSize.z),
-		center + vec3(hSize.x, -hSize.y, hSize.z),
-		center + vec3(hSize.x, hSize.y, hSize.z),
-		center + vec3(-hSize.x, hSize.y, hSize.z)
-	);
+	// High fidelity 3D boulder mesh (14 vertices: top, bottom, 2 staggered horizontal 6-vertex rings)
+	vec3 boulderVerts[14];
+	boulderVerts[0] = center + vec3(0.0, rockSize.y * 0.55, 0.0);  // Top vertex
+	boulderVerts[13] = center - vec3(0.0, rockSize.y * 0.45, 0.0); // Bottom vertex
 
-	for (uint i = 0u; i < 8u; ++i) {
-		vec3 jitter = (vec3(pcg_hash(itemSeed + 40u + i), pcg_hash(itemSeed + 48u + i), pcg_hash(itemSeed + 56u + i)) *
-						   2.0 -
-					   1.0) *
-					  (rockScale * 0.08);
-		vec3 vPos = boxVerts[i] + jitter;
+	for (uint i = 0u; i < 6u; ++i) {
+		float a1 = float(i) * (TAU / 6.0) + angle;
+		float r1 = 0.5;
+		vec3  disp1 = vec3(
+			(pcg_hash(itemSeed + 10u + i) * 0.3 - 0.15) * rockSize.x,
+			(pcg_hash(itemSeed + 20u + i) * 0.2 - 0.10) * rockSize.y,
+			(pcg_hash(itemSeed + 30u + i) * 0.3 - 0.15) * rockSize.z
+		);
+		boulderVerts[1 + i] = center + vec3(cos(a1) * rockSize.x * r1, rockSize.y * 0.2, sin(a1) * rockSize.z * r1) + disp1;
+
+		float a2 = float(i) * (TAU / 6.0) + angle + (TAU / 12.0);
+		float r2 = 0.45;
+		vec3  disp2 = vec3(
+			(pcg_hash(itemSeed + 40u + i) * 0.3 - 0.15) * rockSize.x,
+			(pcg_hash(itemSeed + 50u + i) * 0.2 - 0.10) * rockSize.y,
+			(pcg_hash(itemSeed + 60u + i) * 0.3 - 0.15) * rockSize.z
+		);
+		boulderVerts[7 + i] = center + vec3(cos(a2) * rockSize.x * r2, -rockSize.y * 0.25, sin(a2) * rockSize.z * r2) + disp2;
+	}
+
+	for (uint i = 0u; i < 14u; ++i) {
+		vec3 vPos = boulderVerts[i];
 		vec3 viewP = mat3(uViewMatrix) * vPos;
 		gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
 		outWorldPos[vBase + i] = vPos + uCameraPosition.xyz;
-		outNormal[vBase + i] = normalize(vPos - center + vec3(0.0, 0.2, 0.0));
+		outNormal[vBase + i] = normalize(vPos - center + vec3(0.0, 0.1, 0.0));
 		outUV[vBase + i] = vec2(0.5, 0.5);
-		outColor[vBase + i] = rockColor;
+		outColor[vBase + i] = mix(rockColor, vec4(0.25, 0.32, 0.20, 1.0), (i > 6u) ? 0.25 : 0.0); // subtle moss tint near base
 		outMaterialType[vBase + i] = 3u;
-		outFade[vBase + i] = 1.0; // rocks don't height-fade, only density-cull
+		outFade[vBase + i] = 1.0;
 	}
 
 	uint pBase = pCount;
-	uvec3 boxTris[10] = uvec3[10](
-		uvec3(vBase + 3u, vBase + 2u, vBase + 6u),
-		uvec3(vBase + 3u, vBase + 6u, vBase + 7u),
-		uvec3(vBase + 4u, vBase + 5u, vBase + 6u),
-		uvec3(vBase + 4u, vBase + 6u, vBase + 7u),
-		uvec3(vBase + 1u, vBase + 0u, vBase + 3u),
-		uvec3(vBase + 1u, vBase + 3u, vBase + 2u),
-		uvec3(vBase + 0u, vBase + 4u, vBase + 7u),
-		uvec3(vBase + 0u, vBase + 7u, vBase + 3u),
-		uvec3(vBase + 5u, vBase + 1u, vBase + 2u),
-		uvec3(vBase + 5u, vBase + 2u, vBase + 6u)
-	);
-	for (uint i = 0u; i < 10u; ++i) {
-		gl_PrimitiveTriangleIndicesEXT[pBase + i] = boxTris[i];
+	// 20 triangular facets forming full 3D closed boulder topology
+	for (uint i = 0u; i < 6u; ++i) {
+		uint nextI = (i + 1u) % 6u;
+		// Top cap triangles
+		gl_PrimitiveTriangleIndicesEXT[pBase + i] = uvec3(vBase, vBase + 1u + i, vBase + 1u + nextI);
+		// Middle band triangles
+		gl_PrimitiveTriangleIndicesEXT[pBase + 6u + i * 2u] = uvec3(vBase + 1u + i, vBase + 7u + i, vBase + 1u + nextI);
+		gl_PrimitiveTriangleIndicesEXT[pBase + 6u + i * 2u + 1u] = uvec3(vBase + 1u + nextI, vBase + 7u + i, vBase + 7u + nextI);
+		// Bottom cap triangles
+		gl_PrimitiveTriangleIndicesEXT[pBase + 18u + i] = uvec3(vBase + 13u, vBase + 7u + nextI, vBase + 7u + i);
 	}
 
-	vCount += 8u;
-	pCount += 10u;
+	vCount += 14u;
+	pCount += 20u;
 }
 
 void emitBushItem(
@@ -419,40 +454,35 @@ void emitBushItem(
 	inout uint pCount
 ) {
 	float bushHeight = (1.2 + pcg_hash(itemSeed + 2u) * 1.0) * params.lengthMultiplier;
-	float bushWidth = (1.0 + pcg_hash(itemSeed + 3u) * 0.8) * params.widthMultiplier;
+	float bushWidth = (1.1 + pcg_hash(itemSeed + 3u) * 0.8) * params.widthMultiplier;
 
-	vec4 bushBottomColor = vec4(0.08, 0.28, 0.06, 1.0);
-	vec4 bushTopColor = vec4(0.18 + pcg_hash(itemSeed + 5u) * 0.08, 0.55, 0.12, 1.0);
+	vec4 bushBottomColor = vec4(0.06, 0.24, 0.05, 1.0);
+	vec4 bushTopColor = vec4(0.18 + pcg_hash(itemSeed + 5u) * 0.08, 0.58, 0.12, 1.0);
 
 	uint vBase = vCount;
-	vec3 topCenter = basePos + vec3(windStrength * 0.5, bushHeight, windStrength * 0.5);
+	vec3 bushCenter = basePos + vec3(windStrength * 0.3, bushHeight * 0.5, windStrength * 0.3);
 
-	// 3 crossed quads (60 degrees apart) instead of 2, for a fuller silhouette from every angle.
-	vec3  dirs[3];
+	// 3 vertical crossed quads (60 degrees apart)
 	float halfW = bushWidth * 0.5;
 	for (uint q = 0u; q < 3u; ++q) {
 		float a = angle + float(q) * (TAU / 6.0);
-		dirs[q] = vec3(cos(a), 0.0, sin(a)) * halfW;
-	}
+		vec3  d = vec3(cos(a), 0.0, sin(a)) * halfW;
+		vec3  v0 = basePos - d;
+		vec3  v1 = basePos + d;
+		vec3  v2 = basePos + vec3(0.0, bushHeight, 0.0) - d * 0.7;
+		vec3  v3 = basePos + vec3(0.0, bushHeight, 0.0) + d * 0.7;
 
-	for (uint q = 0u; q < 3u; ++q) {
-		vec3 d = dirs[q];
-		vec3 v0 = basePos - d;
-		vec3 v1 = basePos + d;
-		vec3 v2 = topCenter - d * 0.6;
-		vec3 v3 = topCenter + d * 0.6;
 		vec3 qv[4] = vec3[4](v0, v1, v2, v3);
 		vec2 qUVs[4] = vec2[4](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 1.0));
-		vec4 qColors[4] = vec4[4](bushBottomColor, bushBottomColor, bushTopColor, bushTopColor);
 
 		uint qBase = vBase + q * 4u;
 		for (uint i = 0u; i < 4u; ++i) {
 			vec3 viewP = mat3(uViewMatrix) * qv[i];
 			gl_MeshVerticesEXT[qBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
 			outWorldPos[qBase + i] = qv[i] + uCameraPosition.xyz;
-			outNormal[qBase + i] = terrainNormal;
+			outNormal[qBase + i] = normalize(qv[i] - bushCenter + vec3(0.0, bushHeight * 0.1, 0.0));
 			outUV[qBase + i] = qUVs[i];
-			outColor[qBase + i] = qColors[i];
+			outColor[qBase + i] = mix(bushBottomColor, bushTopColor, float(i >> 1u));
 			outMaterialType[qBase + i] = 5u;
 			outFade[qBase + i] = 1.0;
 		}
@@ -462,14 +492,45 @@ void emitBushItem(
 		gl_PrimitiveTriangleIndicesEXT[qp + 1u] = uvec3(qBase + 1u, qBase + 3u, qBase + 2u);
 	}
 
-	vCount += 12u;
-	pCount += 6u;
+	// 2 horizontal canopy dome panels at mid and top heights for dense 3D volume
+	uint hBase = vBase + 12u;
+	for (uint h = 0u; h < 2u; ++h) {
+		float hFrac = (h == 0u) ? 0.55 : 0.85;
+		float hRad = halfW * ((h == 0u) ? 0.9 : 0.65);
+		vec3  hCenter = basePos + vec3(0.0, bushHeight * hFrac, 0.0);
+
+		vec3 hv[4] = vec3[4](
+			hCenter + vec3(-hRad, 0.0, -hRad),
+			hCenter + vec3(hRad, 0.0, -hRad),
+			hCenter + vec3(-hRad, 0.0, hRad),
+			hCenter + vec3(hRad, 0.0, hRad)
+		);
+
+		uint quadBase = hBase + h * 4u;
+		for (uint i = 0u; i < 4u; ++i) {
+			vec3 viewP = mat3(uViewMatrix) * hv[i];
+			gl_MeshVerticesEXT[quadBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+			outWorldPos[quadBase + i] = hv[i] + uCameraPosition.xyz;
+			outNormal[quadBase + i] = normalize(hv[i] - bushCenter + vec3(0.0, bushHeight * 0.2, 0.0));
+			outUV[quadBase + i] = vec2(float(i & 1u), float(i >> 1u));
+			outColor[quadBase + i] = bushTopColor;
+			outMaterialType[quadBase + i] = 5u;
+			outFade[quadBase + i] = 1.0;
+		}
+
+		uint qp = pCount + 6u + h * 2u;
+		gl_PrimitiveTriangleIndicesEXT[qp] = uvec3(quadBase, quadBase + 1u, quadBase + 2u);
+		gl_PrimitiveTriangleIndicesEXT[qp + 1u] = uvec3(quadBase + 1u, quadBase + 3u, quadBase + 2u);
+	}
+
+	vCount += 20u;
+	pCount += 10u;
 }
 
 void main() {
 	uint clumpGlobalIdx = gl_WorkGroupID.x;
-	uint tileIdx = clumpGlobalIdx >> 2u;
-	uint clumpLocal = clumpGlobalIdx & 3u;
+	uint tileIdx = clumpGlobalIdx >> 4u;
+	uint clumpLocal = clumpGlobalIdx & 15u;
 
 	vec2  relTileMin = payload.relTileMinXZ[tileIdx];
 	float tileSize = payload.tileSize[tileIdx];
@@ -480,19 +541,14 @@ void main() {
 		return;
 	}
 
-	// 2x2 grid of world-space jitter cells per tile (clumpLocal selects one). Cell size is half
-	// the tile's own size -- 4 cells = 4 clumps, matching the previous per-tile clump count, but
-	// addressed in pure world space instead of tile-relative pcg_hash, so a cell's identity (and
-	// its jitter/survival/fade decision below) is stable regardless of which tile currently owns
-	// it -- this is what actually fixes the camera-snapped-grid popping/swimming.
-	float cellStep = tileSize * 0.5;
+	// 4x4 grid of world-space jitter cells per tile (clumpLocal selects one). Cell size is 1/4
+	// the tile's own size -- 16 cells = 16 clumps.
+	float cellStep = tileSize * 0.25;
 	vec2  tileMinWorld = uCameraPosition.xz + relTileMin;
 	ivec2 cellCoord0 = ivec2(floor(tileMinWorld / cellStep + 0.001));
-	ivec2 cellOffset = ivec2(int(clumpLocal & 1u), int(clumpLocal >> 1u));
+	ivec2 cellOffset = ivec2(int(clumpLocal & 3u), int(clumpLocal >> 2u));
 	ivec2 cellCoord = cellCoord0 + cellOffset;
 
-	// Boidish's exact cell-hash constants (grass_placement.comp) -- stable across frames since
-	// it's seeded purely from integer cell coordinates, never from camera position.
 	uint cellSeed = hashUint(uint(cellCoord.x) * 1973u ^ uint(cellCoord.y) * 9277u ^ (lodLevel * 101u));
 
 	vec2 cellCenterWorld = (vec2(cellCoord) + 0.5) * cellStep;
@@ -515,9 +571,6 @@ void main() {
 
 	bool isUnderwater = (terrainHeight < params.waterLevel - 0.2);
 
-	// Real per-location biome -- TerrainBiomeTexture's own value is hardcoded to 0 in
-	// terrain_gen.comp, so the weather texture + Whittaker classification is the only real
-	// signal, same decode deferred.frag already uses.
 	vec4  weatherSample = sampleTerrainWeatherBiome(
 		params.weatherBiomeIndex, vec3(clumpCenterWorld.x, terrainHeight, clumpCenterWorld.y)
 	);
@@ -535,37 +588,23 @@ void main() {
 	vec4 bCVE = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 4u); // colorVariability,enabled,_,_
 
 	if (bCVE.y < 0.5) {
-		// This biome has foliage disabled entirely (e.g. bare ice) -- nothing to place here.
 		SetMeshOutputsEXT(0u, 0u);
 		return;
 	}
 
-	// Item count: same discrete thresholds the previous (working) version used, not a redesign --
-	// only the position (jittered world cell, above) and the fade below are new. A continuous
-	// hash-vs-threshold whole-clump survival roll was tried here and measured to cull nearly
-	// everything beyond ~2x lodBaseRange once biome density was multiplied in (lodBaseRange's
-	// default of 20 was never calibrated against a falloff anchored directly on it) -- removed
-	// rather than re-tuned blind, since invisible foliage is strictly worse than un-jittered
-	// foliage. biomeDensity still scales item count, just not whether the clump exists at all.
 	float lodRange = max(params.lodBaseRange, 1.0);
-	uint  bladesInTile = 32u;
+	uint  bladesInTile = 64u;
 	if (lodLevel >= 4u || distToCam > lodRange * 7.5) {
-		bladesInTile = 4u;
-	} else if (lodLevel >= 2u || distToCam > lodRange * 3.0) {
 		bladesInTile = 8u;
-	} else if (lodLevel >= 1u || distToCam > lodRange * 1.5) {
+	} else if (lodLevel >= 2u || distToCam > lodRange * 3.0) {
 		bladesInTile = 16u;
+	} else if (lodLevel >= 1u || distToCam > lodRange * 1.5) {
+		bladesInTile = 32u;
 	}
 	float biomeDensity = max(bHWDF.z, 0.0);
 	uint  scaledBlades = uint(round(float(bladesInTile) * params.densityMultiplier * biomeDensity));
-	uint  itemsPerClump = clamp(scaledBlades / 4u, 1u, 8u);
+	uint  itemsPerClump = clamp(scaledBlades / 16u, 1u, 4u);
 
-	// Fade: purely geometric, anchored to this LOD ring's own known radius (tileSize *
-	// tilesPerRow * 0.5) -- not a hash-driven ratio, so it can never collapse density to zero by
-	// accident the way the removed survival roll did. Only the outer 30% of each ring fades;
-	// the inner 70% renders at full height exactly as before. This is what actually fixes
-	// popping: a clump shrinks smoothly in that outer band instead of vanishing in one frame
-	// when its tile stops being dispatched (foliage.task's frustum/parent-nesting cull).
 	float ringHalfExtent = max(tileSize * float(max(params.gridParams.y, 1u)) * 0.5, 1.0);
 	float fade = 1.0 - smoothstep(ringHalfExtent * 0.7, ringHalfExtent, distToCam);
 
@@ -594,7 +633,7 @@ void main() {
 			foliageType = (underwaterChoice < 0.75) ? 4u : 3u;
 		} else {
 			float sel = pcg_hash(itemSeed + 4u);
-			float cumulative = params.flowerRatio * bHWDF.w; // scaled by this biome's flowerRatio
+			float cumulative = params.flowerRatio * bHWDF.w;
 			if (sel < cumulative) {
 				foliageType = 2u;
 			} else {
@@ -621,20 +660,20 @@ void main() {
 		uint itemVerts;
 		uint itemPrims;
 		if (foliageType == 3u) {
-			itemVerts = 8u;
-			itemPrims = 10u;
+			itemVerts = 14u;
+			itemPrims = 20u;
 		} else if (foliageType == 5u) {
-			itemVerts = 12u;
-			itemPrims = 6u;
+			itemVerts = 20u;
+			itemPrims = 10u;
 		} else if (foliageType == 1u) {
-			itemVerts = 24u;
-			itemPrims = 16u;
+			itemVerts = 60u;
+			itemPrims = 48u;
 		} else if (foliageType == 2u) {
-			itemVerts = 9u;
-			itemPrims = 6u;
+			itemVerts = 17u;
+			itemPrims = 14u;
 		} else {
-			itemVerts = 8u;
-			itemPrims = 6u;
+			itemVerts = 12u;
+			itemPrims = 10u;
 		}
 
 		if (vCount + itemVerts > 128u || pCount + itemPrims > 128u) {
@@ -643,7 +682,10 @@ void main() {
 
 		vec3  basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
 		float heightScale = bHWDF.x * fade;
-		float widthScale = bHWDF.y;
+		// Must shrink with fade the same way heightScale does -- leaving width full-size while
+		// height shrinks toward the LOD ring's outer edge turns each item into a tall thin sliver
+		// right before it fades out, instead of shrinking uniformly.
+		float widthScale = bHWDF.y * fade;
 		vec3  sway = vec3(windStrength, 0.0, windStrength);
 
 		if (foliageType == 3u) {

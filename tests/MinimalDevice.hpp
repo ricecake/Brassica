@@ -7,6 +7,7 @@
 
 #include "vk_mem_alloc.h"
 #include "VkBootstrap.h"
+#include "VulkanCompat.hpp"
 
 // A minimal Vulkan 1.3 core bootstrap for tests that need a *real* device but not the full
 // production Engine's feature set. Engine::InitVulkan (src/Engine.cpp) hard-requires
@@ -166,7 +167,7 @@ namespace brassica::testing {
 
 		[[nodiscard]] uint32_t GetQueueFamily() const { return m_queueFamily; }
 
-		[[nodiscard]] const vk::DispatchLoaderDynamic& GetDls() const { return m_dls; }
+		[[nodiscard]] const brassica::DispatchLoaderDynamic& GetDls() const { return m_dls; }
 
 		[[nodiscard]] uint32_t GetValidationErrorCount() const { return m_errorCount; }
 
@@ -200,7 +201,7 @@ namespace brassica::testing {
 		vk::Queue                  m_queue{};
 		uint32_t                   m_queueFamily{0};
 		VmaAllocator               m_allocator{VK_NULL_HANDLE};
-		vk::DispatchLoaderDynamic  m_dls{};
+		brassica::DispatchLoaderDynamic m_dls{};
 
 		uint32_t m_errorCount{0};
 		uint32_t m_warningCount{0};

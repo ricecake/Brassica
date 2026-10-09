@@ -1058,6 +1058,98 @@ TEST_CASE(
 	CHECK(device.GetValidationWarningCount() == 0);
 }
 
+// The regression this closes: ProvisionTemporalPairs created a History<K> pair exactly once
+// (guarded by `!pair[0]`) and never again checked its desc against the current frame's -- so a
+// resize correctly replaced the *bare* key's and the *History<K>* reader's own textures via the
+// ordinary per-key provisioning loop, only for ProvisionTemporalPairs to unconditionally revert
+// both back to the stale pre-resize pair on the very next frame, which the ordinary loop then
+// "fixed" again, forever -- each round destroying a texture the previous frame's command buffer
+// might still be using. Confirmed on real hardware as a genuine vkDestroyImage-while-in-use
+// crash cascading into a full GPU hang; see project memory project-brassica-hiz-foliage-culling.
+TEST_CASE("History<K> pair is recreated, not silently stuck at the old size, when K is resized") {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				device.GetQueueFamily(),
+			}
+		);
+		vk::CommandBuffer vkCmd = vkDevice
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		PhysicalExecutionBackend backend(registry);
+
+		auto runFrame = [&](std::uint64_t frameIndex, std::uint32_t width, std::uint32_t height) {
+			Graph g;
+			g.Register<PreviousFrame<TemporalTestTemporal>>();
+			g.Register<TemporalWriter>();
+			g.Register<TemporalReader>();
+
+			FrameContext ctx{.width = width, .height = height, .frameIndex = frameIndex};
+
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(g, ctx, cmd, false));
+			vkCmd.end();
+
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			device.GetQueue().submit(submitInfo);
+			device.GetQueue().waitIdle();
+		};
+
+		runFrame(0, 64, 64);
+		runFrame(1, 64, 64);
+		auto baseFrame1 = registry.GetTexture<TestTemporalMask>();
+		auto historyFrame1 = registry.GetTexture<History<TestTemporalMask>>();
+		REQUIRE(baseFrame1 != nullptr);
+		REQUIRE(historyFrame1 != nullptr);
+		CHECK(baseFrame1->GetDesc().width == 64);
+		CHECK(historyFrame1->GetDesc().width == 64);
+
+		// Resize -- both the bare key's and the History<K> reader's own realizations now report a
+		// genuinely different width/height, exactly like a real window resize.
+		runFrame(2, 128, 96);
+		auto baseFrame2 = registry.GetTexture<TestTemporalMask>();
+		auto historyFrame2 = registry.GetTexture<History<TestTemporalMask>>();
+		REQUIRE(baseFrame2 != nullptr);
+		REQUIRE(historyFrame2 != nullptr);
+		CHECK(baseFrame2->GetDesc().width == 128);
+		CHECK(baseFrame2->GetDesc().height == 96);
+		CHECK(historyFrame2->GetDesc().width == 128);
+		CHECK(historyFrame2->GetDesc().height == 96);
+		CHECK(baseFrame2 != historyFrame2);
+		// The old, pre-resize pair must be gone -- not just coexisting alongside a new one.
+		CHECK(baseFrame2 != baseFrame1);
+		CHECK(baseFrame2 != historyFrame1);
+
+		// A further frame at the same (post-resize) size must NOT revert to the stale pre-resize
+		// pair -- just a normal parity swap onto the already-resized pair.
+		runFrame(3, 128, 96);
+		auto baseFrame3 = registry.GetTexture<TestTemporalMask>();
+		CHECK(baseFrame3 == historyFrame2);
+		CHECK(baseFrame3->GetDesc().width == 128);
+
+		vkDevice.destroyCommandPool(pool);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
 // The regression this closes: before AccessOf and BarrierTranslator's coalesced map resolved by
 // base id, a node consuming version N-1 and producing version N reported Read (not ReadWrite)
 // for the edge into it, and two versions of one key could desynchronize into two separate
