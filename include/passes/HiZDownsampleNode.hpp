@@ -176,9 +176,9 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			width = ctx.width;
 			height = ctx.height;
-			std::uint32_t maxDim = std::max(width, height);
+			std::uint32_t maxDim = (std::max)(width, height);
 			outputMips = maxDim > 0 ? static_cast<std::uint32_t>(std::floor(std::log2(static_cast<float>(maxDim)))) : 1;
-			outputMips = std::min(outputMips, 12u);
+			outputMips = (std::min)(outputMips, 12u);
 
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 			r.realizations.push_back(

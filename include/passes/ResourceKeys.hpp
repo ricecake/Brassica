@@ -20,10 +20,10 @@ namespace brassica {
 	inline graph::ResourceDesc HiZTextureDesc(std::uint32_t width, std::uint32_t height, std::uint32_t mips = 0) {
 		std::uint32_t calculatedMips = mips;
 		if (calculatedMips == 0) {
-			const std::uint32_t maxDim = std::max(width, height);
+			const std::uint32_t maxDim = (std::max)(width, height);
 			calculatedMips = maxDim > 0 ? static_cast<std::uint32_t>(std::floor(std::log2(static_cast<float>(maxDim)))) + 1 : 1;
 		}
-		calculatedMips = std::min(calculatedMips, 12u);
+		calculatedMips = (std::min)(calculatedMips, 12u);
 
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
