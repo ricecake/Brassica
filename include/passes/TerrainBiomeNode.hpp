@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
@@ -22,13 +23,13 @@ namespace brassica {
 
 	struct ClimateInitialPushConstants {
 		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{2048};
+		std::uint32_t textureDim{4096};
 	};
 
 	struct ClimateAdvectPushConstants {
 		std::uint32_t inStorageIdx{0};
 		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{2048};
+		std::uint32_t textureDim{4096};
 		float         dt{1.0f};
 	};
 
@@ -36,23 +37,27 @@ namespace brassica {
 		std::uint32_t forwardStorageIdx{0};
 		std::uint32_t originalStorageIdx{0};
 		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{2048};
+		std::uint32_t textureDim{4096};
 		float         dt{1.0f};
 	};
 
 	struct ClimateWeatherPushConstants {
 		std::uint32_t climateStorageIdx{0};
 		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{2048};
+		std::uint32_t textureDim{4096};
 		std::uint32_t pad{0};
 	};
 
-	// Marked persistent: this field is read every time a node Creates/Modifies either weather
-	// texture, so both get the lazy-allocate-once, alias-pool-bypassing treatment uniformly --
-	// see ResourceDesc::persistent (Execution.hpp). Without it, the registry's alias pool would
-	// eventually believe the memory backing one of these is free (it only ever runs once every
-	// updateInterval frames) and hand it to an unrelated transient resource.
-	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim = 2048) {
+	struct ClimateBlendPushConstants {
+		std::uint32_t inMapAStorageIdx{0};
+		std::uint32_t inMapBStorageIdx{0};
+		std::uint32_t outStorageIdx{0};
+		std::uint32_t textureDim{4096};
+		float         blendFactor{0.0f};
+	};
+
+	// Marked persistent: weather textures survive across frames.
+	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim = 4096) {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
 			.width = dim,
@@ -69,10 +74,10 @@ namespace brassica {
 	struct TerrainBiomeNode: render::NodeRegistrar<TerrainBiomeNode> {
 		using Resources = graph::Declares<
 			graph::Create<TerrainWeatherBiomeTexture>,
-			graph::Create<TerrainWeatherPingPongTexture>>;
+			graph::Create<TerrainWeatherPingPongTexture>,
+			graph::Create<TerrainWeatherMapATexture>,
+			graph::Create<TerrainWeatherMapBTexture>>;
 
-		// See TerrainGenNode's identical comment: particle shaders now read terrain data at
-		// SubPhase::Prepare, so every terrain-producing node has to run at or before Prepare too.
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
@@ -80,19 +85,22 @@ namespace brassica {
 		ComputeShader            advectShader;
 		ComputeShader            correctShader;
 		ComputeShader            weatherShader;
+		ComputeShader            blendShader;
 
 		bool          forceRegeneration{true};
 		bool          hasEverGenerated{false};
 		std::uint32_t frameCounter{0};
+		std::uint32_t lastSimFrame{0};
 		std::uint32_t updateInterval{300};
-		std::uint32_t textureDim{2048};
+		std::uint32_t textureDim{4096};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
 			if (!initialShader.CompileComputeFromFile(services.device, "shaders/climate_initial.comp") ||
 			    !advectShader.CompileComputeFromFile(services.device, "shaders/climate_advect.comp") ||
 			    !correctShader.CompileComputeFromFile(services.device, "shaders/climate_bfecc_correct.comp") ||
-			    !weatherShader.CompileComputeFromFile(services.device, "shaders/climate_weather.comp")) {
+			    !weatherShader.CompileComputeFromFile(services.device, "shaders/climate_weather.comp") ||
+			    !blendShader.CompileComputeFromFile(services.device, "shaders/climate_blend.comp")) {
 				spdlog::critical("TerrainBiomeNode shader compilation failed.");
 				throw std::runtime_error("TerrainBiomeNode shader compilation failed.");
 			}
@@ -106,6 +114,7 @@ namespace brassica {
 			watcher.RegisterShader(&advectShader);
 			watcher.RegisterShader(&correctShader);
 			watcher.RegisterShader(&weatherShader);
+			watcher.RegisterShader(&blendShader);
 		}
 
 		void Destroy(vk::Device device) {
@@ -113,6 +122,7 @@ namespace brassica {
 			advectShader.Destroy(device);
 			correctShader.Destroy(device);
 			weatherShader.Destroy(device);
+			blendShader.Destroy(device);
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
@@ -121,10 +131,9 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext&) {
-			bool shouldRun = forceRegeneration || (frameCounter == 1) || (frameCounter % updateInterval == 0);
 			graph::Recipe r{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = shouldRun
+				.isActive = true
 			};
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -140,12 +149,23 @@ namespace brassica {
 					.desc = WeatherBiomeImageDesc(textureDim),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWeatherMapATexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = WeatherBiomeImageDesc(textureDim),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWeatherMapBTexture>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = WeatherBiomeImageDesc(textureDim),
+				}
+			);
 			return r;
 		}
 
-		// Binds/pushes/dispatches one of this node's compute passes. Shared across every pass
-		// below -- the bind-pipeline/bind-sets/push-constants/dispatch shape is otherwise
-		// identical for all five, differing only in which shader and push-constant type.
 		template <typename PushT>
 		void DispatchCompute(
 			vk::CommandBuffer                              vkCmd,
@@ -189,14 +209,10 @@ namespace brassica {
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
-			// mainIdx (TerrainWeatherBiomeTexture) and pingPongIdx (TerrainWeatherPingPongTexture)
-			// are both marked persistent (WeatherBiomeImageDesc) -- real GPU memory that survives
-			// every frame this node is inactive, not just the frame it was allocated on. pingPongIdx
-			// holds the persistent *raw* climate state (temp, moisture, windX, windY) carried
-			// across activations; mainIdx ends this function holding the display weather/biome
-			// texture CirrusNode/DeferredNode sample.
 			std::uint32_t mainIdx = ctx.StorageIndex<TerrainWeatherBiomeTexture>();
 			std::uint32_t pingPongIdx = ctx.StorageIndex<TerrainWeatherPingPongTexture>();
+			std::uint32_t mapAIdx = ctx.StorageIndex<TerrainWeatherMapATexture>();
+			std::uint32_t mapBIdx = ctx.StorageIndex<TerrainWeatherMapBTexture>();
 
 			auto insertComputeBarrier = [&](vk::CommandBuffer cmd) {
 				vk::MemoryBarrier2 barrier{};
@@ -210,87 +226,186 @@ namespace brassica {
 				cmd.pipelineBarrier2(depInfo);
 			};
 
-			// Regenerate the baseline only on first-ever generation or an explicit
-			// forceRegeneration. Every other activation continues advecting whatever state
-			// survived in pingPongIdx from the previous one -- that's the entire point of marking
-			// these textures persistent instead of letting this unconditionally reset the
-			// simulation back to the deterministic baseline field every updateInterval frames.
-			if (!hasEverGenerated || forceRegeneration) {
-				DispatchCompute(
-					vkCmd,
-					initialShader,
-					setLayouts,
-					boundSets,
-					ClimateInitialPushConstants{.outStorageIdx = pingPongIdx, .textureDim = textureDim}
-				);
-				insertComputeBarrier(vkCmd);
-				hasEverGenerated = true;
+			bool shouldRunSimulation = forceRegeneration || !hasEverGenerated || (frameCounter == 1) || (frameCounter % updateInterval == 0);
+
+			if (shouldRunSimulation) {
+				if (!hasEverGenerated || forceRegeneration) {
+					DispatchCompute(
+						vkCmd,
+						initialShader,
+						setLayouts,
+						boundSets,
+						ClimateInitialPushConstants{.outStorageIdx = pingPongIdx, .textureDim = textureDim}
+					);
+					insertComputeBarrier(vkCmd);
+
+					// BFECC advection
+					DispatchCompute(
+						vkCmd,
+						advectShader,
+						setLayouts,
+						boundSets,
+						ClimateAdvectPushConstants{
+							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					DispatchCompute(
+						vkCmd,
+						correctShader,
+						setLayouts,
+						boundSets,
+						ClimateBFECCCorrectPushConstants{
+							.forwardStorageIdx = mainIdx,
+							.originalStorageIdx = pingPongIdx,
+							.outStorageIdx = pingPongIdx,
+							.textureDim = textureDim,
+							.dt = 1.0f,
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					DispatchCompute(
+						vkCmd,
+						advectShader,
+						setLayouts,
+						boundSets,
+						ClimateAdvectPushConstants{
+							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					DispatchCompute(
+						vkCmd,
+						advectShader,
+						setLayouts,
+						boundSets,
+						ClimateAdvectPushConstants{
+							.inStorageIdx = mainIdx, .outStorageIdx = pingPongIdx, .textureDim = textureDim, .dt = 0.0f
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					// Output initial weather simulation state into Map A and Map B
+					DispatchCompute(
+						vkCmd,
+						weatherShader,
+						setLayouts,
+						boundSets,
+						ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mapBIdx, .textureDim = textureDim}
+					);
+					insertComputeBarrier(vkCmd);
+
+					DispatchCompute(
+						vkCmd,
+						weatherShader,
+						setLayouts,
+						boundSets,
+						ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mapAIdx, .textureDim = textureDim}
+					);
+					insertComputeBarrier(vkCmd);
+
+					hasEverGenerated = true;
+				} else {
+					// Blend Map B into Map A so Map A becomes the starting point of the new fade cycle
+					DispatchCompute(
+						vkCmd,
+						blendShader,
+						setLayouts,
+						boundSets,
+						ClimateBlendPushConstants{
+							.inMapAStorageIdx = mapAIdx,
+							.inMapBStorageIdx = mapBIdx,
+							.outStorageIdx = mapAIdx,
+							.textureDim = textureDim,
+							.blendFactor = 1.0f,
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					// Advect simulation state forward
+					DispatchCompute(
+						vkCmd,
+						advectShader,
+						setLayouts,
+						boundSets,
+						ClimateAdvectPushConstants{
+							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					DispatchCompute(
+						vkCmd,
+						correctShader,
+						setLayouts,
+						boundSets,
+						ClimateBFECCCorrectPushConstants{
+							.forwardStorageIdx = mainIdx,
+							.originalStorageIdx = pingPongIdx,
+							.outStorageIdx = pingPongIdx,
+							.textureDim = textureDim,
+							.dt = 1.0f,
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					DispatchCompute(
+						vkCmd,
+						advectShader,
+						setLayouts,
+						boundSets,
+						ClimateAdvectPushConstants{
+							.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					DispatchCompute(
+						vkCmd,
+						advectShader,
+						setLayouts,
+						boundSets,
+						ClimateAdvectPushConstants{
+							.inStorageIdx = mainIdx, .outStorageIdx = pingPongIdx, .textureDim = textureDim, .dt = 0.0f
+						}
+					);
+					insertComputeBarrier(vkCmd);
+
+					// Generate new simulation output into Map B (Target)
+					DispatchCompute(
+						vkCmd,
+						weatherShader,
+						setLayouts,
+						boundSets,
+						ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mapBIdx, .textureDim = textureDim}
+					);
+					insertComputeBarrier(vkCmd);
+				}
+				lastSimFrame = frameCounter;
 			}
 
-			// Back and Forth Error Compensation and Correction (BFECC), using the two persistent
-			// textures as the only two physical buffers for the whole cycle:
-			//   1. forward semi-Lagrangian step:        pingPongIdx (phi0) -> mainIdx (phi1)
-			//   2. backward step + pointwise correction, written in place over pingPongIdx --
-			//      phi0's own texel is never backtraced there, so overwriting it in place is safe
-			//      (see climate_bfecc_correct.comp)
-			//   3. final forward step of the corrected field: pingPongIdx -> mainIdx (phi_final)
-			//   4. relocate phi_final back to pingPongIdx (dt = 0, a pure copy -- see
-			//      climate_advect.comp) so it's there for the next activation's step 1
-			//   5. weather/Whittaker biome derivation: pingPongIdx (phi_final) -> mainIdx (display)
-			DispatchCompute(
-				vkCmd,
-				advectShader,
-				setLayouts,
-				boundSets,
-				ClimateAdvectPushConstants{
-					.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
-				}
+			// Smoothly blend Map A into Map B over updateInterval frames
+			float blendFactor = std::clamp(
+				static_cast<float>(frameCounter - lastSimFrame) / static_cast<float>(updateInterval),
+				0.0f,
+				1.0f
 			);
-			insertComputeBarrier(vkCmd);
 
 			DispatchCompute(
 				vkCmd,
-				correctShader,
+				blendShader,
 				setLayouts,
 				boundSets,
-				ClimateBFECCCorrectPushConstants{
-					.forwardStorageIdx = mainIdx,
-					.originalStorageIdx = pingPongIdx,
-					.outStorageIdx = pingPongIdx,
+				ClimateBlendPushConstants{
+					.inMapAStorageIdx = mapAIdx,
+					.inMapBStorageIdx = mapBIdx,
+					.outStorageIdx = mainIdx,
 					.textureDim = textureDim,
-					.dt = 1.0f,
+					.blendFactor = blendFactor,
 				}
-			);
-			insertComputeBarrier(vkCmd);
-
-			DispatchCompute(
-				vkCmd,
-				advectShader,
-				setLayouts,
-				boundSets,
-				ClimateAdvectPushConstants{
-					.inStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim, .dt = 1.0f
-				}
-			);
-			insertComputeBarrier(vkCmd);
-
-			DispatchCompute(
-				vkCmd,
-				advectShader,
-				setLayouts,
-				boundSets,
-				ClimateAdvectPushConstants{
-					.inStorageIdx = mainIdx, .outStorageIdx = pingPongIdx, .textureDim = textureDim, .dt = 0.0f
-				}
-			);
-			insertComputeBarrier(vkCmd);
-
-			DispatchCompute(
-				vkCmd,
-				weatherShader,
-				setLayouts,
-				boundSets,
-				ClimateWeatherPushConstants{.climateStorageIdx = pingPongIdx, .outStorageIdx = mainIdx, .textureDim = textureDim}
 			);
 		}
 	};

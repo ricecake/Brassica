@@ -3,8 +3,6 @@
 
 #include "bindless.glsl"
 #include "common.glsl"
-#include "helpers/octahedral.glsl"
-#include "helpers/whittaker.glsl"
 #include "terrain/generation.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
@@ -12,8 +10,8 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform ClimateWeatherPushConstants {
 	uint climateStorageIdx; // Input advected climate storage image
-	uint outStorageIdx;     // Output final weather & Whittaker biome storage image
-	uint textureDim;        // 2048
+	uint outStorageIdx;     // Output final weather & coverage map storage image
+	uint textureDim;        // 4096
 	uint pad;
 } push;
 
@@ -42,7 +40,7 @@ void main() {
 	vec4 dataU = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordU);
 	vec4 dataD = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.climateStorageIdx)], coordD);
 
-	// Partial derivatives of wind field (dwx/du, dwx/dv, dwy/du, dwy/dv)
+	// Partial derivatives of wind field
 	float dwx_du = (dataR.b - dataL.b) * 0.5 * float(dim);
 	float dwx_dv = (dataU.b - dataD.b) * 0.5 * float(dim);
 	float dwy_du = (dataR.a - dataL.a) * 0.5 * float(dim);
@@ -57,40 +55,45 @@ void main() {
 	float dT_dv = (dataU.r - dataD.r) * 0.5 * float(dim);
 	float tempGrad = length(vec2(dT_du, dT_dv));
 
-	// Terrain slope gradient & Orographic lift
+	// Terrain slope gradient & Orographic lift in 2D Planar world space
 	vec2 uv = (vec2(pixel) + 0.5) / float(dim);
-	vec3 dir = octahedralUVToDirection(uv);
-	float theta = atan(dir.x, dir.z);
-	float phi = asin(clamp(dir.y, -1.0, 1.0));
-	vec3 worldP = vec3(theta * FAKE_PLANET_RADIUS, 0.0, phi * FAKE_PLANET_RADIUS);
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+	vec2 worldXZ = (uv - 0.5) * worldExtent;
+	vec3 worldP = vec3(worldXZ.x, 0.0, worldXZ.y);
 
 	vec3 gradMask = vec3(0.0);
 	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
 	float elevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask);
-	float landVal = clamp(elevation, 0.0, 1.0);
 
 	vec2 slopeGrad2D = vec2(gradMask.x, gradMask.z) * 0.001;
 	float orographicLift = dot(wind, slopeGrad2D);
 
-	// Rain shadow occurs downwind of mountains (orographicLift < 0 with sinking air divergence > 0)
+	// Rain shadow occurs downwind of mountains
 	float rainShadow = clamp(-orographicLift * 100.0 + max(0.0, divergence) * 0.5, 0.0, 1.0);
 
-	// Precipitation probability: boosted by convergence (divergence < 0), moisture, and orographic lift
+	// Cloud Coverage (r channel): moisture + convergence boost + lift - rain shadow
 	float convergenceBoost = max(0.0, -divergence) * 0.8;
-	float precipProb = clamp(moisture * 0.6 + convergenceBoost + max(0.0, orographicLift) * 50.0 - rainShadow * 0.4, 0.0, 1.0);
+	float cloudCoverage = clamp(moisture * 0.7 + convergenceBoost + max(0.0, orographicLift) * 50.0 - rainShadow * 0.4, 0.0, 1.0);
 
-	// Thunderstorm severity: high moisture + temperature front + high shear/curl
-	float severity = clamp(moisture * tempGrad * 0.2 + abs(curl) * 0.15 + shear * 0.15, 0.0, 1.0);
+	// Weather Type (g channel): 0.0 = low stratiform, 0.5 = cumulus, 1.0 = convective storm
+	float instability = max(0.0, -divergence) * 0.5 + tempGrad * 0.3 + max(0.0, orographicLift) * 20.0;
+	float weatherType = clamp(0.2 + instability + temp * 0.3, 0.0, 1.0);
 
-	// Precipitation type: 1.0 = Snow, 0.5 = Sleet, 0.0 = Rain
-	float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+	// Moisture Content (b channel): effective moisture adjusted for elevation and rain shadow
+	float moistureContent = clamp(moisture - rainShadow * 0.3, 0.0, 1.0);
 
-	float effectiveMoisture = clamp(moisture - rainShadow * 0.3, 0.0, 1.0);
+	// Lightning Propensity (a channel): high moisture + severe instability/shear + cloud coverage
+	float thunderstormSeverity = clamp(moistureContent * tempGrad * 0.3 + abs(curl) * 0.2 + shear * 0.2 + convergenceBoost, 0.0, 1.0);
+	float lightningPropensity = clamp(thunderstormSeverity * cloudCoverage, 0.0, 1.0);
 
-	// Store final output: r = advected temperature, g = advected/effective moisture, b = severity, a = rain shadow
+	// Store final weather simulation output:
+	// r = Cloud Coverage
+	// g = Weather Type
+	// b = Moisture Content
+	// a = Lightning Propensity
 	imageStore(
 		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
 		coord,
-		vec4(temp, effectiveMoisture, severity, rainShadow)
+		vec4(cloudCoverage, weatherType, moistureContent, lightningPropensity)
 	);
 }

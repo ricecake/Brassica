@@ -1,0 +1,35 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform ClimateBlendPushConstants {
+	uint  inMapAStorageIdx; // Coverage Map A (previous simulation state)
+	uint  inMapBStorageIdx; // Coverage Map B (target simulation state)
+	uint  outStorageIdx;    // Blended final display texture (TerrainWeatherBiomeTexture)
+	uint  textureDim;       // 4096
+	float blendFactor;      // 0.0 to 1.0 transition factor
+} push;
+
+void main() {
+	uvec2 pixel = gl_GlobalInvocationID.xy;
+	if (pixel.x >= push.textureDim || pixel.y >= push.textureDim) {
+		return;
+	}
+
+	ivec2 coord = ivec2(pixel);
+	vec4 sampleA = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapAStorageIdx)], coord);
+	vec4 sampleB = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapBStorageIdx)], coord);
+
+	float t = clamp(push.blendFactor, 0.0, 1.0);
+	vec4 blended = mix(sampleA, sampleB, t);
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
+		coord,
+		blended
+	);
+}

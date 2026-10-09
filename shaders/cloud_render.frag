@@ -322,17 +322,22 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 		float distFromCam = t;
 
 		vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
-		vec3 surfaceDir = normalize(p_cloud - planetCenter);
-        vec3 toPlanetCenter = p_cloud - planetCenter;
-        float r_world = length(toPlanetCenter);
-		vec2 weatherUV = directionToOctahedralUV(surfaceDir);
-		float weatherDensity = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV).g;
+		vec3 toPlanetCenter = p_cloud - planetCenter;
+		float r_world = length(toPlanetCenter);
+		vec3 surfaceDir = normalize(toPlanetCenter);
+		float worldExtent = 2.0 * FAKE_PLANET_RADIUS * 3.14159265359;
+		vec2 weatherUV = fract((p_cloud.xz / worldExtent) + 0.5);
+		vec4 weatherSample = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV);
+		float weatherCoverage = weatherSample.r;
+		float weatherType = weatherSample.g;
+		float weatherMoisture = weatherSample.b;
 
-		if (weatherDensity > 0.01) {
-			float density = 10.0*sampleCloudCascades(p_cloud, distFromCam) * weatherDensity;
+		if (weatherCoverage > 0.01) {
+			float baseDensity = sampleCloudCascades(p_cloud, distFromCam) * weatherCoverage;
+			float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
 
 			if (density > 0.0) {
-				float extinction = max(0.0, density * 0.0125);
+				float extinction = max(0.0, density * (0.005 + 0.02 * weatherMoisture));
 				float averageDensity = (prevDensity + density) * 0.5;
 				float stepDensity = averageDensity * extinction;
 				float stepOpticalDepth = stepDensity * stepSize;
@@ -345,9 +350,13 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				for (int i = 0; i < 5; i++) {
 					vec3 sp_c = p_cloud + sunDir * light_t;
 					float shadow_dist = length(sp_c - uCameraPosition.xyz);
-					float shadow_density = sampleCloudCascades(sp_c, shadow_dist) * weatherDensity;
+					vec2 shadowWeatherUV = fract((sp_c.xz / worldExtent) + 0.5);
+					vec4 shadowWeatherSample = SAMPLE_LINEAR(push.weatherBiomeIndex, shadowWeatherUV);
+					float shadow_coverage = shadowWeatherSample.r;
+					float shadow_moisture = shadowWeatherSample.b;
+					float shadow_density = sampleCloudCascades(sp_c, shadow_dist) * shadow_coverage;
 
-					opticalDepthToLight += max(0.0, shadow_density * 0.0125) * lightStepSize;
+					opticalDepthToLight += max(0.0, shadow_density * (0.005 + 0.02 * shadow_moisture)) * lightStepSize;
 					light_t += lightStepSize;
 					lightStepSize *= 2.0;
 				}
