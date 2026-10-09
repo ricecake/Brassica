@@ -1016,6 +1016,7 @@ namespace brassica {
 		features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
 		features12.timelineSemaphore = VK_TRUE;
 		features12.bufferDeviceAddress = VK_TRUE;
+		features12.storageBuffer8BitAccess = VK_TRUE;
 
 		VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
 		meshFeatures.meshShader = VK_TRUE;
