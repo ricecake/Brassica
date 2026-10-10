@@ -24,6 +24,7 @@ layout(push_constant) uniform FoliagePushConstants {
 	float rockRatio;
 	float seaweedRatio;
 	float bushRatio;
+	float treeRatio;
 	float lengthMultiplier;
 	float widthMultiplier;
 	float densityMultiplier;

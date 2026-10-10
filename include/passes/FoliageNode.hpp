@@ -41,6 +41,7 @@ namespace brassica {
 		float         rockRatio{0.05f};
 		float         seaweedRatio{0.05f};
 		float         bushRatio{0.10f};
+		float         treeRatio{0.10f};
 		float         lengthMultiplier{1.0f};
 		float         widthMultiplier{1.0f};
 		float         densityMultiplier{1.0f};
@@ -56,7 +57,7 @@ namespace brassica {
 		std::uint32_t hizIndex{0};     // bindless index for History<HiZTexture>
 	};
 
-	static_assert(sizeof(FoliagePushConstants) == 112, "FoliagePushConstants size must be 112 bytes");
+	static_assert(sizeof(FoliagePushConstants) == 116, "FoliagePushConstants size must be 116 bytes");
 
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
 		using Resources = graph::Declares<
@@ -136,6 +137,7 @@ namespace brassica {
 				push.rockRatio = props.rockRatio;
 				push.seaweedRatio = props.seaweedRatio;
 				push.bushRatio = props.bushRatio;
+				push.treeRatio = props.treeRatio;
 				push.lengthMultiplier = props.lengthMultiplier;
 				push.widthMultiplier = props.widthMultiplier;
 				push.densityMultiplier = props.densityMultiplier;
