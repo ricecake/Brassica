@@ -20,6 +20,7 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  biomeIndex;
 }
 params;
 
@@ -70,21 +71,52 @@ void main() {
 		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 		float maxWaveAmp = 20.0;
 
-		vec3 relMinB = vec3(
-			relCameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-			params.waterLevel - maxWaveAmp - uCameraPosition.y,
-			relCameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
-		);
-		vec3 relMaxB = relMinB + vec3(meshletSize, 2.0 * maxWaveAmp, meshletSize);
+		vec2 relMeshMinXZ = relCameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5) * meshletSize;
+		vec2 worldMinXZ = uCameraPosition.xz + relMeshMinXZ;
+		vec2 worldMaxXZ = worldMinXZ + vec2(meshletSize);
+		uint sampleLOD = min(ringLevel + 4u, params.gridParams.x - 1u);
 
-		vec2 maxRel = max(abs(relMinB.xz), abs(relMaxB.xz));
-		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
-		relMinB.y -= maxDropOff;
+		float tileMaxWaterLevel = -1e9;
+		float tileMinWaterLevel = 1e9;
+		if (params.biomeIndex > 0u) {
+			for (int j = 0; j < 3; j++) {
+				for (int i = 0; i < 3; i++) {
+					vec2 t = vec2(float(i), float(j)) * 0.5;
+					vec2 sampleXZ = mix(worldMinXZ, worldMaxXZ, t);
+					float wl = sampleTerrainBiome(params.biomeIndex, sampleXZ, sampleLOD, params.gridParams.w).a;
+					tileMaxWaterLevel = max(tileMaxWaterLevel, wl);
+					tileMinWaterLevel = min(tileMinWaterLevel, wl);
+				}
+			}
+		} else {
+			tileMaxWaterLevel = params.waterLevel;
+			tileMinWaterLevel = params.waterLevel;
+		}
 
-		mat4 viewRel = mat4(mat3(uViewMatrix));
-		mat4 viewProjRel = uProjMatrix * viewRel;
+		vec3 relMinB = vec3(0.0);
+		vec3 relMaxB = vec3(0.0);
 
-		visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(50.0, 100.0, 50.0), -100.0);
+		if (tileMaxWaterLevel >= -500.0) {
+			relMinB = vec3(
+				relMeshMinXZ.x,
+				tileMinWaterLevel - maxWaveAmp - uCameraPosition.y,
+				relMeshMinXZ.y
+			);
+			relMaxB = vec3(
+				relMinB.x + meshletSize,
+				tileMaxWaterLevel + maxWaveAmp - uCameraPosition.y,
+				relMinB.z + meshletSize
+			);
+
+			vec2 maxRel = max(abs(relMinB.xz), abs(relMaxB.xz));
+			float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
+			relMinB.y -= maxDropOff;
+
+			mat4 viewRel = mat4(mat3(uViewMatrix));
+			mat4 viewProjRel = uProjMatrix * viewRel;
+
+			visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(50.0, 100.0, 50.0), -100.0);
+		}
 
 		if (visible && ringLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel - 1)) * angleCompression;
@@ -107,10 +139,6 @@ void main() {
 		// meshletSize (= 24*2^ring) footprint with margin; the 3x3 grid absorbs cluster/tile
 		// misalignment.
 		if (visible && params.minMaxIndex > 0u) {
-			vec2 worldMinXZ = uCameraPosition.xz + relMinB.xz;
-			vec2 worldMaxXZ = uCameraPosition.xz + relMaxB.xz;
-			uint sampleLOD = min(ringLevel + 4u, params.gridParams.x - 1u);
-
 			float tileMinHeight = 1e9;
 			for (int j = 0; j < 3; j++) {
 				for (int i = 0; i < 3; i++) {
@@ -122,7 +150,7 @@ void main() {
 			}
 
 			float dryLandMargin = 50.0;
-			if (tileMinHeight > params.waterLevel + maxWaveAmp + dryLandMargin) {
+			if (tileMinHeight > tileMaxWaterLevel + maxWaveAmp + dryLandMargin) {
 				visible = false;
 			}
 		}
@@ -130,9 +158,9 @@ void main() {
 		// Gentle horizon cull: the water surface never rises above waterLevel + maxWaveAmp, so
 		// that's the tile's height above the waterLevel reference regardless of ring.
 		if (visible) {
-			vec2  closestXZ = clamp(vec2(0.0), relMinB.xz, relMaxB.xz);
+			vec2  closestXZ = clamp(vec2(0.0), relMeshMinXZ, relMeshMinXZ + vec2(meshletSize));
 			float tileDist = length(closestXZ);
-			float camAltitude = uCameraPosition.y - params.waterLevel;
+			float camAltitude = uCameraPosition.y - tileMaxWaterLevel;
 			float slack = meshletSize * 4.0 + 500.0;
 			if (isBeyondHorizon(tileDist, maxWaveAmp, camAltitude, slack)) {
 				visible = false;

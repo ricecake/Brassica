@@ -6,6 +6,7 @@
 
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
+layout(location = 2) in float inWaterLevel;
 
 layout(location = 0) out vec4 outColor;
 
@@ -20,6 +21,7 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  biomeIndex;
 } params;
 
 void main() {
@@ -69,12 +71,12 @@ void main() {
 			// Looking UP at the water surface from below
 			// The view ray travels entirely through the water volume from camera to surface
 			rayLengthThroughWater = distToCamWater;
-			depthBelowWater = params.waterLevel - uCameraPosition.y;
+			depthBelowWater = inWaterLevel - uCameraPosition.y;
 		}
 	} else {
 		// Sky background
 		rayLengthThroughWater = isAboveWater ? 100.0 : distToCamWater;
-		depthBelowWater = isAboveWater ? 100.0 : (params.waterLevel - uCameraPosition.y);
+		depthBelowWater = isAboveWater ? 100.0 : (inWaterLevel - uCameraPosition.y);
 	}
 
 	vec3 baseNormal = normalize(inNormal);

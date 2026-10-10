@@ -38,6 +38,7 @@ namespace {
 		using Resources = graph::Declares<
 			graph::Create<TerrainMinMaxTexture>,
 			graph::Create<TerrainClipmapTexture>,
+			graph::Create<TerrainBiomeTexture>,
 			graph::Create<TerrainWeatherBiomeTexture>>;
 		static constexpr graph::Phase kPhase = graph::Phase::PreviousFrame;
 		graph::Recipe Setup(const graph::FrameContext&) { return graph::Recipe{.domain = graph::ExecutionDomain::Host}; }

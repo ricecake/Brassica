@@ -40,6 +40,7 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t gMaterialIndex{0};
 		std::uint32_t skyViewIndex{0};
+		std::uint32_t biomeIndex{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -57,6 +58,7 @@ namespace brassica {
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
 			graph::Read<TerrainMinMaxTexture>,
+			graph::Read<TerrainBiomeTexture>,
 			graph::Read<SkyViewLUT>,
 			graph::Modify<HdrColor>>;
 
@@ -153,6 +155,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.gMaterialIndex = ctx.Index<GBufferMaterial>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 
 			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
