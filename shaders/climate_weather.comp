@@ -64,10 +64,10 @@ void main() {
 	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
 	vec2 worldXZ = (uv - 0.5) * worldExtent;
 	vec3 worldP = vec3(worldXZ.x, 0.0, worldXZ.y);
-
+	float waterLevel;
 	vec3 gradMask = vec3(0.0);
 	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
-	float elevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask);
+	float elevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask, waterLevel);
 
 	vec2 slopeGrad2D = vec2(gradMask.x, gradMask.z) * 0.001;
 	float orographicLift = dot(wind, slopeGrad2D);

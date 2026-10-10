@@ -60,11 +60,11 @@ void main() {
 
 	float h = 0.0;
 	float biome = 0.0;
-	float land_mask = 0.0;
+	float waterLevel = 0.0;
 	vec3 normal = vec3(0.0, 1.0, 0.0);
 
 	// eval_terrain(p, con, h, normal);
-	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal);
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel);
 
 	// mat3 warpGrad;
 	// vec3 scaleGrad;
@@ -136,6 +136,6 @@ void main() {
 		// level; TerrainMinMaxDownsampleNode builds the real min/max reduction into mips 1+ from
 		// this.
 		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.minMaxStorageIdx)], storeCoord, vec4(h, h, 0.0, 0.0));
-		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, 1.0, land_mask));
+		imageStore(uImageArraysRGBA32F[nonuniformEXT(push.biomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), variance, 1.0, waterLevel));
 	}
 }

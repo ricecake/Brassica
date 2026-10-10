@@ -25,9 +25,9 @@ void main() {
 	vec3 worldP = vec3(worldXZ.x, 0.0, worldXZ.y);
 
 	vec3 gradMask = vec3(0.0);
-
+	float waterLevel;
 	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
-	float elevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask);
+	float elevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask, waterLevel);
 
 	float landVal = clamp(elevation, 0.0, 1.0);
 
