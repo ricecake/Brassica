@@ -3,6 +3,7 @@
 
 #include "brdf.glsl"
 #include "material.glsl"
+#include "terrain.glsl"
 
 #ifndef LIGHTING_TYPES
 #define LIGHTING_TYPES
