@@ -1,0 +1,290 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "terrain_dirty.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+	uvec4 gridParams;        // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uint  clipmapStorageIdx; // bindless STORAGE/SAMPLED index for TerrainClipmapTexture
+	uint  horizonStorageIdx; // bindless STORAGE index for TerrainHorizonTexture
+	uint  mode;              // 0 = horizontal rows (+X East, -X West), 1 = vertical columns (+Y South, -Y North)
+	bool  forceRegeneration;
+} push;
+
+shared float s_heights[1024];
+
+// Ping-pong double-buffered shared memory to prevent data races during parallel scan
+shared uint s_max_h_idx_A[1024];
+shared uint s_max_h_idx_B[1024];
+shared uint s_max_s_idx_A[1024];
+shared uint s_max_s_idx_B[1024];
+
+shared float s_fwd_max_slope[1024];
+shared float s_bwd_max_slope[1024];
+
+void dirtySpanForAxisLocal(int delta, int gridOffsetComp, uint dim, out uint start, out uint count) {
+	int dimInt = int(dim);
+	if (delta > 0) {
+		count = uint(delta);
+		start = uint(((gridOffsetComp - delta) % dimInt + dimInt) % dimInt);
+	} else if (delta < 0) {
+		count = uint(-delta);
+		start = uint(((gridOffsetComp) % dimInt + dimInt) % dimInt);
+	} else {
+		count = 0u;
+		start = 0u;
+	}
+}
+
+bool indexInDirtySpan(uint idx, uint start, uint count, uint dim) {
+	if (count == 0u) return false;
+	uint offset = (idx + dim - start) % dim;
+	return offset < count;
+}
+
+void main() {
+	uint dim = push.gridParams.w > 0u ? push.gridParams.w : 1024u;
+	uint slice = gl_WorkGroupID.z;
+	uint lineIdx = gl_WorkGroupID.y; // row index if mode == 0, column index if mode == 1
+
+	if (slice >= push.gridParams.x || lineIdx >= dim) {
+		return;
+	}
+
+	TerrainClipmapUpdate update = terrainClipmapUpdateFor(slice, dim, push.forceRegeneration);
+
+	if (!update.isFull && update.delta.x == 0 && update.delta.y == 0) {
+		return;
+	}
+
+	bool lineIsDirty = update.isFull;
+
+	if (!lineIsDirty) {
+		if (push.mode == 0u) {
+			if (update.delta.x != 0) {
+				lineIsDirty = true;
+			} else if (update.delta.y != 0) {
+				uint rStart, rCount;
+				dirtySpanForAxisLocal(update.delta.y, update.gridOffset.y, dim, rStart, rCount);
+				lineIsDirty = indexInDirtySpan(lineIdx, rStart, rCount, dim);
+			}
+		} else {
+			if (update.delta.y != 0) {
+				lineIsDirty = true;
+			} else if (update.delta.x != 0) {
+				uint cStart, cCount;
+				dirtySpanForAxisLocal(update.delta.x, update.gridOffset.x, dim, cStart, cCount);
+				lineIsDirty = indexInDirtySpan(lineIdx, cStart, cCount, dim);
+			}
+		}
+	}
+
+	if (!lineIsDirty) {
+		return;
+	}
+
+	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+	float dx = baseTexelSize * getLODScale(float(slice));
+
+	uint tid = gl_LocalInvocationIndex; // 0..255
+
+	// Load 1024 height samples into shared memory
+	for (uint i = 0u; i < 4u; ++i) {
+		uint idx = tid * 4u + i;
+		if (idx < dim) {
+			ivec2 storeCoord;
+			if (push.mode == 0u) {
+				int colIdx = int(idx);
+				storeCoord.x = (colIdx + update.gridOffset.x + int(dim)) % int(dim);
+				storeCoord.y = (int(lineIdx) + update.gridOffset.y + int(dim)) % int(dim);
+			} else {
+				int rowIdx = int(idx);
+				storeCoord.x = (int(lineIdx) + update.gridOffset.x + int(dim)) % int(dim);
+				storeCoord.y = (rowIdx + update.gridOffset.y + int(dim)) % int(dim);
+			}
+
+			s_heights[idx] = texelFetch(
+				sampler2DArray(uTextureArrays[nonuniformEXT(push.clipmapStorageIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+				ivec3(storeCoord, int(slice)),
+				0
+			).r;
+		}
+	}
+
+	barrier();
+
+	// -------------------------------------------------------------------------
+	// FORWARD PARALLEL PREFIX SCAN (j > i) WITH PING-PONG BUFFERS
+	// -------------------------------------------------------------------------
+	for (uint i = 0u; i < 4u; ++i) {
+		uint idx = tid * 4u + i;
+		if (idx < dim) {
+			s_max_h_idx_A[idx] = idx + 1u < dim ? idx + 1u : idx;
+			s_max_s_idx_A[idx] = idx + 1u < dim ? idx + 1u : idx;
+		}
+	}
+
+	barrier();
+
+	bool readA = true;
+
+	for (uint s = 1u; s < dim; s <<= 1u) {
+		for (uint i = 0u; i < 4u; ++i) {
+			uint idx = tid * 4u + i;
+			if (idx < dim) {
+				if (idx + s < dim) {
+					uint p1 = readA ? s_max_s_idx_A[idx] : s_max_s_idx_B[idx];
+					uint p2 = readA ? s_max_s_idx_A[idx + s] : s_max_s_idx_B[idx + s];
+					uint p3 = readA ? s_max_h_idx_A[idx + s] : s_max_h_idx_B[idx + s];
+
+					float slope1 = (s_heights[p1] - s_heights[idx]) / max(float(p1 - idx) * dx, 1e-4);
+					float slope2 = (s_heights[p2] - s_heights[idx]) / max(float(p2 - idx) * dx, 1e-4);
+					float slope3 = (s_heights[p3] - s_heights[idx]) / max(float(p3 - idx) * dx, 1e-4);
+
+					uint best_p = p1;
+					float max_slope = slope1;
+					if (slope2 > max_slope) { max_slope = slope2; best_p = p2; }
+					if (slope3 > max_slope) { max_slope = slope3; best_p = p3; }
+
+					uint h1 = readA ? s_max_h_idx_A[idx] : s_max_h_idx_B[idx];
+					uint h2 = readA ? s_max_h_idx_A[idx + s] : s_max_h_idx_B[idx + s];
+					uint best_h = s_heights[h1] >= s_heights[h2] ? h1 : h2;
+
+					if (readA) {
+						s_max_s_idx_B[idx] = best_p;
+						s_max_h_idx_B[idx] = best_h;
+					} else {
+						s_max_s_idx_A[idx] = best_p;
+						s_max_h_idx_A[idx] = best_h;
+					}
+				} else {
+					if (readA) {
+						s_max_s_idx_B[idx] = s_max_s_idx_A[idx];
+						s_max_h_idx_B[idx] = s_max_h_idx_A[idx];
+					} else {
+						s_max_s_idx_A[idx] = s_max_s_idx_B[idx];
+						s_max_h_idx_A[idx] = s_max_h_idx_B[idx];
+					}
+				}
+			}
+		}
+		readA = !readA;
+		barrier();
+	}
+
+	for (uint i = 0u; i < 4u; ++i) {
+		uint idx = tid * 4u + i;
+		if (idx < dim) {
+			uint p = readA ? s_max_s_idx_A[idx] : s_max_s_idx_B[idx];
+			float slope = p > idx ? (s_heights[p] - s_heights[idx]) / (float(p - idx) * dx) : 0.0;
+			s_fwd_max_slope[idx] = max(0.0, slope);
+		}
+	}
+
+	barrier();
+
+	// -------------------------------------------------------------------------
+	// BACKWARD PARALLEL PREFIX SCAN (j < i) WITH PING-PONG BUFFERS
+	// -------------------------------------------------------------------------
+	for (uint i = 0u; i < 4u; ++i) {
+		uint idx = tid * 4u + i;
+		if (idx < dim) {
+			s_max_h_idx_A[idx] = idx > 0u ? idx - 1u : idx;
+			s_max_s_idx_A[idx] = idx > 0u ? idx - 1u : idx;
+		}
+	}
+
+	barrier();
+
+	readA = true;
+
+	for (uint s = 1u; s < dim; s <<= 1u) {
+		for (uint i = 0u; i < 4u; ++i) {
+			uint idx = tid * 4u + i;
+			if (idx < dim) {
+				if (idx >= s) {
+					uint p1 = readA ? s_max_s_idx_A[idx] : s_max_s_idx_B[idx];
+					uint p2 = readA ? s_max_s_idx_A[idx - s] : s_max_s_idx_B[idx - s];
+					uint p3 = readA ? s_max_h_idx_A[idx - s] : s_max_h_idx_B[idx - s];
+
+					float slope1 = (s_heights[p1] - s_heights[idx]) / max(float(idx - p1) * dx, 1e-4);
+					float slope2 = (s_heights[p2] - s_heights[idx]) / max(float(idx - p2) * dx, 1e-4);
+					float slope3 = (s_heights[p3] - s_heights[idx]) / max(float(idx - p3) * dx, 1e-4);
+
+					uint best_p = p1;
+					float max_slope = slope1;
+					if (slope2 > max_slope) { max_slope = slope2; best_p = p2; }
+					if (slope3 > max_slope) { max_slope = slope3; best_p = p3; }
+
+					uint h1 = readA ? s_max_h_idx_A[idx] : s_max_h_idx_B[idx];
+					uint h2 = readA ? s_max_h_idx_A[idx - s] : s_max_h_idx_B[idx - s];
+					uint best_h = s_heights[h1] >= s_heights[h2] ? h1 : h2;
+
+					if (readA) {
+						s_max_s_idx_B[idx] = best_p;
+						s_max_h_idx_B[idx] = best_h;
+					} else {
+						s_max_s_idx_A[idx] = best_p;
+						s_max_h_idx_A[idx] = best_h;
+					}
+				} else {
+					if (readA) {
+						s_max_s_idx_B[idx] = s_max_s_idx_A[idx];
+						s_max_h_idx_B[idx] = s_max_h_idx_A[idx];
+					} else {
+						s_max_s_idx_A[idx] = s_max_s_idx_B[idx];
+						s_max_h_idx_A[idx] = s_max_h_idx_B[idx];
+					}
+				}
+			}
+		}
+		readA = !readA;
+		barrier();
+	}
+
+	for (uint i = 0u; i < 4u; ++i) {
+		uint idx = tid * 4u + i;
+		if (idx < dim) {
+			uint p = readA ? s_max_s_idx_A[idx] : s_max_s_idx_B[idx];
+			float slope = p < idx ? (s_heights[p] - s_heights[idx]) / (float(idx - p) * dx) : 0.0;
+			s_bwd_max_slope[idx] = max(0.0, slope);
+		}
+	}
+
+	barrier();
+
+	// -------------------------------------------------------------------------
+	// STORE OUTPUT TO TerrainHorizonTexture
+	// -------------------------------------------------------------------------
+	const float kHalfPi = 1.57079632679;
+
+	for (uint i = 0u; i < 4u; ++i) {
+		uint idx = tid * 4u + i;
+		if (idx < dim) {
+			float angleFwd = clamp(atan(s_fwd_max_slope[idx]) / kHalfPi, 0.0, 1.0);
+			float angleBwd = clamp(atan(s_bwd_max_slope[idx]) / kHalfPi, 0.0, 1.0);
+
+			ivec3 storeCoord;
+			if (push.mode == 0u) {
+				int colIdx = int(idx);
+				storeCoord.x = (colIdx + update.gridOffset.x + int(dim)) % int(dim);
+				storeCoord.y = (int(lineIdx) + update.gridOffset.y + int(dim)) % int(dim);
+				storeCoord.z = int(slice);
+
+				vec4 oldVal = imageLoad(uImageArraysRGBA8Coherent[nonuniformEXT(push.horizonStorageIdx)], storeCoord);
+				imageStore(uImageArraysRGBA8Coherent[nonuniformEXT(push.horizonStorageIdx)], storeCoord, vec4(angleFwd, angleBwd, oldVal.b, oldVal.a));
+			} else {
+				int rowIdx = int(idx);
+				storeCoord.x = (int(lineIdx) + update.gridOffset.x + int(dim)) % int(dim);
+				storeCoord.y = (rowIdx + update.gridOffset.y + int(dim)) % int(dim);
+				storeCoord.z = int(slice);
+
+				vec4 oldVal = imageLoad(uImageArraysRGBA8Coherent[nonuniformEXT(push.horizonStorageIdx)], storeCoord);
+				imageStore(uImageArraysRGBA8Coherent[nonuniformEXT(push.horizonStorageIdx)], storeCoord, vec4(oldVal.r, oldVal.g, angleFwd, angleBwd));
+			}
+		}
+	}
+}

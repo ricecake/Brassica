@@ -85,6 +85,7 @@ layout(set = 1, binding = 3) writeonly uniform image3D uImages3DGenericWrite[];
 // pattern as the rest of this file.
 layout(set = 1, binding = 3, rg32f) coherent uniform image2D uImagesRG32FCoherent[];
 layout(set = 1, binding = 3, rg32f) coherent uniform image2DArray uImageArraysRG32FCoherent[];
+layout(set = 1, binding = 3, rgba8) coherent uniform image2DArray uImageArraysRGBA8Coherent[];
 // Binding 5: a real 3D-volume sampled catalog, independently sized/counted from bindings 0/1
 // (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,
 // not a 2D-array pressed into service for a volume it was never shaped for.

@@ -113,6 +113,8 @@ namespace brassica {
 
 	struct TerrainMinMaxTexture {};
 
+	struct TerrainHorizonTexture {};
+
 	struct TerrainBiomeTexture {};
 
 	struct TerrainWeatherBiomeTexture {};
