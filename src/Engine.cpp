@@ -552,8 +552,9 @@ namespace brassica {
 		// Poll GPU readback data first
 		terrainManager.PollReadbackData();
 
+		glm::vec2 camPos2D(camera.position.x, camera.position.z);
 		// -1024.0f: default terrain floor fallback if no readback has arrived yet.
-		float maxTerrainHeight = terrainManager.GetCachedGroundHeight(-1024.0f);
+		float currentGroundHeight = terrainManager.GetInterpolatedGroundHeight(camPos2D, -1024.0f);
 
 		auto* defaultHandler = dynamic_cast<DefaultInputHandler*>(inputHandler.get());
 
@@ -573,7 +574,7 @@ namespace brassica {
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_EQUAL)) {
 				camera.CycleMode();
 				if (camera.mode == CameraMode::FirstPerson) {
-					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
+					float groundSurfaceHeight = std::max(currentGroundHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
@@ -589,7 +590,7 @@ namespace brassica {
 					camera.mode = CameraMode::Accelerated;
 				} else {
 					camera.mode = CameraMode::FirstPerson;
-					float groundSurfaceHeight = std::max(maxTerrainHeight, 0.0f);
+					float groundSurfaceHeight = std::max(currentGroundHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
@@ -668,7 +669,7 @@ namespace brassica {
 		}
 
 		if (camera.mode == CameraMode::FirstPerson) {
-			float terrainHeight = maxTerrainHeight;
+			float terrainHeight = currentGroundHeight;
 			bool isUnderwater = (camera.position.y < 0.0f) && (terrainHeight < 0.0f);
 
 			bool isCtrlHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_CONTROL) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
@@ -757,10 +758,15 @@ namespace brassica {
 
 				camera.position += camera.velocity * deltaTime;
 
-				// Collision check with ground
+				// Collision check with ground using basketball radius (~0.15m)
+				constexpr float kBasketballRadius = 0.15f;
+				float minGroundHeight = groundSurfaceHeight + kBasketballRadius;
 				if (camera.position.y <= groundLevel) {
 					camera.position.y = groundLevel;
 					camera.velocity.y = 0.0f;
+				} else if (camera.position.y < minGroundHeight) {
+					camera.position.y = minGroundHeight;
+					camera.velocity.y = std::max(0.0f, camera.velocity.y);
 				}
 
 				camera.currentSpeed = glm::length(camera.velocity);
@@ -819,43 +825,65 @@ namespace brassica {
 		}
 
 		// Trigger a new ground-height readback for next frame, if TerrainMinMaxTexture is
-		// initialized and has been populated/transitioned in the frame graph. Reads a small
-		// window of a coarse mip (3: 128x128 for MapDim = 1024, each texel already the real
-		// min/max over an 8x8 mip-0 footprint) rather than an 8x8 window of the raw heightmap --
-		// far less data for an equivalent real-world footprint, and the mip chain already holds
-		// exactly this reduction. Same stateless toroidal addressing terrain_gen.comp computes
-		// every dispatch (LOD 0, so getLODScale(0) == 1 -- texelSize0 is just baseTexelSize), just
-		// scaled by the mip's texel size -- no CPU-side paging bookkeeping needed, unlike the
-		// deleted TerrainClipmap::levelInfos/UpdateCameraPosition.
+		// initialized and has been populated/transitioned in the frame graph. Reads a 128x128
+		// window at LOD 0 mip 0 (64m x 64m footprint) to support smooth bilinear ground height
+		// interpolation below the camera and significantly reduce transfer frequency.
 		auto minMaxTex = physicalRegistry.GetTexture<TerrainMinMaxTexture>();
 		if (minMaxTex && minMaxTex->GetImage() && terrainManager.GetNumLODs() > 0 &&
 		    minMaxTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
-			constexpr int kReadbackMip = 3;
-			constexpr int dim = static_cast<int>(constants::Class::Terrain::MapDim) >> kReadbackMip;
-			float texelSize0 = terrainManager.GetBaseTexelSize() > 0.0001f ? terrainManager.GetBaseTexelSize() : 0.5f;
-			float texelSizeMip = texelSize0 * static_cast<float>(1 << kReadbackMip);
-			glm::vec2 camGrid = glm::floor(glm::vec2(camera.position.x, camera.position.z) / texelSizeMip);
-			int camU = static_cast<int>(camGrid.x) % dim;
-			int camV = static_cast<int>(camGrid.y) % dim;
-			if (camU < 0) camU += dim;
-			if (camV < 0) camV += dim;
+			bool shouldTrigger = !terrainManager.IsReadbackInFlight();
+			if (shouldTrigger && terrainManager.HasReadbackData()) {
+				float distFromLastTrigger = glm::distance(camPos2D, terrainManager.GetLastReadbackCamPos());
+				if (distFromLastTrigger < 16.0f) {
+					shouldTrigger = false;
+				}
+			}
 
-			int minU = std::clamp(camU - 1, 0, dim - 2);
-			int minV = std::clamp(camV - 1, 0, dim - 2);
+			if (shouldTrigger) {
+				constexpr int kReadbackWidth = 128;
+				constexpr int kReadbackHeight = 128;
+				int           dim = static_cast<int>(constants::Class::Terrain::MapDim); // 1024
+				float         texelSize =
+					terrainManager.GetBaseTexelSize() > 0.0001f ? terrainManager.GetBaseTexelSize() : 0.5f;
+				glm::vec2 camGrid = glm::floor(camPos2D / texelSize);
 
-			terrainManager.TriggerImageRegionReadbackAsync(
-				minMaxTex->GetImage(),
-				0, // arrayLayer (LOD 0)
-				kReadbackMip,
-				vk::Offset2D{minU, minV},
-				vk::Extent2D{2, 2},
-				minMaxTex->GetCurrentLayout()
-			);
+				int camU = static_cast<int>(camGrid.x) % dim;
+				int camV = static_cast<int>(camGrid.y) % dim;
+				if (camU < 0)
+					camU += dim;
+				if (camV < 0)
+					camV += dim;
+
+				int minU = std::clamp(camU - kReadbackWidth / 2, 0, dim - kReadbackWidth);
+				int minV = std::clamp(camV - kReadbackHeight / 2, 0, dim - kReadbackHeight);
+
+				int g_x0 = static_cast<int>(camGrid.x) - (camU - minU);
+				int g_y0 = static_cast<int>(camGrid.y) - (camV - minV);
+
+				glm::vec2 originWorld(
+					(static_cast<float>(g_x0) + 0.5f) * texelSize,
+					(static_cast<float>(g_y0) + 0.5f) * texelSize
+				);
+
+				terrainManager.TriggerImageRegionReadbackAsync(
+					minMaxTex->GetImage(),
+					0, // arrayLayer (LOD 0)
+					0, // mipLevel 0
+					vk::Offset2D{minU, minV},
+					vk::Extent2D{static_cast<uint32_t>(kReadbackWidth), static_cast<uint32_t>(kReadbackHeight)},
+					originWorld,
+					texelSize,
+					camPos2D,
+					minMaxTex->GetCurrentLayout()
+				);
+			}
 		}
 
-		// Apply camera height constraint with conservative padding (e.g., +4.0f) for free-fly modes
+		// Apply camera height constraint with basketball collision radius for free-fly modes
 		if (camera.mode != CameraMode::FirstPerson) {
-			float minHeight = maxTerrainHeight + 4.0f;
+			constexpr float kBasketballRadius = 0.15f;
+			float           groundSurfaceHeight = std::max(currentGroundHeight, 0.0f);
+			float           minHeight = groundSurfaceHeight + kBasketballRadius;
 			if (camera.position.y < minHeight) {
 				camera.position.y = minHeight;
 			}
