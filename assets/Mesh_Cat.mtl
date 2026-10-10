@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:4f38c6c9bb6ceeaca347f026159936af55ea54ce360e7bfb86909cf7be5611e7
-size 107
+newmtl lambert2SG
+illum 4
+Kd 0.00 0.00 0.00
+Ka 0.00 0.00 0.00
+Tf 1.00 1.00 1.00
+map_Kd Tex_Cat.png
+Ni 1.00
