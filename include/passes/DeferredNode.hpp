@@ -10,6 +10,7 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -40,6 +41,7 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t gMaterialIndex{0};
+		std::uint32_t hizIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -52,6 +54,7 @@ namespace brassica {
 			graph::Read<TerrainBiomeTexture>,
 			graph::Read<TerrainWeatherBiomeTexture>,
 			graph::Read<TerrainTLAS>,
+			graph::Read<HiZTexture>,
 			graph::Create<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::DeferredShading;
@@ -117,6 +120,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.hizIndex = ctx.Index<HiZTexture>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
