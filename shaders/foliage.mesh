@@ -23,6 +23,7 @@ layout(push_constant) uniform FoliagePushConstants {
 	float rockRatio;
 	float seaweedRatio;
 	float bushRatio;
+	float treeRatio;
 	float lengthMultiplier;
 	float widthMultiplier;
 	float densityMultiplier;
@@ -574,6 +575,470 @@ void emitBushItem(
 	pCount += 10u;
 }
 
+void emitPalmTreeItem(
+	vec3 basePos, float heightScale, float widthScale, float angle, vec3 sway, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
+) {
+	float treeHeight = (6.0 + pcg_hash(itemSeed + 2u) * 2.5) * params.lengthMultiplier * fade;
+	float trunkRadius = (0.22 + pcg_hash(itemSeed + 3u) * 0.08) * params.widthMultiplier * fade;
+
+	vec4 trunkColor = vec4(0.42, 0.35, 0.25, 1.0);
+	vec4 frondColor = vec4(0.18, 0.65, 0.20, 1.0);
+
+	uint vBase = vCount;
+
+	vec3 curveAxis = vec3(cos(angle), 0.0, sin(angle));
+	vec3 sideAxis = vec3(-curveAxis.z, 0.0, curveAxis.x);
+
+	for (uint s = 0u; s < 5u; ++s) {
+		float t = float(s) * 0.25;
+		float bend = t * t * 0.8;
+		vec3 center = basePos + vec3(0.0, treeHeight * t, 0.0) + curveAxis * bend + sway * (t * t);
+		float rad = trunkRadius * (1.0 - t * 0.35);
+
+		vec3 pL = center - sideAxis * rad;
+		vec3 pR = center + sideAxis * rad;
+
+		uint li = vBase + s * 2u;
+		vec3 viewL = mat3(uViewMatrix) * pL;
+		gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+		outWorldPos[li] = pL + uCameraPosition.xyz;
+		outNormal[li] = normalize(pL - center + vec3(0.0, 0.1, 0.0));
+		outUV[li] = vec2(0.0, t);
+		outColor[li] = trunkColor;
+		outMaterialType[li] = 6u;
+		outFade[li] = 1.0;
+
+		uint ri = li + 1u;
+		vec3 viewR = mat3(uViewMatrix) * pR;
+		gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+		outWorldPos[ri] = pR + uCameraPosition.xyz;
+		outNormal[ri] = normalize(pR - center + vec3(0.0, 0.1, 0.0));
+		outUV[ri] = vec2(1.0, t);
+		outColor[ri] = trunkColor;
+		outMaterialType[ri] = 6u;
+		outFade[ri] = 1.0;
+	}
+
+	uint pBase = pCount;
+	for (uint s = 0u; s < 4u; ++s) {
+		uint i0 = vBase + s * 2u;
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+	}
+
+	vCount += 10u;
+	pCount += 8u;
+
+	vec3 tipCenter = basePos + vec3(0.0, treeHeight, 0.0) + curveAxis * 0.8 + sway;
+	float frondLen = (2.2 + pcg_hash(itemSeed + 5u) * 1.0) * params.widthMultiplier * fade;
+
+	uint fBase = vCount;
+	uint fPBase = pCount;
+
+	for (uint f = 0u; f < 5u; ++f) {
+		float fAngle = angle + float(f) * (TAU / 5.0) + pcg_hash(itemSeed + 10u + f) * 0.2;
+		vec3 fDir = vec3(cos(fAngle), 0.0, sin(fAngle));
+		vec3 fRight = vec3(-fDir.z, 0.0, fDir.x);
+
+		uint fVertBase = fBase + f * 6u;
+		for (uint s = 0u; s < 3u; ++s) {
+			float ft = float(s) * 0.5;
+			float dropY = -ft * ft * 0.9 * frondLen;
+			vec3 fCenter = tipCenter + fDir * (frondLen * ft) + vec3(0.0, dropY, 0.0);
+			float fWidth = (0.4 + pcg_hash(itemSeed + 20u + f) * 0.2) * (1.0 - ft * 0.5);
+
+			vec3 pL = fCenter - fRight * (fWidth * 0.5);
+			vec3 pR = fCenter + fRight * (fWidth * 0.5);
+
+			uint li = fVertBase + s * 2u;
+			vec3 viewL = mat3(uViewMatrix) * pL;
+			gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+			outWorldPos[li] = pL + uCameraPosition.xyz;
+			outNormal[li] = vec3(0.0, 1.0, 0.0);
+			outUV[li] = vec2(0.0, ft);
+			outColor[li] = frondColor;
+			outMaterialType[li] = 7u;
+			outFade[li] = 1.0;
+
+			uint ri = li + 1u;
+			vec3 viewR = mat3(uViewMatrix) * pR;
+			gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+			outWorldPos[ri] = pR + uCameraPosition.xyz;
+			outNormal[ri] = vec3(0.0, 1.0, 0.0);
+			outUV[ri] = vec2(1.0, ft);
+			outColor[ri] = frondColor;
+			outMaterialType[ri] = 7u;
+			outFade[ri] = 1.0;
+		}
+
+		uint fp = fPBase + f * 4u;
+		for (uint s = 0u; s < 2u; ++s) {
+			uint i0 = fVertBase + s * 2u;
+			gl_PrimitiveTriangleIndicesEXT[fp + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
+			gl_PrimitiveTriangleIndicesEXT[fp + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+		}
+	}
+
+	vCount += 30u;
+	pCount += 20u;
+}
+
+void emitPineTreeItem(
+	vec3 basePos, float heightScale, float widthScale, float angle, vec3 sway, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
+) {
+	float treeHeight = (5.5 + pcg_hash(itemSeed + 2u) * 3.0) * params.lengthMultiplier * fade;
+	float trunkRadius = (0.20 + pcg_hash(itemSeed + 3u) * 0.08) * params.widthMultiplier * fade;
+
+	vec4 barkColor = vec4(0.28, 0.20, 0.14, 1.0);
+	vec4 needleColor = vec4(0.08, 0.32, 0.12, 1.0);
+
+	uint vBase = vCount;
+
+	vec3 sideAxis = vec3(cos(angle), 0.0, sin(angle));
+	for (uint s = 0u; s < 4u; ++s) {
+		float t = float(s) * 0.25;
+		vec3 center = basePos + vec3(0.0, treeHeight * t * 0.7, 0.0) + sway * (t * t * 0.3);
+		float rad = trunkRadius * (1.0 - t * 0.4);
+
+		vec3 pL = center - sideAxis * rad;
+		vec3 pR = center + sideAxis * rad;
+
+		uint li = vBase + s * 2u;
+		vec3 viewL = mat3(uViewMatrix) * pL;
+		gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+		outWorldPos[li] = pL + uCameraPosition.xyz;
+		outNormal[li] = normalize(pL - center + vec3(0.0, 0.1, 0.0));
+		outUV[li] = vec2(0.0, t);
+		outColor[li] = barkColor;
+		outMaterialType[li] = 6u;
+		outFade[li] = 1.0;
+
+		uint ri = li + 1u;
+		vec3 viewR = mat3(uViewMatrix) * pR;
+		gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+		outWorldPos[ri] = pR + uCameraPosition.xyz;
+		outNormal[ri] = normalize(pR - center + vec3(0.0, 0.1, 0.0));
+		outUV[ri] = vec2(1.0, t);
+		outColor[ri] = barkColor;
+		outMaterialType[ri] = 6u;
+		outFade[ri] = 1.0;
+	}
+
+	uint pBase = pCount;
+	for (uint s = 0u; s < 3u; ++s) {
+		uint i0 = vBase + s * 2u;
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+	}
+
+	vCount += 8u;
+	pCount += 6u;
+
+	uint tBase = vCount;
+	uint tPBase = pCount;
+
+	for (uint tier = 0u; tier < 3u; ++tier) {
+		float tFrac = 0.25 + float(tier) * 0.25;
+		float nextFrac = tFrac + 0.35;
+
+		float baseRad = (1.8 - float(tier) * 0.45) * params.widthMultiplier * fade;
+		vec3 baseCenter = basePos + vec3(0.0, treeHeight * tFrac, 0.0) + sway * (tFrac * tFrac);
+		vec3 peakCenter = basePos + vec3(0.0, treeHeight * nextFrac, 0.0) + sway * (nextFrac * nextFrac);
+
+		uint tierVBase = tBase + tier * 6u;
+		vec3 viewPeak = mat3(uViewMatrix) * peakCenter;
+		gl_MeshVerticesEXT[tierVBase].gl_Position = uProjMatrix * vec4(viewPeak, 1.0);
+		outWorldPos[tierVBase] = peakCenter + uCameraPosition.xyz;
+		outNormal[tierVBase] = vec3(0.0, 1.0, 0.0);
+		outUV[tierVBase] = vec2(0.5, 1.0);
+		outColor[tierVBase] = needleColor * 1.1;
+		outMaterialType[tierVBase] = 7u;
+		outFade[tierVBase] = 1.0;
+
+		for (uint i = 0u; i < 5u; ++i) {
+			float pAngle = float(i) * (TAU / 5.0) + angle;
+			vec3 bOffset = vec3(cos(pAngle), 0.0, sin(pAngle)) * baseRad;
+			vec3 bPos = baseCenter + bOffset;
+
+			uint bi = tierVBase + 1u + i;
+			vec3 viewB = mat3(uViewMatrix) * bPos;
+			gl_MeshVerticesEXT[bi].gl_Position = uProjMatrix * vec4(viewB, 1.0);
+			outWorldPos[bi] = bPos + uCameraPosition.xyz;
+			outNormal[bi] = normalize(vec3(cos(pAngle), 0.3, sin(pAngle)));
+			outUV[bi] = vec2(float(i) / 5.0, 0.0);
+			outColor[bi] = needleColor;
+			outMaterialType[bi] = 7u;
+			outFade[bi] = 1.0;
+		}
+
+		uint tp = tPBase + tier * 5u;
+		for (uint i = 0u; i < 5u; ++i) {
+			uint nextI = (i + 1u) % 5u;
+			gl_PrimitiveTriangleIndicesEXT[tp + i] = uvec3(tierVBase, tierVBase + 1u + i, tierVBase + 1u + nextI);
+		}
+	}
+
+	vCount += 18u;
+	pCount += 15u;
+}
+
+void emitDeciduousTreeItem(
+	vec3 basePos, float heightScale, float widthScale, float angle, vec3 sway, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
+) {
+	float treeHeight = (5.0 + pcg_hash(itemSeed + 2u) * 2.5) * params.lengthMultiplier * fade;
+	float crownWidth = (3.2 + pcg_hash(itemSeed + 3u) * 1.2) * params.widthMultiplier * fade;
+
+	vec4 barkColor = vec4(0.36, 0.28, 0.18, 1.0);
+	vec4 leafBottomColor = vec4(0.12, 0.42, 0.08, 1.0);
+	vec4 leafTopColor = vec4(0.24, 0.62, 0.16, 1.0);
+
+	uint vBase = vCount;
+
+	vec3 sideAxis = vec3(cos(angle), 0.0, sin(angle));
+	float trunkRadius = crownWidth * 0.12;
+
+	for (uint s = 0u; s < 4u; ++s) {
+		float t = float(s) * 0.25;
+		vec3 center = basePos + vec3(0.0, treeHeight * t * 0.55, 0.0) + sway * (t * t * 0.3);
+		float rad = trunkRadius * (1.2 - t * 0.4);
+
+		vec3 pL = center - sideAxis * rad;
+		vec3 pR = center + sideAxis * rad;
+
+		uint li = vBase + s * 2u;
+		vec3 viewL = mat3(uViewMatrix) * pL;
+		gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+		outWorldPos[li] = pL + uCameraPosition.xyz;
+		outNormal[li] = normalize(pL - center + vec3(0.0, 0.1, 0.0));
+		outUV[li] = vec2(0.0, t);
+		outColor[li] = barkColor;
+		outMaterialType[li] = 6u;
+		outFade[li] = 1.0;
+
+		uint ri = li + 1u;
+		vec3 viewR = mat3(uViewMatrix) * pR;
+		gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+		outWorldPos[ri] = pR + uCameraPosition.xyz;
+		outNormal[ri] = normalize(pR - center + vec3(0.0, 0.1, 0.0));
+		outUV[ri] = vec2(1.0, t);
+		outColor[ri] = barkColor;
+		outMaterialType[ri] = 6u;
+		outFade[ri] = 1.0;
+	}
+
+	uint pBase = pCount;
+	for (uint s = 0u; s < 3u; ++s) {
+		uint i0 = vBase + s * 2u;
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+	}
+
+	vCount += 8u;
+	pCount += 6u;
+
+	vec3 crownCenter = basePos + vec3(0.0, treeHeight * 0.7, 0.0) + sway * 0.5;
+	float halfW = crownWidth * 0.5;
+	float crownH = treeHeight * 0.55;
+
+	uint cBase = vCount;
+	for (uint q = 0u; q < 3u; ++q) {
+		float a = angle + float(q) * (TAU / 6.0);
+		vec3 d = vec3(cos(a), 0.0, sin(a)) * halfW;
+		vec3 v0 = crownCenter - d - vec3(0.0, crownH * 0.5, 0.0);
+		vec3 v1 = crownCenter + d - vec3(0.0, crownH * 0.5, 0.0);
+		vec3 v2 = crownCenter - d + vec3(0.0, crownH * 0.5, 0.0);
+		vec3 v3 = crownCenter + d + vec3(0.0, crownH * 0.5, 0.0);
+
+		vec3 qv[4] = vec3[4](v0, v1, v2, v3);
+		uint qBase = cBase + q * 4u;
+
+		for (uint i = 0u; i < 4u; ++i) {
+			vec3 viewP = mat3(uViewMatrix) * qv[i];
+			gl_MeshVerticesEXT[qBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+			outWorldPos[qBase + i] = qv[i] + uCameraPosition.xyz;
+			outNormal[qBase + i] = normalize(qv[i] - crownCenter + vec3(0.0, crownH * 0.2, 0.0));
+			outUV[qBase + i] = vec2(float(i & 1u), float(i >> 1u));
+			outColor[qBase + i] = mix(leafBottomColor, leafTopColor, float(i >> 1u));
+			outMaterialType[qBase + i] = 7u;
+			outFade[qBase + i] = 1.0;
+		}
+
+		uint qp = pCount + q * 2u;
+		gl_PrimitiveTriangleIndicesEXT[qp] = uvec3(qBase, qBase + 1u, qBase + 2u);
+		gl_PrimitiveTriangleIndicesEXT[qp + 1u] = uvec3(qBase + 1u, qBase + 3u, qBase + 2u);
+	}
+
+	uint hQuadBase = cBase + 12u;
+	float hRad = halfW * 0.85;
+	vec3 hCenter = crownCenter + vec3(0.0, crownH * 0.25, 0.0);
+
+	vec3 hv[4] = vec3[4](
+		hCenter + vec3(-hRad, 0.0, -hRad),
+		hCenter + vec3(hRad, 0.0, -hRad),
+		hCenter + vec3(-hRad, 0.0, hRad),
+		hCenter + vec3(hRad, 0.0, hRad)
+	);
+
+	for (uint i = 0u; i < 4u; ++i) {
+		vec3 viewP = mat3(uViewMatrix) * hv[i];
+		gl_MeshVerticesEXT[hQuadBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+		outWorldPos[hQuadBase + i] = hv[i] + uCameraPosition.xyz;
+		outNormal[hQuadBase + i] = normalize(hv[i] - crownCenter + vec3(0.0, crownH * 0.3, 0.0));
+		outUV[hQuadBase + i] = vec2(float(i & 1u), float(i >> 1u));
+		outColor[hQuadBase + i] = leafTopColor;
+		outMaterialType[hQuadBase + i] = 7u;
+		outFade[hQuadBase + i] = 1.0;
+	}
+
+	uint hqp = pCount + 6u;
+	gl_PrimitiveTriangleIndicesEXT[hqp] = uvec3(hQuadBase, hQuadBase + 1u, hQuadBase + 2u);
+	gl_PrimitiveTriangleIndicesEXT[hqp + 1u] = uvec3(hQuadBase + 1u, hQuadBase + 3u, hQuadBase + 2u);
+
+	vCount += 16u;
+	pCount += 8u;
+}
+
+void emitCactusItem(
+	vec3 basePos, float heightScale, float widthScale, float angle, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
+) {
+	float cactusHeight = (2.5 + pcg_hash(itemSeed + 2u) * 1.5) * params.lengthMultiplier * fade;
+	float columnRadius = (0.20 + pcg_hash(itemSeed + 3u) * 0.08) * params.widthMultiplier * fade;
+
+	vec4 cactusColor = vec4(0.22, 0.48, 0.26, 1.0);
+
+	uint vBase = vCount;
+
+	vec3 sideAxis = vec3(cos(angle), 0.0, sin(angle));
+
+	for (uint s = 0u; s < 4u; ++s) {
+		float t = float(s) * 0.33;
+		vec3 center = basePos + vec3(0.0, cactusHeight * t, 0.0);
+		float rad = columnRadius * (s == 3u ? 0.7 : 1.0);
+
+		vec3 pL = center - sideAxis * rad;
+		vec3 pR = center + sideAxis * rad;
+
+		uint li = vBase + s * 2u;
+		vec3 viewL = mat3(uViewMatrix) * pL;
+		gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+		outWorldPos[li] = pL + uCameraPosition.xyz;
+		outNormal[li] = normalize(pL - center + vec3(0.0, 0.1, 0.0));
+		outUV[li] = vec2(0.0, t);
+		outColor[li] = cactusColor;
+		outMaterialType[li] = 8u;
+		outFade[li] = 1.0;
+
+		uint ri = li + 1u;
+		vec3 viewR = mat3(uViewMatrix) * pR;
+		gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+		outWorldPos[ri] = pR + uCameraPosition.xyz;
+		outNormal[ri] = normalize(pR - center + vec3(0.0, 0.1, 0.0));
+		outUV[ri] = vec2(1.0, t);
+		outColor[ri] = cactusColor;
+		outMaterialType[ri] = 8u;
+		outFade[ri] = 1.0;
+	}
+
+	uint pBase = pCount;
+	for (uint s = 0u; s < 3u; ++s) {
+		uint i0 = vBase + s * 2u;
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
+		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+	}
+
+	vCount += 8u;
+	pCount += 6u;
+
+	uint aBase = vCount;
+	uint aPBase = pCount;
+
+	for (uint arm = 0u; arm < 2u; ++arm) {
+		float armDir = (arm == 0u) ? 1.0 : -1.0;
+		vec3 armOut = sideAxis * armDir;
+
+		float armBaseY = cactusHeight * (0.35 + float(arm) * 0.15);
+		float armLen = cactusHeight * 0.30;
+		float armRad = columnRadius * 0.75;
+
+		vec3 p0 = basePos + vec3(0.0, armBaseY, 0.0);
+		vec3 p1 = p0 + armOut * (armLen * 0.8);
+		vec3 p2 = p1 + vec3(0.0, armLen * 0.7, 0.0);
+
+		vec3 armPts[3] = vec3[3](p0, p1, p2);
+
+		uint armVBase = aBase + arm * 6u;
+		for (uint s = 0u; s < 3u; ++s) {
+			vec3 center = armPts[s];
+			vec3 pL = center - vec3(0.0, armRad, 0.0);
+			vec3 pR = center + vec3(0.0, armRad, 0.0);
+
+			uint li = armVBase + s * 2u;
+			vec3 viewL = mat3(uViewMatrix) * pL;
+			gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
+			outWorldPos[li] = pL + uCameraPosition.xyz;
+			outNormal[li] = armOut;
+			outUV[li] = vec2(0.0, float(s) * 0.5);
+			outColor[li] = cactusColor;
+			outMaterialType[li] = 8u;
+			outFade[li] = 1.0;
+
+			uint ri = armVBase + s * 2u + 1u;
+			vec3 viewR = mat3(uViewMatrix) * pR;
+			gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
+			outWorldPos[ri] = pR + uCameraPosition.xyz;
+			outNormal[ri] = armOut;
+			outUV[ri] = vec2(1.0, float(s) * 0.5);
+			outColor[ri] = cactusColor;
+			outMaterialType[ri] = 8u;
+			outFade[ri] = 1.0;
+		}
+
+		uint ap = aPBase + arm * 4u;
+		for (uint s = 0u; s < 2u; ++s) {
+			uint i0 = armVBase + s * 2u;
+			gl_PrimitiveTriangleIndicesEXT[ap + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
+			gl_PrimitiveTriangleIndicesEXT[ap + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+		}
+	}
+
+	vCount += 12u;
+	pCount += 8u;
+}
+
+void emitTreeItem(
+	vec3 basePos,
+	float heightScale,
+	float widthScale,
+	float angle,
+	vec3 sway,
+	uint itemSeed,
+	vec3 terrainNormal,
+	uint biomeIdx,
+	float temp,
+	float moisture,
+	float fade,
+	inout uint vCount,
+	inout uint pCount
+) {
+	if (biomeIdx == 7u) {
+		emitCactusItem(basePos, heightScale, widthScale, angle, itemSeed, terrainNormal, fade, vCount, pCount);
+	} else if (biomeIdx == 8u || biomeIdx == 9u) {
+		emitPalmTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+	} else if (biomeIdx == 0u || biomeIdx == 1u || biomeIdx == 2u) {
+		emitPineTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+	} else if (biomeIdx == 4u || biomeIdx == 5u || biomeIdx == 6u) {
+		emitDeciduousTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+	} else {
+		if (moisture < 0.25) {
+			emitCactusItem(basePos, heightScale, widthScale, angle, itemSeed, terrainNormal, fade, vCount, pCount);
+		} else if (temp < 0.4) {
+			emitPineTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+		} else {
+			emitDeciduousTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+		}
+	}
+}
+
 void main() {
 	uint clumpGlobalIdx = gl_WorkGroupID.x;
 	uint tileIdx = clumpGlobalIdx >> 4u;
@@ -697,7 +1162,12 @@ void main() {
 							foliageType = 4u;
 						} else {
 							cumulative += params.bushRatio;
-							foliageType = (sel < cumulative) ? 5u : 0u;
+						if (sel < cumulative) {
+							foliageType = 5u;
+						} else {
+							cumulative += params.treeRatio;
+							foliageType = (sel < cumulative) ? 6u : 0u;
+						}
 						}
 					}
 				}
@@ -718,6 +1188,9 @@ void main() {
 		} else if (foliageType == 2u) {
 			itemVerts = 17u;
 			itemPrims = 14u;
+		} else if (foliageType == 6u) {
+			itemVerts = 48u;
+			itemPrims = 38u;
 		} else {
 			itemVerts = 12u;
 			itemPrims = 10u;
@@ -746,6 +1219,10 @@ void main() {
 			);
 		} else if (foliageType == 2u) {
 			emitFlowerItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorBottom, fade, vCount, pCount);
+		} else if (foliageType == 6u) {
+			emitTreeItem(
+				basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, biomeIdx, temp, moisture, fade, vCount, pCount
+			);
 		} else {
 			emitBladeItem(
 				basePos, heightScale, widthScale, foliageType, angle, distToCam, sway, params.windTime, itemWorldXZ,
