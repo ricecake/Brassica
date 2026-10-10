@@ -78,6 +78,33 @@ namespace brassica {
 				gltfNodeToSkinJointIndex[skin.joints[i]] = static_cast<int>(i);
 			}
 
+			// Build parent mapping for nodes
+			std::vector<int> nodeParents(asset.nodes.size(), -1);
+			for (std::size_t i = 0; i < asset.nodes.size(); ++i) {
+				for (std::size_t childIdx : asset.nodes[i].children) {
+					nodeParents[childIdx] = static_cast<int>(i);
+				}
+			}
+
+			auto getNodeLocalMatrix = [&](std::size_t nodeIdx) -> glm::mat4 {
+				const auto& node = asset.nodes[nodeIdx];
+				if (auto* trs = std::get_if<fastgltf::TRS>(&node.transform)) {
+					glm::vec3 t(trs->translation[0], trs->translation[1], trs->translation[2]);
+					glm::quat r(trs->rotation[3], trs->rotation[0], trs->rotation[1], trs->rotation[2]);
+					glm::vec3 s(trs->scale[0], trs->scale[1], trs->scale[2]);
+					return glm::translate(glm::mat4(1.0f), t) * glm::mat4_cast(r) * glm::scale(glm::mat4(1.0f), s);
+				} else if (auto* mat = std::get_if<fastgltf::math::fmat4x4>(&node.transform)) {
+					glm::mat4 m(1.0f);
+					for (int c = 0; c < 4; ++c) {
+						for (int r = 0; r < 4; ++r) {
+							m[c][r] = (*mat)[c][r];
+						}
+					}
+					return m;
+				}
+				return glm::mat4(1.0f);
+			};
+
 			// Build joint hierarchy for Ozz RawSkeleton
 			std::vector<bool> isChild(skin.joints.size(), false);
 			for (std::size_t i = 0; i < skin.joints.size(); ++i) {
@@ -91,39 +118,39 @@ namespace brassica {
 				}
 			}
 
-			auto buildRawJoint = [&](auto self, std::size_t nodeIdx) -> ozz::animation::offline::RawSkeleton::Joint {
+			auto buildRawJoint = [&](auto self, std::size_t nodeIdx, bool isRoot) -> ozz::animation::offline::RawSkeleton::Joint {
 				const auto& node = asset.nodes[nodeIdx];
 				ozz::animation::offline::RawSkeleton::Joint rawJoint;
 				rawJoint.name = node.name.c_str();
 
-				// Get transform (always TRS because of DecomposeNodeMatrices)
-				if (auto* trs = std::get_if<fastgltf::TRS>(&node.transform)) {
-					rawJoint.transform.translation = ozz::math::Float3(trs->translation[0], trs->translation[1], trs->translation[2]);
-					rawJoint.transform.rotation = ozz::math::Quaternion(trs->rotation[0], trs->rotation[1], trs->rotation[2], trs->rotation[3]);
-					rawJoint.transform.scale = ozz::math::Float3(trs->scale[0], trs->scale[1], trs->scale[2]);
-				} else if (auto* mat = std::get_if<fastgltf::math::fmat4x4>(&node.transform)) {
-					glm::mat4 m(1.0f);
-					for (int c = 0; c < 4; ++c) {
-						for (int r = 0; r < 4; ++r) {
-							m[c][r] = (*mat)[c][r];
-						}
-					}
-					glm::vec3 scale(1.0f);
-					glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
-					glm::vec3 translation(0.0f);
-					glm::vec3 skew;
-					glm::vec4 perspective;
-					glm::decompose(m, scale, rotation, translation, skew, perspective);
+				glm::mat4 localMat = getNodeLocalMatrix(nodeIdx);
 
-					rawJoint.transform.translation = ozz::math::Float3(translation.x, translation.y, translation.z);
-					rawJoint.transform.rotation = ozz::math::Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
-					rawJoint.transform.scale = ozz::math::Float3(scale.x, scale.y, scale.z);
+				if (isRoot) {
+					// Accumulate non-skin ancestor transforms up to scene root
+					glm::mat4 ancestorMat(1.0f);
+					int currParent = nodeParents[nodeIdx];
+					while (currParent >= 0 && gltfNodeToSkinJointIndex[currParent] == -1) {
+						ancestorMat = getNodeLocalMatrix(currParent) * ancestorMat;
+						currParent = nodeParents[currParent];
+					}
+					localMat = ancestorMat * localMat;
 				}
+
+				glm::vec3 scale(1.0f);
+				glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+				glm::vec3 translation(0.0f);
+				glm::vec3 skew;
+				glm::vec4 perspective;
+				glm::decompose(localMat, scale, rotation, translation, skew, perspective);
+
+				rawJoint.transform.translation = ozz::math::Float3(translation.x, translation.y, translation.z);
+				rawJoint.transform.rotation = ozz::math::Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
+				rawJoint.transform.scale = ozz::math::Float3(scale.x, scale.y, scale.z);
 
 				for (std::size_t childNodeIdx : node.children) {
 					int childJointIdx = gltfNodeToSkinJointIndex[childNodeIdx];
 					if (childJointIdx >= 0) {
-						rawJoint.children.push_back(self(self, childNodeIdx));
+						rawJoint.children.push_back(self(self, childNodeIdx, false));
 					}
 				}
 				return rawJoint;
@@ -131,7 +158,7 @@ namespace brassica {
 
 			for (std::size_t i = 0; i < skin.joints.size(); ++i) {
 				if (!isChild[i]) {
-					rawSkeleton.roots.push_back(buildRawJoint(buildRawJoint, skin.joints[i]));
+					rawSkeleton.roots.push_back(buildRawJoint(buildRawJoint, skin.joints[i], true));
 				}
 			}
 		} else {

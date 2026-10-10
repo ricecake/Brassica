@@ -118,7 +118,7 @@ namespace brassica {
 					float groundY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
 
 					transform->position = cow.basePos;
-					transform->position.y = groundY + 1.25f;
+					transform->position.y = groundY + 0.5f;
 
 					if (glm::length(cow.velocity) > 0.01f) {
 						transform->rotation.y = std::atan2(cow.velocity.x, cow.velocity.z);
@@ -178,11 +178,11 @@ namespace brassica {
 
 			glm::vec3 pos(std::cos(angle) * radius, 0.0f, std::sin(angle) * radius - 15.0f);
 			float groundY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
-			pos.y = groundY + 1.25f;
+			pos.y = groundY + 0.5f;
 
 			TransformComponent transform{};
 			transform.position = pos;
-			transform.scale = glm::vec3(25.0f);
+			transform.scale = glm::vec3(1.5f);
 
 			CowInstanceData cowData{};
 			cowData.spawnTime = currentTime;
