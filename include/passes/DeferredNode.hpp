@@ -11,9 +11,11 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/ResourceGroups.hpp"
+#include "lighting/ILightManager.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
+#include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
@@ -69,6 +71,7 @@ namespace brassica {
 		FragmentShader           fragShader;
 		vk::Format               swapchainFormat = vk::Format::eUndefined;
 		DeferredPushConstants    push{};
+		bool                     enableGTAO{true};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -95,6 +98,9 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.gridParams = p.terrainGridParams;
+			if (ServiceLocator::Instance().Has<ILightManager>()) {
+				enableGTAO = ServiceLocator::Instance().Get<ILightManager>()->IsGTAOEnabled();
+			}
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -122,7 +128,7 @@ namespace brassica {
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
-			push.gtaoIndex = ctx.Index<GTAOTexture>();
+			push.gtaoIndex = enableGTAO ? ctx.Index<GTAOTexture>() : 0u;
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

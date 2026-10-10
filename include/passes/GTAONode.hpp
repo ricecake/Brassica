@@ -7,10 +7,12 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "lighting/ILightManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
+#include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
@@ -39,6 +41,13 @@ namespace brassica {
 		GTAOPushConstants        push{};
 		std::uint32_t            width{0};
 		std::uint32_t            height{0};
+		bool                     enabled{true};
+
+		void SetFrameParams(const render::NodeFrameParams& p) {
+			if (ServiceLocator::Instance().Has<ILightManager>()) {
+				enabled = ServiceLocator::Instance().Get<ILightManager>()->IsGTAOEnabled();
+			}
+		}
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -59,7 +68,7 @@ namespace brassica {
 			width = ctx.width;
 			height = ctx.height;
 
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = enabled};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<GBufferPosition>(),

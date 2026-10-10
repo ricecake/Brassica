@@ -23,6 +23,7 @@ namespace brassica {
 			state.skyExposure = _skyExposure;
 			state.starExposure = _starExposure;
 			state.terrainExposure = _terrainExposure;
+			state.enableGTAO = _enableGTAO;
 
 			state.cycleEnabled = _cycle.enabled;
 			state.cycleTime = _cycle.time;
@@ -41,6 +42,7 @@ namespace brassica {
 			_skyExposure = state.skyExposure;
 			_starExposure = state.starExposure;
 			_terrainExposure = state.terrainExposure;
+			_enableGTAO = state.enableGTAO;
 
 			_cycle.enabled = state.cycleEnabled;
 			_cycle.time = state.cycleTime;
@@ -77,6 +79,10 @@ namespace brassica {
 
 		void SetTerrainExposure(float exp) override { _terrainExposure = exp; }
 
+		bool IsGTAOEnabled() const override { return _enableGTAO; }
+
+		void SetGTAOEnabled(bool enable) override { _enableGTAO = enable; }
+
 		DayNightCycle& GetDayNightCycle() override { return _cycle; }
 
 		const DayNightCycle& GetDayNightCycle() const override { return _cycle; }
@@ -111,6 +117,7 @@ namespace brassica {
 		float _skyExposure = constants::Class::Lighting::DefaultSkyExposure;
 		float _starExposure = constants::Class::Lighting::DefaultStarExposure;
 		float _terrainExposure = constants::Class::Lighting::DefaultTerrainExposure;
+		bool  _enableGTAO = true;
 	};
 
 } // namespace brassica
