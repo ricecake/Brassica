@@ -54,6 +54,7 @@ namespace brassica {
 			.rockRatio = m_state.rockRatio,
 			.seaweedRatio = m_state.seaweedRatio,
 			.bushRatio = m_state.bushRatio,
+			.treeRatio = m_state.treeRatio,
 			.baseTileSize = m_state.baseTileSize,
 			.maxLODs = m_state.maxLODs,
 			.tilesPerRow = m_state.tilesPerRow,
@@ -75,6 +76,7 @@ namespace brassica {
 		m_state.rockRatio = props.rockRatio;
 		m_state.seaweedRatio = props.seaweedRatio;
 		m_state.bushRatio = props.bushRatio;
+		m_state.treeRatio = props.treeRatio;
 		m_state.baseTileSize = props.baseTileSize;
 		m_state.maxLODs = props.maxLODs;
 		m_state.tilesPerRow = props.tilesPerRow;

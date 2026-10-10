@@ -46,6 +46,7 @@ namespace brassica {
 		float    rockRatio{0.05f};
 		float    seaweedRatio{0.05f};
 		float    bushRatio{0.10f};
+		float    treeRatio{0.10f};
 		float    baseTileSize{16.0f};
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
@@ -67,6 +68,7 @@ namespace brassica {
 		float    rockRatio{0.05f};
 		float    seaweedRatio{0.05f};
 		float    bushRatio{0.10f};
+		float    treeRatio{0.10f};
 		float    baseTileSize{16.0f};
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
@@ -88,6 +90,7 @@ namespace brassica {
 				MakeField("rockRatio", "Rock Ratio", &FoliageState::rockRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("seaweedRatio", "Seaweed Ratio", &FoliageState::seaweedRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("bushRatio", "Bush Ratio", &FoliageState::bushRatio, 0.0f, 1.0f, UIHint::Slider),
+				MakeField("treeRatio", "Tree Ratio", &FoliageState::treeRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),
@@ -113,6 +116,7 @@ namespace brassica {
 				MakeField("rockRatio", "Rock Ratio", &FoliageState::rockRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("seaweedRatio", "Seaweed Ratio", &FoliageState::seaweedRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("bushRatio", "Bush Ratio", &FoliageState::bushRatio, 0.0f, 1.0f, UIHint::Slider),
+				MakeField("treeRatio", "Tree Ratio", &FoliageState::treeRatio, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),

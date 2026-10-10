@@ -44,6 +44,12 @@ void main() {
 		roughness = 0.25;
 	} else if (inMaterialType == 5u) { // Bush
 		roughness = 0.6;
+	} else if (inMaterialType == 6u) { // Tree Bark / Trunk
+		roughness = 0.8;
+	} else if (inMaterialType == 7u) { // Tree Leaves / Canopy
+		roughness = 0.5;
+	} else if (inMaterialType == 8u) { // Cactus
+		roughness = 0.4;
 	}
 	outPosition = vec4(relPos, 1.0);
 	outNormal = vec4(normalize(inNormal), roughness);
