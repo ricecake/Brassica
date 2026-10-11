@@ -766,6 +766,36 @@ namespace {
 	};
 } // namespace
 
+TEST_CASE("GTAONode creates dependency before deferred shading pass") {
+	struct GtaoTestNode {
+		using Resources = Declares<
+			Read<GBufferNormal>,
+			Create<brassica::GTAOTexture>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Execute(NodeContext&) {}
+	};
+
+	struct DeferredTestNode {
+		using Resources = Declares<
+			Read<brassica::GTAOTexture>,
+			Modify<Swapchain>>;
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Execute(NodeContext&) {}
+	};
+
+	Graph graph;
+	graph.Register<DeferredTestNode>();
+	graph.Register<GtaoTestNode>();
+	graph.Register<GBufferPass>();
+	graph.Register<Import<Swapchain>>();
+
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
+
+	const auto& schedule = graph.GetSchedule();
+	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
+}
+
 TEST_CASE("Cluster light assignment node creates dependency before deferred shading pass") {
 	Graph graph;
 	graph.Register<DeferredWithLightingNode>();
