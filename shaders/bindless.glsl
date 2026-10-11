@@ -83,6 +83,7 @@ layout(set = 1, binding = 3) writeonly uniform image3D uImages3DGenericWrite[];
 // because the only resource that needs this today -- the terrain min/max mip chain -- is RG32F;
 // a different format needing this same capability would get its own aliased declaration, same
 // pattern as the rest of this file.
+layout(set = 1, binding = 3, rg32f) coherent uniform image2D uImagesRG32FCoherent[];
 layout(set = 1, binding = 3, rg32f) coherent uniform image2DArray uImageArraysRG32FCoherent[];
 // Binding 5: a real 3D-volume sampled catalog, independently sized/counted from bindings 0/1
 // (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,

@@ -57,6 +57,7 @@ namespace brassica::ui {
 					modified |= ImGui::SliderFloat("Rock Ratio", &props.rockRatio, 0.0f, 1.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Seaweed Ratio", &props.seaweedRatio, 0.0f, 1.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Bush Ratio", &props.bushRatio, 0.0f, 1.0f, "%.2f");
+					modified |= ImGui::SliderFloat("Tree Ratio", &props.treeRatio, 0.0f, 1.0f, "%.2f");
 
 					if (modified) {
 						mgr->SetGlobalProperties(props);

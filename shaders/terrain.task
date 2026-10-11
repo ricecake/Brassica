@@ -131,7 +131,6 @@ void main() {
 		// lodLevel<=1 band stays untouched here too) -- a near tile is never worth the march.
 		if (visible && lodLevel >= 2u && params.minMaxIndex > 0u) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-				params.clipmapIndex,
 				params.minMaxIndex,
 				params.gridParams.w,
 				params.gridParams.x,

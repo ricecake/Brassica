@@ -54,6 +54,7 @@ namespace brassica {
 			.rockRatio = m_state.rockRatio,
 			.seaweedRatio = m_state.seaweedRatio,
 			.bushRatio = m_state.bushRatio,
+			.treeRatio = m_state.treeRatio,
 			.baseTileSize = m_state.baseTileSize,
 			.maxLODs = m_state.maxLODs,
 			.tilesPerRow = m_state.tilesPerRow,
@@ -75,6 +76,7 @@ namespace brassica {
 		m_state.rockRatio = props.rockRatio;
 		m_state.seaweedRatio = props.seaweedRatio;
 		m_state.bushRatio = props.bushRatio;
+		m_state.treeRatio = props.treeRatio;
 		m_state.baseTileSize = props.baseTileSize;
 		m_state.maxLODs = props.maxLODs;
 		m_state.tilesPerRow = props.tilesPerRow;
@@ -96,7 +98,7 @@ namespace brassica {
 			.colorBottom = glm::vec4(0.55f, 0.60f, 0.55f, 1.0f),
 			.height = 0.3f, .width = 0.04f, .rigidity = 0.7f,
 			.heightVariance = 0.2f, .widthVariance = 0.05f, .density = 0.15f,
-			.colorVariability = 0.1f, .windInfluence = 0.6f, .enabled = 0u, .flowerRatio = 0.0f,
+			.colorVariability = 0.1f, .windInfluence = 0.6f, .enabled = 1u, .flowerRatio = 0.0f,
 		};
 		m_biomeProps[1] = GrassProperties{ // Tundra
 			.colorTop = glm::vec4(0.45f, 0.48f, 0.30f, 1.0f),

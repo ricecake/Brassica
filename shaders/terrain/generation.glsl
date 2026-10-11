@@ -3,11 +3,6 @@
 #include "lygia/generative/psrdnoise.glsl"
 #include "lygia/generative/noised.glsl"
 
-
-float biome_map(float temperature, float moisture, float rocky) {
-	return dot(vec3(temperature, moisture, rocky), vec3(0.2126, 0.7152, 0.0722));
-}
-
 // Assuming cross_noise_fbm and dot_noise_fbm from previous implementations are in scope
 struct TerrainConfig {
     float spatial_scale;
@@ -16,6 +11,46 @@ struct TerrainConfig {
     float ridge_weight;
 	float biome_bleed;
 };
+
+
+struct TectonicPlate {
+    vec3 seed_dir; // Normalized direction of the plate center
+    float height;  // Base continent elevation (e.g., 1.0 for land, 0.0 for ocean)
+	float k;
+    vec3 velocity;
+};
+
+const TectonicPlate plates[] = TectonicPlate[](
+TectonicPlate(vec3(-0.10998967, 0.18729015, 0.9761274), -0.2120724, 45.14807, vec3(0.77386445, -0.6001565, 0.20235115)),
+TectonicPlate(vec3(-0.27727792, 0.5709581, 0.77273786), 0.2528148, 58.432438, vec3(0.3304707, -0.69852555, 0.6347056)),
+TectonicPlate(vec3(0.51554155, 0.5044243, -0.6926565), -0.2947329, 51.651794, vec3(-0.7036822, 0.71048665, -0.006338941)),
+TectonicPlate(vec3(0.40002212, -0.9128037, -0.082290396), -0.21447644, 30.138618, vec3(-0.3685467, -0.078000076, -0.9263311)),
+TectonicPlate(vec3(0.83764374, -0.41415262, -0.35613286), -0.20410867, 31.204689, vec3(0.43418014, 0.10924039, 0.8941779)),
+TectonicPlate(vec3(-0.24284463, 0.95516706, 0.16935897), -0.20179172, 32.290123, vec3(-0.9077131, -0.16216363, -0.3869881)),
+TectonicPlate(vec3(-0.25884876, -0.95428, -0.14948884), 0.2607334, 30.138618, vec3(-0.36568236, 0.2400595, -0.89924854)),
+TectonicPlate(vec3(0.584477, -0.523526, 0.61992514), 0.20748353, 22.928429, vec3(0.28582802, -0.5821977, -0.76114917)),
+TectonicPlate(vec3(0.56173223, 0.8076131, 0.1794939), -0.20347077, 23.187391, vec3(-0.82534325, 0.5320569, 0.18900792)),
+TectonicPlate(vec3(-0.8119338, 0.57554865, 0.09750533), 0.20122617, 29.046818, vec3(-0.10501896, 0.020289334, -0.99426323)),
+TectonicPlate(vec3(-0.7352156, -0.28897724, 0.61314774), -0.2765189, 49.537014, vec3(-0.66958004, 0.45035282, -0.59063095)),
+TectonicPlate(vec3(-0.8682852, -0.16594851, 0.46748477), -0.23236254, 49.537014, vec3(0.45362902, -0.646992, 0.6128801)),
+TectonicPlate(vec3(0.8529673, 0.21423429, -0.47597313), 0.23602277, 55.593468, vec3(0.48385212, -0.66657984, 0.5670612)),
+TectonicPlate(vec3(0.68821555, 0.28596404, -0.6667713), -0.22226922, 57.919964, vec3(-0.18723384, -0.81790406, -0.5440373)),
+TectonicPlate(vec3(0.67695993, 0.24926774, -0.692525), -0.22986473, 59.190933, vec3(-0.32156685, -0.7461877, -0.5829226)),
+TectonicPlate(vec3(0.68970764, 0.24122171, -0.68272644), -0.236392, 59.190933, vec3(-0.26256981, -0.7953834, -0.5462804)),
+TectonicPlate(vec3(0.8105663, 0.29784927, -0.50425005), 0.26635143, 55.593468, vec3(0.42700186, -0.8898418, 0.16078268)),
+TectonicPlate(vec3(0.6607884, 0.40715584, -0.6305417), -0.22629133, 54.17562, vec3(-0.25031647, -0.67244256, -0.69653624)),
+TectonicPlate(vec3(-0.4545163, 0.5521465, 0.698963), 0.22175944, 58.846478, vec3(0.88106287, 0.3940281, 0.2616679)),
+TectonicPlate(vec3(-0.29539505, 0.54401505, 0.7853593), 0.23929027, 58.432438, vec3(0.37006053, -0.69271606, 0.61903125)),
+TectonicPlate(vec3(-0.42060938, 0.55077577, 0.72092575), 0.23587625, 58.582535, vec3(0.86194944, -0.00533904, 0.5069661)),
+TectonicPlate(vec3(-0.43457094, 0.56824714, 0.6987441), 0.22874336, 58.846478, vec3(0.89979833, 0.24044727, 0.3640716)),
+TectonicPlate(vec3(-0.23474325, 0.66267097, 0.7111701), 0.22830667, 54.673428, vec3(-0.6909433, -0.6283583, 0.35743976)),
+TectonicPlate(vec3(-0.13862608, 0.49421793, 0.85821414), -0.22194448, 51.904488, vec3(-0.28121662, -0.8505538, 0.44438198))
+);
+
+/*
+float biome_map(float temperature, float moisture, float rocky) {
+	return dot(vec3(temperature, moisture, rocky), vec3(0.2126, 0.7152, 0.0722));
+}
 
 float evaluate_terrain(vec3 p, float phase, float warp_strength, TerrainConfig config, out float out_biome, out float out_mask) {
 	p *= config.spatial_scale;
@@ -191,45 +226,6 @@ float evaluate_terrain_analytical(vec3 p, float phase, float warp_strength, Terr
 
     return true_height;
 }
-
-struct TectonicPlate {
-    vec3 seed_dir; // Normalized direction of the plate center
-    float height;  // Base continent elevation (e.g., 1.0 for land, 0.0 for ocean)
-	float k;
-    vec3 velocity;
-};
-
-// // SSBO containing your continent seeds
-// layout(std430, binding = 0) readonly buffer PlateBuffer {
-//     TectonicPlate plates[];
-// };
-
-const TectonicPlate plates[] = TectonicPlate[](
-TectonicPlate(vec3(-0.10998967, 0.18729015, 0.9761274), -0.2120724, 45.14807, vec3(0.77386445, -0.6001565, 0.20235115)),
-TectonicPlate(vec3(-0.27727792, 0.5709581, 0.77273786), 0.2528148, 58.432438, vec3(0.3304707, -0.69852555, 0.6347056)),
-TectonicPlate(vec3(0.51554155, 0.5044243, -0.6926565), -0.2947329, 51.651794, vec3(-0.7036822, 0.71048665, -0.006338941)),
-TectonicPlate(vec3(0.40002212, -0.9128037, -0.082290396), -0.21447644, 30.138618, vec3(-0.3685467, -0.078000076, -0.9263311)),
-TectonicPlate(vec3(0.83764374, -0.41415262, -0.35613286), -0.20410867, 31.204689, vec3(0.43418014, 0.10924039, 0.8941779)),
-TectonicPlate(vec3(-0.24284463, 0.95516706, 0.16935897), -0.20179172, 32.290123, vec3(-0.9077131, -0.16216363, -0.3869881)),
-TectonicPlate(vec3(-0.25884876, -0.95428, -0.14948884), 0.2607334, 30.138618, vec3(-0.36568236, 0.2400595, -0.89924854)),
-TectonicPlate(vec3(0.584477, -0.523526, 0.61992514), 0.20748353, 22.928429, vec3(0.28582802, -0.5821977, -0.76114917)),
-TectonicPlate(vec3(0.56173223, 0.8076131, 0.1794939), -0.20347077, 23.187391, vec3(-0.82534325, 0.5320569, 0.18900792)),
-TectonicPlate(vec3(-0.8119338, 0.57554865, 0.09750533), 0.20122617, 29.046818, vec3(-0.10501896, 0.020289334, -0.99426323)),
-TectonicPlate(vec3(-0.7352156, -0.28897724, 0.61314774), -0.2765189, 49.537014, vec3(-0.66958004, 0.45035282, -0.59063095)),
-TectonicPlate(vec3(-0.8682852, -0.16594851, 0.46748477), -0.23236254, 49.537014, vec3(0.45362902, -0.646992, 0.6128801)),
-TectonicPlate(vec3(0.8529673, 0.21423429, -0.47597313), 0.23602277, 55.593468, vec3(0.48385212, -0.66657984, 0.5670612)),
-TectonicPlate(vec3(0.68821555, 0.28596404, -0.6667713), -0.22226922, 57.919964, vec3(-0.18723384, -0.81790406, -0.5440373)),
-TectonicPlate(vec3(0.67695993, 0.24926774, -0.692525), -0.22986473, 59.190933, vec3(-0.32156685, -0.7461877, -0.5829226)),
-TectonicPlate(vec3(0.68970764, 0.24122171, -0.68272644), -0.236392, 59.190933, vec3(-0.26256981, -0.7953834, -0.5462804)),
-TectonicPlate(vec3(0.8105663, 0.29784927, -0.50425005), 0.26635143, 55.593468, vec3(0.42700186, -0.8898418, 0.16078268)),
-TectonicPlate(vec3(0.6607884, 0.40715584, -0.6305417), -0.22629133, 54.17562, vec3(-0.25031647, -0.67244256, -0.69653624)),
-TectonicPlate(vec3(-0.4545163, 0.5521465, 0.698963), 0.22175944, 58.846478, vec3(0.88106287, 0.3940281, 0.2616679)),
-TectonicPlate(vec3(-0.29539505, 0.54401505, 0.7853593), 0.23929027, 58.432438, vec3(0.37006053, -0.69271606, 0.61903125)),
-TectonicPlate(vec3(-0.42060938, 0.55077577, 0.72092575), 0.23587625, 58.582535, vec3(0.86194944, -0.00533904, 0.5069661)),
-TectonicPlate(vec3(-0.43457094, 0.56824714, 0.6987441), 0.22874336, 58.846478, vec3(0.89979833, 0.24044727, 0.3640716)),
-TectonicPlate(vec3(-0.23474325, 0.66267097, 0.7111701), 0.22830667, 54.673428, vec3(-0.6909433, -0.6283583, 0.35743976)),
-TectonicPlate(vec3(-0.13862608, 0.49421793, 0.85821414), -0.22194448, 51.904488, vec3(-0.28121662, -0.8505538, 0.44438198))
-);
 
 // k = Sharpness of the plate boundaries.
 // Higher k = sharper tectonic faults. Lower k = smoother transitions.
@@ -446,7 +442,7 @@ struct TectonicPlate2 {
     //     vel, J_vel,
     //     P_geo, dP_dx, dP_dz);
 
-
+*/
 void evaluate_tectonics_geocentric(
     vec3 p_local, float k_crumple,
     out float out_base_h, out vec3 out_grad_h,
@@ -529,26 +525,22 @@ void evaluate_tectonics_geocentric(
 
     // Fault Mask: 1.0 - sum( (w/W)^2 )
     float sum_N2_crump = sum_w2_crump * inv_W_crump2;
-// Old: out_fault = 1.0 - sum_N2_crump;
 
-// New: Remap the raw mask so that 0.5 becomes 1.0 using a smooth curve
-float raw_fault = 1.0 - sum_N2_crump;
-float max_fault_expected = 0.55; // Slightly above 0.5 to account for 3-plate intersections
+    float raw_fault = 1.0 - sum_N2_crump;
+    float hotspot_mask = smoothstep(0.52, 0.65, raw_fault);
+    float max_fault_expected = 0.55; // Slightly above 0.5 to account for 3-plate intersections
 
-// smoothstep(0.0, max_fault_expected, raw_fault)
-float t_fault = clamp(raw_fault / max_fault_expected, 0.0, 1.0);
-out_fault = t_fault * t_fault * (3.0 - 2.0 * t_fault);
+    // smoothstep(0.0, max_fault_expected, raw_fault)
+    float t_fault = clamp(raw_fault / max_fault_expected, 0.0, 1.0);
+    out_fault = t_fault * t_fault * (3.0 - 2.0 * t_fault);
 
-// Chain rule for the new smoothstep mask
-float d_smooth_fault = 6.0 * t_fault * (1.0 - t_fault) / max_fault_expected;
+    // Chain rule for the new smoothstep mask
+    float d_smooth_fault = 6.0 * t_fault * (1.0 - t_fault) / max_fault_expected;
 
-vec3 raw_grad_f = -(grad_w2_crump - 2.0 * sum_N2_crump * sum_w_crump * grad_w_crump) * inv_W_crump2;
-out_grad_f = raw_grad_f * d_smooth_fault;
+    vec3 raw_grad_f = -(grad_w2_crump - 2.0 * sum_N2_crump * sum_w_crump * grad_w_crump) * inv_W_crump2;
+    out_grad_f = raw_grad_f * d_smooth_fault;
 }
 
-// float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
-//     vec3 warp_v = vec3(0.0);
-// 	float warp_s = psrdnoise(2*p_local/FAKE_PLANET_RADIUS, vec3(0), 0.0, warp_v);
 
 float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength, TerrainConfig config, out vec3 out_normal) {
 
@@ -558,7 +550,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // float warp_s = psrdnoise(4*p_local / FAKE_PLANET_RADIUS, vec3(0.0), 0.0, warp_v);
     // vec3 p_tectonic = p_local + 20000.0 * smoothstep(-0.5, 0.75, warp_s) * normalize(vec3(warp_v.z, 0.0, warp_v.x));
 
-	vec3 p_tectonic = p_local + 20000.0 * cross_noise_fbm(4*p_local / FAKE_PLANET_RADIUS, 6, 0.0);
+	vec3 p_tectonic = p_local + 20000.0 * cross_noise_fbm(16*p_local / FAKE_PLANET_RADIUS, 6, 0.0); // 16 or 32 work well
 
     // 1. Evaluate Dual-Temperature Tectonics
     float base_h, fault_mask;
@@ -567,7 +559,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
 
     // A low k_crumple (e.g., 8.0 - 15.0) spreads the fault_mask and velocity field
     // hundreds of kilometers wide, while coastlines remain sharp.
-    float k_crumple = 450.0;
+    float k_crumple = 350.0;
 
     evaluate_tectonics_geocentric(p_tectonic, k_crumple,
         base_h, grad_base_h,
@@ -585,47 +577,79 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     // Because k_crumple is such a low-frequency, ultra-smooth field, we can safely
     // treat the gradient of this specific uplift layer as near-zero to avoid
     // needing the Hessian of the Voronoi cells, without causing visible lighting errors.
-// Isolate violent collisions (highly negative I1)
-// Adjust the -2.0 based on the magnitude of your velocity drift speed
-float collision_intensity = smoothstep(-0.5, -2.0, I1);
 
-// Aggressively push the base crust up.
-// A multiplier of 0.4 means a collision can push a lowland plate (0.2)
-// all the way up to a highland plateau (0.6) before any noise is added.
-float uplift = collision_intensity * 0.4;
-base_h += uplift;
+    // Isolate violent collisions (highly negative I1)
+    // Adjust the -2.0 based on the magnitude of your velocity drift speed
+    float collision_intensity = smoothstep(-0.5, -2.0, I1);
+
+    // Aggressively push the base crust up.
+    // A multiplier of 0.4 means a collision can push a lowland plate (0.2)
+    // all the way up to a highland plateau (0.6) before any noise is added.
+    float uplift = collision_intensity * 0.4;
+    base_h += uplift;
 
     // 3. Base Continent Topography (Rolling Hills & Plains)
     float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
     vec3 P_noise = P_geo * radius_scale;
 
     vec3 grad_base_noise;
-    // float base_noise = dot_noise_fbm(P_noise, 4, phase, grad_base_noise);
-	vec4 raw_base_noise = noised(P_noise);
-	float base_noise = raw_base_noise.x;
-	grad_base_noise = raw_base_noise.yzw;
+    float base_noise = dot_noise_fbm(P_noise, 5, phase+32, grad_base_noise);
+	// vec4 raw_base_noise = noised(P_noise);
+	// float base_noise = raw_base_noise.x;
+	// grad_base_noise = raw_base_noise.yzw;
 
     float base_noise_amp = 0.95;
     float continent_h = base_noise * base_noise_amp;
     vec3 grad_continent_h = grad_base_noise * base_noise_amp;
+
+    // Define the stable interior mask
+    float interior_mask = 1.0 - fault_mask;
+    vec3 grad_interior_mask = -grad_fault;
+
+    // vec4 raw_hill_noise = noised(P_noise);
+    // float raw_hills = raw_hill_noise.x;
+    // vec3 grad_raw_hills = raw_hill_noise.yzw;
+    vec3 grad_raw_hills;
+    float raw_hills = dot_noise_fbm(P_noise, 4, phase+89, grad_raw_hills);
+
+    // Apply the inverted envelope for rolling hills
+    float hill_profile = pow(1.0 - abs(raw_hills), 2.0);
+    vec3 grad_hill_profile = -2.0 * (1.0 - abs(raw_hills)) * sign(raw_hills) * grad_raw_hills;
+
+    // Product rule: Height * Mask
+    float hill_h = hill_profile * interior_mask;
+    vec3 grad_hill_h = (grad_hill_profile * interior_mask) + (hill_profile * grad_interior_mask);
 
     // 4. Tectonic Domain Warping & Ridges (Wide Crumple Zones)
     vec3 P_warped = P_noise + vel * warp_strength;
     mat3 J_warp = mat3(radius_scale) + J_vel * warp_strength;
 
     vec3 grad_raw_ridge;
+    // float raw_ridge = psrdnoise(P_warped, vec3(0), phase + 42.0, grad_raw_ridge);
     float raw_ridge = dot_noise_fbm(P_warped, 6, phase + 42.0, grad_raw_ridge);
     vec3 grad_ridge_warped = transpose(J_warp) * grad_raw_ridge;
 
     // Product rule for the WIDE fault-masked ridges
     // Because fault_mask now comes from k_crumple, the mountain ranges will naturally
     // spill out far beyond the sharp tectonic borders.
-    float ridge_h = raw_ridge * fault_mask;
-    vec3 grad_ridge = (grad_ridge_warped * fault_mask) + (raw_ridge * grad_fault);
+
+    // After evaluating raw_ridge and grad_ridge_warped
+    float exponent = 2.5;
+    float massive_ridge = pow(abs(raw_ridge), exponent);
+    vec3 grad_massive_ridge = exponent * pow(abs(raw_ridge), exponent - 1.0) * sign(raw_ridge) * grad_ridge_warped;
+
+    // Apply fault mask
+    float ridge_h = massive_ridge * fault_mask;
+    vec3 grad_ridge = (grad_massive_ridge * fault_mask) + (massive_ridge * grad_fault);
+
+    // float ridge_h = raw_ridge * fault_mask;
+    // vec3 grad_ridge = (grad_ridge_warped * fault_mask) + (raw_ridge * grad_fault);
+
+    vec4 raw_smin_shelf = smax_quad_deriv(vec4(continent_h, grad_continent_h), vec4(hill_h, grad_hill_h), 0.25);
 
     // 5. Final Composition
-    float final_h = base_h + continent_h + ridge_h;
-    vec3 final_grad_geo = grad_base_h + grad_continent_h + grad_ridge;
+    float final_h = base_h + raw_smin_shelf.x + ridge_h;
+    vec3 final_grad_geo = grad_base_h + raw_smin_shelf.yzw + grad_ridge;
 
     // 6. Resolve to Local Normal
     float true_height = remap(final_h, 0.0, 1.0, config.min_height, config.max_height);

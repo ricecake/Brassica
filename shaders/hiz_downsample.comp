@@ -1,0 +1,95 @@
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_quad : require
+
+// AMD FidelityFX Single Pass Downsampler (external/ffx-spd) -- builds the HiZ depth pyramid
+// from GBufferDepth's mip 0 (written by G-Buffer geometry passes).
+// Produces an RG32F texture where x = minDepth and y = maxDepth for mips 1..N.
+#define A_GPU 1
+#define A_GLSL 1
+
+#include "bindless.glsl"
+#include "ffx-spd/ffx_a.h"
+
+shared vec4 spdIntermediate[16][16];
+shared uint spdCounter;
+
+// Atomic counter buffer owned by the node (Set 2, Binding 0)
+layout(set = 2, binding = 0, std430) coherent buffer AtomicCounter { uint counter[]; };
+
+layout(push_constant) uniform Constants {
+	uint   srcIndex;       // bindless SAMPLED index for GBufferDepth's mip 0 (read-only)
+	uint   mips;           // total output mips to compute (mips 1..N)
+	uint   numWorkGroups;  // workgroups dispatched for this slice
+	uint   _pad0;
+	uvec2  workGroupOffset; // tile offset
+	uint   mipIndices[12]; // bindless STORAGE indices for output mips
+} cb;
+
+// 1. Fetch source depth texel at mip 0 (GBufferDepth)
+vec4 SpdLoadSourceImage(ivec2 pix, uint slice) {
+	float depth = texelFetch(
+		sampler2D(uTextures2D[nonuniformEXT(cb.srcIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		pix,
+		0
+	).r;
+	return vec4(depth, depth, 0.0, 0.0);
+}
+
+// 2. Fetch mip 5 -- coherent handoff for coarse tail
+vec4 SpdLoad(ivec2 pix, uint slice) {
+	return imageLoad(uImagesRG32FCoherent[nonuniformEXT(cb.mipIndices[5])], pix);
+}
+
+// 3. Store output mip (index 0..11 corresponding to output mips)
+void SpdStore(ivec2 pix, vec4 outValue, uint index, uint slice) {
+	if (index == 5) {
+		imageStore(uImagesRG32FCoherent[nonuniformEXT(cb.mipIndices[5])], pix, outValue);
+	} else {
+		imageStore(uImagesGenericWrite[nonuniformEXT(cb.mipIndices[index])], pix, outValue);
+	}
+}
+
+// 4. LDS intermediate storage
+vec4 SpdLoadIntermediate(uint x, uint y) {
+	return spdIntermediate[x][y];
+}
+
+void SpdStoreIntermediate(uint x, uint y, vec4 value) {
+	spdIntermediate[x][y] = value;
+}
+
+// 5. Atomic counters
+void SpdIncreaseAtomicCounter(uint slice) {
+	spdCounter = atomicAdd(counter[slice], 1u);
+}
+
+uint SpdGetAtomicCounter() {
+	return spdCounter;
+}
+
+void SpdResetAtomicCounter(uint slice) {
+	counter[slice] = 0u;
+}
+
+// 6. Min/max depth reduction -- x = minDepth, y = maxDepth; z/w unused.
+vec4 SpdReduce4(vec4 v0, vec4 v1, vec4 v2, vec4 v3) {
+	float minDepth = min(min(v0.x, v1.x), min(v2.x, v3.x));
+	float maxDepth = max(max(v0.y, v1.y), max(v2.y, v3.y));
+	return vec4(minDepth, maxDepth, 0.0, 0.0);
+}
+
+#include "ffx-spd/ffx_spd.h"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+	SpdDownsample(
+		gl_WorkGroupID.xy,
+		gl_LocalInvocationIndex,
+		cb.mips,
+		cb.numWorkGroups,
+		gl_WorkGroupID.z,
+		cb.workGroupOffset
+	);
+}

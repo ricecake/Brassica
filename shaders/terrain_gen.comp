@@ -4,6 +4,7 @@
 #extension GL_KHR_shader_subgroup_vote : require // Required for subgroupAny
 
 #include "bindless.glsl"
+#include "terrain.glsl"
 #include "terrain/generation.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2DArray uImageArraysRGBA32F[];
@@ -33,31 +34,18 @@ void main() {
 
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
 	float texelSize = baseTexelSize * getLODScale(float(lod));
-	int dimInt = int(dim);
 
-	vec2 camGrid = floor(uCameraPosition.xz / texelSize);
-	ivec2 gridOffset = ivec2(mod(camGrid, vec2(dim)));
+	TerrainClipmapUpdate update = terrainClipmapUpdateFor(lod, dim, push.forceRegeneration);
 
-	vec2 prevCamGrid = floor(uPreviousCameraPosition.xz / texelSize);
-	ivec2 delta = ivec2(camGrid) - ivec2(prevCamGrid);
-	int deltaX = delta.x;
-	int deltaZ = delta.y;
-
-	if (!push.forceRegeneration && uFrameIndex > 0 && deltaX == 0 && deltaZ == 0) {
+	if (!update.isFull && update.delta.x == 0 && update.delta.y == 0) {
 		return;
 	}
 
 	ivec2 texelIndex = ivec2(globalId.xy);
-	int colIdx = (texelIndex.x - gridOffset.x + int(dim)) % int(dim);
-	int rowIdx = (texelIndex.y - gridOffset.y + int(dim)) % int(dim);
+	int colIdx = (texelIndex.x - update.gridOffset.x + int(dim)) % int(dim);
+	int rowIdx = (texelIndex.y - update.gridOffset.y + int(dim)) % int(dim);
 
-	bool is_dirty = true;
-
-	if (uFrameIndex > 0 && abs(deltaX) < dimInt && abs(deltaZ) < dimInt) {
-		bool dirtyX = (deltaX > 0 && colIdx >= dimInt - deltaX) || (deltaX < 0 && colIdx < -deltaX);
-		bool dirtyZ = (deltaZ > 0 && rowIdx >= dimInt - deltaZ) || (deltaZ < 0 && rowIdx < -deltaZ);
-		is_dirty = dirtyX || dirtyZ;
-	}
+	bool is_dirty = terrainClipmapTexelDirty(update, colIdx, rowIdx, dim);
 
 	if (!push.forceRegeneration && uFrameIndex > 0 && !subgroupAny(is_dirty)) {
 		return;
@@ -77,6 +65,22 @@ void main() {
 
 	// eval_terrain(p, con, h, normal);
 	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal);
+
+	// mat3 warpGrad;
+	// vec3 scaleGrad;
+	// HierarchicalWorleyData2D worley = hierarchicalWorleyTiled((p.xz+16*cross_noise_fbm(p/1024, 3, 0.0, warpGrad).xz)/(256), 4096);
+	// h+= 32*abs(dot_noise_fbm(p/1024, 4, 0, scaleGrad))*(1.0 - worley.f1_dist);
+
+	// normal = normalize(0.707*32*vec3(worley.p - worley.f1_pos, 1.0)+normal);
+
+	// // Add minor local perturbations to mesh height and surface normals for close-up detail
+	// vec2 microGrad = vec2(0.0);
+	// float microNoise = psrdnoise(worldXZ / 256, vec2(0.0), 0.0, microGrad);
+	// float lodFade = clamp(1.0 - (float(lod) / 6.0), 0.0, 1.0);
+	// float microAmplitude = lodFade;
+	// h += microNoise * microAmplitude * smoothstep(0.0, 1.0, h);
+	// normal = normalize(normal + smoothstep(0.0, 1.0, h) * normalize(vec3(-microGrad.x, 1.0, -microGrad.y)) * (0.15 * lodFade));
+
 
 	float ny = max(0.0001, normal.y);
 	vec3 heightAndSlope = vec3(h, -normal.x / ny, -normal.z / ny);

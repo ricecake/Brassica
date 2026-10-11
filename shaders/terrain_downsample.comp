@@ -10,6 +10,7 @@
 #define A_GLSL 1
 
 #include "bindless.glsl"
+#include "terrain_dirty.glsl"
 #include "ffx-spd/ffx_a.h"
 
 shared vec4 spdIntermediate[16][16];
@@ -22,29 +23,54 @@ shared uint spdCounter;
 layout(set = 2, binding = 0, std430) coherent buffer AtomicCounter { uint counter[]; };
 
 layout(push_constant) uniform Constants {
-	uint   srcIndex;       // bindless SAMPLED index for TerrainMinMaxTexture's mip 0 (read-only)
-	uint   mips;           // total output mips to compute (10 for MapDim = 1024 -- our mip 1..10)
-	uint   numWorkGroups;  // workgroups dispatched for this slice (excludes the Z/slice dimension)
-	uvec2  workGroupOffset; // tile offset -- (0,0) until incremental dirty-rect dispatch lands
+	uint srcIndex;      // bindless SAMPLED index for TerrainMinMaxTexture's mip 0 (read-only)
+	uint mips;          // total output mips to compute (10 for MapDim = 1024 -- our mip 1..10)
+	uint isFullRebuild; // nonzero = every tile in every slice is dirty (first dispatch/force/resize)
+	uint textureDim;    // per-layer map width -- for the toroidal dirty-tile test below
 	// Bindless STORAGE indices for SPD's internal output mips 0..9 (== our mip 1..10). Index 5
 	// (our mip 6) is SPD's single-workgroup coarse-tail handoff -- SpdStore/SpdLoad route it
 	// through uImageArraysRG32FCoherent instead of the plain writeonly alias every other index
 	// uses, but it's the same bindless slot either way (AssignAndWriteBindlessIndices doesn't
 	// care which GLSL declaration a resource's index gets read through).
-	uint   mipIndices[10];
+	uint mipIndices[10];
 } cb;
 
 // 1. Fetch mip 0 -- already (min, max) per terrain_gen.comp's write, not a raw height, so no
 // manual min==max duplication needed here. Sampled read (not storage): formatless storage reads
 // aren't legal in this toolchain (bindless.glsl's comment), but a sampled read has no such
 // restriction regardless of format.
-vec4 SpdLoadSourceImage(ivec2 pix, uint slice) {
-	vec2 minMax = texelFetch(
+//
+// Dilated by one texel (min/max over the 2x2 block {pix, pix+1}, wrapping toroidally): every
+// coarse cell this chain builds must bound the *interpolated* surface sampleTerrainClipmap
+// actually draws across its whole footprint, not just its own corner sample. Without this, a
+// hierarchical min-max tracer could only ever accept a hit at mip 0 -- a ray that dips below the
+// true (interpolated) surface but stays above every stored corner sample would never register
+// against an undilated chain. pix+1 wraps with & (dim-1) rather than clamping, since adjacent
+// storage texels represent adjacent world positions all the way around the toroidal window
+// (including across the seam) -- clamping would read the wrong edge there.
+// GLSL doesn't allow a sampler-typed local variable (only uniform globals/function parameters),
+// so the combined sampler is constructed once per fetch, same as every other bindless sample
+// site in this codebase (bindless.glsl/terrain.glsl) -- not re-fetched from a cached handle.
+vec2 fetchMip0MinMax(ivec2 pix, uint slice) {
+	return texelFetch(
 		sampler2DArray(uTextureArrays[nonuniformEXT(cb.srcIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
-		ivec3(pix, slice),
+		ivec3(pix, int(slice)),
 		0
 	).rg;
-	return vec4(minMax, 0.0, 0.0);
+}
+
+vec4 SpdLoadSourceImage(ivec2 pix, uint slice) {
+	uint dim = (cb.textureDim > 0u) ? cb.textureDim : 1024u;
+	ivec2 pixNext = ivec2((uvec2(pix) + 1u) & (dim - 1u));
+
+	vec2 a = fetchMip0MinMax(ivec2(pix.x, pix.y), slice);
+	vec2 b = fetchMip0MinMax(ivec2(pixNext.x, pix.y), slice);
+	vec2 c = fetchMip0MinMax(ivec2(pix.x, pixNext.y), slice);
+	vec2 d = fetchMip0MinMax(ivec2(pixNext.x, pixNext.y), slice);
+
+	float minVal = min(min(a.x, b.x), min(c.x, d.x));
+	float maxVal = max(max(a.y, b.y), max(c.y, d.y));
+	return vec4(minVal, maxVal, 0.0, 0.0);
 }
 
 // 2. Fetch mip 6 -- the coherent handoff: the single surviving workgroup reads back every
@@ -97,13 +123,95 @@ vec4 SpdReduce4(vec4 v0, vec4 v1, vec4 v2, vec4 v3) {
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
+// Dirty storage-texel span (start, count) for one axis of one layer, derived the same way
+// terrain_gen.comp's per-texel dirty strip is, then padded by one texel on the low side: a
+// dilated texel at storage position s (SpdLoadSourceImage above) depends on s and s+1, so if s0
+// is dirty, the dilated value at s0-1 changes too, even though s0-1 itself didn't. Padding only
+// the low side is enough -- s0+1's dilated value depends on s0+1 and s0+2, neither of which this
+// span's own dirtiness implies changed (unless s0+1 was already dirty, already inside the span).
+void dirtySpanForAxis(int delta, int gridOffsetComp, uint dim, out uint start, out uint count) {
+	int dimInt = int(dim);
+	if (delta > 0) {
+		count = uint(delta);
+		start = uint(((gridOffsetComp - delta) % dimInt + dimInt) % dimInt);
+	} else if (delta < 0) {
+		count = uint(-delta);
+		start = uint(((gridOffsetComp) % dimInt + dimInt) % dimInt);
+	} else {
+		count = 0u;
+		start = 0u;
+	}
+	if (count > 0u) {
+		start = (start + dim - 1u) % dim;
+		count += 1u;
+	}
+}
+
+// Does the 64-wide tile starting at tileOrigin intersect the (start, count) dirty span, both
+// measured mod dim? Two circular intervals of length <= dim intersect iff either one's start
+// falls inside the other's span -- verified against concrete start/count/tileOrigin examples
+// (including both directions of wraparound) rather than taken on faith.
+bool tileAxisDirty(uint tileOrigin, uint start, uint count, uint dim) {
+	if (count == 0u) {
+		return false;
+	}
+	uint tileStartInSpan = (tileOrigin + dim - start) % dim; // (s - a) mod dim
+	uint spanStartInTile = (start + dim - tileOrigin) % dim; // (a - s) mod dim
+	return tileStartInSpan < count || spanStartInTile < 64u;
+}
+
 void main() {
+	uint dim = (cb.textureDim > 0u) ? cb.textureDim : 1024u;
+	uint tilesPerAxis = max(1u, dim / 64u);
+	uint slice = gl_WorkGroupID.z;
+
+	TerrainClipmapUpdate update = terrainClipmapUpdateFor(slice, dim, cb.isFullRebuild != 0u);
+
+	uint numWorkGroupsForSlice;
+	bool tileIsDirty;
+
+	if (update.isFull) {
+		numWorkGroupsForSlice = tilesPerAxis * tilesPerAxis;
+		tileIsDirty = true;
+	} else {
+		uint colStart, colCount, rowStart, rowCount;
+		dirtySpanForAxis(update.delta.x, update.gridOffset.x, dim, colStart, colCount);
+		dirtySpanForAxis(update.delta.y, update.gridOffset.y, dim, rowStart, rowCount);
+
+		// Every workgroup in this slice derives the same slice-wide dirty tile count from the
+		// same (uniform) camera delta -- cheap (2 * tilesPerAxis iterations) relative to the SPD
+		// work it gates, and avoids a second dispatch or a CPU readback to learn the count.
+		uint dirtyCols = 0u;
+		uint dirtyRows = 0u;
+		for (uint i = 0u; i < tilesPerAxis; ++i) {
+			if (tileAxisDirty(i * 64u, colStart, colCount, dim)) {
+				dirtyCols += 1u;
+			}
+			if (tileAxisDirty(i * 64u, rowStart, rowCount, dim)) {
+				dirtyRows += 1u;
+			}
+		}
+		// Inclusion-exclusion over the cross-shaped dirty region: dirty tile columns (any row)
+		// union dirty tile rows (any column), minus their double-counted intersection.
+		numWorkGroupsForSlice = dirtyCols * tilesPerAxis + dirtyRows * tilesPerAxis - dirtyCols * dirtyRows;
+
+		bool colDirty = tileAxisDirty(gl_WorkGroupID.x * 64u, colStart, colCount, dim);
+		bool rowDirty = tileAxisDirty(gl_WorkGroupID.y * 64u, rowStart, rowCount, dim);
+		tileIsDirty = colDirty || rowDirty;
+	}
+
+	// A clean tile returns before touching SPD's atomic counter at all -- SpdIncreaseAtomicCounter
+	// (called once per workgroup that reaches the mips 6-7 handoff) must fire exactly
+	// numWorkGroupsForSlice times for SpdExitWorkgroup's election to resolve correctly.
+	if (!tileIsDirty) {
+		return;
+	}
+
 	SpdDownsample(
 		gl_WorkGroupID.xy,
 		gl_LocalInvocationIndex,
 		cb.mips,
-		cb.numWorkGroups,
-		gl_WorkGroupID.z, // one clipmap slice (LOD layer) per Z workgroup index
-		cb.workGroupOffset
+		numWorkGroupsForSlice,
+		slice // one clipmap slice (LOD layer) per Z workgroup index
 	);
 }

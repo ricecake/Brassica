@@ -41,15 +41,16 @@ vec3 calculateCirrusColor(
 
 	vec3 planetCenter = vec3(0.0, -FAKE_PLANET_RADIUS, 0.0);
 	vec3 surfaceDir = normalize(p_cirrus - planetCenter);
-	vec2 weatherUV = directionToOctahedralUV(surfaceDir);
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * 3.14159265359;
+	vec2 weatherUV = fract((p_cirrus.xz / worldExtent) + 0.5);
 
 	float weatherCloudDensity = 0.5;
 	float rainfall = 0.0;
 
 	if (push.weatherBiomeIndex > 0u) {
 		vec4 weatherSample = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV);
-		weatherCloudDensity = clamp(weatherSample.g, 0.0, 1.0);
-		rainfall = clamp(weatherSample.b, 0.0, 1.0);
+		weatherCloudDensity = clamp(weatherSample.r, 0.0, 1.0); // r = cloud coverage
+		rainfall = clamp(weatherSample.b, 0.0, 1.0);            // b = moisture content
 	}
 
 	// Advect cirrus clouds with 2D/3D atmospheric circulation wind map
