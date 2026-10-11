@@ -33,8 +33,8 @@ void main() {
 		return;
 	}
 
-	vec3 viewPos = (uViewMatrix * vec4(posSample.rgb, 1.0)).xyz;
-	vec3 viewNorm = normalize((uViewMatrix * vec4(normalSample.rgb, 0.0)).xyz);
+	vec3 viewPos = mat3(uViewMatrix) * posSample.rgb;
+	vec3 viewNorm = normalize(mat3(uViewMatrix) * normalSample.rgb);
 	vec3 V = normalize(-viewPos);
 
 	float noise = spatialJitter(pixel);
@@ -58,7 +58,7 @@ void main() {
 			// Horizon step 1
 			vec2 sampleUV1 = uv + sliceDir * stepDist / vec2(params.screenSize);
 			if (sampleUV1.x >= 0.0 && sampleUV1.x <= 1.0 && sampleUV1.y >= 0.0 && sampleUV1.y <= 1.0) {
-				vec3 sPos1 = (uViewMatrix * vec4(SAMPLE_NEAREST(params.gPositionIndex, sampleUV1).rgb, 1.0)).xyz;
+				vec3 sPos1 = mat3(uViewMatrix) * SAMPLE_NEAREST(params.gPositionIndex, sampleUV1).rgb;
 				vec3 delta1 = sPos1 - viewPos;
 				if (length(delta1) < 20.0) {
 					float h1 = dot(normalize(delta1), V);
@@ -69,7 +69,7 @@ void main() {
 			// Horizon step 2
 			vec2 sampleUV2 = uv - sliceDir * stepDist / vec2(params.screenSize);
 			if (sampleUV2.x >= 0.0 && sampleUV2.x <= 1.0 && sampleUV2.y >= 0.0 && sampleUV2.y <= 1.0) {
-				vec3 sPos2 = (uViewMatrix * vec4(SAMPLE_NEAREST(params.gPositionIndex, sampleUV2).rgb, 1.0)).xyz;
+				vec3 sPos2 = mat3(uViewMatrix) * SAMPLE_NEAREST(params.gPositionIndex, sampleUV2).rgb;
 				vec3 delta2 = sPos2 - viewPos;
 				if (length(delta2) < 20.0) {
 					float h2 = dot(normalize(delta2), V);
