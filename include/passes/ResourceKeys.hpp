@@ -74,6 +74,8 @@ namespace brassica {
 
 	struct GBufferDepth {};
 
+	struct GBufferBackDepth {};
+
 	struct ClusteredLighting {};
 
 	struct AutoExposureBuffer {};

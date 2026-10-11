@@ -27,17 +27,17 @@ namespace brassica {
 
 	struct HiZDownsamplePushConstants {
 		std::uint32_t srcIndex{0};       // bindless SAMPLED index for GBufferDepth (mip 0 read)
+		std::uint32_t backSrcIndex{0};   // bindless SAMPLED index for GBufferBackDepth (mip 0 read)
 		std::uint32_t mips{10};          // SPD output mips
 		std::uint32_t numWorkGroups{0};  // workgroups dispatched
-		std::uint32_t _pad0{0};
 		glm::uvec2    workGroupOffset{0, 0};        // (0,0)
 		std::array<std::uint32_t, 12> mipIndices{}; // bindless STORAGE indices for mips 1..12
 	};
 
 	static_assert(offsetof(HiZDownsamplePushConstants, srcIndex) == 0);
-	static_assert(offsetof(HiZDownsamplePushConstants, mips) == 4);
-	static_assert(offsetof(HiZDownsamplePushConstants, numWorkGroups) == 8);
-	static_assert(offsetof(HiZDownsamplePushConstants, _pad0) == 12);
+	static_assert(offsetof(HiZDownsamplePushConstants, backSrcIndex) == 4);
+	static_assert(offsetof(HiZDownsamplePushConstants, mips) == 8);
+	static_assert(offsetof(HiZDownsamplePushConstants, numWorkGroups) == 12);
 	static_assert(offsetof(HiZDownsamplePushConstants, workGroupOffset) == 16);
 	static_assert(offsetof(HiZDownsamplePushConstants, mipIndices) == 24);
 	static_assert(sizeof(HiZDownsamplePushConstants) == 72, "HiZDownsamplePushConstants size must be 72 bytes");
@@ -93,7 +93,7 @@ namespace brassica {
 	// Executed in SubPhase::LightPreparation (Phase 500) so HiZ depth data is available for
 	// light clustering, occlusion culling, reflections, and screen space shadow ray marching.
 	struct HiZDownsampleNode: render::NodeRegistrar<HiZDownsampleNode> {
-		using Resources = graph::Declares<graph::Read<GBufferDepth>, graph::Create<HiZTexture>>;
+		using Resources = graph::Declares<graph::Read<GBufferDepth>, graph::Read<GBufferBackDepth>, graph::Create<HiZTexture>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
@@ -190,6 +190,13 @@ namespace brassica {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferBackDepth>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ColorAttachmentDesc(width, height, vk::Format::eR32Sfloat),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
 					.key = graph::IdOf<HiZTexture>(),
 					.access = graph::AccessKind::Write,
 					.desc = HiZTextureDesc(width, height, outputMips + 1),
@@ -215,6 +222,7 @@ namespace brassica {
 			};
 
 			push.srcIndex = ctx.Index<GBufferDepth>();
+			push.backSrcIndex = ctx.Index<GBufferBackDepth>();
 			for (std::uint32_t mip = 0; mip < outputMips; ++mip) {
 				push.mipIndices[mip] = ctx.StorageIndex<HiZTexture>(mip + 1);
 			}

@@ -82,7 +82,18 @@ namespace brassica {
 			.depthTest = true,
 			.depthWrite = false,
 			.depthCompareOp = vk::CompareOp::eLess,
+			.enableBlend = true,
 			.enableShadingRate = false,
+			.stencilTest = true,
+			.stencilState = vk::StencilOpState{
+				.failOp = vk::StencilOp::eKeep,
+				.passOp = vk::StencilOp::eReplace,
+				.depthFailOp = vk::StencilOp::eKeep,
+				.compareOp = vk::CompareOp::eAlways,
+				.compareMask = 0xFF,
+				.writeMask = 0xFF,
+				.reference = 1,
+			},
 		};
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
@@ -170,7 +181,7 @@ namespace brassica {
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
-				.depthFormat = vk::Format::eD32Sfloat,
+				.depthFormat = vk::Format::eD32SfloatS8Uint,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};

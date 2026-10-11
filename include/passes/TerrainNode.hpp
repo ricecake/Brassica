@@ -162,6 +162,14 @@ namespace brassica {
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferBackDepth>(),
+					.access = graph::AccessKind::ReadWrite,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32Sfloat),
+					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
+				}
+			);
 			return r;
 		}
 
@@ -172,11 +180,12 @@ namespace brassica {
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
-			std::array<vk::Format, 4>      colorFormats{
+			std::array<vk::Format, 5>      colorFormats{
 				vk::Format::eR32G32B32A32Sfloat,
 				vk::Format::eR16G16B16A16Sfloat,
 				vk::Format::eR8G8B8A8Srgb,
-				vk::Format::eR8G8B8A8Unorm
+				vk::Format::eR8G8B8A8Unorm,
+				vk::Format::eR32Sfloat
 			};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
@@ -191,7 +200,7 @@ namespace brassica {
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
-				.depthFormat = vk::Format::eD32Sfloat,
+				.depthFormat = vk::Format::eD32SfloatS8Uint,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};

@@ -3,6 +3,7 @@
 #include <array>
 #include <vector>
 
+#include "graph/ResourceState.hpp"
 #include "spdlog/spdlog.h"
 
 namespace brassica::render {
@@ -71,6 +72,14 @@ namespace brassica::render {
 		key.words.push_back(static_cast<std::uint64_t>(request.state.depthCompareOp));
 		key.words.push_back(request.state.enableBlend ? 1 : 0);
 		key.words.push_back(request.state.enableShadingRate ? 1 : 0);
+		key.words.push_back(request.state.stencilTest ? 1 : 0);
+		key.words.push_back(static_cast<std::uint64_t>(request.state.stencilState.failOp));
+		key.words.push_back(static_cast<std::uint64_t>(request.state.stencilState.passOp));
+		key.words.push_back(static_cast<std::uint64_t>(request.state.stencilState.depthFailOp));
+		key.words.push_back(static_cast<std::uint64_t>(request.state.stencilState.compareOp));
+		key.words.push_back(request.state.stencilState.compareMask);
+		key.words.push_back(request.state.stencilState.writeMask);
+		key.words.push_back(request.state.stencilState.reference);
 
 		key.words.push_back(request.colorFormats.size());
 		for (vk::Format fmt : request.colorFormats) {
@@ -164,15 +173,23 @@ namespace brassica::render {
 		multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
 
 		std::vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments(request.colorFormats.size());
-		for (auto& attachment : colorBlendAttachments) {
+		for (std::size_t i = 0; i < request.colorFormats.size(); ++i) {
+			auto& attachment = colorBlendAttachments[i];
 			attachment.setColorWriteMask(
 				vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
 				vk::ColorComponentFlagBits::eA
 			);
-			if (request.state.enableBlend) {
-				// Standard alpha blend -- the one config every current consumer of this flag
-				// (the water branch) actually wants; a second blend preset can be added if a
-				// future pass needs a different one.
+			if (request.colorFormats[i] == vk::Format::eR32Sfloat && request.state.enableBlend) {
+				// Back depth accumulation: use max blending so GBufferBackDepth gets the maximum (backmost) depth
+				attachment.setBlendEnable(VK_TRUE);
+				attachment.setSrcColorBlendFactor(vk::BlendFactor::eOne);
+				attachment.setDstColorBlendFactor(vk::BlendFactor::eOne);
+				attachment.setColorBlendOp(vk::BlendOp::eMax);
+				attachment.setSrcAlphaBlendFactor(vk::BlendFactor::eOne);
+				attachment.setDstAlphaBlendFactor(vk::BlendFactor::eOne);
+				attachment.setAlphaBlendOp(vk::BlendOp::eMax);
+			} else if (request.state.enableBlend) {
+				// Standard alpha blend
 				attachment.setBlendEnable(VK_TRUE);
 				attachment.setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha);
 				attachment.setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
@@ -194,7 +211,9 @@ namespace brassica::render {
 		depthStencil.setDepthWriteEnable(request.state.depthWrite ? VK_TRUE : VK_FALSE);
 		depthStencil.setDepthCompareOp(request.state.depthCompareOp);
 		depthStencil.setDepthBoundsTestEnable(VK_FALSE);
-		depthStencil.setStencilTestEnable(VK_FALSE);
+		depthStencil.setStencilTestEnable(request.state.stencilTest ? VK_TRUE : VK_FALSE);
+		depthStencil.setFront(request.state.stencilState);
+		depthStencil.setBack(request.state.stencilState);
 
 		std::array<vk::DynamicState, 2>    dynamicStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
 		vk::PipelineDynamicStateCreateInfo dynamicState{};
@@ -212,6 +231,9 @@ namespace brassica::render {
 		}
 		if (request.depthFormat != vk::Format::eUndefined) {
 			renderingCreateInfo.setDepthAttachmentFormat(request.depthFormat);
+			if (graph::HasStencilComponent(request.depthFormat)) {
+				renderingCreateInfo.setStencilAttachmentFormat(request.depthFormat);
+			}
 		}
 		if (request.state.enableShadingRate) {
 			renderingCreateInfo.setPNext(&shadingRateState);

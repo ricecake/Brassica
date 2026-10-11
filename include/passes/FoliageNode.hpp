@@ -81,6 +81,7 @@ namespace brassica {
 			// so foliage only ever drew where it was farther than or equal to whatever terrain had
 			// already written, i.e. almost nowhere a normal above-ground camera could see it.
 			.depthCompareOp = vk::CompareOp::eLess,
+			.enableBlend = true,
 			.enableShadingRate = false,
 		};
 
@@ -177,6 +178,12 @@ namespace brassica {
 						.access = graph::AccessKind::ReadWrite,
 						.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 					},
+					graph::ResourceRealization{
+						.key = graph::IdOf<GBufferBackDepth>(),
+						.access = graph::AccessKind::ReadWrite,
+						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32Sfloat),
+						.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
+					},
 					// A History<K> realization has no producer within this frame's own schedule --
 					// PhysicalRegistry::ProvisionTemporalPairs only forms the ping-ponged pair (and
 					// assigns its bindless index) from a *reader's* own realization, since
@@ -201,10 +208,11 @@ namespace brassica {
 			push.biomeTableIndex = ctx.Index<FoliageBiomeTableTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
-			std::array<vk::Format, 3>      colorFormats{
+			std::array<vk::Format, 4>      colorFormats{
 				vk::Format::eR32G32B32A32Sfloat,
 				vk::Format::eR16G16B16A16Sfloat,
-				vk::Format::eR8G8B8A8Srgb
+				vk::Format::eR8G8B8A8Srgb,
+				vk::Format::eR32Sfloat
 			};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
@@ -220,7 +228,7 @@ namespace brassica {
 				.stages = stages,
 				.state = kPipelineState,
 				.colorFormats = colorFormats,
-				.depthFormat = vk::Format::eD32Sfloat,
+				.depthFormat = vk::Format::eD32SfloatS8Uint,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};

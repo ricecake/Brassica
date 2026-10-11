@@ -19,7 +19,8 @@ float calculateScreenSpaceShadowHiZ(
 	vec3 normal,
 	vec3 lightDir,
 	uint hizIndex,
-	uint depthIndex
+	uint depthIndex,
+	uint backDepthIndex
 ) {
 	if (hizIndex == 0u || depthIndex == 0u) {
 		return 1.0;
@@ -87,25 +88,32 @@ float calculateScreenSpaceShadowHiZ(
 		}
 
 		// Ray is near or past cell min depth: test precise scene depth at mip 0
-		float sceneDepth = SAMPLE_NEAREST(depthIndex, uv).r;
+		float sceneFrontDepth = SAMPLE_NEAREST(depthIndex, uv).r;
+		float sceneBackDepth = (backDepthIndex != 0u) ? SAMPLE_NEAREST(backDepthIndex, uv).r : 0.0;
 
 		const float depthBias = 0.0002;
 		const float maxThickness = 0.005;
 
-		// Standard Z: if rayDepth > sceneDepth + bias, ray is behind the scene surface
-		if (rayDepth > sceneDepth + depthBias) {
-			float depthDiff = rayDepth - sceneDepth;
-			if (depthDiff < maxThickness) {
-				// Occluder found!
-				// Smooth fade at screen edges to avoid harsh boundary cutoffs
+		if (sceneBackDepth > 0.0) {
+			// Valid back face depth tracked: ray is inside occluder if within [frontDepth, backDepth]
+			if (rayDepth >= sceneFrontDepth - depthBias && rayDepth <= sceneBackDepth + depthBias) {
 				float edgeFade = smoothstep(0.0, 0.05, uv.x) * smoothstep(1.0, 0.95, uv.x) *
 				                 smoothstep(0.0, 0.05, uv.y) * smoothstep(1.0, 0.95, uv.y);
-
-				// Distance fade
 				float distFade = 1.0 - smoothstep(maxRayDist * 0.7, maxRayDist, currentDist);
-
 				shadowVisibility = mix(1.0, 0.0, edgeFade * distFade);
 				break;
+			}
+		} else {
+			// Sentinel value (0.0): no back face depth, gracefully fall back to thickness threshold
+			if (rayDepth > sceneFrontDepth + depthBias) {
+				float depthDiff = rayDepth - sceneFrontDepth;
+				if (depthDiff < maxThickness) {
+					float edgeFade = smoothstep(0.0, 0.05, uv.x) * smoothstep(1.0, 0.95, uv.x) *
+					                 smoothstep(0.0, 0.05, uv.y) * smoothstep(1.0, 0.95, uv.y);
+					float distFade = 1.0 - smoothstep(maxRayDist * 0.7, maxRayDist, currentDist);
+					shadowVisibility = mix(1.0, 0.0, edgeFade * distFade);
+					break;
+				}
 			}
 		}
 

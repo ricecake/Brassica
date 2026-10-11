@@ -22,6 +22,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  weatherBiomeIndex;
 	uint  gMaterialIndex;
 	uint  hizIndex;
+	uint  gBackDepthIndex;
 }
 
 params;
@@ -119,7 +120,8 @@ void main() {
 			norm,
 			material,
 			params.hizIndex,
-			params.gDepthIndex
+			params.gDepthIndex,
+			params.gBackDepthIndex
 		).color;
     
 		if(uLights[0].intensity >0) {

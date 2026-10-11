@@ -38,7 +38,8 @@ LightingResult evaluateClusteredLightContributionPBR(
 	vec3 normal,
 	Material material,
 	uint hizIndex,
-	uint depthIndex
+	uint depthIndex,
+	uint backDepthIndex
 ) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
@@ -65,7 +66,7 @@ LightingResult evaluateClusteredLightContributionPBR(
 
 			float shadow = 1.0;
 			if (hizIndex > 0u && depthIndex > 0u) {
-				shadow = calculateScreenSpaceShadowHiZ(frag_pos, N, L, hizIndex, depthIndex);
+				shadow = calculateScreenSpaceShadowHiZ(frag_pos, N, L, hizIndex, depthIndex, backDepthIndex);
 			}
 
 			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
@@ -145,8 +146,12 @@ LightingResult evaluateClusteredLightContributionPBR(
 	return result;
 }
 
+LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material, uint hizIndex, uint depthIndex) {
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, hizIndex, depthIndex, 0u);
+}
+
 LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
-	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u);
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u, 0u);
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL
