@@ -28,14 +28,19 @@ void main() {
 	vec4 normalSample = SAMPLE_NEAREST(params.gNormalIndex, uv);
 
 	// If background / unrendered pixel, write 1.0 (unoccluded)
-	if (posSample.a <= 0.0 || normalSample.a <= 0.0 || length(normalSample.rgb) < 0.1) {
+	if (posSample.a <= 0.0 || normalSample.a <= 0.0 || length(normalSample.rgb) < 0.1 || length(posSample.rgb) < 0.001) {
 		imageStore(uImagesGenericWrite[nonuniformEXT(params.outGtaoIndex)], pixel, vec4(1.0, 0.0, 0.0, 0.0));
 		return;
 	}
 
 	vec3 viewPos = mat3(uViewMatrix) * posSample.rgb;
+	float viewDist = length(viewPos);
+	if (viewDist < 0.001) {
+		imageStore(uImagesGenericWrite[nonuniformEXT(params.outGtaoIndex)], pixel, vec4(1.0, 0.0, 0.0, 0.0));
+		return;
+	}
 	vec3 viewNorm = normalize(mat3(uViewMatrix) * normalSample.rgb);
-	vec3 V = normalize(-viewPos);
+	vec3 V = -viewPos / viewDist;
 
 	float noise = spatialJitter(pixel);
 
@@ -60,8 +65,9 @@ void main() {
 			if (sampleUV1.x >= 0.0 && sampleUV1.x <= 1.0 && sampleUV1.y >= 0.0 && sampleUV1.y <= 1.0) {
 				vec3 sPos1 = mat3(uViewMatrix) * SAMPLE_NEAREST(params.gPositionIndex, sampleUV1).rgb;
 				vec3 delta1 = sPos1 - viewPos;
-				if (length(delta1) < 20.0) {
-					float h1 = dot(normalize(delta1), V);
+				float len1 = length(delta1);
+				if (len1 > 0.001 && len1 < 20.0) {
+					float h1 = dot(delta1 / len1, V);
 					maxH1 = max(maxH1, h1);
 				}
 			}
@@ -71,8 +77,9 @@ void main() {
 			if (sampleUV2.x >= 0.0 && sampleUV2.x <= 1.0 && sampleUV2.y >= 0.0 && sampleUV2.y <= 1.0) {
 				vec3 sPos2 = mat3(uViewMatrix) * SAMPLE_NEAREST(params.gPositionIndex, sampleUV2).rgb;
 				vec3 delta2 = sPos2 - viewPos;
-				if (length(delta2) < 20.0) {
-					float h2 = dot(normalize(delta2), V);
+				float len2 = length(delta2);
+				if (len2 > 0.001 && len2 < 20.0) {
+					float h2 = dot(delta2 / len2, V);
 					maxH2 = max(maxH2, h2);
 				}
 			}
@@ -81,17 +88,22 @@ void main() {
 		maxH1 = clamp(maxH1, -1.0, 1.0);
 		maxH2 = clamp(maxH2, -1.0, 1.0);
 
-		vec3 slicePlaneNorm = normalize(cross(vec3(sliceDir, 0.0), V));
-		vec3 projNorm = viewNorm - slicePlaneNorm * dot(viewNorm, slicePlaneNorm);
-		float projNormLen = length(projNorm);
+		vec3 crossVec = cross(vec3(sliceDir, 0.0), V);
+		float crossLen = length(crossVec);
 
 		float sliceAO = 1.0;
-		if (projNormLen > 0.001) {
-			float h1 = acos(maxH1);
-			float h2 = acos(maxH2);
+		if (crossLen > 0.001) {
+			vec3 slicePlaneNorm = crossVec / crossLen;
+			vec3 projNorm = viewNorm - slicePlaneNorm * dot(viewNorm, slicePlaneNorm);
+			float projNormLen = length(projNorm);
 
-			float unoccludedAngle = clamp(h1 + h2 - PI, 0.0, PI);
-			sliceAO = unoccludedAngle / PI;
+			if (projNormLen > 0.001) {
+				float h1 = acos(maxH1);
+				float h2 = acos(maxH2);
+
+				float unoccludedAngle = clamp(h1 + h2 - PI, 0.0, PI);
+				sliceAO = unoccludedAngle / PI;
+			}
 		}
 
 		visibility += sliceAO;
