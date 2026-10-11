@@ -3,25 +3,18 @@
 
 #include "bindless.glsl"
 #include "common.glsl"
-#include "helpers/octahedral.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform ClimateBFECCCorrectPushConstants {
-	uint  forwardStorageIdx;  // phi1: result of the forward semi-Lagrangian step
-	uint  originalStorageIdx; // phi0: the field phi1 was advected from
-	uint  outStorageIdx;      // written in place over originalStorageIdx's own texel
-	uint  textureDim;         // 2048
-	float dt;                 // same magnitude as the forward step's dt
+	uint  forwardStorageIdx;  // phi1 (the forward-advected state)
+	uint  originalStorageIdx; // phi0 (the original state before advection)
+	uint  outStorageIdx;      // phi0_tilde (the corrected state, overwritten in place)
+	uint  textureDim;         // 1024
+	float dt;                 // Advection step size
 } push;
 
-// Back and Forth Error Compensation and Correction (BFECC). phi1 (forwardStorageIdx) was
-// produced by advecting phi0 (originalStorageIdx) forward by +dt. Advecting phi1 backward by
-// the same dt -- tracing forward along the wind instead of backtracing -- estimates how much a
-// pure semi-Lagrangian step smeared the field; phi0 + (phi0 - phi2)/2 cancels half of that
-// estimated error before the real forward step (climate_advect.comp again, reading
-// outStorageIdx) advances the simulation using the corrected field instead of phi0 directly.
 void main() {
 	uvec2 pixel = gl_GlobalInvocationID.xy;
 	if (pixel.x >= push.textureDim || pixel.y >= push.textureDim) {
@@ -31,23 +24,28 @@ void main() {
 	vec2 uv = (vec2(pixel) + 0.5) / float(push.textureDim);
 	ivec2 coord = ivec2(pixel);
 
-	vec4 phi1 = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.forwardStorageIdx)], coord);
-	vec2 phi1Wind = phi1.ba;
+	// Read forward-advected velocity at this cell
+	vec4 forwardData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.forwardStorageIdx)], coord);
+	vec2 forwardWind = forwardData.ba;
 
-	// Reversed sign relative to climate_advect.comp's backtrace: phi1 is traced *forward*
-	// along the wind to recover an estimate of phi0.
-	vec2 backtrackUV = uv + phi1Wind * push.dt;
-	vec3 backtrackDir = octahedralUVToDirection(backtrackUV);
-	vec2 wrappedBacktrackUV = directionToOctahedralUV(backtrackDir);
-	ivec2 backtrackCoord = ivec2(clamp(wrappedBacktrackUV * float(push.textureDim), vec2(0.0), vec2(float(push.textureDim - 1))));
+	// Backward semi-Lagrangian trace along the reverse velocity field
+	vec2 backtrackUV = uv + forwardWind * push.dt;
+	backtrackUV = fract(backtrackUV);
 
-	vec4 phi2 = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.forwardStorageIdx)], backtrackCoord);
-	// Own-texel only, never backtraced -- safe to write outStorageIdx back over this same
-	// buffer in place (see TerrainBiomeNode::Execute's buffer-reuse comment).
+	ivec2 backtrackCoord = ivec2(clamp(backtrackUV * float(push.textureDim), vec2(0.0), vec2(float(push.textureDim - 1))));
+
+	// Sample the original field phi0 at the backtraced position: phi0_star = phi0(x + v*dt)
+	vec4 originalSample = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.originalStorageIdx)], backtrackCoord);
+
+	// Read phi0 at this cell
 	vec4 phi0 = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.originalStorageIdx)], coord);
 
-	vec4 corrected = phi0 + 0.5 * (phi0 - phi2);
-	corrected.rg = clamp(corrected.rg, vec2(0.0), vec2(1.0));
+	// Pointwise BFECC correction: phi0_tilde = phi0 + 0.5 * (phi0 - phi0_star)
+	vec4 corrected = phi0 + 0.5 * (phi0 - originalSample);
 
-	imageStore(uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)], coord, corrected);
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
+		coord,
+		vec4(clamp(corrected.r, 0.0, 1.0), clamp(corrected.g, 0.0, 1.0), corrected.b, corrected.a)
+	);
 }

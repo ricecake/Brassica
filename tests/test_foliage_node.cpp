@@ -20,6 +20,7 @@ TEST_CASE("FoliageManager state and global properties") {
 	props.rockRatio = 0.12f;
 	props.seaweedRatio = 0.18f;
 	props.bushRatio = 0.25f;
+	props.treeRatio = 0.35f;
 	props.lodBaseRange = 500.0f;
 	props.maxLODs = 10u;
 	props.tilesPerRow = 24u;
@@ -31,14 +32,19 @@ TEST_CASE("FoliageManager state and global properties") {
 	CHECK(updatedProps.rockRatio == doctest::Approx(0.12f));
 	CHECK(updatedProps.seaweedRatio == doctest::Approx(0.18f));
 	CHECK(updatedProps.bushRatio == doctest::Approx(0.25f));
+	CHECK(updatedProps.treeRatio == doctest::Approx(0.35f));
 	CHECK(updatedProps.lodBaseRange == doctest::Approx(500.0f));
 	CHECK(updatedProps.maxLODs == 10u);
 	CHECK(updatedProps.tilesPerRow == 24u);
 
-	brassica::GrassProperties biome0 = mgr.GetBiomeProperties(0);
-	CHECK(biome0.enabled == 0u);
+	// All 10 biomes are enabled by default -- a biome's weather classification can legitimately
+	// drift into any of them over a long session (shaders/helpers/whittaker.glsl), and one left
+	// disabled by default meant foliage could silently vanish wherever that happened.
+	for (std::uint32_t i = 0; i < brassica::kFoliageBiomeCount; ++i) {
+		brassica::GrassProperties biome = mgr.GetBiomeProperties(i);
+		CHECK(biome.enabled == 1u);
+	}
 	brassica::GrassProperties biome1 = mgr.GetBiomeProperties(1);
-	CHECK(biome1.enabled == 1u);
 	CHECK(biome1.height > 0.0f);
 }
 
@@ -57,6 +63,7 @@ TEST_CASE("FoliageNode registration and push constants sync") {
 	props.rockRatio = 0.3f;
 	props.seaweedRatio = 0.2f;
 	props.bushRatio = 0.4f;
+	props.treeRatio = 0.5f;
 	props.maxLODs = 12u;
 	props.tilesPerRow = 16u;
 	foliageMgr->SetGlobalProperties(props);
@@ -70,6 +77,7 @@ TEST_CASE("FoliageNode registration and push constants sync") {
 	CHECK(node.push.rockRatio == doctest::Approx(0.3f));
 	CHECK(node.push.seaweedRatio == doctest::Approx(0.2f));
 	CHECK(node.push.bushRatio == doctest::Approx(0.4f));
+	CHECK(node.push.treeRatio == doctest::Approx(0.5f));
 	CHECK(node.push.gridParams.x == 12u);
 	CHECK(node.push.gridParams.y == 16u);
 	CHECK(node.push.gridParams.z == 12u * 16u * 16u);

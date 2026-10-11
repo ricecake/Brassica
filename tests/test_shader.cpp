@@ -323,6 +323,7 @@ TEST_CASE("Terrain Occlusion Helper Consumers Compile") {
 	const Case cases[] = {
 		{"shaders/terrain.task", shaderc_glsl_task_shader},
 		{"shaders/terrain.mesh", shaderc_glsl_mesh_shader},
+		{"shaders/terrain.frag", shaderc_glsl_fragment_shader},
 		{"shaders/water.task", shaderc_glsl_task_shader},
 		{"shaders/water.mesh", shaderc_glsl_mesh_shader},
 		{"shaders/foliage.task", shaderc_glsl_task_shader},

@@ -121,6 +121,33 @@ void main() {
 			params.hizIndex,
 			params.gDepthIndex
 		).color;
+    
+		if(uLights[0].intensity >0) {
+			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+				params.minMaxIndex,
+				params.gridParams.w,
+				params.gridParams.x,
+				0.0
+			);
+			float hitDist = 0.0;
+			bool hit;
+			if (dot(norm, uLights[0].direction) > 0) {
+				hitDist = dot(norm, -uLights[0].direction);
+				hit = true;
+			}
+			else {
+				hit = traceTerrainOcclusion(
+					occCtx,
+					pos+(2.0*-uLights[0].direction)+(norm*0.5),
+					-uLights[0].direction,
+					50000,
+					hitDist
+				);
+			}
+			if (hit) {
+				hdrColor *= mix(1.0, smoothstep(-25, 50, hitDist), clamp(uLights[0].intensity, 0, 1));
+			}
+		}
 	}
 
 	outColor = vec4(hdrColor, 1.0);

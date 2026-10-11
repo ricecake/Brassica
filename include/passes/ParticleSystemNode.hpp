@@ -1003,7 +1003,6 @@ namespace brassica {
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(UnderwaterParticleRenderNode);
 
 	struct AboveWaterParticleRenderNode: render::NodeRegistrar<AboveWaterParticleRenderNode> {
 		using Resources = graph::Declares<
@@ -1181,7 +1180,6 @@ namespace brassica {
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(AboveWaterParticleRenderNode);
 
 	using ParticleRenderNode = AboveWaterParticleRenderNode;
 
@@ -1308,7 +1306,9 @@ namespace brassica {
 		[[nodiscard]] const graph::Graph& InnerGraph() const { return m_subgraph.InnerGraph(); }
 	};
 
-	BRASSICA_REGISTER_NODE(ParticleSystemNode);
+	//BRASSICA_REGISTER_NODE(UnderwaterParticleRenderNode);
+	//BRASSICA_REGISTER_NODE(AboveWaterParticleRenderNode);
+	//BRASSICA_REGISTER_NODE(ParticleSystemNode);
 
 } // namespace brassica
 
