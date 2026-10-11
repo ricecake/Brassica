@@ -123,13 +123,20 @@ void main() {
 				0.0
 			);
 			float hitDist = 0.0;
-			bool hit = traceTerrainOcclusion(
-				occCtx,
-				pos-uLights[0].direction,
-				-uLights[0].direction,
-				3500,
-				hitDist
-			);
+			bool hit;
+			if (dot(norm, uLights[0].direction) > 0) {
+				hitDist = dot(norm, -uLights[0].direction);
+				hit = true;
+			}
+			else {
+				hit = traceTerrainOcclusion(
+					occCtx,
+					pos-10*uLights[0].direction,
+					-uLights[0].direction,
+					50000,
+					hitDist
+				);
+			}
 			if (hit) {
 				hdrColor *= mix(1.0, smoothstep(-25, 50, hitDist), clamp(uLights[0].intensity, 0, 1));
 			}

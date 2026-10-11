@@ -88,22 +88,29 @@ void main() {
 	float substrate = 0.0;
 	float debugVal = 0.0;
 
+	const float erosion_strength = 0.12;
+	const float erosion_gully_weight = 0.5;
+	const float erosion_detail = 1.5;
+	const float erosion_scale = 0.15;
+	float frameworkHeightPeak = 5000.0;
+	float erosionFadeTarget = clamp(h / (frameworkHeightPeak * 0.6), -1.0, 1.0);
+
 	vec4 erosionDelta = ErosionFilter(
 		worldXZ,
 		heightAndSlope,
-		0.0,                      // fadeTarget
-		0.05,                     // strength
-		0.5,                      // gullyWeight
-		1.0,                      // detail
-		vec4(0.5, 0.5, 1.0, 1.0), // rounding
-		vec4(1.0, 1.0, 1.0, 1.0), // onset
-		vec2(1.0, 0.0),           // assumedSlope
-		0.01,                     // scale
-		4,                        // octaves
-		2.0,                      // lacunarity
-		0.5,                      // gain
-		1.0,                      // cellScale
-		1.0,                      // normalization
+		erosionFadeTarget,              // fadeTarget
+		erosion_strength,               // strength
+		erosion_gully_weight,           // gullyWeight
+		erosion_detail,                 // detail
+		vec4(0.1, 0.0, 0.1, 2.0),       // rounding
+		vec4(1.25, 1.25, 2.8, 1.5),     // onset
+		vec2(0.7, 1.0),                 // assumedSlope
+		erosion_scale,                  // scale
+		5,                              // octaves
+		2.0,                            // lacunarity
+		0.5,                            // gain
+		0.70,                           // cellScale
+		0.5,                            // normalization
 		ridgeMap,
 		substrate,
 		debugVal
