@@ -2003,13 +2003,13 @@ namespace brassica {
 		bindings[4]
 			.setBinding(4)
 			.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
-			.setDescriptorCount(16)
+			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 5: uTextures3D
 		bindings[5]
 			.setBinding(5)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
-			.setDescriptorCount(32)
+			.setDescriptorCount(8)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 6: bindless storage buffers (no single canonical GLSL declaration -- each
 		// consumer aliases its own struct at this binding, same idiom as uImagesRGBA32F's
@@ -2017,15 +2017,15 @@ namespace brassica {
 		bindings[6]
 			.setBinding(6)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-			.setDescriptorCount(256)
+			.setDescriptorCount(16)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		std::array<vk::DescriptorBindingFlags, 7> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
@@ -2042,11 +2042,11 @@ namespace brassica {
 		// resource's descriptor is written once at creation and read for the rest of its life,
 		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
 		std::array<vk::DescriptorPoolSize, 5> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 32},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
-			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 16},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 256},
+			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16},
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);

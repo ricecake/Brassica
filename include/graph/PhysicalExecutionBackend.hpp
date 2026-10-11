@@ -68,10 +68,8 @@ namespace brassica::graph {
 				continue;
 			}
 
-		std::uint32_t w = r.desc.width > 0 ? r.desc.width : tex->GetDesc().width;
-		std::uint32_t h = r.desc.height > 0 ? r.desc.height : tex->GetDesc().height;
-		out.width = std::max(out.width, w);
-		out.height = std::max(out.height, h);
+			out.width = std::max(out.width, r.desc.width);
+			out.height = std::max(out.height, r.desc.height);
 
 			if (role == AttachmentRole::Depth) {
 				out.depthFormat = format;

@@ -71,27 +71,6 @@ namespace brassica {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = enabled};
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferPosition>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ColorAttachmentDesc(width, height, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferNormal>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ColorAttachmentDesc(width, height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::DepthBufferDesc(width, height),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
 					.key = graph::IdOf<GTAOTexture>(),
 					.access = graph::AccessKind::Write,
 					.desc = GTAOTextureDesc(width, height),

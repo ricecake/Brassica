@@ -558,9 +558,7 @@ namespace brassica::graph {
 							continue;
 						}
 
-						if (r.desc.width > 0 || realizationsToProvision.find(resolvedKey) == realizationsToProvision.end()) {
-							realizationsToProvision[resolvedKey] = r;
-						}
+						realizationsToProvision[resolvedKey] = r;
 					}
 				}
 			}
