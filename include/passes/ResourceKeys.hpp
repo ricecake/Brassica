@@ -130,6 +130,23 @@ namespace brassica {
 
 	struct SkyViewLUT {};
 
+	struct GTAOTexture {};
+
+	inline graph::ResourceDesc GTAOTextureDesc(std::uint32_t width, std::uint32_t height) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR8Unorm),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eColorAttachment
+			),
+		};
+	}
+
 	struct ParticleBuffer {};
 
 	struct ParticleTypeBuffer {};

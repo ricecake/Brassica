@@ -11,9 +11,11 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "passes/ResourceGroups.hpp"
+#include "lighting/ILightManager.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
+#include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "spdlog/spdlog.h"
@@ -40,6 +42,8 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t gMaterialIndex{0};
+		std::uint32_t skyViewIndex{0};
+		std::uint32_t gtaoIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -51,6 +55,8 @@ namespace brassica {
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
 			graph::Read<TerrainWeatherBiomeTexture>,
+			graph::Read<SkyViewLUT>,
+			graph::Read<GTAOTexture>,
 			graph::Read<TerrainTLAS>,
 			graph::Create<HdrColor>>;
 
@@ -65,6 +71,7 @@ namespace brassica {
 		FragmentShader           fragShader;
 		vk::Format               swapchainFormat = vk::Format::eUndefined;
 		DeferredPushConstants    push{};
+		bool                     enableGTAO{true};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -91,6 +98,9 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.gridParams = p.terrainGridParams;
+			if (ServiceLocator::Instance().Has<ILightManager>()) {
+				enableGTAO = ServiceLocator::Instance().Get<ILightManager>()->IsGTAOEnabled();
+			}
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -117,6 +127,8 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.gtaoIndex = enableGTAO ? ctx.Index<GTAOTexture>() : 0u;
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

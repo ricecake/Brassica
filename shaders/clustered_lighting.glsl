@@ -3,6 +3,10 @@
 
 #include "lighting.glsl"
 #include "helpers/lighting.glsl"
+#include "helpers/octahedral.glsl"
+#include "atmosphere/common.glsl"
+#include "helpers/whittaker.glsl"
+#include "external/lygia/lighting/common/gtaoMultiBounce.glsl"
 
 /**
  * Computes the 1D cluster index for a given world-space position.
@@ -27,12 +31,17 @@ uint getClusterIndex(vec3 frag_pos) {
 }
 
 /**
- * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR
- * BRDF. This is the only entry point -- callers that don't have every Material field on hand
- * should start from materialDefault() (material.glsl) and override what they know, rather than a
- * separate defaults-filling wrapper.
+ * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR BRDF.
  */
-LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+LightingResult evaluateClusteredLightContributionPBR(
+	vec3 frag_pos,
+	vec3 normal,
+	Material material,
+	uint skyViewIndex,
+	uint weatherBiomeIndex,
+	uint gtaoIndex,
+	vec2 uv
+) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
 
@@ -125,12 +134,61 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 	}
 
 	float terrainOcc = calculateTerrainOcclusion(frag_pos, N);
-	vec3 spatialSHAmbient = getSpatialAmbientSH(frag_pos, N);
-	result.color += spatialSHAmbient * uAmbientLight.rgb * material.albedo * (material.ao * terrainOcc);
 
+	// 1. Minimum physically grounded airglow floor (upper atmosphere chemiluminescence)
+	const vec3 airglow = vec3(0.0008, 0.0015, 0.0022);
+
+	// 2. Sky Light from SkyViewLUT
+	vec3 skyLight = airglow;
+	if (skyViewIndex > 0u) {
+		vec3 skyZenith = sampleSkyView(skyViewIndex, vec3(0.0, 1.0, 0.0));
+		vec3 skyNorm = sampleSkyView(skyViewIndex, max(N, vec3(0.0, 0.01, 0.0)));
+		skyLight = mix(skyZenith, skyNorm, 0.5);
+	}
+
+	// 3. Cloud coverage & Weather modulation
+	vec3 biomeColor = vec3(0.2, 0.35, 0.15);
+	if (weatherBiomeIndex > 0u) {
+		vec3 planetDir = normalize(frag_pos - vec3(0.0, -FAKE_PLANET_RADIUS, 0.0));
+		vec2 octUV = directionToOctahedralUV(planetDir);
+		vec4 weather = SAMPLE_LINEAR(weatherBiomeIndex, octUV);
+
+		float cloudCoverage = clamp(weather.r, 0.0, 1.0);
+		float cloudAttenuation = mix(1.0, 0.35, cloudCoverage);
+		vec3 overcastSky = vec3(length(skyLight) * 0.6);
+		skyLight = mix(skyLight, overcastSky, cloudCoverage * 0.7) * cloudAttenuation;
+
+		WhittakerBiome biome = evaluateWhittakerBiome(weather.y, weather.z, weather.a, weather.g);
+		biomeColor = biome.color;
+	}
+
+	skyLight = max(skyLight, airglow);
+
+	// 4. Biome Palette ground bounce (hemispheric upward ambient)
+	vec3 groundBounce = skyLight * biomeColor * 0.4;
+	float hemisphere = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+	vec3 ambientLight = mix(groundBounce, skyLight, hemisphere);
+
+	// 5. GTAO Modulation with multi-bounce inter-reflection
+	float gtaoVal = material.ao;
+	if (gtaoIndex > 0u) {
+		float sampledGTAO = SAMPLE_NEAREST(gtaoIndex, uv).r;
+		gtaoVal *= sampledGTAO;
+	}
+
+	vec3 multiBounceAO = gtaoMultiBounce(gtaoVal, material.albedo);
+
+	vec3 spatialSHAmbient = getSpatialAmbientSH(frag_pos, N);
+	vec3 finalAmbient = (spatialSHAmbient + ambientLight) * uAmbientLight.rgb;
+
+	result.color += finalAmbient * material.albedo * multiBounceAO * terrainOcc;
 	result.color += material.albedo * material.emissivity;
 
 	return result;
+}
+
+LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u, 0u, vec2(0.5));
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL
