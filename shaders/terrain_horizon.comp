@@ -2,6 +2,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #include "bindless.glsl"
+#include "common.glsl"
 #include "terrain_dirty.glsl"
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
@@ -16,7 +17,7 @@ layout(push_constant) uniform PushConstants {
 
 shared float s_heights[1024];
 
-// Ping-pong double-buffered shared memory to prevent data races during parallel scan
+// Ping-pong double-buffered shared memory for 1024 items
 shared uint s_max_h_idx_A[1024];
 shared uint s_max_h_idx_B[1024];
 shared uint s_max_s_idx_A[1024];
@@ -91,7 +92,7 @@ void main() {
 
 	uint tid = gl_LocalInvocationIndex; // 0..255
 
-	// Load 1024 height samples into shared memory
+	// Phase 1: Load 1024 height samples into shared memory
 	for (uint i = 0u; i < 4u; ++i) {
 		uint idx = tid * 4u + i;
 		if (idx < dim) {
@@ -117,7 +118,7 @@ void main() {
 	barrier();
 
 	// -------------------------------------------------------------------------
-	// FORWARD PARALLEL PREFIX SCAN (j > i) WITH PING-PONG BUFFERS
+	// FORWARD PARALLEL PREFIX SCAN (j > i)
 	// -------------------------------------------------------------------------
 	for (uint i = 0u; i < 4u; ++i) {
 		uint idx = tid * 4u + i;
@@ -140,9 +141,13 @@ void main() {
 					uint p2 = readA ? s_max_s_idx_A[idx + s] : s_max_s_idx_B[idx + s];
 					uint p3 = readA ? s_max_h_idx_A[idx + s] : s_max_h_idx_B[idx + s];
 
-					float slope1 = (s_heights[p1] - s_heights[idx]) / max(float(p1 - idx) * dx, 1e-4);
-					float slope2 = (s_heights[p2] - s_heights[idx]) / max(float(p2 - idx) * dx, 1e-4);
-					float slope3 = (s_heights[p3] - s_heights[idx]) / max(float(p3 - idx) * dx, 1e-4);
+					float d1 = max(float(p1 - idx) * dx, 1e-4);
+					float d2 = max(float(p2 - idx) * dx, 1e-4);
+					float d3 = max(float(p3 - idx) * dx, 1e-4);
+
+					float slope1 = p1 > idx ? (s_heights[p1] - s_heights[idx]) / d1 - d1 * 0.5 / FAKE_PLANET_RADIUS : -1e9;
+					float slope2 = p2 > idx ? (s_heights[p2] - s_heights[idx]) / d2 - d2 * 0.5 / FAKE_PLANET_RADIUS : -1e9;
+					float slope3 = p3 > idx ? (s_heights[p3] - s_heights[idx]) / d3 - d3 * 0.5 / FAKE_PLANET_RADIUS : -1e9;
 
 					uint best_p = p1;
 					float max_slope = slope1;
@@ -179,15 +184,20 @@ void main() {
 		uint idx = tid * 4u + i;
 		if (idx < dim) {
 			uint p = readA ? s_max_s_idx_A[idx] : s_max_s_idx_B[idx];
-			float slope = p > idx ? (s_heights[p] - s_heights[idx]) / (float(p - idx) * dx) : 0.0;
-			s_fwd_max_slope[idx] = max(0.0, slope);
+			if (p > idx) {
+				float dist = float(p - idx) * dx;
+				float slope = (s_heights[p] - s_heights[idx]) / max(dist, 1e-4) - dist * 0.5 / FAKE_PLANET_RADIUS;
+				s_fwd_max_slope[idx] = max(0.0, slope);
+			} else {
+				s_fwd_max_slope[idx] = 0.0;
+			}
 		}
 	}
 
 	barrier();
 
 	// -------------------------------------------------------------------------
-	// BACKWARD PARALLEL PREFIX SCAN (j < i) WITH PING-PONG BUFFERS
+	// BACKWARD PARALLEL PREFIX SCAN (j < i)
 	// -------------------------------------------------------------------------
 	for (uint i = 0u; i < 4u; ++i) {
 		uint idx = tid * 4u + i;
@@ -210,9 +220,13 @@ void main() {
 					uint p2 = readA ? s_max_s_idx_A[idx - s] : s_max_s_idx_B[idx - s];
 					uint p3 = readA ? s_max_h_idx_A[idx - s] : s_max_h_idx_B[idx - s];
 
-					float slope1 = (s_heights[p1] - s_heights[idx]) / max(float(idx - p1) * dx, 1e-4);
-					float slope2 = (s_heights[p2] - s_heights[idx]) / max(float(idx - p2) * dx, 1e-4);
-					float slope3 = (s_heights[p3] - s_heights[idx]) / max(float(idx - p3) * dx, 1e-4);
+					float d1 = max(float(idx - p1) * dx, 1e-4);
+					float d2 = max(float(idx - p2) * dx, 1e-4);
+					float d3 = max(float(idx - p3) * dx, 1e-4);
+
+					float slope1 = p1 < idx ? (s_heights[p1] - s_heights[idx]) / d1 - d1 * 0.5 / FAKE_PLANET_RADIUS : -1e9;
+					float slope2 = p2 < idx ? (s_heights[p2] - s_heights[idx]) / d2 - d2 * 0.5 / FAKE_PLANET_RADIUS : -1e9;
+					float slope3 = p3 < idx ? (s_heights[p3] - s_heights[idx]) / d3 - d3 * 0.5 / FAKE_PLANET_RADIUS : -1e9;
 
 					uint best_p = p1;
 					float max_slope = slope1;
@@ -249,8 +263,13 @@ void main() {
 		uint idx = tid * 4u + i;
 		if (idx < dim) {
 			uint p = readA ? s_max_s_idx_A[idx] : s_max_s_idx_B[idx];
-			float slope = p < idx ? (s_heights[p] - s_heights[idx]) / (float(idx - p) * dx) : 0.0;
-			s_bwd_max_slope[idx] = max(0.0, slope);
+			if (p < idx) {
+				float dist = float(idx - p) * dx;
+				float slope = (s_heights[p] - s_heights[idx]) / max(dist, 1e-4) - dist * 0.5 / FAKE_PLANET_RADIUS;
+				s_bwd_max_slope[idx] = max(0.0, slope);
+			} else {
+				s_bwd_max_slope[idx] = 0.0;
+			}
 		}
 	}
 

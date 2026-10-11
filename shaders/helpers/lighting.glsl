@@ -139,6 +139,8 @@ float calculateTerrainHorizonShadow(
 	float wS = max(lightDirXZ.y, 0.0);
 	float wN = max(-lightDirXZ.y, 0.0);
 
+	wE *= wE; wW *= wW; wS *= wS; wN *= wN;
+
 	float totalW = wE + wW + wS + wN;
 	if (totalW < 1e-4) return 1.0;
 
@@ -147,7 +149,7 @@ float calculateTerrainHorizonShadow(
 
 	float horizAngle = max(horizAngle0, horizAngle1);
 
-	float penumbra = 0.035;
+	float penumbra = mix(0.02, 0.05, clamp(1.0 - L.y, 0.0, 1.0));
 	float shadow = smoothstep(horizAngle - penumbra, horizAngle + penumbra, lightElevationAngle);
 
 	return clamp(shadow, 0.0, 1.0);
