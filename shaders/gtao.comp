@@ -28,14 +28,21 @@ void main() {
 	vec4 normalSample = SAMPLE_NEAREST(params.gNormalIndex, uv);
 
 	// If background / unrendered pixel, write 1.0 (unoccluded)
-	if (posSample.a <= 0.0 || normalSample.a <= 0.0 || length(normalSample.rgb) < 0.1) {
+	if (posSample.a <= 0.0 || normalSample.a <= 0.0 || length(normalSample.rgb) < 0.1 || length(posSample.rgb) < 0.001) {
 		imageStore(uImagesGenericWrite[nonuniformEXT(params.outGtaoIndex)], pixel, vec4(1.0, 0.0, 0.0, 0.0));
 		return;
 	}
 
-	vec3 viewPos = (uViewMatrix * vec4(posSample.rgb, 1.0)).xyz;
-	vec3 viewNorm = normalize((uViewMatrix * vec4(normalSample.rgb, 0.0)).xyz);
-	vec3 V = normalize(-viewPos);
+	// GBufferPosition stores camera-relative position (posWorld - uCameraPosition.xyz).
+	// Multiplying by mat3(uViewMatrix) applies view-rotation to transform to view-space.
+	vec3 viewPos = mat3(uViewMatrix) * posSample.rgb;
+	float viewDist = length(viewPos);
+	if (viewDist < 0.001) {
+		imageStore(uImagesGenericWrite[nonuniformEXT(params.outGtaoIndex)], pixel, vec4(1.0, 0.0, 0.0, 0.0));
+		return;
+	}
+	vec3 viewNorm = normalize(mat3(uViewMatrix) * normalSample.rgb);
+	vec3 V = -viewPos / viewDist;
 
 	float noise = spatialJitter(pixel);
 
@@ -43,11 +50,32 @@ void main() {
 	const int NUM_STEPS = 4;
 	float radiusScreen = clamp(16.0 / max(-viewPos.z, 0.1), 2.0, 32.0);
 
-	float visibility = 0.0;
+	float totalVis = 0.0;
+	float totalWeight = 0.0;
 
 	for (int s = 0; s < NUM_SLICES; ++s) {
 		float sliceAngle = (float(s) + noise) * (PI / float(NUM_SLICES));
 		vec2 sliceDir = vec2(cos(sliceAngle), sin(sliceAngle));
+
+		vec3 dir3 = vec3(sliceDir, 0.0);
+		vec3 slicePlaneNorm = cross(dir3, V);
+		float slicePlaneLen = length(slicePlaneNorm);
+
+		float lenNproj = 0.0;
+		float n = 0.0;
+
+		if (slicePlaneLen > 0.001) {
+			slicePlaneNorm /= slicePlaneLen;
+			vec3 projNorm = viewNorm - slicePlaneNorm * dot(viewNorm, slicePlaneNorm);
+			lenNproj = length(projNorm);
+
+			if (lenNproj > 0.001) {
+				vec3 projNormHat = projNorm / lenNproj;
+				float cosN = clamp(dot(projNormHat, V), -1.0, 1.0);
+				float sgnN = sign(dot(projNorm, dir3));
+				n = sgnN * acos(cosN);
+			}
+		}
 
 		float maxH1 = -1.0;
 		float maxH2 = -1.0;
@@ -55,49 +83,47 @@ void main() {
 		for (int step = 1; step <= NUM_STEPS; ++step) {
 			float stepDist = (float(step) + noise) * (radiusScreen / float(NUM_STEPS));
 
-			// Horizon step 1
+			// Horizon step 1 (+sliceDir)
 			vec2 sampleUV1 = uv + sliceDir * stepDist / vec2(params.screenSize);
 			if (sampleUV1.x >= 0.0 && sampleUV1.x <= 1.0 && sampleUV1.y >= 0.0 && sampleUV1.y <= 1.0) {
-				vec3 sPos1 = (uViewMatrix * vec4(SAMPLE_NEAREST(params.gPositionIndex, sampleUV1).rgb, 1.0)).xyz;
+				vec3 sPos1 = mat3(uViewMatrix) * SAMPLE_NEAREST(params.gPositionIndex, sampleUV1).rgb;
 				vec3 delta1 = sPos1 - viewPos;
-				if (length(delta1) < 20.0) {
-					float h1 = dot(normalize(delta1), V);
-					maxH1 = max(maxH1, h1);
+				float len1 = length(delta1);
+				if (len1 > 0.001 && len1 < 20.0) {
+					float cosTheta1 = dot(delta1 / len1, V);
+					maxH1 = max(maxH1, cosTheta1);
 				}
 			}
 
-			// Horizon step 2
+			// Horizon step 2 (-sliceDir)
 			vec2 sampleUV2 = uv - sliceDir * stepDist / vec2(params.screenSize);
 			if (sampleUV2.x >= 0.0 && sampleUV2.x <= 1.0 && sampleUV2.y >= 0.0 && sampleUV2.y <= 1.0) {
-				vec3 sPos2 = (uViewMatrix * vec4(SAMPLE_NEAREST(params.gPositionIndex, sampleUV2).rgb, 1.0)).xyz;
+				vec3 sPos2 = mat3(uViewMatrix) * SAMPLE_NEAREST(params.gPositionIndex, sampleUV2).rgb;
 				vec3 delta2 = sPos2 - viewPos;
-				if (length(delta2) < 20.0) {
-					float h2 = dot(normalize(delta2), V);
-					maxH2 = max(maxH2, h2);
+				float len2 = length(delta2);
+				if (len2 > 0.001 && len2 < 20.0) {
+					float cosTheta2 = dot(delta2 / len2, V);
+					maxH2 = max(maxH2, cosTheta2);
 				}
 			}
 		}
 
-		maxH1 = clamp(maxH1, -1.0, 1.0);
-		maxH2 = clamp(maxH2, -1.0, 1.0);
+		// Horizon angles relative to V
+		float theta1 = -acos(clamp(maxH1, -1.0, 1.0)); // range [-PI, 0]
+		float theta2 = acos(clamp(maxH2, -1.0, 1.0));  // range [0, PI]
 
-		vec3 slicePlaneNorm = normalize(cross(vec3(sliceDir, 0.0), V));
-		vec3 projNorm = viewNorm - slicePlaneNorm * dot(viewNorm, slicePlaneNorm);
-		float projNormLen = length(projNorm);
+		// Clamp horizon angles to normal hemisphere [n - PI/2, n + PI/2]
+		float h1 = n + max(-PI * 0.5, theta1 - n);
+		float h2 = n + min(PI * 0.5, theta2 - n);
 
-		float sliceAO = 1.0;
-		if (projNormLen > 0.001) {
-			float h1 = acos(maxH1);
-			float h2 = acos(maxH2);
+		float sliceVis = clamp((sin(h2 - n) - sin(h1 - n)) * 0.5, 0.0, 1.0);
 
-			float unoccludedAngle = clamp(h1 + h2 - PI, 0.0, PI);
-			sliceAO = unoccludedAngle / PI;
-		}
-
-		visibility += sliceAO;
+		float weight = max(lenNproj, 0.001);
+		totalVis += sliceVis * weight;
+		totalWeight += weight;
 	}
 
-	visibility = clamp(visibility / float(NUM_SLICES), 0.0, 1.0);
+	float visibility = (totalWeight > 0.0) ? clamp(totalVis / totalWeight, 0.0, 1.0) : 1.0;
 
 	imageStore(uImagesGenericWrite[nonuniformEXT(params.outGtaoIndex)], pixel, vec4(visibility, 0.0, 0.0, 0.0));
 }

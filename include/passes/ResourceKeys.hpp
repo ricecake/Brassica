@@ -139,7 +139,7 @@ namespace brassica {
 			.height = height,
 			.mips = 1,
 			.layers = 1,
-			.formatCode = static_cast<std::uint32_t>(vk::Format::eR8Unorm),
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
 				vk::ImageUsageFlagBits::eColorAttachment
