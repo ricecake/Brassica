@@ -21,6 +21,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  biomeIndex;
 	uint  weatherBiomeIndex;
 	uint  gMaterialIndex;
+	uint  hizIndex;
 }
 
 params;
@@ -113,8 +114,14 @@ void main() {
 		// Aerial perspective / underwater extinction is no longer applied here: it happens
 		// uniformly for every pixel (this one included) in AtmosphereCompositeNode, which runs
 		// after this pass at SubPhase::Atmosphere -- see shaders/atmosphere/composite.frag.
-		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material).color;
-
+		hdrColor = evaluateClusteredLightContributionPBR(
+			pos,
+			norm,
+			material,
+			params.hizIndex,
+			params.gDepthIndex
+		).color;
+    
 		if(uLights[0].intensity >0) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 				params.minMaxIndex,
@@ -131,7 +138,7 @@ void main() {
 			else {
 				hit = traceTerrainOcclusion(
 					occCtx,
-					pos-10*uLights[0].direction,
+					pos+(2.0*-uLights[0].direction)+(norm*0.5),
 					-uLights[0].direction,
 					50000,
 					hitDist
@@ -141,7 +148,6 @@ void main() {
 				hdrColor *= mix(1.0, smoothstep(-25, 50, hitDist), clamp(uLights[0].intensity, 0, 1));
 			}
 		}
-
 	}
 
 	outColor = vec4(hdrColor, 1.0);

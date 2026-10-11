@@ -3,6 +3,7 @@
 
 #include "lighting.glsl"
 #include "helpers/lighting.glsl"
+#include "helpers/screen_space_shadows.glsl"
 
 /**
  * Computes the 1D cluster index for a given world-space position.
@@ -32,7 +33,13 @@ uint getClusterIndex(vec3 frag_pos) {
  * should start from materialDefault() (material.glsl) and override what they know, rather than a
  * separate defaults-filling wrapper.
  */
-LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+LightingResult evaluateClusteredLightContributionPBR(
+	vec3 frag_pos,
+	vec3 normal,
+	Material material,
+	uint hizIndex,
+	uint depthIndex
+) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
 
@@ -56,8 +63,13 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 				attenuation
 			);
 
+			float shadow = 1.0;
+			if (hizIndex > 0u && depthIndex > 0u) {
+				shadow = calculateScreenSpaceShadowHiZ(frag_pos, N, L, hizIndex, depthIndex);
+			}
+
 			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
-			evaluate_brdf(N, V, L, material, radiance, 1.0, result);
+			evaluate_brdf(N, V, L, material, radiance, shadow, result);
 		}
 	}
 
@@ -131,6 +143,10 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 	result.color += material.albedo * material.emissivity;
 
 	return result;
+}
+
+LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u);
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL
