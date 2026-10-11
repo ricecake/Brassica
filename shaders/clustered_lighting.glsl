@@ -32,7 +32,14 @@ uint getClusterIndex(vec3 frag_pos) {
  * should start from materialDefault() (material.glsl) and override what they know, rather than a
  * separate defaults-filling wrapper.
  */
-LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+LightingResult evaluateClusteredLightContributionPBR(
+	vec3 frag_pos,
+	vec3 normal,
+	Material material,
+	uint horizonIndex,
+	uint textureDim,
+	uint numLODs
+) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
 
@@ -56,8 +63,9 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 				attenuation
 			);
 
+			float terrainShadow = calculateTerrainHorizonShadow(horizonIndex, frag_pos, L, textureDim, numLODs);
 			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
-			evaluate_brdf(N, V, L, material, radiance, 1.0, result);
+			evaluate_brdf(N, V, L, material, radiance, terrainShadow, result);
 		}
 	}
 
@@ -124,13 +132,17 @@ LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal,
 		evaluate_brdf(N, V, L, material, radiance, 1.0, result);
 	}
 
-	float terrainOcc = calculateTerrainOcclusion(frag_pos, N);
+	float terrainOcc = calculateTerrainOcclusionWithHorizon(horizonIndex, frag_pos, textureDim) * calculateTerrainOcclusion(frag_pos, N);
 	vec3 spatialSHAmbient = getSpatialAmbientSH(frag_pos, N);
 	result.color += spatialSHAmbient * uAmbientLight.rgb * material.albedo * (material.ao * terrainOcc);
 
 	result.color += material.albedo * material.emissivity;
 
 	return result;
+}
+
+LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 1024u, 8u);
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL
