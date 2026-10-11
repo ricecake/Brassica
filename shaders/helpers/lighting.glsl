@@ -3,6 +3,7 @@
 
 #include "brdf.glsl"
 #include "material.glsl"
+#include "terrain.glsl"
 
 #ifndef LIGHTING_TYPES
 #define LIGHTING_TYPES
@@ -107,6 +108,65 @@ vec3 getSpatialAmbientSH(vec3 worldPos, vec3 N) {
 #define TERRAIN_OCCLUSION_DEFINED
 float calculateTerrainOcclusion(vec3 worldPos, vec3 normal) {
 	return 1.0;
+}
+
+float calculateTerrainHorizonShadow(
+	uint  horizonIndex,
+	vec3  worldPos,
+	vec3  lightDir,
+	uint  textureDim,
+	uint  numLODs
+) {
+	if (horizonIndex == 0u || lightDir.y <= 0.0) {
+		return 1.0;
+	}
+
+	vec3 L = normalize(lightDir);
+	float lightHorizDist = max(length(L.xz), 1e-4);
+	float lightElevationAngle = atan(L.y, lightHorizDist);
+
+	vec2 lightDirXZ = L.xz / lightHorizDist;
+
+	vec4 horiz0 = sampleTerrainHorizon(horizonIndex, worldPos.xz, 0u, textureDim);
+	vec4 horiz1 = sampleTerrainHorizon(horizonIndex, worldPos.xz, min(1u, numLODs - 1u), textureDim);
+
+	const float kHalfPi = 1.57079632679;
+	vec4 angles0 = horiz0 * kHalfPi;
+	vec4 angles1 = horiz1 * kHalfPi;
+
+	float wE = max(lightDirXZ.x, 0.0);
+	float wW = max(-lightDirXZ.x, 0.0);
+	float wS = max(lightDirXZ.y, 0.0);
+	float wN = max(-lightDirXZ.y, 0.0);
+
+	wE *= wE; wW *= wW; wS *= wS; wN *= wN;
+
+	float totalW = wE + wW + wS + wN;
+	if (totalW < 1e-4) return 1.0;
+
+	float horizAngle0 = (wE * angles0.r + wW * angles0.g + wS * angles0.b + wN * angles0.a) / totalW;
+	float horizAngle1 = (wE * angles1.r + wW * angles1.g + wS * angles1.b + wN * angles1.a) / totalW;
+
+	float horizAngle = max(horizAngle0, horizAngle1);
+
+	float penumbra = mix(0.02, 0.05, clamp(1.0 - L.y, 0.0, 1.0));
+	float shadow = smoothstep(horizAngle - penumbra, horizAngle + penumbra, lightElevationAngle);
+
+	return clamp(shadow, 0.0, 1.0);
+}
+
+float calculateTerrainOcclusionWithHorizon(uint horizonIndex, vec3 worldPos, uint textureDim) {
+	if (horizonIndex == 0u) {
+		return 1.0;
+	}
+	vec4 horiz = sampleTerrainHorizon(horizonIndex, worldPos.xz, 0u, textureDim);
+	const float kHalfPi = 1.57079632679;
+	vec4 angles = horiz * kHalfPi;
+
+	float avgAngle = (angles.r + angles.g + angles.b + angles.a) * 0.25;
+	float occlusion = 1.0 - (avgAngle / kHalfPi);
+
+	return clamp(occlusion * occlusion, 0.15, 1.0);
 }
 #endif
 

@@ -45,6 +45,20 @@ vec2 sampleTerrainMinMax(
 	return SAMPLE_ARRAY_WRAP(minMaxIndex, vec3(uv, float(level))).rg;
 }
 
+// Sample terrain horizon map (.r = East +X, .g = West -X, .b = South +Z, .a = North -Z)
+vec4 sampleTerrainHorizon(
+	uint  horizonIndex,
+	vec2  worldXZ,
+	uint  level,
+	uint  textureDim
+) {
+	if (horizonIndex == 0u) {
+		return vec4(0.0);
+	}
+	vec2 uv = sampleToroidalUV(worldXZ, level, textureDim);
+	return SAMPLE_ARRAY_WRAP(horizonIndex, vec3(uv, float(level)));
+}
+
 // Sample terrain biome map (r = biome weight/type, g = terrain variance for LOD adjustments, b = detail, a = moisture)
 vec4 sampleTerrainBiome(
 	uint  biomeIndex,

@@ -40,6 +40,7 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t gMaterialIndex{0};
+		std::uint32_t horizonIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -49,6 +50,7 @@ namespace brassica {
 			graph::Read<ClusteredLighting>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
+			graph::Read<TerrainHorizonTexture>,
 			graph::Read<TerrainBiomeTexture>,
 			graph::Read<TerrainWeatherBiomeTexture>,
 			graph::Read<TerrainTLAS>,
@@ -117,6 +119,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.horizonIndex = ctx.Index<TerrainHorizonTexture>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

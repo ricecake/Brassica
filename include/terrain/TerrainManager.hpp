@@ -143,6 +143,21 @@ namespace brassica {
 		};
 	}
 
+	inline graph::ResourceDesc TerrainHorizonDesc(std::uint32_t numLODs) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = constants::Class::Terrain::MapDim,
+			.height = constants::Class::Terrain::MapDim,
+			.mips = 1,
+			.layers = numLODs,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Unorm),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
+			),
+			.persistent = true,
+		};
+	}
+
 	inline graph::ResourceDesc TerrainBiomeDesc(std::uint32_t numLODs) {
 		return TerrainClipmapDesc(numLODs);
 	}
