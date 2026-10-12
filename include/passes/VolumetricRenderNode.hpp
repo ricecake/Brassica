@@ -30,7 +30,11 @@ namespace brassica {
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gDepthIndex{0};
 		std::uint32_t hdrColorIndex{0};
-		float         maxDistance{12800.0f};
+		float         maxDistance{51200.0f};
+		float         waterLevel{0.0f};
+		std::uint32_t cascade3ScatteringIdx{0xFFFFFFFFu};
+		std::uint32_t cascade3ExtinctionIdx{0xFFFFFFFFu};
+		std::uint32_t _pad{0u};
 	};
 
 	// Composites froxel volumetric scattering and extinction onto HdrColor.
@@ -44,6 +48,8 @@ namespace brassica {
 			graph::Read<VolumetricCascade1Extinction>,
 			graph::Read<VolumetricCascade2Scattering>,
 			graph::Read<VolumetricCascade2Extinction>,
+			graph::Read<VolumetricCascade3Scattering>,
+			graph::Read<VolumetricCascade3Extinction>,
 			graph::Modify<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
@@ -85,11 +91,12 @@ namespace brassica {
 			push.camUp = glm::vec4(p.cameraUp, 0.0f);
 			push.camRight = glm::vec4(p.cameraRight, 0.0f);
 			push.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
+			push.waterLevel = p.waterLevel;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.reserve(8);
+			r.realizations.reserve(10);
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
@@ -101,6 +108,20 @@ namespace brassica {
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<VolumetricCascade0Scattering>(),
+					.access = graph::AccessKind::Read,
+					.desc = VolumetricFroxelDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<VolumetricCascade3Scattering>(),
+					.access = graph::AccessKind::Read,
+					.desc = VolumetricFroxelDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<VolumetricCascade3Extinction>(),
 					.access = graph::AccessKind::Read,
 					.desc = VolumetricFroxelDesc(),
 				}
@@ -148,10 +169,15 @@ namespace brassica {
 			push.cascadeScatteringIdx.x = ctx.Index<VolumetricCascade0Scattering>();
 			push.cascadeScatteringIdx.y = ctx.Index<VolumetricCascade1Scattering>();
 			push.cascadeScatteringIdx.z = ctx.Index<VolumetricCascade2Scattering>();
+			push.cascadeScatteringIdx.w = ctx.Index<VolumetricCascade3Scattering>();
 
 			push.cascadeExtinctionIdx.x = ctx.Index<VolumetricCascade0Extinction>();
 			push.cascadeExtinctionIdx.y = ctx.Index<VolumetricCascade1Extinction>();
 			push.cascadeExtinctionIdx.z = ctx.Index<VolumetricCascade2Extinction>();
+			push.cascadeExtinctionIdx.w = ctx.Index<VolumetricCascade3Extinction>();
+
+			push.cascade3ScatteringIdx = ctx.Index<VolumetricCascade3Scattering>();
+			push.cascade3ExtinctionIdx = ctx.Index<VolumetricCascade3Extinction>();
 
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gDepthIndex = ctx.Index<GBufferDepth>();

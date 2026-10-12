@@ -12,23 +12,27 @@ layout(push_constant) uniform VolumetricRenderPushConstants {
 	vec4  camUp;                // xyz = camera up
 	vec4  camRight;             // xyz = camera right
 	vec4  fovAspect;            // x = tanHalfFov, y = aspect ratio
-	uvec4 cascadeScatteringIdx;  // x, y, z = sampled indices for cascade 0, 1, 2 scattering
-	uvec4 cascadeExtinctionIdx;  // x, y, z = sampled indices for cascade 0, 1, 2 extinction
+	uvec4 cascadeScatteringIdx;  // x, y, z, w = sampled indices for cascade 0, 1, 2, 3 scattering
+	uvec4 cascadeExtinctionIdx;  // x, y, z, w = sampled indices for cascade 0, 1, 2, 3 extinction
 	uint  gPositionIndex;
 	uint  gDepthIndex;
 	uint  hdrColorIndex;
 	float maxDistance;
+	float waterLevel;
+	uint  cascade3ScatteringIdx;
+	uint  cascade3ExtinctionIdx;
+	uint  _pad;
 } push;
 
-vec4 sampleFroxelCascade(int c, vec3 relPos, out float outTransmittance) {
-	float cascadeRanges[3] = float[3](200.0, 1600.0, 12800.0);
+vec4 sampleFroxelCascade(int c, vec3 relPos, out vec3 outTransmittance) {
+	float cascadeRanges[4] = float[4](200.0, 1600.0, 12800.0, 51200.0);
 	float maxDist = cascadeRanges[c];
 
 	uint scatIdx = push.cascadeScatteringIdx[c];
 	uint extIdx = push.cascadeExtinctionIdx[c];
 
 	if (scatIdx == 0xFFFFFFFFu || extIdx == 0xFFFFFFFFu) {
-		outTransmittance = 1.0;
+		outTransmittance = vec3(1.0);
 		return vec4(0.0);
 	}
 
@@ -38,7 +42,7 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, out float outTransmittance) {
 	float viewY = dot(relPos, push.camUp.xyz);
 
 	if (viewZ <= 0.001) {
-		outTransmittance = 1.0;
+		outTransmittance = vec3(1.0);
 		return vec4(0.0);
 	}
 
@@ -57,7 +61,7 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, out float outTransmittance) {
 	vec4 scatSample = textureLod(sampler3D(uTextures3D[nonuniformEXT(scatIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv3d, 0.0);
 	vec4 extSample = textureLod(sampler3D(uTextures3D[nonuniformEXT(extIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv3d, 0.0);
 
-	outTransmittance = extSample.r;
+	outTransmittance = extSample.rgb;
 	return scatSample;
 }
 
@@ -81,33 +85,41 @@ void main() {
 		rayDist = skyFogDist;
 	}
 
-	float cascadeRanges[3] = float[3](200.0, 1600.0, 12800.0);
+	float cascadeRanges[4] = float[4](200.0, 1600.0, 12800.0, 51200.0);
 
 	// Select cascade based on ray distance and smooth transition
 	vec3 fogScattering = vec3(0.0);
-	float fogTransmittance = 1.0;
+	vec3 fogTransmittance = vec3(1.0);
 
 	if (rayDist <= cascadeRanges[0]) {
-		float t0 = 1.0;
+		vec3 t0 = vec3(1.0);
 		vec4 s0 = sampleFroxelCascade(0, relPos, t0);
 		fogScattering = s0.rgb;
 		fogTransmittance = t0;
 	} else if (rayDist <= cascadeRanges[1]) {
 		float blend = smoothstep(cascadeRanges[0] * 0.8, cascadeRanges[0], rayDist);
-		float t0 = 1.0, t1 = 1.0;
+		vec3 t0 = vec3(1.0), t1 = vec3(1.0);
 		vec4 s0 = sampleFroxelCascade(0, relPos, t0);
 		vec4 s1 = sampleFroxelCascade(1, relPos, t1);
 
 		fogScattering = mix(s0.rgb, s1.rgb, blend);
 		fogTransmittance = mix(t0, t1, blend);
-	} else {
+	} else if (rayDist <= cascadeRanges[2]) {
 		float blend = smoothstep(cascadeRanges[1] * 0.8, cascadeRanges[1], rayDist);
-		float t1 = 1.0, t2 = 1.0;
+		vec3 t1 = vec3(1.0), t2 = vec3(1.0);
 		vec4 s1 = sampleFroxelCascade(1, relPos, t1);
 		vec4 s2 = sampleFroxelCascade(2, relPos, t2);
 
 		fogScattering = mix(s1.rgb, s2.rgb, blend);
 		fogTransmittance = mix(t1, t2, blend);
+	} else {
+		float blend = smoothstep(cascadeRanges[2] * 0.8, cascadeRanges[2], rayDist);
+		vec3 t2 = vec3(1.0), t3 = vec3(1.0);
+		vec4 s2 = sampleFroxelCascade(2, relPos, t2);
+		vec4 s3 = sampleFroxelCascade(3, relPos, t3);
+
+		fogScattering = mix(s2.rgb, s3.rgb, blend);
+		fogTransmittance = mix(t2, t3, blend);
 	}
 
 	vec3 finalColor = currentHdr.rgb * fogTransmittance + fogScattering;

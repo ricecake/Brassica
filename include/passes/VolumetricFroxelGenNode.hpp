@@ -42,10 +42,15 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0xFFFFFFFFu};
 		std::uint32_t gridTextureDim{1024u};
 		std::uint32_t skyViewIndex{0xFFFFFFFFu};
-		std::uint32_t _pad[3]{0u, 0u, 0u};
+		std::uint32_t numLevels{8u};
+		float         waterLevel{0.0f};
+		float         waterBlendDepth{2.0f};
+		std::uint32_t cascade3ScatteringIdx{0xFFFFFFFFu};
+		std::uint32_t cascade3ExtinctionIdx{0xFFFFFFFFu};
+		std::uint32_t _pad[2]{0u, 0u};
 	};
 
-	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
+	// Manages 4 froxel grid cascades for volumetric fog, scattering, and god rays.
 	// Operates in SubPhase::LightPreparation (Phase 500).
 	struct VolumetricFroxelGenNode: render::NodeRegistrar<VolumetricFroxelGenNode> {
 		using Resources = graph::Declares<
@@ -55,6 +60,8 @@ namespace brassica {
 			graph::Create<VolumetricCascade1Extinction>,
 			graph::Create<VolumetricCascade2Scattering>,
 			graph::Create<VolumetricCascade2Extinction>,
+			graph::Create<VolumetricCascade3Scattering>,
+			graph::Create<VolumetricCascade3Extinction>,
 			graph::Create<VolumetricNoiseTexture>,
 			graph::Read<SkyViewLUT>,
 			graph::Read<TerrainClipmapTexture>,
@@ -103,17 +110,34 @@ namespace brassica {
 			genPush.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
 			genPush.sunDir = glm::vec4(p.sunDir, 1.0f);
 			genPush.sunColor = glm::vec4(p.sunRadiance, 1.0f);
+			genPush.numLevels = p.terrainGridParams.x;
 			genPush.gridTextureDim = p.terrainGridParams.w;
+			genPush.waterLevel = p.waterLevel;
+			genPush.waterBlendDepth = p.atmosphere.waterBlendDepth;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(7);
+			r.realizations.reserve(9);
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<VolumetricCascade0Scattering>(),
+					.access = graph::AccessKind::Write,
+					.desc = VolumetricFroxelDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<VolumetricCascade3Scattering>(),
+					.access = graph::AccessKind::Write,
+					.desc = VolumetricFroxelDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<VolumetricCascade3Extinction>(),
 					.access = graph::AccessKind::Write,
 					.desc = VolumetricFroxelDesc(),
 				}
@@ -220,10 +244,15 @@ namespace brassica {
 			genPush.cascadeScatteringIdx.x = ctx.StorageIndex<VolumetricCascade0Scattering>();
 			genPush.cascadeScatteringIdx.y = ctx.StorageIndex<VolumetricCascade1Scattering>();
 			genPush.cascadeScatteringIdx.z = ctx.StorageIndex<VolumetricCascade2Scattering>();
+			genPush.cascadeScatteringIdx.w = ctx.StorageIndex<VolumetricCascade3Scattering>();
 
 			genPush.cascadeExtinctionIdx.x = ctx.StorageIndex<VolumetricCascade0Extinction>();
 			genPush.cascadeExtinctionIdx.y = ctx.StorageIndex<VolumetricCascade1Extinction>();
 			genPush.cascadeExtinctionIdx.z = ctx.StorageIndex<VolumetricCascade2Extinction>();
+			genPush.cascadeExtinctionIdx.w = ctx.StorageIndex<VolumetricCascade3Extinction>();
+
+			genPush.cascade3ScatteringIdx = ctx.StorageIndex<VolumetricCascade3Scattering>();
+			genPush.cascade3ExtinctionIdx = ctx.StorageIndex<VolumetricCascade3Extinction>();
 
 			genPush.noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
 			genPush.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
