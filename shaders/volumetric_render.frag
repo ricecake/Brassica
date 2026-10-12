@@ -50,7 +50,7 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, out float outTransmittance) {
 
 	vec3 uv3d = vec3(
 		clamp(viewX / frustumWidthAtZ + 0.5, 0.0, 1.0),
-		clamp(viewY / frustumHeightAtZ + 0.5, 0.0, 1.0),
+		clamp(0.5 - viewY / frustumHeightAtZ, 0.0, 1.0),
 		clamp(length(relPos) / maxDist, 0.0, 1.0)
 	);
 
@@ -69,14 +69,16 @@ void main() {
 	float rayDist = length(relPos);
 
 	if (posSample.a < 0.01 || rayDist <= 0.01) {
-		// Empty sky/background pixel: reconstruct view ray direction and sample across maxDistance
+		// Empty sky/background pixel: reconstruct view ray direction and sample local fog depth
 		vec2 clip = inUV * 2.0 - 1.0;
 		vec4 viewRay4 = uInvProjMatrix * vec4(clip, 1.0, 1.0);
 		vec3 viewDir = viewRay4.xyz / max(1e-4, viewRay4.w);
 		vec3 worldRayDir = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
 
-		relPos = worldRayDir * push.maxDistance;
-		rayDist = push.maxDistance;
+		// Local fog volume extends up to ~600m along background sky rays
+		float skyFogDist = min(push.maxDistance, 600.0);
+		relPos = worldRayDir * skyFogDist;
+		rayDist = skyFogDist;
 	}
 
 	float cascadeRanges[3] = float[3](200.0, 1600.0, 12800.0);
