@@ -41,6 +41,8 @@ namespace brassica {
 		std::uint32_t clipmapIndex{0xFFFFFFFFu};
 		std::uint32_t minMaxIndex{0xFFFFFFFFu};
 		std::uint32_t gridTextureDim{1024u};
+		std::uint32_t skyViewIndex{0xFFFFFFFFu};
+		std::uint32_t _pad[3]{0u, 0u, 0u};
 	};
 
 	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
@@ -54,6 +56,7 @@ namespace brassica {
 			graph::Create<VolumetricCascade2Scattering>,
 			graph::Create<VolumetricCascade2Extinction>,
 			graph::Create<VolumetricNoiseTexture>,
+			graph::Read<SkyViewLUT>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>>;
 
@@ -157,6 +160,13 @@ namespace brassica {
 					.desc = VolumetricNoiseDesc(),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<SkyViewLUT>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
+				}
+			);
 
 			return r;
 		}
@@ -218,6 +228,7 @@ namespace brassica {
 			genPush.noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
 			genPush.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			genPush.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
+			genPush.skyViewIndex = ctx.Index<SkyViewLUT>();
 
 			std::array<vk::PushConstantRange, 1> genPushRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricFroxelGenPushConstants)}

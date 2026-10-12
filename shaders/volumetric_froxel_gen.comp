@@ -3,6 +3,8 @@
 
 #include "bindless.glsl"
 #include "common.glsl"
+#include "lighting.glsl"
+#include "helpers/lighting.glsl"
 #include "terrain.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -22,6 +24,7 @@ layout(push_constant) uniform VolumetricFroxelGenPushConstants {
 	uint  clipmapIndex;         // bindless index for TerrainClipmapTexture
 	uint  minMaxIndex;          // bindless index for TerrainMinMaxTexture
 	uint  gridTextureDim;       // terrain map dimension (1024)
+	uint  skyViewIndex;         // bindless index for SkyViewLUT
 } push;
 
 float dualHenyeyGreenstein(float cosTheta, float g) {
@@ -100,13 +103,25 @@ void main() {
 			float dist = ((float(z) + 0.5) / 64.0) * maxDist;
 			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist;
 
-			// Sample logarithmically proportioned 2D noise map
-			vec2 noiseUV = worldPos.xz * (0.0005 * pow(2.0, float(c)));
+			// Cascade noise scaling: Cascade 0 (near camera) samples higher spatial frequencies
+			// for crisp, detailed fog wisps, while Cascades 1 & 2 sample lower frequencies for smooth broad mist.
+			float noiseScale = 0.018 / pow(2.5, float(c));
+			vec2 noiseUV = worldPos.xz * noiseScale;
 			vec4 noiseVal = vec4(0.5);
 			if (push.noiseTextureIdx != 0xFFFFFFFFu) {
 				noiseVal = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.noiseTextureIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), noiseUV, 0.0);
 			}
-			float noiseMod = noiseVal.r * 0.5 + noiseVal.g * 0.25 + noiseVal.b * 0.125 + noiseVal.a * 0.125;
+
+			float noiseMod = 0.5;
+			if (c == 0) {
+				// Near camera: emphasize fine wisp channels (b & a)
+				noiseMod = noiseVal.r * 0.15 + noiseVal.g * 0.25 + noiseVal.b * 0.35 + noiseVal.a * 0.25;
+			} else if (c == 1) {
+				noiseMod = noiseVal.r * 0.30 + noiseVal.g * 0.40 + noiseVal.b * 0.20 + noiseVal.a * 0.10;
+			} else {
+				// Far distance: smooth broad features (r & g)
+				noiseMod = noiseVal.r * 0.60 + noiseVal.g * 0.30 + noiseVal.b * 0.10;
+			}
 
 			// Analytical exponential height fog
 			float fogBase = push.fogParams.z;
@@ -130,10 +145,48 @@ void main() {
 
 			vec3 directSun = push.sunColor.rgb * push.sunDir.w * phase * shadowTerm;
 
-			// Bright ambient sky illumination so fog is vibrant blue/sky-tinted rather than black
+			// Sample physical sky radiance from SkyViewLUT for realistic atmospheric ambient fog tinting
 			vec3 skyAmbient = vec3(0.20, 0.35, 0.55) * max(0.2, push.sunDir.y) + vec3(0.05, 0.08, 0.12);
+			if (push.skyViewIndex != 0xFFFFFFFFu) {
+				vec3 zenithSky = sampleSkyView(push.skyViewIndex, vec3(0.0, 1.0, 0.0));
+				vec3 viewSky = sampleSkyView(push.skyViewIndex, viewRayDir);
+				skyAmbient = mix(zenithSky, viewSky, 0.5);
+			}
 
-			vec3 totalIllumination = directSun + skyAmbient;
+			// Evaluate local point and spot light sources for volumetric light shafts
+			vec3 localLightScattering = vec3(0.0);
+			uint maxLightsToSample = min(uLightCount, 32u);
+			for (uint li = 0u; li < maxLightsToSample; ++li) {
+				if (uLights[li].intensity <= 0.0) continue;
+				if (uLights[li].type == LIGHT_TYPE_DIRECTIONAL) continue;
+
+				vec3 lightPos = uLights[li].position;
+				if ((uLights[li].flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
+					lightPos += push.cameraPos.xyz;
+				}
+
+				vec3 L;
+				float attenuation;
+				calculateLightContribution(
+					uLights[li].type,
+					lightPos,
+					uLights[li].direction,
+					uLights[li].innerCutoff,
+					uLights[li].outerCutoff,
+					uLights[li].intensity,
+					worldPos,
+					L,
+					attenuation
+				);
+
+				if (attenuation <= 0.0) continue;
+
+				float cosL = dot(viewRayDir, L);
+				float localPhase = dualHenyeyGreenstein(cosL, push.fogParams.w);
+				localLightScattering += uLights[li].color * uLights[li].intensity * attenuation * localPhase;
+			}
+
+			vec3 totalIllumination = directSun + skyAmbient + localLightScattering;
 			vec3 cellScattering = scatteringCoeff * totalIllumination + vec3(emissivity);
 
 			// Wronski 2014 analytical slice integration over voxel depth voxelSizeZ

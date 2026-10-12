@@ -18,17 +18,16 @@ void main() {
 
 	vec2 uv = vec2(pos) / 512.0;
 
-	// Logarithmically proportioned multi-octave 2D noise map
-	// Scales: 2.0, 4.0, 8.0, 16.0
-	float scale0 = 2.0;
-	float scale1 = 4.0;
-	float scale2 = 8.0;
-	float scale3 = 16.0;
-
-	float n0 = psrdnoise(uv * scale0, vec2(0.0), push.time * 0.05);
-	float n1 = psrdnoise(uv * scale1, vec2(0.0), push.time * 0.10);
-	float n2 = psrdnoise(uv * scale2, vec2(0.0), push.time * 0.20);
-	float n3 = psrdnoise(uv * scale3, vec2(0.0), push.time * 0.40);
+	// Multi-octave 2D noise map for volumetric fog
+	// Channels store different frequency octaves and animated time phases:
+	// r = Coarse broad features
+	// g = Medium features
+	// b = Fine wisps (high frequency)
+	// a = Micro turbulence
+	float n0 = psrdnoise(uv * 2.0, vec2(0.0), push.time * 0.05);
+	float n1 = psrdnoise(uv * 6.0, vec2(0.0), push.time * 0.12);
+	float n2 = psrdnoise(uv * 18.0, vec2(0.0), push.time * 0.25);
+	float n3 = psrdnoise(uv * 54.0, vec2(0.0), push.time * 0.50);
 
 	vec4 noiseVal = vec4(n0, n1, n2, n3) * 0.5 + vec4(0.5);
 
