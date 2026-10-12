@@ -110,37 +110,39 @@ void main() {
 
 		Material material = Material(albedo.rgb, roughness, metallic, ao, emissivity, glint);
 
-		// Aerial perspective / underwater extinction is no longer applied here: it happens
-		// uniformly for every pixel (this one included) in AtmosphereCompositeNode, which runs
-		// after this pass at SubPhase::Atmosphere -- see shaders/atmosphere/composite.frag.
-		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material).color;
+		float terrainShadow = 1.0;
+		float terrainAO = 1.0;
 
-		if(uLights[0].intensity >0) {
+		if (params.minMaxIndex > 0u) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 				params.minMaxIndex,
 				params.gridParams.w,
 				params.gridParams.x,
 				0.0
 			);
-			float hitDist = 0.0;
-			bool hit;
-			if (dot(norm, uLights[0].direction) > 0) {
-				hitDist = dot(norm, -uLights[0].direction);
-				hit = true;
-			}
-			else {
-				hit = traceTerrainOcclusion(
+
+			vec3 sunDir = normalize(-uLights[0].direction);
+			if (uLights[0].intensity > 0.0) {
+				terrainShadow = calculateTerrainSoftShadow(
 					occCtx,
-					pos-10*uLights[0].direction,
-					-uLights[0].direction,
-					50000,
-					hitDist
+					pos,
+					norm,
+					sunDir,
+					50000.0
 				);
 			}
-			if (hit) {
-				hdrColor *= mix(1.0, smoothstep(-25, 50, hitDist), clamp(uLights[0].intensity, 0, 1));
+
+			if (params.clipmapIndex > 0u) {
+				terrainAO = calculateTerrainOcclusion(
+					occCtx,
+					params.clipmapIndex,
+					pos,
+					norm
+				);
 			}
 		}
+
+		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material, terrainShadow, terrainAO).color;
 
 	}
 

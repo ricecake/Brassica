@@ -292,3 +292,8 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
 
     return true_height;
 }
+
+float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength, TerrainConfig config, out vec3 out_normal) {
+    float dummy_water_level;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummy_water_level);
+}

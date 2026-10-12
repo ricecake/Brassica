@@ -341,6 +341,155 @@ bool traceTerrainOcclusion(
 	return false;
 }
 
+// Multi-directional horizon elevation sampling for Terrain Ambient Occlusion (Terrain AO)
+float calculateTerrainOcclusion(
+	TerrainOcclusionContext ctx,
+	uint clipmapIndex,
+	vec3 worldPos,
+	vec3 normal
+) {
+	if (ctx.minMaxIndex == 0u || clipmapIndex == 0u) {
+		return 1.0;
+	}
+
+	vec3 N = normalize(normal);
+	vec2 centerXZ = worldPos.xz;
+	float centerH = worldPos.y;
+
+	// 8 cardinal and intercardinal sampling directions
+	const vec2 dirs[8] = vec2[](
+		vec2( 1.0,  0.0), vec2( 0.7071,  0.7071),
+		vec2( 0.0,  1.0), vec2(-0.7071,  0.7071),
+		vec2(-1.0,  0.0), vec2(-0.7071, -0.7071),
+		vec2( 0.0, -1.0), vec2( 0.7071, -0.7071)
+	);
+
+	// 3 sampling radii to capture multi-scale terrain occlusion (local crevices, gullies, macro basins)
+	const float radii[3] = float[](8.0, 32.0, 128.0);
+
+	float totalOcclusion = 0.0;
+
+	for (int d = 0; d < 8; ++d) {
+		vec2 dir = dirs[d];
+		float maxElevationTan = 0.0;
+
+		for (int r = 0; r < 3; ++r) {
+			float radius = radii[r];
+			vec2 sampleXZ = centerXZ + dir * radius;
+
+			uint level = terrainClipmapLevelFor(sampleXZ, ctx.textureDim, ctx.numLevels);
+			vec4 tex = sampleTerrainClipmap(clipmapIndex, sampleXZ, min(level, ctx.numLevels - 1u), ctx.textureDim);
+			float sampleH = tex.r - terrainDropOff(sampleXZ);
+
+			float deltaH = sampleH - centerH;
+			if (deltaH > 0.0) {
+				float elevationTan = deltaH / radius;
+				maxElevationTan = max(maxElevationTan, elevationTan);
+			}
+		}
+
+		// Directional weight based on surface normal N
+		vec3 dir3D = vec3(dir.x, 0.0, dir.y);
+		float NdotDir = max(dot(N, dir3D), 0.0);
+		float dirWeight = 0.5 + 0.5 * (1.0 - NdotDir); // Higher occlusion weight into opposing slopes
+
+		float dirOcclusion = clamp(maxElevationTan * 1.2, 0.0, 1.0) * dirWeight;
+		totalOcclusion += dirOcclusion;
+	}
+
+	float avgOcclusion = totalOcclusion / 8.0;
+	return clamp(1.0 - avgOcclusion * 0.75, 0.15, 1.0);
+}
+
+// Soft terrain shadow calculation with cone-marching penumbra, slope/normal biasing, and continuous LODs
+float calculateTerrainSoftShadow(
+	TerrainOcclusionContext ctx,
+	vec3 pos,
+	vec3 N,
+	vec3 L,
+	float maxDistance
+) {
+	if (ctx.minMaxIndex == 0u || ctx.numLevels == 0u || maxDistance <= 0.0) {
+		return 1.0;
+	}
+
+	float NdotL = dot(N, L);
+	if (NdotL <= 0.001) {
+		return 0.0; // Back-facing surface receives no direct sun
+	}
+
+	// Normal and light origin biasing to eliminate self-shadowing acne on discretized terrain
+	float slopeFactor = 1.0 - clamp(N.y, 0.0, 1.0);
+	vec3 rayOrigin = pos + N * (0.3 + 0.7 * slopeFactor) + L * (0.4 + 0.6 * slopeFactor);
+
+	vec3 d = normalize(L);
+	vec2 camXZ = uCameraPosition.xz;
+
+	// Curvature drop profile
+	vec2 o2 = rayOrigin.xz - camXZ;
+	float A = dot(d.xz, d.xz) / (2.0 * FAKE_PLANET_RADIUS);
+	float B = d.y + dot(o2, d.xz) / FAKE_PLANET_RADIUS;
+	float C = rayOrigin.y + dot(o2, o2) / (2.0 * FAKE_PLANET_RADIUS);
+
+	float halfExtent0 = terrainLevelHalfExtent(0u, ctx.textureDim);
+	const float kNudge = 1e-3;
+	const float kPenumbraSoftness = 24.0; // Sharpness scale for soft penumbra transitions
+
+	float minClearanceRatio = 1.0;
+	float t = max(0.5 / max(NdotL, 0.1), 0.5); // Initial step offset to clear origin texel
+
+	for (int iter = 0; iter < TERRAIN_OCCLUSION_MAX_ITERATIONS; ++iter) {
+		if (t >= maxDistance) {
+			break;
+		}
+
+		vec3 p = rayOrigin + d * t;
+
+		// Continuous LOD level calculation to prevent discrete shadow jumping across LOD boundaries
+		vec2 d2 = abs(p.xz - camXZ);
+		float distToCam = max(d2.x, d2.y);
+		float floatLevel = clamp(log2(max(distToCam, halfExtent0) / halfExtent0), 0.0, float(ctx.numLevels - 1u));
+		uint L_base = uint(floor(floatLevel));
+		uint L_next = min(L_base + 1u, ctx.numLevels - 1u);
+		float levelBlend = smoothstep(0.0, 1.0, fract(floatLevel));
+
+		float tsL = texelSize(L_base);
+		float cellSize = tsL;
+
+		float cellExitT = terrainCellExitT(rayOrigin, d, p.xz, cellSize);
+		float t1 = min(cellExitT, maxDistance);
+		if (t1 <= t) {
+			t1 = t + cellSize * 1e-4;
+		}
+
+		// Sample continuous min/max bounds across LOD levels
+		vec2 cellMinMax0 = terrainCellMinMax(ctx, p.xz, L_base, 0u);
+		vec2 cellMinMax1 = terrainCellMinMax(ctx, p.xz, L_next, 0u);
+		vec2 cellMinMax = mix(cellMinMax0, cellMinMax1, levelBlend);
+
+		float gMin = terrainRaySegmentMinG(A, B, C, t, t1);
+
+		float clearance = gMin - cellMinMax.y;
+
+		if (clearance < 0.0) {
+			// Ray passes into terrain bound: calculate soft shadow based on distance to occluder
+			float hitPenumbra = smoothstep(0.0, 150.0, t);
+			minClearanceRatio = min(minClearanceRatio, hitPenumbra);
+			if (minClearanceRatio <= 0.01) {
+				return 0.0; // Fully in umbra
+			}
+		} else {
+			// Soft penumbra calculation based on angular clearance ratio
+			float clearanceRatio = clamp(kPenumbraSoftness * clearance / max(t, 1.0), 0.0, 1.0);
+			minClearanceRatio = min(minClearanceRatio, clearanceRatio);
+		}
+
+		t = t1 + kNudge;
+	}
+
+	return clamp(minClearanceRatio, 0.0, 1.0);
+}
+
 // Requested shape: vector + origin + distance. distance is in/out -- read as the max range to
 // check within, overwritten with the hit distance only if occluded. origin/dir are render
 // space, same as every other curved-world consumer's sample points.
