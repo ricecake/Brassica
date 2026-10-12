@@ -85,15 +85,15 @@ namespace brassica {
 			.enableBlend = true,
 			.enableShadingRate = false,
 			.stencilTest = true,
-			.stencilState = vk::StencilOpState{
-				.failOp = vk::StencilOp::eKeep,
-				.passOp = vk::StencilOp::eReplace,
-				.depthFailOp = vk::StencilOp::eKeep,
-				.compareOp = vk::CompareOp::eAlways,
-				.compareMask = 0xFF,
-				.writeMask = 0xFF,
-				.reference = 1,
-			},
+			.stencilState = vk::StencilOpState(
+				vk::StencilOp::eKeep,
+				vk::StencilOp::eReplace,
+				vk::StencilOp::eKeep,
+				vk::CompareOp::eAlways,
+				0xFF,
+				0xFF,
+				1
+			),
 		};
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
