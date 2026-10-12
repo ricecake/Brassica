@@ -1,0 +1,35 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "lygia/generative/psrdnoise.glsl"
+#include "common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(push_constant) uniform VolumetricNoiseGenPushConstants {
+	uint  noiseStorageIdx;
+	float time;
+} push;
+
+void main() {
+	uvec2 pos = gl_GlobalInvocationID.xy;
+	if (pos.x >= 512 || pos.y >= 512) return;
+
+	vec2 uv = vec2(pos) / 512.0;
+
+	// Multi-octave 2D noise map for volumetric fog
+	// Channels store different frequency octaves and animated time phases:
+	// r = Coarse broad features
+	// g = Medium features
+	// b = Fine wisps (high frequency)
+	// a = Micro turbulence
+	float n0 = psrdnoise(uv * 2.0, vec2(0.0), push.time * 0.05);
+	float n1 = psrdnoise(uv * 6.0, vec2(0.0), push.time * 0.12);
+	float n2 = psrdnoise(uv * 18.0, vec2(0.0), push.time * 0.25);
+	float n3 = psrdnoise(uv * 54.0, vec2(0.0), push.time * 0.50);
+
+	vec4 noiseVal = vec4(n0, n1, n2, n3) * 0.5 + vec4(0.5);
+
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.noiseStorageIdx)], ivec2(pos), noiseVal);
+}

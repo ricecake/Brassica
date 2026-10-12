@@ -69,17 +69,37 @@ namespace brassica {
 			uint32_t        mipLevel,
 			vk::Offset2D    offset,
 			vk::Extent2D    extent,
+			glm::vec2       originWorld,
+			float           texelSize,
+			glm::vec2       camPos,
 			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
 		);
 
+		bool TriggerImageRegionReadbackAsync(
+			vk::Image       image,
+			uint32_t        arrayLayer,
+			uint32_t        mipLevel,
+			vk::Offset2D    offset,
+			vk::Extent2D    extent,
+			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
+		) {
+			return TriggerImageRegionReadbackAsync(
+				image, arrayLayer, mipLevel, offset, extent, glm::vec2(0.0f), 0.5f, glm::vec2(0.0f), currentLayout
+			);
+		}
+
 		void PollReadbackData();
 
-		// The real cached-ground-height query: max of .g (the max-height channel) over whatever
-		// region the last completed readback covered, or fallback if nothing has completed yet.
-		// RG32F texels (min, max), not a raw height sample -- see TriggerImageRegionReadbackAsync's
-		// real caller (Engine::UpdateCamera) for why this reads a min/max mip instead of the
-		// heightmap directly.
+		// Evaluates 2D bilinear height interpolation across the cached terrain height readback grid.
+		float GetInterpolatedGroundHeight(glm::vec2 worldXZ, float fallback) const;
+		float GetInterpolatedGroundHeight(float fallback) const;
+
 		float GetCachedGroundHeight(float fallback) const;
+		float GetCachedGroundHeight(glm::vec2 worldXZ, float fallback) const;
+
+		bool      IsReadbackInFlight() const { return readbackInFlight; }
+		bool      HasReadbackData() const { return hasReadbackData; }
+		glm::vec2 GetLastReadbackCamPos() const { return cachedReadbackCamPos; }
 
 	private:
 		uint32_t numLODs{constants::Class::Terrain::DefaultMaxLODs};
@@ -101,10 +121,17 @@ namespace brassica {
 		uint64_t          readbackCompletedTimelineValue{0};
 		bool              readbackInFlight{false};
 
+		glm::vec2 pendingOriginWorld{0.0f};
+		float     pendingTexelSize{0.5f};
+		glm::vec2 pendingCamPos{0.0f};
+
 		std::vector<glm::vec2> cachedReadbackData;
-		uint32_t                cachedReadbackWidth{0};
-		uint32_t                cachedReadbackHeight{0};
-		bool                    hasReadbackData{false};
+		uint32_t               cachedReadbackWidth{0};
+		uint32_t               cachedReadbackHeight{0};
+		glm::vec2              cachedReadbackOriginWorld{0.0f};
+		float                  cachedReadbackTexelSize{0.5f};
+		glm::vec2              cachedReadbackCamPos{0.0f};
+		bool                   hasReadbackData{false};
 	};
 
 	// mips = 1: this image has no mip chain of its own -- only TerrainMinMaxDesc below does.

@@ -95,6 +95,9 @@ namespace brassica {
 		uint32_t        mipLevel,
 		vk::Offset2D    offset,
 		vk::Extent2D    extent,
+		glm::vec2       originWorld,
+		float           texelSize,
+		glm::vec2       camPos,
 		vk::ImageLayout currentLayout
 	) {
 		if (!image || readbackInFlight || !readbackStagingBuffer) {
@@ -109,6 +112,9 @@ namespace brassica {
 
 		cachedReadbackWidth = extent.width;
 		cachedReadbackHeight = extent.height;
+		pendingOriginWorld = originWorld;
+		pendingTexelSize = texelSize;
+		pendingCamPos = camPos;
 
 		readbackSubmittedTimelineValue++;
 
@@ -193,19 +199,65 @@ namespace brassica {
 			if (readbackStagingMapped) {
 				std::memcpy(cachedReadbackData.data(), readbackStagingMapped, pixelCount * sizeof(glm::vec2));
 			}
+			cachedReadbackOriginWorld = pendingOriginWorld;
+			cachedReadbackTexelSize = pendingTexelSize;
+			cachedReadbackCamPos = pendingCamPos;
 			hasReadbackData = true;
 		}
 	}
 
-	float TerrainManager::GetCachedGroundHeight(float fallback) const {
-		if (!hasReadbackData || cachedReadbackData.empty()) {
+	float TerrainManager::GetInterpolatedGroundHeight(glm::vec2 worldXZ, float fallback) const {
+		if (!hasReadbackData || cachedReadbackData.empty() || cachedReadbackWidth < 1 || cachedReadbackHeight < 1) {
 			return fallback;
 		}
-		float maxHeight = fallback;
-		for (const glm::vec2& sample : cachedReadbackData) {
-			maxHeight = std::max(maxHeight, sample.y); // .y = max height, from the min/max mip texel
+
+		if (cachedReadbackWidth == 1 && cachedReadbackHeight == 1) {
+			return cachedReadbackData[0].x;
 		}
-		return maxHeight;
+
+		float ts = (cachedReadbackTexelSize > 1e-5f) ? cachedReadbackTexelSize : 0.5f;
+		float gx = (worldXZ.x - cachedReadbackOriginWorld.x) / ts;
+		float gz = (worldXZ.y - cachedReadbackOriginWorld.y) / ts;
+
+		int i0 = static_cast<int>(std::floor(gx));
+		int j0 = static_cast<int>(std::floor(gz));
+
+		float fx = gx - static_cast<float>(i0);
+		float fz = gz - static_cast<float>(j0);
+
+		int maxI = static_cast<int>(cachedReadbackWidth) - 1;
+		int maxJ = static_cast<int>(cachedReadbackHeight) - 1;
+
+		int i0_clamped = std::clamp(i0, 0, std::max(0, maxI - 1));
+		int j0_clamped = std::clamp(j0, 0, std::max(0, maxJ - 1));
+
+		int i1 = std::min(i0_clamped + 1, maxI);
+		int j1 = std::min(j0_clamped + 1, maxJ);
+
+		float fx_clamped = std::clamp(fx, 0.0f, 1.0f);
+		float fz_clamped = std::clamp(fz, 0.0f, 1.0f);
+
+		uint32_t w = cachedReadbackWidth;
+		float h00 = cachedReadbackData[j0_clamped * w + i0_clamped].x;
+		float h10 = cachedReadbackData[j0_clamped * w + i1].x;
+		float h01 = cachedReadbackData[j1 * w + i0_clamped].x;
+		float h11 = cachedReadbackData[j1 * w + i1].x;
+
+		float top = glm::mix(h00, h10, fx_clamped);
+		float bot = glm::mix(h01, h11, fx_clamped);
+		return glm::mix(top, bot, fz_clamped);
+	}
+
+	float TerrainManager::GetInterpolatedGroundHeight(float fallback) const {
+		return GetInterpolatedGroundHeight(cachedReadbackCamPos, fallback);
+	}
+
+	float TerrainManager::GetCachedGroundHeight(float fallback) const {
+		return GetInterpolatedGroundHeight(cachedReadbackCamPos, fallback);
+	}
+
+	float TerrainManager::GetCachedGroundHeight(glm::vec2 worldXZ, float fallback) const {
+		return GetInterpolatedGroundHeight(worldXZ, fallback);
 	}
 
 } // namespace brassica

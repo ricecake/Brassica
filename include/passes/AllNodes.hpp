@@ -29,4 +29,6 @@
 #include "passes/TerrainMinMaxDownsampleNode.hpp"
 #include "passes/TerrainNode.hpp"
 #include "passes/TonemapNode.hpp"
+#include "passes/VolumetricFroxelGenNode.hpp"
+#include "passes/VolumetricRenderNode.hpp"
 #include "passes/WaterNode.hpp"

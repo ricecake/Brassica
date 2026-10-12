@@ -156,6 +156,8 @@ void main() {
 
 			float shadowStrength = clamp(uLights[0].intensity, 0.0, 1.0);
 			hdrColor *= mix(1.0, shadowMask, shadowStrength);
+			// hdrColor *= mix(1.0, smoothstep(-25, 50, hitDist), clamp(uLights[0].intensity, 0, 1));
+
 		}
 	}
 
