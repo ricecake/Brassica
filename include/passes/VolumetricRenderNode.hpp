@@ -21,21 +21,13 @@
 namespace brassica {
 
 	struct alignas(16) VolumetricRenderPushConstants {
-		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
-		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 0.0f};
-		alignas(16) glm::vec4 camRight{1.0f, 0.0f, 0.0f, 0.0f};
-		alignas(16) glm::vec4 fovAspect{1.0f, 1.777f, 0.0f, 0.0f}; // tanHalfFov, aspect
-		alignas(16) glm::uvec4 cascadeScatteringIdx{0xFFFFFFFFu};
-		alignas(16) glm::uvec4 cascadeExtinctionIdx{0xFFFFFFFFu};
-		std::uint32_t gPositionIndex{0};
-		std::uint32_t gDepthIndex{0};
-		std::uint32_t hdrColorIndex{0};
-		float         maxDistance{51200.0f};
-		float         waterLevel{0.0f};
-		std::uint32_t cascade3ScatteringIdx{0xFFFFFFFFu};
-		std::uint32_t cascade3ExtinctionIdx{0xFFFFFFFFu};
-		std::uint32_t _pad{0u};
+		alignas(16) glm::vec4 scaledCamRight{1.0f, 0.0f, 0.0f, 0.0f}; // xyz = camRight * aspect * tanHalfFov
+		alignas(16) glm::vec4 scaledCamUp{0.0f, 1.0f, 0.0f, 0.0f};    // xyz = camUp * tanHalfFov
+		alignas(16) glm::uvec4 cascadeScatExtIdx01{0xFFFFFFFFu};    // x,y = C0 scat/ext, z,w = C1 scat/ext
+		alignas(16) glm::uvec4 cascadeScatExtIdx23{0xFFFFFFFFu};    // x,y = C2 scat/ext, z,w = C3 scat/ext
+		alignas(16) glm::uvec4 gBufferConfig{0u};                    // x = gPositionIndex, y = gDepthIndex, z = hdrColorIndex, w = maxDist
 	};
+	static_assert(sizeof(VolumetricRenderPushConstants) == 80, "VolumetricRenderPushConstants size must be 80 bytes");
 
 	// Composites froxel volumetric scattering and extinction onto HdrColor.
 	// Operates in SubPhase::Atmosphere (Phase 900).
@@ -87,11 +79,10 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.camForward = glm::vec4(p.cameraForward, 0.0f);
-			push.camUp = glm::vec4(p.cameraUp, 0.0f);
-			push.camRight = glm::vec4(p.cameraRight, 0.0f);
-			push.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
-			push.waterLevel = p.waterLevel;
+			float tanHalfFov = std::tan(p.fov * 0.5f);
+			push.scaledCamRight = glm::vec4(p.cameraRight * p.aspectRatio * tanHalfFov, 0.0f);
+			push.scaledCamUp = glm::vec4(p.cameraUp * tanHalfFov, 0.0f);
+			push.gBufferConfig.w = std::bit_cast<std::uint32_t>(51200.0f);
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -166,22 +157,22 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			push.cascadeScatteringIdx.x = ctx.Index<VolumetricCascade0Scattering>();
-			push.cascadeScatteringIdx.y = ctx.Index<VolumetricCascade1Scattering>();
-			push.cascadeScatteringIdx.z = ctx.Index<VolumetricCascade2Scattering>();
-			push.cascadeScatteringIdx.w = ctx.Index<VolumetricCascade3Scattering>();
+			push.cascadeScatExtIdx01 = glm::uvec4(
+				ctx.Index<VolumetricCascade0Scattering>(),
+				ctx.Index<VolumetricCascade0Extinction>(),
+				ctx.Index<VolumetricCascade1Scattering>(),
+				ctx.Index<VolumetricCascade1Extinction>()
+			);
+			push.cascadeScatExtIdx23 = glm::uvec4(
+				ctx.Index<VolumetricCascade2Scattering>(),
+				ctx.Index<VolumetricCascade2Extinction>(),
+				ctx.Index<VolumetricCascade3Scattering>(),
+				ctx.Index<VolumetricCascade3Extinction>()
+			);
 
-			push.cascadeExtinctionIdx.x = ctx.Index<VolumetricCascade0Extinction>();
-			push.cascadeExtinctionIdx.y = ctx.Index<VolumetricCascade1Extinction>();
-			push.cascadeExtinctionIdx.z = ctx.Index<VolumetricCascade2Extinction>();
-			push.cascadeExtinctionIdx.w = ctx.Index<VolumetricCascade3Extinction>();
-
-			push.cascade3ScatteringIdx = ctx.Index<VolumetricCascade3Scattering>();
-			push.cascade3ExtinctionIdx = ctx.Index<VolumetricCascade3Extinction>();
-
-			push.gPositionIndex = ctx.Index<GBufferPosition>();
-			push.gDepthIndex = ctx.Index<GBufferDepth>();
-			push.hdrColorIndex = ctx.Index<HdrColor>();
+			push.gBufferConfig.x = ctx.Index<GBufferPosition>();
+			push.gBufferConfig.y = ctx.Index<GBufferDepth>();
+			push.gBufferConfig.z = ctx.Index<HdrColor>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

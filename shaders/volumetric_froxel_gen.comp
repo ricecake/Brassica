@@ -11,27 +11,17 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(push_constant) uniform VolumetricFroxelGenPushConstants {
-	vec4  cameraPos;            // x, y, z = camera position, w = time
-	vec4  camForward;           // xyz = camera forward vector
-	vec4  camUp;                // xyz = camera up vector
-	vec4  camRight;             // xyz = camera right vector
-	vec4  sunDir;               // x, y, z = sun direction, w = sun intensity
-	vec4  sunColor;             // rgb = sun color/radiance
-	vec4  fogParams;            // x = fog density, y = fog height falloff, z = fog base height, w = phase anisotropy g
-	vec4  fovAspect;            // x = tanHalfFov, y = aspect ratio
-	uvec4 cascadeScatteringIdx; // x, y, z, w = bindless storage indices for cascade 0, 1, 2, 3 scattering
-	uvec4 cascadeExtinctionIdx; // x, y, z, w = bindless storage indices for cascade 0, 1, 2, 3 extinction
-	uint  noiseTextureIdx;      // bindless index for VolumetricNoiseTexture
-	uint  clipmapIndex;         // bindless index for TerrainClipmapTexture
-	uint  minMaxIndex;          // bindless index for TerrainMinMaxTexture
-	uint  gridTextureDim;       // terrain map dimension (1024)
-	uint  skyViewIndex;         // bindless index for SkyViewLUT
-	uint  numLevels;            // terrain clipmap level count
-	float waterLevel;           // water surface elevation
-	float waterBlendDepth;      // underwater blend depth
-	uint  cascade3ScatteringIdx;
-	uint  cascade3ExtinctionIdx;
-	uint  _pad[2];
+	vec4  cameraPos;             // x, y, z = camera position, w = time
+	vec4  scaledCamRight;        // xyz = camRight * aspect * tanHalfFov
+	vec4  scaledCamUp;           // xyz = camUp * tanHalfFov
+	vec4  fogParams;             // x = fog density, y = fog height falloff, z = fog base height, w = phase anisotropy g
+	uvec4 cascadeScatExtIdx01;   // x,y = C0 scat/ext, z,w = C1 scat/ext
+	uvec4 cascadeScatExtIdx23;   // x,y = C2 scat/ext, z,w = C3 scat/ext
+	uvec4 texturesConfig;        // x = noiseTexture, y = minMax, z = skyView, w = gridDim
+	uint  numLevels;             // terrain clipmap level count
+	float waterLevel;            // water surface elevation
+	float waterBlendDepth;       // underwater blend depth
+	uint  _pad;
 } push;
 
 float dualHenyeyGreenstein(float cosTheta, float g) {
@@ -47,11 +37,13 @@ float dualHenyeyGreenstein(float cosTheta, float g) {
 
 // Calculates terrain volumetric shadowing (god rays) using the terrain library occlusion system
 float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir) {
-	if (push.minMaxIndex == 0u || push.minMaxIndex == 0xFFFFFFFFu) return 1.0;
+	uint minMaxIndex = push.texturesConfig.y;
+	uint gridTextureDim = push.texturesConfig.w;
+	if (minMaxIndex == 0u || minMaxIndex == 0xFFFFFFFFu) return 1.0;
 
 	TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-		push.minMaxIndex,
-		push.gridTextureDim,
+		minMaxIndex,
+		gridTextureDim,
 		push.numLevels,
 		push.waterLevel
 	);
@@ -70,25 +62,34 @@ void main() {
 	uvec2 xy = gl_GlobalInvocationID.xy;
 	if (xy.x >= 64 || xy.y >= 64) return;
 
-	// Camera view frustum directions (xy.y = 0 points UP along +camUp to match top of image/frustum)
+	// Camera view frustum directions (xy.y = 0 points UP along +scaledCamUp to match top of image/frustum)
 	float ndcX = (((float(xy.x) + 0.5) / 64.0) * 2.0 - 1.0);
 	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 64.0) * 2.0);
 
-	float tanHalfFov = push.fovAspect.x;
-	float aspect = push.fovAspect.y;
+	vec3 camForward = normalize(cross(push.scaledCamUp.xyz, push.scaledCamRight.xyz));
 
 	vec3 viewRayDir = normalize(
-		ndcX * aspect * tanHalfFov * push.camRight.xyz +
-		ndcY * tanHalfFov * push.camUp.xyz +
-		push.camForward.xyz
+		ndcX * push.scaledCamRight.xyz +
+		ndcY * push.scaledCamUp.xyz +
+		camForward
 	);
 
 	// Cascades covering extended distances: C0 = 200m, C1 = 1600m, C2 = 12800m, C3 = 51200m
 	float cascadeRanges[4] = float[4](200.0, 1600.0, 12800.0, 51200.0);
 
+	uvec4 scatExtIndices[4] = uvec4[4](
+		push.cascadeScatExtIdx01.xy,
+		push.cascadeScatExtIdx01.zw,
+		push.cascadeScatExtIdx23.xy,
+		push.cascadeScatExtIdx23.zw
+	);
+
+	uint noiseTextureIdx = push.texturesConfig.x;
+	uint skyViewIndex = push.texturesConfig.z;
+
 	for (int c = 0; c < 4; ++c) {
-		uint scatIdx = push.cascadeScatteringIdx[c];
-		uint extIdx = push.cascadeExtinctionIdx[c];
+		uint scatIdx = scatExtIndices[c].x;
+		uint extIdx = scatExtIndices[c].y;
 		if (scatIdx == 0xFFFFFFFFu || extIdx == 0xFFFFFFFFu) continue;
 
 		float maxDist = cascadeRanges[c];
@@ -108,8 +109,8 @@ void main() {
 			float noiseScale = 0.018 / pow(2.5, float(c));
 			vec2 noiseUV = worldPos.xz * noiseScale;
 			vec4 noiseVal = vec4(0.5);
-			if (push.noiseTextureIdx != 0xFFFFFFFFu) {
-				noiseVal = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.noiseTextureIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), noiseUV, 0.0);
+			if (noiseTextureIdx != 0xFFFFFFFFu) {
+				noiseVal = textureLod(sampler2D(uTextures2D[nonuniformEXT(noiseTextureIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), noiseUV, 0.0);
 			}
 
 			float noiseMod = 0.5;
@@ -152,26 +153,28 @@ void main() {
 			float emissivity = 0.01 * density * (1.0 - waterBlend);
 
 			// Volumetric shadowing for god rays
-			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz);
+			vec3 sunDir = uLights[0].direction != vec3(0.0) ? normalize(-uLights[0].direction) : vec3(0.0, 1.0, 0.0);
+			vec3 sunColor = uLights[0].color * uLights[0].intensity;
+			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, sunDir);
 
 			// Direct sun light + phase function along viewRayDir
-			float cosTheta = dot(viewRayDir, push.sunDir.xyz);
+			float cosTheta = dot(viewRayDir, sunDir);
 			float phase = dualHenyeyGreenstein(cosTheta, push.fogParams.w);
 
-			vec3 directSun = push.sunColor.rgb * push.sunDir.w * phase * shadowTerm;
+			vec3 directSun = sunColor * phase * shadowTerm;
 
 			// Apply water depth attenuation to direct sun light when underwater
 			vec3 sunWaterAtten = exp(-waterExtCoeff * depthInWater);
 			directSun = mix(directSun, directSun * sunWaterAtten, waterBlend);
 
 			// Sample physical sky radiance from SkyViewLUT for atmospheric ambient, or aquatic teal tint underwater
-			vec3 skyAmbient = vec3(0.20, 0.35, 0.55) * max(0.2, push.sunDir.y) + vec3(0.05, 0.08, 0.12);
-			if (push.skyViewIndex != 0xFFFFFFFFu) {
-				vec3 zenithSky = sampleSkyView(push.skyViewIndex, vec3(0.0, 1.0, 0.0));
-				vec3 viewSky = sampleSkyView(push.skyViewIndex, viewRayDir);
+			vec3 skyAmbient = vec3(0.20, 0.35, 0.55) * max(0.2, sunDir.y) + vec3(0.05, 0.08, 0.12);
+			if (skyViewIndex != 0xFFFFFFFFu) {
+				vec3 zenithSky = sampleSkyView(skyViewIndex, vec3(0.0, 1.0, 0.0));
+				vec3 viewSky = sampleSkyView(skyViewIndex, viewRayDir);
 				skyAmbient = mix(zenithSky, viewSky, 0.5);
 			}
-			vec3 underwaterAmbient = vec3(0.02, 0.18, 0.28) * max(0.2, push.sunDir.y) + vec3(0.005, 0.03, 0.05);
+			vec3 underwaterAmbient = vec3(0.02, 0.18, 0.28) * max(0.2, sunDir.y) + vec3(0.005, 0.03, 0.05);
 			skyAmbient = mix(skyAmbient, underwaterAmbient, waterBlend);
 
 			// Evaluate local point and spot light sources for volumetric light shafts
