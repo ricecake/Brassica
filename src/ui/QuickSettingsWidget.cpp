@@ -99,6 +99,17 @@ namespace brassica::ui {
 				}
 			}
 
+			if (ServiceLocator::Instance().Has<LightManager>()) {
+				auto lightMgr = ServiceLocator::Instance().Get<LightManager>();
+				bool gtaoEnabled = lightMgr->IsGTAOEnabled();
+				if (ImGui::Checkbox("Enable GTAO##Quick", &gtaoEnabled)) {
+					lightMgr->SetGTAOEnabled(gtaoEnabled);
+					if (cfg) {
+						cfg->SetAppSetting("quick_gtao_enabled", gtaoEnabled);
+					}
+				}
+			}
+
 			ImGui::Separator();
 
 			// Particles

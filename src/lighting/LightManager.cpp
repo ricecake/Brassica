@@ -174,8 +174,9 @@ namespace brassica {
 
 				_cycle.nightFactor = glm::smoothstep(0.2f, -0.2f, sunVis);
 
+				const glm::vec3 airglow{0.0008f, 0.0015f, 0.0022f};
 				glm::vec3 dayAmbient{0.2f, 0.2f, 0.25f};
-				glm::vec3 nightAmbient = dayAmbient * 0.15f + _lights[1].color * 0.3f * std::max(0.0f, moonVis);
+				glm::vec3 nightAmbient = airglow + dayAmbient * 0.15f + _lights[1].color * 0.3f * std::max(0.0f, moonVis);
 				float     ambientFactor = std::clamp(sunVis * 5.0f + 0.5f, 0.0f, 1.0f);
 				_ambientLight = glm::mix(nightAmbient, dayAmbient, ambientFactor);
 			}

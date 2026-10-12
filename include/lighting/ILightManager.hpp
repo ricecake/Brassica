@@ -16,6 +16,7 @@ namespace brassica {
 		float     skyExposure = constants::Class::Lighting::DefaultSkyExposure;
 		float     starExposure = constants::Class::Lighting::DefaultStarExposure;
 		float     terrainExposure = constants::Class::Lighting::DefaultTerrainExposure;
+		bool      enableGTAO = true;
 
 		bool      cycleEnabled = true;
 		float     cycleTime = constants::Class::Lighting::DefaultCycleTime;
@@ -76,7 +77,8 @@ namespace brassica {
 					100.0f,
 					UIHint::Slider
 				),
-				MakeColorField("moonTint", "Moon Tint Color", &LightManagerState::moonTint)
+				MakeColorField("moonTint", "Moon Tint Color", &LightManagerState::moonTint),
+				MakeField("enableGTAO", "Enable GTAO", &LightManagerState::enableGTAO)
 			);
 		}
 	};
@@ -123,6 +125,9 @@ namespace brassica {
 
 		virtual float GetTerrainExposure() const = 0;
 		virtual void  SetTerrainExposure(float exp) = 0;
+
+		virtual bool  IsGTAOEnabled() const = 0;
+		virtual void  SetGTAOEnabled(bool enable) = 0;
 
 		virtual DayNightCycle&       GetDayNightCycle() = 0;
 		virtual const DayNightCycle& GetDayNightCycle() const = 0;

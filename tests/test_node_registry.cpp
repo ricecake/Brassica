@@ -17,6 +17,7 @@
 // 20 -> 24: Replaced per-handler EntityNode with auto-registered EntityPrepareNode and EntityNode.
 // 24 -> 25: Added HiZDownsampleNode.
 // 25 -> 27: Added VolumetricFroxelGenNode and VolumetricRenderNode for froxel volumetric rendering.
+// 27 -> 28: Added GTAONode.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 27);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 28);
 }
