@@ -54,7 +54,7 @@ void main() {
 	if (push.outBiomeStorageIdx != 0xFFFFFFFFu && push.inBiomeMapAStorageIdx != 0xFFFFFFFFu && push.inBiomeMapBStorageIdx != 0xFFFFFFFFu) {
 		vec4 biomeA = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inBiomeMapAStorageIdx)], coord);
 		vec4 biomeB = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inBiomeMapBStorageIdx)], coord);
-		vec4 blendedBiome = mix(biomeA, biomeB, t);
+		vec4 blendedBiome = mix(biomeA, biomeB, 0.125);
 
 		imageStore(
 			uImageStorageRGBA32F[nonuniformEXT(push.outBiomeStorageIdx)],
