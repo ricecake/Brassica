@@ -115,33 +115,48 @@ void main() {
 		// after this pass at SubPhase::Atmosphere -- see shaders/atmosphere/composite.frag.
 		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material).color;
 
-		if(uLights[0].intensity >0) {
+		if (uLights[0].intensity > 0.0) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 				params.minMaxIndex,
 				params.gridParams.w,
 				params.gridParams.x,
 				0.0
 			);
-			float hitDist = 0.0;
-			bool hit;
-			if (dot(norm, uLights[0].direction) > 0) {
-				hitDist = dot(norm, -uLights[0].direction);
-				hit = true;
-			}
-			else {
-				hit = traceTerrainOcclusion(
-					occCtx,
-					pos-10*uLights[0].direction,
-					-uLights[0].direction,
-					50000,
-					hitDist
-				);
-			}
-			if (hit) {
-				hdrColor *= mix(1.0, smoothstep(-25, 50, hitDist), clamp(uLights[0].intensity, 0, 1));
-			}
-		}
 
+			vec3 lightDir = normalize(-uLights[0].direction);
+			float NdotL = dot(norm, lightDir);
+			float shadowMask = 1.0;
+
+			if (NdotL <= 0.0) {
+				shadowMask = 0.0;
+			} else {
+				// float slopeFactor = 1.0 - clamp(norm.y, 0.0, 1.0);
+				// vec3 rayOrigin = pos + norm * (0.3 + 0.7 * slopeFactor) + lightDir * (0.4 + 0.6 * slopeFactor);
+				vec3 biasNorm = norm;//normalize(cross(dFdx(pos), dFdy(pos)));
+				// Ensure the dot product doesn't drop below zero for surfaces facing away
+				float cosTheta = clamp(dot(biasNorm, lightDir), 0.0, 1.0);
+				// Derived from sin^2(x) + cos^2(x) = 1
+				float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+				// Tune these based on your world scale and ray step size
+				float minBias = 0.01;
+				float maxBias = 0.05;
+				// At cosTheta = 1.0 (facing light): bias is purely along lightDir
+				// At cosTheta = 0.0 (grazing angle): bias is purely along biasNormal
+				vec3 biasVector = (lightDir * cosTheta * minBias) + (biasNorm * sinTheta * maxBias);
+				vec3 rayOrigin = pos + biasVector;
+
+				float near = 0.0;
+				float distanceInOut = 50000.0;
+				bool hit = isDirectionOccludedByTerrain(occCtx, rayOrigin, lightDir, distanceInOut, near);
+
+				if (hit) {
+					shadowMask = 0.0 + clamp(near * pow(distanceInOut,1), 0,1);
+				}
+			}
+
+			float shadowStrength = clamp(uLights[0].intensity, 0.0, 1.0);
+			hdrColor *= mix(1.0, shadowMask, shadowStrength);
+		}
 	}
 
 	outColor = vec4(hdrColor, 1.0);

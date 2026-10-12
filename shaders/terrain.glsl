@@ -246,7 +246,8 @@ bool traceTerrainOcclusion(
 	vec3  origin,
 	vec3  dir,
 	float maxDistance,
-	inout float hitDistance
+	inout float hitDistance,
+	out float nearestApproach
 ) {
 	if (ctx.minMaxIndex == 0u || ctx.numLevels == 0u || maxDistance <= 0.0) {
 		return false;
@@ -295,6 +296,7 @@ bool traceTerrainOcclusion(
 			// that would exit this layer's own safety window, in which case move out to the
 			// next (coarser) layer one mip finer than its own 0, keeping the world cell size
 			// roughly continuous across the layer boundary instead of jumping.
+			nearestApproach = min(nearestApproach, gMin - cellMinMax.y);
 			t = t1 + kNudge;
 			if (exitingLayer) {
 				if (L + 1u >= ctx.numLevels) {
@@ -312,6 +314,7 @@ bool traceTerrainOcclusion(
 			// A hit -- but confirm it at progressively finer mips rather than trusting
 			// whichever coarse mip first flagged it, since a coarse cell's min can sit well
 			// below the exact point the ray actually dips under.
+			nearestApproach = min(nearestApproach, cellMinMax.x - gMin);
 			if (m > 0) {
 				m -= 1;
 				continue;
@@ -341,11 +344,26 @@ bool traceTerrainOcclusion(
 	return false;
 }
 
+bool traceTerrainOcclusion(
+	TerrainOcclusionContext ctx,
+	vec3  origin,
+	vec3  dir,
+	float maxDistance,
+	inout float hitDistance
+) {
+	float near;
+	return traceTerrainOcclusion(ctx, origin, dir, maxDistance, hitDistance, near);
+}
+
 // Requested shape: vector + origin + distance. distance is in/out -- read as the max range to
 // check within, overwritten with the hit distance only if occluded. origin/dir are render
 // space, same as every other curved-world consumer's sample points.
 bool isDirectionOccludedByTerrain(TerrainOcclusionContext ctx, vec3 origin, vec3 dir, inout float distance) {
 	return traceTerrainOcclusion(ctx, origin, dir, distance, distance);
+}
+
+bool isDirectionOccludedByTerrain(TerrainOcclusionContext ctx, vec3 origin, vec3 dir, inout float distance, out float near) {
+	return traceTerrainOcclusion(ctx, origin, dir, distance, distance, near);
 }
 
 // Shared by isAABBOccludedByTerrain's three rays: traces from `from` toward `target` (both
