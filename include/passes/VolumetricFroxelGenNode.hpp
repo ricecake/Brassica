@@ -33,7 +33,7 @@ namespace brassica {
 		alignas(16) glm::vec4 camRight{1.0f, 0.0f, 0.0f, 0.0f};
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};
 		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 1.0f};
-		alignas(16) glm::vec4 fogParams{0.015f, 0.005f, 0.0f, 0.6f}; // density, height falloff, base height, anisotropy g
+		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 0.6f}; // density, height falloff, base height, anisotropy g
 		alignas(16) glm::vec4 fovAspect{1.0f, 1.777f, 0.0f, 0.0f};   // tanHalfFov, aspect
 		alignas(16) glm::uvec4 cascadeScatteringIdx{0xFFFFFFFFu};
 		alignas(16) glm::uvec4 cascadeExtinctionIdx{0xFFFFFFFFu};

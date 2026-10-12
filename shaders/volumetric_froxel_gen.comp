@@ -70,9 +70,9 @@ void main() {
 	uvec2 xy = gl_GlobalInvocationID.xy;
 	if (xy.x >= 64 || xy.y >= 64) return;
 
-	// Camera view frustum directions
+	// Camera view frustum directions (xy.y = 0 points UP along +camUp to match top of image/frustum)
 	float ndcX = (((float(xy.x) + 0.5) / 64.0) * 2.0 - 1.0);
-	float ndcY = (((float(xy.y) + 0.5) / 64.0) * 2.0 - 1.0);
+	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 64.0) * 2.0);
 
 	float tanHalfFov = push.fovAspect.x;
 	float aspect = push.fovAspect.y;
