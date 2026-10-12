@@ -21,6 +21,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  biomeIndex;
 	uint  weatherBiomeIndex;
 	uint  gMaterialIndex;
+	uint  hizIndex;
 }
 
 params;
@@ -113,7 +114,13 @@ void main() {
 		// Aerial perspective / underwater extinction is no longer applied here: it happens
 		// uniformly for every pixel (this one included) in AtmosphereCompositeNode, which runs
 		// after this pass at SubPhase::Atmosphere -- see shaders/atmosphere/composite.frag.
-		hdrColor = evaluateClusteredLightContributionPBR(pos, norm, material).color;
+		hdrColor = evaluateClusteredLightContributionPBR(
+			pos,
+			norm,
+			material,
+			params.hizIndex,
+			params.gDepthIndex
+		).color;
 	}
 
 	outColor = vec4(hdrColor, 1.0);

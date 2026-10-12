@@ -10,6 +10,7 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
+#include "passes/DeferredNode.hpp"
 #include "passes/HiZDownsampleNode.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -154,6 +155,57 @@ TEST_CASE("HiZDownsampleNode graph ordering and schedule proof") {
 		}
 	}
 	CHECK(foundSynthesizedBarrier);
+}
+
+TEST_CASE("DeferredNode reads HiZTexture and is staged after HiZDownsampleNode") {
+	FakeDepthWriterNode depthWriter;
+	HiZDownsampleNode   hizNode;
+	DeferredNode        deferredNode;
+
+	graph::Graph g;
+	g.RegisterRef(depthWriter);
+	g.RegisterRef(hizNode);
+	g.RegisterRef(deferredNode);
+	g.Register<graph::Import<GBufferPosition>>();
+	g.Register<graph::Import<GBufferNormal>>();
+	g.Register<graph::Import<GBufferAlbedo>>();
+	g.Register<graph::Import<GBufferMaterial>>();
+	g.Register<graph::Import<AtmosphereRadiance>>();
+	g.Register<graph::Import<ClusteredLighting>>();
+	g.Register<graph::Import<TerrainClipmapTexture>>();
+	g.Register<graph::Import<TerrainMinMaxTexture>>();
+	g.Register<graph::Import<TerrainBiomeTexture>>();
+	g.Register<graph::Import<TerrainWeatherBiomeTexture>>();
+	g.Register<graph::Import<TerrainTLAS>>();
+
+	graph::FrameContext ctx{.width = 1280, .height = 720};
+	g.Setup(ctx);
+	auto res = g.Compile();
+	if (!res) {
+		MESSAGE(res.error().message);
+	}
+	REQUIRE(res.has_value());
+
+	const auto& schedule = g.GetSchedule();
+
+	auto stageOf = [&](std::string_view name) -> std::optional<std::size_t> {
+		for (std::size_t s = 0; s < schedule.stages.size(); ++s) {
+			for (std::size_t nodeIdx : schedule.stages[s].nodes) {
+				if (g.Nodes()[nodeIdx].Descriptor().name.find(name) != std::string_view::npos) {
+					return s;
+				}
+			}
+		}
+		return std::nullopt;
+	};
+
+	auto hizStage = stageOf("HiZDownsampleNode");
+	auto deferredStage = stageOf("DeferredNode");
+
+	REQUIRE(hizStage.has_value());
+	REQUIRE(deferredStage.has_value());
+
+	CHECK(*deferredStage > *hizStage);
 }
 
 namespace {
