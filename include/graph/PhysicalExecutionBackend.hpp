@@ -191,6 +191,7 @@ namespace brassica::graph {
 				static_cast<std::uint32_t>(colorAttachments.size()),
 				colorAttachments.empty() ? nullptr : colorAttachments.data(),
 				hasDepth ? &depthAttachment : nullptr,
+				(hasDepth && HasStencilComponent(derived.depthFormat)) ? &depthAttachment : nullptr,
 			};
 			if (derived.hasShadingRate) {
 				renderingInfo.pNext = &shadingRateAttachment;

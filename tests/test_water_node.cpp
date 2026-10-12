@@ -30,6 +30,7 @@ namespace {
 			graph::Create<GBufferNormal>,
 			graph::Create<GBufferMaterial>,
 			graph::Create<GBufferDepth>,
+			graph::Create<GBufferBackDepth>,
 			graph::Create<HdrColor>,
 			graph::Create<TerrainMinMaxTexture>,
 			graph::Create<SkyViewLUT>>;
@@ -72,6 +73,13 @@ namespace {
 					.key = graph::IdOf<GBufferDepth>(),
 					.access = graph::AccessKind::Write,
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<GBufferBackDepth>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32Sfloat),
 				}
 			);
 			r.realizations.push_back(

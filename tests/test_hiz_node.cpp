@@ -32,7 +32,7 @@ using namespace brassica;
 // Vulkan's mandatory format-feature set), so a compute-shader imageStore approach doesn't work
 // either -- it would resolve to the bindless-miss fallback index and silently write nothing.
 struct FakeDepthWriterNode {
-	using Resources = graph::Declares<graph::Create<GBufferDepth>>;
+	using Resources = graph::Declares<graph::Create<GBufferDepth>, graph::Create<GBufferBackDepth>>;
 
 	VmaAllocator                     allocator{nullptr};
 	graph::PhysicalResourceRegistry* registry{nullptr};
@@ -59,6 +59,14 @@ struct FakeDepthWriterNode {
 				.key = graph::IdOf<GBufferDepth>(),
 				.access = graph::AccessKind::Write,
 				.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
+			}
+		);
+		r.realizations.push_back(
+			graph::ResourceRealization{
+				.key = graph::IdOf<GBufferBackDepth>(),
+				.access = graph::AccessKind::Write,
+				.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32Sfloat),
+				.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
 			}
 		);
 		return r;
@@ -170,6 +178,7 @@ TEST_CASE("DeferredNode reads HiZTexture and is staged after HiZDownsampleNode")
 	g.Register<graph::Import<GBufferNormal>>();
 	g.Register<graph::Import<GBufferAlbedo>>();
 	g.Register<graph::Import<GBufferMaterial>>();
+	g.Register<graph::Import<GBufferBackDepth>>();
 	g.Register<graph::Import<AtmosphereRadiance>>();
 	g.Register<graph::Import<ClusteredLighting>>();
 	g.Register<graph::Import<TerrainClipmapTexture>>();

@@ -168,7 +168,9 @@ target_include_directories(imgui PUBLIC
     ${IMGUI_DIR}/backends
     ${IMGUIZMO_DIR}
     ${IMGUIZMO_DIR}/src
+    ${Vulkan_INCLUDE_DIR}
 )
+target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE GLFW_INCLUDE_VULKAN)
 target_link_libraries(imgui PUBLIC glfw Vulkan::Vulkan)
 
 # 4. Engine Library

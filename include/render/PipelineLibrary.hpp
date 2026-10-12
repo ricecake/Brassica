@@ -29,6 +29,9 @@ namespace brassica::render {
 		bool              enableBlend = false;
 
 		bool enableShadingRate = false;
+
+		bool              stencilTest = false;
+		vk::StencilOpState stencilState{};
 	};
 
 	struct GraphicsPipelineRequest {

@@ -19,21 +19,26 @@ layout(set = 2, binding = 0, std430) coherent buffer AtomicCounter { uint counte
 
 layout(push_constant) uniform Constants {
 	uint   srcIndex;       // bindless SAMPLED index for GBufferDepth's mip 0 (read-only)
+	uint   backSrcIndex;   // bindless SAMPLED index for GBufferBackDepth's mip 0 (read-only)
 	uint   mips;           // total output mips to compute (mips 1..N)
 	uint   numWorkGroups;  // workgroups dispatched for this slice
-	uint   _pad0;
 	uvec2  workGroupOffset; // tile offset
 	uint   mipIndices[12]; // bindless STORAGE indices for output mips
 } cb;
 
-// 1. Fetch source depth texel at mip 0 (GBufferDepth)
+// 1. Fetch source depth texel at mip 0 (GBufferDepth & GBufferBackDepth)
 vec4 SpdLoadSourceImage(ivec2 pix, uint slice) {
-	float depth = texelFetch(
+	float frontDepth = texelFetch(
 		sampler2D(uTextures2D[nonuniformEXT(cb.srcIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
 		pix,
 		0
 	).r;
-	return vec4(depth, depth, 0.0, 0.0);
+	float backDepth = texelFetch(
+		sampler2D(uTextures2D[nonuniformEXT(cb.backSrcIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		pix,
+		0
+	).r;
+	return vec4(frontDepth, backDepth, 0.0, 0.0);
 }
 
 // 2. Fetch mip 5 -- coherent handoff for coarse tail
@@ -72,11 +77,11 @@ void SpdResetAtomicCounter(uint slice) {
 	counter[slice] = 0u;
 }
 
-// 6. Min/max depth reduction -- x = minDepth, y = maxDepth; z/w unused.
+// 6. Min/max depth reduction -- x = minFrontDepth, y = maxBackDepth; z/w unused.
 vec4 SpdReduce4(vec4 v0, vec4 v1, vec4 v2, vec4 v3) {
-	float minDepth = min(min(v0.x, v1.x), min(v2.x, v3.x));
-	float maxDepth = max(max(v0.y, v1.y), max(v2.y, v3.y));
-	return vec4(minDepth, maxDepth, 0.0, 0.0);
+	float minFrontDepth = min(min(v0.x, v1.x), min(v2.x, v3.x));
+	float maxBackDepth = max(max(v0.y, v1.y), max(v2.y, v3.y));
+	return vec4(minFrontDepth, maxBackDepth, 0.0, 0.0);
 }
 
 #include "ffx-spd/ffx_spd.h"

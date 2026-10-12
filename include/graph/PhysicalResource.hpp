@@ -911,7 +911,7 @@ namespace brassica::graph {
 	}
 
 	inline ResourceDesc
-	DepthBufferDesc(std::uint32_t width, std::uint32_t height, vk::Format format = vk::Format::eD32Sfloat) {
+	DepthBufferDesc(std::uint32_t width, std::uint32_t height, vk::Format format = vk::Format::eD32SfloatS8Uint) {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Image2D,
 			.width = width,

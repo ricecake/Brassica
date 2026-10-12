@@ -42,6 +42,7 @@ namespace brassica {
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t gMaterialIndex{0};
 		std::uint32_t hizIndex{0};
+		std::uint32_t gBackDepthIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -121,6 +122,7 @@ namespace brassica {
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.hizIndex = ctx.Index<HiZTexture>();
+			push.gBackDepthIndex = ctx.Index<GBufferBackDepth>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

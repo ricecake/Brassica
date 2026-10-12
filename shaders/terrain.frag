@@ -13,6 +13,7 @@ layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outMaterial;
+layout(location = 4) out float outBackDepth;
 
 void main() {
 	vec3 worldPos = inPosition + uCameraPosition.xyz;
@@ -108,4 +109,5 @@ void main() {
 	outNormal   = vec4(normalize(N), 1.0);
 	outAlbedo   = vec4(finalAlbedo, inAlbedo.a > 0.0 ? inAlbedo.a : 1.0);
 	outMaterial = vec4(metallic, roughness, glint, inMaterial.a);
+	outBackDepth = 0.0;
 }

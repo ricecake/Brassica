@@ -12,6 +12,7 @@ layout(location = 5) in float inFade;
 layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
+layout(location = 3) out float outBackDepth;
 
 void main() {
 	float coverage = inFade;
@@ -54,4 +55,5 @@ void main() {
 	outPosition = vec4(relPos, 1.0);
 	outNormal = vec4(normalize(inNormal), roughness);
 	outAlbedo = inColor;
+	outBackDepth = (!gl_FrontFacing) ? gl_FragCoord.z : 0.0;
 }
