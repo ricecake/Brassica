@@ -179,7 +179,7 @@ namespace brassica::render {
 				vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
 				vk::ColorComponentFlagBits::eA
 			);
-			if (request.colorFormats[i] == vk::Format::eR32Sfloat && request.state.enableBlend) {
+			if (request.colorFormats[i] == vk::Format::eR32Sfloat) {
 				// Back depth accumulation: use max blending so GBufferBackDepth gets the maximum (backmost) depth
 				attachment.setBlendEnable(VK_TRUE);
 				attachment.setSrcColorBlendFactor(vk::BlendFactor::eOne);

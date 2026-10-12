@@ -75,13 +75,8 @@ namespace brassica {
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
 			.depthWrite = true,
-			// Engine convention is standard Z (0=near, 1=far; see Engine.cpp's plain
-			// glm::perspective, no reverse-Z remap), matching TerrainNode/WaterNode/EntityNode's
-			// eLess (and GraphicsPipelineState's own default) -- eGreaterOrEqual here was backwards,
-			// so foliage only ever drew where it was farther than or equal to whatever terrain had
-			// already written, i.e. almost nowhere a normal above-ground camera could see it.
 			.depthCompareOp = vk::CompareOp::eLess,
-			.enableBlend = true,
+			.enableBlend = false,
 			.enableShadingRate = false,
 		};
 

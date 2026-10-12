@@ -36,7 +36,7 @@ namespace brassica {
 			.depthTest = true,
 			.depthWrite = true,
 			.depthCompareOp = vk::CompareOp::eLess,
-			.enableBlend = true,
+			.enableBlend = false,
 			.enableShadingRate = false,
 		};
 
