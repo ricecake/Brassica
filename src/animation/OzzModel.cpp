@@ -142,6 +142,7 @@ namespace brassica {
 				glm::vec3 skew;
 				glm::vec4 perspective;
 				glm::decompose(localMat, scale, rotation, translation, skew, perspective);
+					rotation = glm::conjugate(rotation);
 
 				rawJoint.transform.translation = ozz::math::Float3(translation.x, translation.y, translation.z);
 				rawJoint.transform.rotation = ozz::math::Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
