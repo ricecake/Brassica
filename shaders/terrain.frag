@@ -39,10 +39,6 @@ void main() {
 	float sandW  = weights.z;
 	float snowW  = weights.w;
 
-	// Tangent space basis construction relative to geometric surface normal
-	vec3 T = normalize(cross(N, abs(N.y) > 0.99 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
-	vec3 B = cross(N, T);
-
 	vec2 perturbedGradSum = vec2(0.0);
 
 	// 1. Macro Tier (0m - 1000m): Provides broad geological shape, cliff banding, and distant normal structure
@@ -122,9 +118,12 @@ void main() {
 		}
 	}
 
-	// Compute final perturbed surface normal if any perturbation was accumulated
 	if (length(perturbedGradSum) > 0.0001) {
-		vec3 unnormalizedN = N + (T * perturbedGradSum.x + B * perturbedGradSum.y);
+		vec3 grad3D = vec3(perturbedGradSum.x, 0.0, perturbedGradSum.y);
+
+		// Subtract the gradient and project out the component parallel to the original normal
+		vec3 unnormalizedN = N - (grad3D - N * dot(grad3D, N));
+
 		float lenN = length(unnormalizedN);
 		N = unnormalizedN / max(lenN, 0.001);
 

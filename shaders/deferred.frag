@@ -137,18 +137,18 @@ void main() {
 
 			// Sample smooth geometric terrain clipmap normal for coherent origin biasing and light angle evaluation
 			vec3 geoNorm = norm;
-			if (params.clipmapIndex > 0u && params.clipmapIndex != 0xFFFFFFFFu) {
-				vec4 clipmapSample = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w);
-				if (length(clipmapSample.gba) >= 0.1) {
-					geoNorm = clipmapSample.gba;
-				}
-			}
+			// if (params.clipmapIndex > 0u && params.clipmapIndex != 0xFFFFFFFFu) {
+			// 	vec4 clipmapSample = sampleTerrainClipmap(params.clipmapIndex, pos.xz, 0u, params.gridParams.w);
+			// 	if (length(clipmapSample.gba) >= 0.1) {
+			// 		geoNorm = clipmapSample.gba;
+			// 	}
+			// }
 
 			float NdotL = dot(geoNorm, lightDir);
 			float shadowMask = 1.0;
 
 			// Soft shadow penumbra sharpness factor
-			const float kPenumbra = 16.0;
+			const float kPenumbra = 8.0;
 
 			// Soft grazing-angle transition factor matching the penumbra soft shadow curve
 			float softNdotL = clamp(NdotL * kPenumbra, 0.0, 1.0);
@@ -168,7 +168,7 @@ void main() {
 				shadowMask = min(raySoftShadow, softNdotL);
 			}
 
-			float shadowStrength = clamp(uLights[0].intensity, 0.0, 1.0);
+			float shadowStrength = 0.5*clamp(uLights[0].intensity, 0.0, 1.0);
 			hdrColor *= mix(1.0, shadowMask, shadowStrength);
 		}
 	}
