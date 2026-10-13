@@ -315,8 +315,23 @@ void main() {
 		}
 		uint skirtIdx = 121 + skirtID;
 
-		float skirtDepth = max(10.0, meshletSize * 0.1);
-		vec3  relSkirtPos = relWorldPos - vec3(0.0, skirtDepth, 0.0);
+		vec2 outDir = vec2(0.0);
+		if (lx == 0)  outDir.x -= 1.0;
+		if (lx == 10) outDir.x += 1.0;
+		if (ly == 0)  outDir.y -= 1.0;
+		if (ly == 10) outDir.y += 1.0;
+		if (length(outDir) > 0.0) {
+			outDir = normalize(outDir);
+		}
+
+		float overlapWidth = max(0.5, meshletSize * 0.05);
+		float dropAmount = max(0.1, overlapWidth * 0.15);
+
+		vec3 relSkirtPos = vec3(
+			relWorldPos.x + outDir.x * overlapWidth,
+			relWorldPos.y - dropAmount,
+			relWorldPos.z + outDir.y * overlapWidth
+		);
 
 		vec3 skirtViewPos = mat3(uViewMatrix) * relSkirtPos;
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);
