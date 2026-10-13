@@ -77,7 +77,7 @@ void main() {
 	// Cascades covering extended distances: C0 = 200m, C1 = 1600m, C2 = 12800m, C3 = 51200m
 	float cascadeRanges[4] = float[4](200.0, 1600.0, 12800.0, 51200.0);
 
-	uvec4 scatExtIndices[4] = uvec4[4](
+	uvec2 scatExtIndices[4] = uvec2[4](
 		push.cascadeScatExtIdx01.xy,
 		push.cascadeScatExtIdx01.zw,
 		push.cascadeScatExtIdx23.xy,

@@ -19,7 +19,7 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, out vec3 outTransmittance) {
 	float cascadeRanges[4] = float[4](200.0, 1600.0, 12800.0, 51200.0);
 	float maxDist = cascadeRanges[c];
 
-	uvec4 scatExtIndices[4] = uvec4[4](
+	uvec2 scatExtIndices[4] = uvec2[4](
 		push.cascadeScatExtIdx01.xy,
 		push.cascadeScatExtIdx01.zw,
 		push.cascadeScatExtIdx23.xy,
@@ -75,8 +75,8 @@ void main() {
 	vec3 relPos = posSample.rgb;
 	float rayDist = length(relPos);
 
-	if (posSample.a < 0.01 || rayDist <= 0.01) {
-		// Empty sky/background pixel: reconstruct view ray direction and sample local fog depth
+	if (rayDist <= 0.01) {
+		// Empty sky/background pixel (no G-Buffer geometry rendered): reconstruct view ray direction
 		vec2 clip = inUV * 2.0 - 1.0;
 		vec4 viewRay4 = uInvProjMatrix * vec4(clip, 1.0, 1.0);
 		vec3 viewDir = viewRay4.xyz / max(1e-4, viewRay4.w);
