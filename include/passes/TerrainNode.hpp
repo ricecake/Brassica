@@ -42,9 +42,10 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		float         waterLevel{0.0f};
 		std::uint32_t weatherBiomeIndex{0};
+		std::uint32_t hizIndex{0};
 	};
 
-	static_assert(sizeof(TerrainPushConstants) == 36, "TerrainPushConstants size must be 40 bytes");
+	static_assert(sizeof(TerrainPushConstants) == 40, "TerrainPushConstants size must be 40 bytes");
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
@@ -59,6 +60,7 @@ namespace brassica {
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Create>,
+			graph::Read<graph::History<HiZTexture>>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
 			graph::Read<TerrainBiomeTexture>,
@@ -162,10 +164,18 @@ namespace brassica {
 					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<graph::History<HiZTexture>>(),
+					.access = graph::AccessKind::Read,
+					.desc = HiZTextureDesc(ctx.width, ctx.height),
+				}
+			);
 			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			push.hizIndex = ctx.Index<graph::History<HiZTexture>>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();

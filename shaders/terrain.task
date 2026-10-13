@@ -22,6 +22,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
+	uint  hizIndex;
 }
 params;
 
@@ -129,19 +130,25 @@ void main() {
 #if TERRAIN_TASK_TERRAIN_OCCLUSION
 		// Only for tiles the near/low-LOD widening above never touches (skipHorizonCull's same
 		// lodLevel<=1 band stays untouched here too) -- a near tile is never worth the march.
-		if (visible && lodLevel >= 2u && params.minMaxIndex > 0u) {
-			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-				params.minMaxIndex,
-				params.gridParams.w,
-				params.gridParams.x,
-				params.waterLevel
-			);
-			vec3 worldMinB = relMinB + uCameraPosition.xyz;
-			vec3 worldMaxB = relMaxB + uCameraPosition.xyz;
-			worldMaxB.y += meshletSize * 0.1 + 20.0; // ridge-edge slack so edges don't flicker
-			float occlusionSlack = meshletSize * 2.0 + 100.0;
-			if (isAABBOccludedByTerrain(occCtx, worldMinB, worldMaxB, occlusionSlack)) {
-				visible = false;
+		if (visible && lodLevel >= 2u) {
+			if (params.hizIndex > 0u) {
+				if (isAABBOccludedByHiZ(relMinB, relMaxB, viewProjRel, params.hizIndex)) {
+					visible = false;
+				}
+			} else if (params.minMaxIndex > 0u) {
+				TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+					params.minMaxIndex,
+					params.gridParams.w,
+					params.gridParams.x,
+					params.waterLevel
+				);
+				vec3 worldMinB = relMinB + uCameraPosition.xyz;
+				vec3 worldMaxB = relMaxB + uCameraPosition.xyz;
+				worldMaxB.y += meshletSize * 0.1 + 20.0; // ridge-edge slack so edges don't flicker
+				float occlusionSlack = meshletSize * 2.0 + 100.0;
+				if (isAABBOccludedByTerrain(occCtx, worldMinB, worldMaxB, occlusionSlack)) {
+					visible = false;
+				}
 			}
 		}
 #endif
