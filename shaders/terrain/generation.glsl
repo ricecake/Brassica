@@ -344,7 +344,7 @@ float evaluate_terrain_analytical(
     float raw_ridge = dot_noise_fbm(P_warped, 6, phase + 42.0, grad_raw_ridge);
     vec3 grad_ridge_warped = transpose(J_warp) * grad_raw_ridge;
 
-    float exponent = 2.5;
+    float exponent = 3.0;
     float massive_ridge = pow(abs(raw_ridge), exponent);
     vec3 grad_massive_ridge = exponent * pow(abs(raw_ridge), exponent - 1.0) * sign(raw_ridge) * grad_ridge_warped;
 
@@ -458,7 +458,7 @@ float evaluate_terrain_analytical(
         erosion_strength,
         erosion_gully_weight,
         erosion_detail,
-        vec4(1.0, 0.0, 0.1, 2.0),       // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
+        vec4(2.1, 0.0, 0.1, 2.0),       // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
         vec4(1.25, 1.25, 2.8, 1.5),     // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
         vec2(0.7, 1.0),                 // assumedSlope
         erosion_scale,
