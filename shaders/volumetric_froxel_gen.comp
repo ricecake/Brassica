@@ -39,32 +39,19 @@ float dualHenyeyGreenstein(float cosTheta, float g) {
 	return mix(hg2, hg1, alpha);
 }
 
-// Raymarches along sun direction to calculate terrain volumetric shadowing (god rays)
+// Calculates terrain volumetric shadowing (god rays) using hierarchical min-max ray clearance
 float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir) {
-	if (push.clipmapIndex == 0xFFFFFFFFu && push.minMaxIndex == 0xFFFFFFFFu) return 1.0;
+	if (push.minMaxIndex == 0xFFFFFFFFu || push.minMaxIndex == 0u) return 1.0;
 
-	float shadow = 1.0;
-	float stepSize = 100.0;
-	int numSteps = 5;
+	TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+		push.minMaxIndex,
+		push.gridTextureDim > 0u ? push.gridTextureDim : 1024u,
+		8u,
+		0.0
+	);
 
-	for (int i = 1; i <= numSteps; ++i) {
-		vec3 sampleP = worldPos + lightDir * (float(i) * stepSize);
-
-		vec2 flatXZ = sampleP.xz - push.cameraPos.xz;
-		float dropOff = dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
-
-		float terrainHeight = -dropOff;
-		if (push.clipmapIndex != 0xFFFFFFFFu && push.clipmapIndex > 0u) {
-			vec4 texSample = sampleTerrainClipmap(push.clipmapIndex, sampleP.xz, 0u, push.gridTextureDim > 0u ? push.gridTextureDim : 1024u);
-			terrainHeight = texSample.r - dropOff;
-		}
-
-		if (sampleP.y < terrainHeight) {
-			shadow = 0.15; // Soft shadow in mountain occlusion
-			break;
-		}
-	}
-	return shadow;
+	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 12800.0, 12.0);
+	return mix(0.15, 1.0, softVal);
 }
 
 void main() {

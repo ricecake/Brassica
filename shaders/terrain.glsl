@@ -249,6 +249,7 @@ bool traceTerrainOcclusion(
 	inout float hitDistance,
 	out float nearestApproach
 ) {
+	nearestApproach = 1e30;
 	if (ctx.minMaxIndex == 0u || ctx.numLevels == 0u || maxDistance <= 0.0) {
 		return false;
 	}
@@ -265,7 +266,7 @@ bool traceTerrainOcclusion(
 
 	uint L = min(terrainClipmapLevelFor(origin.xz, ctx.textureDim, ctx.numLevels), ctx.numLevels - 1u);
 	int  m = 0;
-	float t = InterleavedGradientNoise(origin.xz, int(origin.y));
+	float t = 0.0;
 
 	const float kEps = 0.1;     // bias toward "ambiguous" (resolved by descending) over a wrong call
 	const float kNudge = 1e-3;  // push just past a cell/layer boundary so the next floor() is unambiguous
@@ -296,7 +297,7 @@ bool traceTerrainOcclusion(
 			// that would exit this layer's own safety window, in which case move out to the
 			// next (coarser) layer one mip finer than its own 0, keeping the world cell size
 			// roughly continuous across the layer boundary instead of jumping.
-			nearestApproach = min(nearestApproach, gMin - cellMinMax.y);
+			nearestApproach = min(nearestApproach, max(0.0, gMin - cellMinMax.y));
 			t = t1 + kNudge;
 			if (exitingLayer) {
 				if (L + 1u >= ctx.numLevels) {
@@ -314,13 +315,15 @@ bool traceTerrainOcclusion(
 			// A hit -- but confirm it at progressively finer mips rather than trusting
 			// whichever coarse mip first flagged it, since a coarse cell's min can sit well
 			// below the exact point the ray actually dips under.
-			nearestApproach = min(nearestApproach, cellMinMax.x - gMin);
 			if (m > 0) {
 				m -= 1;
 				continue;
 			}
-			hitDistance = t1;
-			return true;
+			if (t1 > 0.2) {
+				nearestApproach = 0.0;
+				hitDistance = t1;
+				return true;
+			}
 		}
 
 		// Ambiguous: this cell's bound straddles the ray's segment. Descend to resolve it.
@@ -332,6 +335,9 @@ bool traceTerrainOcclusion(
 		// Still ambiguous at mip 0, the finest level the dilated chain offers -- the
 		// conservative default is "not occluded here" (grazing a ridge must never register as
 		// a hit), so advance past this cell at the same resolution instead of ascending.
+		if (t1 > 0.2) {
+			nearestApproach = min(nearestApproach, max(0.0, gMin - cellMinMax.y));
+		}
 		t = t1 + kNudge;
 		if (exitingLayer) {
 			if (L + 1u >= ctx.numLevels) {
@@ -342,6 +348,130 @@ bool traceTerrainOcclusion(
 	}
 
 	return false;
+}
+
+// Calculates smooth soft terrain shadow penumbra factor in [0.0, 1.0].
+// 0.0 = fully shadowed (umbra), 1.0 = fully lit.
+float calculateTerrainSoftShadow(
+	TerrainOcclusionContext ctx,
+	vec3  origin,
+	vec3  dir,
+	float maxDistance,
+	float kPenumbra
+) {
+	if (ctx.minMaxIndex == 0u || ctx.numLevels == 0u || maxDistance <= 0.0) {
+		return 1.0;
+	}
+
+	vec3 d = normalize(dir);
+	vec2 camXZ = uCameraPosition.xz;
+
+	vec2  o2 = origin.xz - camXZ;
+	float A = dot(d.xz, d.xz) / (2.0 * FAKE_PLANET_RADIUS);
+	float B = d.y + dot(o2, d.xz) / FAKE_PLANET_RADIUS;
+	float C = origin.y + dot(o2, o2) / (2.0 * FAKE_PLANET_RADIUS);
+
+	uint L = min(terrainClipmapLevelFor(origin.xz, ctx.textureDim, ctx.numLevels), ctx.numLevels - 1u);
+	int  m = 0;
+	float t = 0.0;
+
+	const float kEps = 0.1;
+	const float kNudge = 1e-3;
+
+	float softShadow = 1.0;
+
+	for (int iter = 0; iter < TERRAIN_OCCLUSION_MAX_ITERATIONS; ++iter) {
+		if (t >= maxDistance) {
+			break;
+		}
+
+		float tsL = texelSize(L);
+		float cellSize = tsL * exp2(float(m));
+		vec3  p = origin + d * t;
+
+		float cellExitT = terrainCellExitT(origin, d, p.xz, cellSize);
+		float layerHalfExtent = terrainLevelHalfExtent(L, ctx.textureDim);
+		float layerExitT = terrainLayerExitT(origin, d, camXZ, layerHalfExtent);
+		bool  exitingLayer = layerExitT <= cellExitT;
+		float t1 = min(min(cellExitT, layerExitT), maxDistance);
+		if (t1 <= t) {
+			t1 = t + cellSize * 1e-4;
+		}
+
+		vec2  cellMinMax = terrainCellMinMax(ctx, p.xz, L, uint(m));
+		float gMin = terrainRaySegmentMinG(A, B, C, t, t1);
+
+		if (gMin > cellMinMax.y + kEps) {
+			// Segment is clear above cell max height
+			float clearance = gMin - cellMinMax.y;
+			if (t1 > 0.2) {
+				float evalT = max(t, 0.2);
+				float stepPenumbra = clamp(kPenumbra * clearance / evalT, 0.0, 1.0);
+				softShadow = min(softShadow, stepPenumbra);
+				if (softShadow <= 0.0) {
+					return 0.0;
+				}
+			}
+
+			t = t1 + kNudge;
+			if (exitingLayer) {
+				if (L + 1u >= ctx.numLevels) {
+					break;
+				}
+				L += 1u;
+				m = max(m - 1, 0);
+			} else {
+				m = min(m + 1, 10);
+			}
+			continue;
+		}
+
+		if (gMin < cellMinMax.x - kEps) {
+			// Segment is below cell min height
+			if (m > 0) {
+				m -= 1;
+				continue;
+			}
+			if (t1 > 0.2) {
+				return 0.0; // Occluded inside terrain
+			}
+		}
+
+		// Ambiguous: descend to resolve
+		if (m > 0) {
+			m -= 1;
+			continue;
+		}
+
+		// Ambiguous at mip 0
+		if (t1 > 0.2) {
+			float clearance = max(0.0, gMin - cellMinMax.y);
+			float stepPenumbra = clamp(kPenumbra * clearance / max(t, 0.2), 0.0, 1.0);
+			softShadow = min(softShadow, stepPenumbra);
+			if (softShadow <= 0.0) {
+				return 0.0;
+			}
+		}
+
+		t = t1 + kNudge;
+		if (exitingLayer) {
+			if (L + 1u >= ctx.numLevels) {
+				break;
+			}
+			L += 1u;
+		}
+	}
+
+	return softShadow;
+}
+
+float calculateTerrainSoftShadow(
+	TerrainOcclusionContext ctx,
+	vec3  origin,
+	vec3  dir,
+	float maxDistance
+) {
+	return calculateTerrainSoftShadow(ctx, origin, dir, maxDistance, 16.0);
 }
 
 bool traceTerrainOcclusion(
