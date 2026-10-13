@@ -115,7 +115,7 @@ namespace brassica {
 					if (std::abs(cow.basePos.x) > 40.0f) cow.velocity.x *= -1.0f;
 					if (std::abs(cow.basePos.z) > 40.0f) cow.velocity.z *= -1.0f;
 
-					float groundY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
+					float groundY = engine.GetTerrainManager().GetCachedGroundHeight(cow.basePos.x);
 
 					transform->position = cow.basePos;
 					transform->position.y = groundY + 0.5f;
@@ -177,7 +177,7 @@ namespace brassica {
 			float radius = 15.0f + static_cast<float>(index % 3) * 5.0f;
 
 			glm::vec3 pos(std::cos(angle) * radius, 0.0f, std::sin(angle) * radius - 15.0f);
-			float groundY = engine.GetTerrainManager().GetCachedGroundHeight(0.0f);
+			float groundY = engine.GetTerrainManager().GetCachedGroundHeight(pos.x);
 			pos.y = groundY + 0.5f;
 
 			TransformComponent transform{};

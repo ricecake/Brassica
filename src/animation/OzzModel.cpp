@@ -136,13 +136,18 @@ namespace brassica {
 					localMat = ancestorMat * localMat;
 				}
 
-				glm::vec3 scale(1.0f);
-				glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
-				glm::vec3 translation(0.0f);
-				glm::vec3 skew;
-				glm::vec4 perspective;
-				glm::decompose(localMat, scale, rotation, translation, skew, perspective);
-					rotation = glm::conjugate(rotation);
+				glm::vec3 translation(localMat[3]);
+				glm::vec3 scale(
+					glm::length(glm::vec3(localMat[0])),
+					glm::length(glm::vec3(localMat[1])),
+					glm::length(glm::vec3(localMat[2]))
+				);
+				glm::mat3 rotMat(
+					scale.x > 0.00001f ? glm::vec3(localMat[0]) / scale.x : glm::vec3(1.0f, 0.0f, 0.0f),
+					scale.y > 0.00001f ? glm::vec3(localMat[1]) / scale.y : glm::vec3(0.0f, 1.0f, 0.0f),
+					scale.z > 0.00001f ? glm::vec3(localMat[2]) / scale.z : glm::vec3(0.0f, 0.0f, 1.0f)
+				);
+				glm::quat rotation = glm::quat_cast(rotMat);
 
 				rawJoint.transform.translation = ozz::math::Float3(translation.x, translation.y, translation.z);
 				rawJoint.transform.rotation = ozz::math::Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
