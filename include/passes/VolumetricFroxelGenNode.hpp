@@ -27,25 +27,21 @@ namespace brassica {
 	};
 
 	struct VolumetricFroxelGenPushConstants {
-		alignas(16) glm::vec4 cameraPos{0.0f};
-		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
-		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 0.0f};
-		alignas(16) glm::vec4 camRight{1.0f, 0.0f, 0.0f, 0.0f};
-		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};
-		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 1.0f};
+		alignas(16) glm::vec4 cameraPos{0.0f};             // xyz = camera position, w = time
+		alignas(16) glm::vec4 scaledCamRight{1.0f, 0.0f, 0.0f, 0.0f}; // xyz = camRight * aspect * tanHalfFov
+		alignas(16) glm::vec4 scaledCamUp{0.0f, 1.0f, 0.0f, 0.0f};    // xyz = camUp * tanHalfFov
 		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 0.6f}; // density, height falloff, base height, anisotropy g
-		alignas(16) glm::vec4 fovAspect{1.0f, 1.777f, 0.0f, 0.0f};   // tanHalfFov, aspect
-		alignas(16) glm::uvec4 cascadeScatteringIdx{0xFFFFFFFFu};
-		alignas(16) glm::uvec4 cascadeExtinctionIdx{0xFFFFFFFFu};
-		std::uint32_t noiseTextureIdx{0xFFFFFFFFu};
-		std::uint32_t clipmapIndex{0xFFFFFFFFu};
-		std::uint32_t minMaxIndex{0xFFFFFFFFu};
-		std::uint32_t gridTextureDim{1024u};
-		std::uint32_t skyViewIndex{0xFFFFFFFFu};
-		std::uint32_t _pad[3]{0u, 0u, 0u};
+		alignas(16) glm::uvec4 cascadeScatExtIdx01{0xFFFFFFFFu};    // x,y = C0 scat/ext, z,w = C1 scat/ext
+		alignas(16) glm::uvec4 cascadeScatExtIdx23{0xFFFFFFFFu};    // x,y = C2 scat/ext, z,w = C3 scat/ext
+		alignas(16) glm::uvec4 texturesConfig{0xFFFFFFFFu};         // x = noiseTexture, y = minMax, z = skyView, w = gridDim
+		std::uint32_t numLevels{8u};
+		float         waterLevel{0.0f};
+		float         waterBlendDepth{2.0f};
+		std::uint32_t _pad{0u};
 	};
+	static_assert(sizeof(VolumetricFroxelGenPushConstants) == 128, "VolumetricFroxelGenPushConstants size must be 128 bytes");
 
-	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
+	// Manages 4 froxel grid cascades for volumetric fog, scattering, and god rays.
 	// Operates in SubPhase::LightPreparation (Phase 500).
 	struct VolumetricFroxelGenNode: render::NodeRegistrar<VolumetricFroxelGenNode> {
 		using Resources = graph::Declares<
@@ -55,6 +51,8 @@ namespace brassica {
 			graph::Create<VolumetricCascade1Extinction>,
 			graph::Create<VolumetricCascade2Scattering>,
 			graph::Create<VolumetricCascade2Extinction>,
+			graph::Create<VolumetricCascade3Scattering>,
+			graph::Create<VolumetricCascade3Extinction>,
 			graph::Create<VolumetricNoiseTexture>,
 			graph::Read<SkyViewLUT>,
 			graph::Read<TerrainClipmapTexture>,
@@ -96,24 +94,38 @@ namespace brassica {
 			cameraPos = p.cameraPosition;
 			time = p.time;
 
+			float tanHalfFov = std::tan(p.fov * 0.5f);
 			genPush.cameraPos = glm::vec4(cameraPos, time);
-			genPush.camForward = glm::vec4(p.cameraForward, 0.0f);
-			genPush.camUp = glm::vec4(p.cameraUp, 0.0f);
-			genPush.camRight = glm::vec4(p.cameraRight, 0.0f);
-			genPush.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
-			genPush.sunDir = glm::vec4(p.sunDir, 1.0f);
-			genPush.sunColor = glm::vec4(p.sunRadiance, 1.0f);
-			genPush.gridTextureDim = p.terrainGridParams.w;
+			genPush.scaledCamRight = glm::vec4(p.cameraRight * p.aspectRatio * tanHalfFov, 0.0f);
+			genPush.scaledCamUp = glm::vec4(p.cameraUp * tanHalfFov, 0.0f);
+			genPush.numLevels = p.terrainGridParams.x;
+			genPush.texturesConfig.w = p.terrainGridParams.w;
+			genPush.waterLevel = p.waterLevel;
+			genPush.waterBlendDepth = p.atmosphere.waterBlendDepth;
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(7);
+			r.realizations.reserve(9);
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<VolumetricCascade0Scattering>(),
+					.access = graph::AccessKind::Write,
+					.desc = VolumetricFroxelDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<VolumetricCascade3Scattering>(),
+					.access = graph::AccessKind::Write,
+					.desc = VolumetricFroxelDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<VolumetricCascade3Extinction>(),
 					.access = graph::AccessKind::Write,
 					.desc = VolumetricFroxelDesc(),
 				}
@@ -217,18 +229,22 @@ namespace brassica {
 			vkCmd.dispatch(32, 32, 1);
 
 			// 2. Generate froxel cascade volumes
-			genPush.cascadeScatteringIdx.x = ctx.StorageIndex<VolumetricCascade0Scattering>();
-			genPush.cascadeScatteringIdx.y = ctx.StorageIndex<VolumetricCascade1Scattering>();
-			genPush.cascadeScatteringIdx.z = ctx.StorageIndex<VolumetricCascade2Scattering>();
+			genPush.cascadeScatExtIdx01 = glm::uvec4(
+				ctx.StorageIndex<VolumetricCascade0Scattering>(),
+				ctx.StorageIndex<VolumetricCascade0Extinction>(),
+				ctx.StorageIndex<VolumetricCascade1Scattering>(),
+				ctx.StorageIndex<VolumetricCascade1Extinction>()
+			);
+			genPush.cascadeScatExtIdx23 = glm::uvec4(
+				ctx.StorageIndex<VolumetricCascade2Scattering>(),
+				ctx.StorageIndex<VolumetricCascade2Extinction>(),
+				ctx.StorageIndex<VolumetricCascade3Scattering>(),
+				ctx.StorageIndex<VolumetricCascade3Extinction>()
+			);
 
-			genPush.cascadeExtinctionIdx.x = ctx.StorageIndex<VolumetricCascade0Extinction>();
-			genPush.cascadeExtinctionIdx.y = ctx.StorageIndex<VolumetricCascade1Extinction>();
-			genPush.cascadeExtinctionIdx.z = ctx.StorageIndex<VolumetricCascade2Extinction>();
-
-			genPush.noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
-			genPush.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
-			genPush.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
-			genPush.skyViewIndex = ctx.Index<SkyViewLUT>();
+			genPush.texturesConfig.x = ctx.Index<VolumetricNoiseTexture>();
+			genPush.texturesConfig.y = ctx.Index<TerrainMinMaxTexture>();
+			genPush.texturesConfig.z = ctx.Index<SkyViewLUT>();
 
 			std::array<vk::PushConstantRange, 1> genPushRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricFroxelGenPushConstants)}

@@ -64,6 +64,8 @@ namespace brassica {
 	struct VolumetricCascade1Extinction {};
 	struct VolumetricCascade2Scattering {};
 	struct VolumetricCascade2Extinction {};
+	struct VolumetricCascade3Scattering {};
+	struct VolumetricCascade3Extinction {};
 
 	struct VolumetricNoiseTexture {};
 
