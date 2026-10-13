@@ -221,9 +221,16 @@ void evaluate_tectonics_geocentric(
     out_grad_f = raw_grad_f * d_smooth_fault;
 }
 
-// Added out_water_level to output absolute water elevation for the renderer
-float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength, TerrainConfig config, out vec3 out_normal, out float out_water_level) {
-
+// Integrated analytical terrain evaluation with guided erosion filter
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal,
+    out float out_water_level,
+    out float out_ridge_map
+) {
     vec3 p_tectonic = p_local + 20000.0 * cross_noise_fbm(16*p_local / FAKE_PLANET_RADIUS, 6, 0.0);
 
     // 1. Evaluate Tectonics
@@ -337,7 +344,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     vec3 grad_canyon_carve = canyon_depth * (grad_canyon_profile * canyon_mask + canyon_profile * grad_canyon_mask);
 
     // LAKE BASINS (Cellular-like structural flattening)
-    vec3 grad_basin_noise;// = vec3(0.0);
+    vec3 grad_basin_noise;
     float basin_noise = dot_noise_fbm(P_geo * radius_scale * 1.2, 3, phase + 200.0, grad_basin_noise);
 
     float t_basin = clamp((basin_noise - 0.65) / 0.25, 0.0, 1.0);
@@ -356,7 +363,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     float final_h = mix(raw_final_h, lake_water_level, basin_mask);
     vec3 final_grad_geo = mix(raw_final_grad, grad_lake_water_level, basin_mask) + (lake_water_level - raw_final_h) * grad_basin_mask;
 
-    // 7. Resolve Output Structs
+    // 7. Resolve Un-eroded Height and Normal
     float true_height = remap(final_h, 0.0, 1.0, config.min_height, config.max_height);
     float height_amplitude = config.max_height - config.min_height;
 
@@ -367,7 +374,62 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
         0.0,
         dot(final_grad_geo, dP_dz)
     );
-    out_normal = normalize(vec3(-grad_local.x, 1.0, -grad_local.z));
+    vec3 pre_normal = normalize(vec3(-grad_local.x, 1.0, -grad_local.z));
+
+    // 8. Integrated Erosion Filter Guided by Structural Generation Fields
+    float ny = max(0.0001, pre_normal.y);
+    vec3 heightAndSlope = vec3(true_height, -pre_normal.x / ny, -pre_normal.z / ny);
+
+    // Derive erosion parameters dynamically from structural fields:
+    // - High mountain ridges (fault_mask) & high elevation fade towards ridges (+1.0)
+    // - Canyons & rivers carved channels fade towards creases (-1.0)
+    // - Lake basins buffer towards flat sediment deposition (+0.3)
+    float frameworkHeightPeak = 5000.0;
+    float elevRatio = clamp(true_height / (frameworkHeightPeak * 0.6), -1.0, 1.0);
+    float erosionFadeTarget = clamp(
+        mix(elevRatio, 1.0, fault_mask * 0.5) - canyon_mask * 0.6 - river_profile * river_mask * 0.4 + basin_mask * 0.5,
+        -1.0, 1.0
+    );
+
+    // Erosion strength increases in mountain/canyon fault regions and reduces in flat lake basins
+    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3)) * (1.0 - basin_mask * 0.7);
+
+    // Gully carving weight is sharper in steep mountain fault zones and canyon walls
+    float erosion_gully_weight = mix(0.40, 0.70, clamp01(fault_mask + canyon_mask * 0.5));
+
+    // Detail restriction and spatial scale adjust according to ridge features
+    float erosion_detail = mix(1.2, 1.8, clamp01(fault_mask + canyon_mask));
+    float erosion_scale = mix(0.12, 0.22, fault_mask);
+
+    float ridgeMapVal = 0.0;
+    float substrateVal = 0.0;
+    float debugVal = 0.0;
+
+    vec4 erosionDelta = ErosionFilter(
+        p_local.xz,
+        heightAndSlope,
+        erosionFadeTarget,
+        erosion_strength,
+        erosion_gully_weight,
+        erosion_detail,
+        vec4(0.1, 0.0, 0.1, 2.0),       // rounding
+        vec4(1.25, 1.25, 2.8, 1.5),     // onset
+        vec2(0.7, 1.0),                 // assumedSlope
+        erosion_scale,
+        5,                              // octaves
+        2.3,                            // lacunarity
+        0.52,                           // gain
+        1.70,                           // cellScale
+        0.5,                            // normalization
+        ridgeMapVal,
+        substrateVal,
+        debugVal
+    );
+
+    true_height += erosionDelta.x;
+    vec2 newSlope = heightAndSlope.yz + erosionDelta.yz;
+    out_normal = normalize(vec3(-newSlope.x, 1.0, -newSlope.y));
+    out_ridge_map = ridgeMapVal;
 
     // Calculate water level in normalized height space
     float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
@@ -389,4 +451,30 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     out_water_level = mix(config.min_height - 1000.0, remap(local_water_norm, 0.0, 1.0, config.min_height, config.max_height), has_water_mask);
 
     return true_height;
+}
+
+// Overload for callers requesting out_water_level
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal,
+    out float out_water_level
+) {
+    float dummyRidgeMap;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, dummyRidgeMap);
+}
+
+// Overload for callers requesting only out_normal
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal
+) {
+    float dummyWaterLevel;
+    float dummyRidgeMap;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummyWaterLevel, dummyRidgeMap);
 }

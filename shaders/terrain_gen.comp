@@ -61,64 +61,10 @@ void main() {
 	float h = 0.0;
 	float biome = 0.0;
 	float waterLevel = 0.0;
+	float ridgeMap = 0.0;
 	vec3 normal = vec3(0.0, 1.0, 0.0);
 
-	// eval_terrain(p, con, h, normal);
-	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel);
-
-	// mat3 warpGrad;
-	// vec3 scaleGrad;
-	// HierarchicalWorleyData2D worley = hierarchicalWorleyTiled((p.xz+16*cross_noise_fbm(p/1024, 3, 0.0, warpGrad).xz)/(256), 4096);
-	// h+= 32*abs(dot_noise_fbm(p/1024, 4, 0, scaleGrad))*(1.0 - worley.f1_dist);
-
-	// normal = normalize(0.707*32*vec3(worley.p - worley.f1_pos, 1.0)+normal);
-
-	// // Add minor local perturbations to mesh height and surface normals for close-up detail
-	// vec2 microGrad = vec2(0.0);
-	// float microNoise = psrdnoise(worldXZ / 256, vec2(0.0), 0.0, microGrad);
-	// float lodFade = clamp(1.0 - (float(lod) / 6.0), 0.0, 1.0);
-	// float microAmplitude = lodFade;
-	// h += microNoise * microAmplitude * smoothstep(0.0, 1.0, h);
-	// normal = normalize(normal + smoothstep(0.0, 1.0, h) * normalize(vec3(-microGrad.x, 1.0, -microGrad.y)) * (0.15 * lodFade));
-
-
-	float ny = max(0.0001, normal.y);
-	vec3 heightAndSlope = vec3(h, -normal.x / ny, -normal.z / ny);
-	float ridgeMap = 0.0;
-	float substrate = 0.0;
-	float debugVal = 0.0;
-
-	const float erosion_strength = 0.12;
-	const float erosion_gully_weight = 0.5;
-	const float erosion_detail = 1.5;
-	const float erosion_scale = 0.15;
-	float frameworkHeightPeak = 5000.0;
-	float erosionFadeTarget = clamp(h / (frameworkHeightPeak * 0.6), -1.0, 1.0);
-
-	vec4 erosionDelta = ErosionFilter(
-		worldXZ,
-		heightAndSlope,
-		erosionFadeTarget,              // fadeTarget
-		erosion_strength,               // strength
-		erosion_gully_weight,           // gullyWeight
-		erosion_detail,                 // detail
-		vec4(0.1, 0.0, 0.1, 2.0),       // rounding
-		vec4(1.25, 1.25, 2.8, 1.5),     // onset
-		vec2(0.7, 1.0),                 // assumedSlope
-		erosion_scale,                  // scale
-		5,                              // octaves
-		2.3,                            // lacunarity
-		0.52,                            // gain
-		1.70,                           // cellScale
-		0.5,                            // normalization
-		ridgeMap,
-		substrate,
-		debugVal
-	);
-
-	h += erosionDelta.x;
-	vec2 newSlope = heightAndSlope.yz + erosionDelta.yz;
-	normal = normalize(vec3(-newSlope.x, 1.0, -newSlope.y));
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap);
 
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
 	float h_swap_y = subgroupQuadSwapVertical(h);
