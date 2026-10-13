@@ -337,7 +337,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     vec3 grad_canyon_carve = canyon_depth * (grad_canyon_profile * canyon_mask + canyon_profile * grad_canyon_mask);
 
     // LAKE BASINS (Cellular-like structural flattening)
-    vec3 grad_basin_noise;
+    vec3 grad_basin_noise;// = vec3(0.0);
     float basin_noise = dot_noise_fbm(P_geo * radius_scale * 1.2, 3, phase + 200.0, grad_basin_noise);
 
     float t_basin = clamp((basin_noise - 0.65) / 0.25, 0.0, 1.0);

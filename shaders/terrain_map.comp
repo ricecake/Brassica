@@ -13,12 +13,12 @@ layout(push_constant) uniform PushConstants {
     float uPlanetRadius;
 };
 
-vec3 getTerrainMapColor(float h, vec3 normal) {
+vec3 getTerrainMapColor(float h, vec3 normal, float waterLevel) {
     vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
     float hillshade = clamp(dot(normal, lightDir), 0.2, 1.0);
 
     vec3 col;
-    if (h < 0.0) {
+    if (h <= 0.0) {
         float bathy = clamp(-h / 1000.0, 0.0, 1.0);
         col = mix(vec3(0.12, 0.45, 0.85), vec3(0.02, 0.10, 0.35), bathy);
     } else {
@@ -56,10 +56,11 @@ void main() {
     TerrainConfig cfg = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
     float h0;
     vec3 normal;
+    float waterLevel = 0.0;
 
-    h0 = evaluate_terrain_analytical(p, 0.1, 0.75, cfg, normal);
+    h0 = evaluate_terrain_analytical(p, 0.1, 0.75, cfg, normal, waterLevel);
 
-    vec3 color = getTerrainMapColor(h0, normal);
+    vec3 color = getTerrainMapColor(h0, normal, waterLevel);
 
     imageStore(uImagesRGBA32F[nonuniformEXT(uStorageImageIdx)], ivec2(pixelPos), vec4(color, 1.0));
 }
