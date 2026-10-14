@@ -214,6 +214,14 @@ namespace brassica::graph {
 				vk::AccessFlags2 acc = vk::AccessFlagBits2::eShaderStorageWrite;
 				if (isReadWrite) {
 					acc |= vk::AccessFlagBits2::eShaderStorageRead;
+					// A combined Storage|Sampled resource's read half of a ReadWrite access may be
+					// performed via a sampler (texelFetch) rather than imageLoad -- usage flags alone
+					// can't tell which, so (matching the Read-only branch's own reasoning below)
+					// include both conservatively rather than silently omitting the sampled-read bit
+					// a barrier needs to make a prior write visible to a subsequent sampled read.
+					if (usage & vk::ImageUsageFlagBits::eSampled) {
+						acc |= vk::AccessFlagBits2::eShaderSampledRead;
+					}
 				}
 				return ResourceState{vk::ImageLayout::eGeneral, ShaderStageForDomain(domain), acc};
 			}

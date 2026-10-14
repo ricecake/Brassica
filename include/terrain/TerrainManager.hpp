@@ -57,12 +57,15 @@ namespace brassica {
 
 		float GetBaseTexelSize() const { return baseTexelSize; }
 
-		// Async GPU->CPU readback -- a real device-local image region (TerrainMinMaxTexture's
-		// coarse mip, in practice) copied back through a dedicated transfer-queue command buffer
-		// + timeline semaphore + host-visible staging buffer, polled non-blockingly rather than
-		// waited on. Moved here verbatim from Engine (which owned it directly before this class
-		// had anything worth attaching it to); the caller still decides *what* region to request
-		// (that needs camera position + the physical registry, neither of which this class owns).
+		// Async GPU->CPU readback -- a real device-local image region (TerrainClipmapTexture's
+		// mip 0, in practice -- the real per-texel height+normal map, not the hierarchical
+		// min/max occlusion bound: it's written directly by TerrainGenNode with no downstream
+		// pass to wait on, and carries the normal for physics besides) copied back through a
+		// dedicated transfer-queue command buffer + timeline semaphore + host-visible staging
+		// buffer, polled non-blockingly rather than waited on. Moved here verbatim from Engine
+		// (which owned it directly before this class had anything worth attaching it to); the
+		// caller still decides *what* region to request (that needs camera position + the
+		// physical registry, neither of which this class owns).
 		bool TriggerImageRegionReadbackAsync(
 			vk::Image       image,
 			uint32_t        arrayLayer,
@@ -97,6 +100,13 @@ namespace brassica {
 		float GetCachedGroundHeight(float fallback) const;
 		float GetCachedGroundHeight(glm::vec2 worldXZ, float fallback) const;
 
+		// Same bilinear grid as GetInterpolatedGroundHeight, reading the readback's normal.xyz
+		// channels (TerrainClipmapTexture's vec4(h, normal.x, normal.y, normal.z)) instead of
+		// height -- re-normalized after interpolation since blending four unit normals doesn't
+		// generally stay unit length. For physics (slope-dependent sliding, collision response).
+		glm::vec3 GetInterpolatedGroundNormal(glm::vec2 worldXZ, glm::vec3 fallback) const;
+		glm::vec3 GetInterpolatedGroundNormal(glm::vec3 fallback) const;
+
 		bool      IsReadbackInFlight() const { return readbackInFlight; }
 		bool      HasReadbackData() const { return hasReadbackData; }
 		glm::vec2 GetLastReadbackCamPos() const { return cachedReadbackCamPos; }
@@ -125,7 +135,7 @@ namespace brassica {
 		float     pendingTexelSize{0.5f};
 		glm::vec2 pendingCamPos{0.0f};
 
-		std::vector<glm::vec2> cachedReadbackData;
+		std::vector<glm::vec4> cachedReadbackData;
 		uint32_t               cachedReadbackWidth{0};
 		uint32_t               cachedReadbackHeight{0};
 		glm::vec2              cachedReadbackOriginWorld{0.0f};

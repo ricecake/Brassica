@@ -130,6 +130,42 @@ vec2 sampleTerrainMinMaxMip(
 	vec2 worldGrid = floor(worldXZ / ts);
 	vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
 
+	if (mip == 0u) {
+		// Mip 0 is TerrainGenNode's raw per-texel height (min == max there -- no dilation
+		// baked in on write). Dilate here on read instead, mirroring exactly the {pix, pix+1}
+		// toroidally-wrapped 2x2 combine shaders/terrain_downsample.comp's SpdLoadSourceImage
+		// already uses to build mip 1 from mip 0 (same reasoning: the interpolated surface
+		// between texels needs both corners bounded, not just one). This is terrainMarchStep's
+		// new finest fallback (m == -1) below mip 1 -- used only when mip 1 is still ambiguous,
+		// a rare case by the algorithm's own design, so the extra 3 texelFetches here are only
+		// paid when actually needed. Baking this into mip 0's write side instead (e.g. via
+		// terrain_gen.comp's existing subgroup quad swaps) was considered and rejected: a
+		// subgroup quad is a fixed 2x2 hardware grouping, so it only covers dilation for texel
+		// pairs that happen to share a quad -- the other half of all texel-to-texel boundaries
+		// (every quad seam) would get no dilation margin at all, silently reintroducing exactly
+		// the "ray dips below the interpolated surface but stays above every stored corner"
+		// gap dilation exists to close in the first place.
+		ivec2 pix = ivec2(texelCoord);
+		ivec2 pixNext = ivec2(mod(texelCoord + 1.0, dim));
+		vec2 a = texelFetch(
+			sampler2DArray(uTextureArrays[nonuniformEXT(minMaxIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+			ivec3(pix.x, pix.y, int(level)), 0
+		).rg;
+		vec2 b = texelFetch(
+			sampler2DArray(uTextureArrays[nonuniformEXT(minMaxIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+			ivec3(pixNext.x, pix.y, int(level)), 0
+		).rg;
+		vec2 c = texelFetch(
+			sampler2DArray(uTextureArrays[nonuniformEXT(minMaxIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+			ivec3(pix.x, pixNext.y, int(level)), 0
+		).rg;
+		vec2 d = texelFetch(
+			sampler2DArray(uTextureArrays[nonuniformEXT(minMaxIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+			ivec3(pixNext.x, pixNext.y, int(level)), 0
+		).rg;
+		return vec2(min(min(a.x, b.x), min(c.x, d.x)), max(max(a.y, b.y), max(c.y, d.y)));
+	}
+
 	// TerrainMinMaxDesc fixes mips=11 (0..10) for a 1024-wide map -- same coupling
 	// TerrainMinMaxDownsampleNode's kOutputMips already hardcodes.
 	int  mipDim = max(1, int(dim) >> int(mip));
@@ -175,25 +211,6 @@ float terrainDropOff(vec2 worldXZ) {
 	return dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
 }
 
-// The conservative min/max bound for the clipmap cell (level, mip) containing worldXZ. Mip 0
-// itself is never dilated -- terrain_gen.comp writes it as a raw per-texel height, min == max --
-// so a mip-0 cell only bounds its own corner sample, not the interpolated surface
-// sampleTerrainClipmap actually draws across the cell's footprint. Dilate it manually here the
-// same way SpdLoadSourceImage dilates every coarser mip during the SPD build
-// (TerrainMinMaxDownsampleNode): min/max over the cell's own corner plus its three neighbors one
-// texel over. Mip 1+ reads its already-dilated value directly, in one fetch.
-vec2 terrainCellMinMax(TerrainOcclusionContext ctx, vec2 worldXZ, uint level, uint mip) {
-	if (mip > 0u) {
-		return sampleTerrainMinMaxMip(ctx.minMaxIndex, worldXZ, level, mip, ctx.textureDim);
-	}
-	float ts = texelSize(level);
-	vec2 a = sampleTerrainMinMaxMip(ctx.minMaxIndex, worldXZ, level, 0u, ctx.textureDim);
-	vec2 b = sampleTerrainMinMaxMip(ctx.minMaxIndex, worldXZ + vec2(ts, 0.0), level, 0u, ctx.textureDim);
-	vec2 c = sampleTerrainMinMaxMip(ctx.minMaxIndex, worldXZ + vec2(0.0, ts), level, 0u, ctx.textureDim);
-	vec2 e = sampleTerrainMinMaxMip(ctx.minMaxIndex, worldXZ + vec2(ts, ts), level, 0u, ctx.textureDim);
-	return vec2(min(min(a.x, b.x), min(c.x, e.x)), max(max(a.y, b.y), max(c.y, e.y)));
-}
-
 // Absolute ray parameter t (origin + dir*t) at which the ray exits the single axis-aligned
 // cell of width cellSize that curPos currently sits in, along one axis. 1e30 ("never", along
 // this axis) if dir has ~no component on that axis -- the other axis's exit still bounds t.
@@ -227,13 +244,176 @@ float terrainLayerExitT(vec3 origin, vec3 dir, vec2 center, float halfExtent) {
 }
 
 // g(t) = C + B*t + A*t^2 is the ray's render-space height (including the curved-world drop)
-// at parameter t, exactly -- see traceTerrainOcclusion for the A/B/C derivation. Convex since
+// at parameter t, exactly -- see terrainMarchStep for the A/B/C derivation. Convex since
 // A = |dir.xz|^2 / (2*FAKE_PLANET_RADIUS) >= 0, so its minimum over [t0, t1] is at the vertex
 // clamped into the interval (or, in the degenerate near-vertical/A~0 case, at whichever endpoint
 // is lower -- g is then effectively linear in t).
 float terrainRaySegmentMinG(float A, float B, float C, float t0, float t1) {
 	float tStar = (A > 1e-12) ? clamp(-B / (2.0 * A), t0, t1) : (B >= 0.0 ? t0 : t1);
 	return C + B * tStar + A * tStar * tStar;
+}
+
+// Shared march core for both consumers below (traceTerrainOcclusion's hard occlusion test and
+// calculateTerrainSoftShadow's penumbra), so the cell/mip/layer stepping lives in exactly one
+// place instead of two independently-hand-rolled copies.
+//
+// m is indexed against SPD's own dilated mips, offset by one (m=0 reads TerrainMinMaxTexture
+// mip 1, m=-1 reads mip 0) -- cellSize = texelSize(L) * 2^(m+1) and
+// sampleTerrainMinMaxMip(..., m+1) both fall out of the same formula at m=-1 (2^0 = 1 texel,
+// mip 0) as at m>=0, no special-casing needed. mip 0 is TerrainGenNode's raw per-texel height,
+// with no dilation baked in on write -- unlike every other mip, which SpdLoadSourceImage builds
+// pre-dilated. sampleTerrainMinMaxMip dilates mip 0 on the read side instead (its own comment),
+// so cellSize and the queried footprint still match at every step: a 1-texel-wide DDA step at
+// m=-1 is bounded by exactly the two corners (pix, pix+1) that step crosses between, the same
+// shape of match mip 1's own build already guarantees for m=0. An earlier version of this file
+// used raw, undilated mip 0 as its finest level directly, which was a real mismatch (the DDA
+// stepped it as 1 texel wide while the ad-hoc dilation attempt covered more than that) and
+// showed up as inconsistent per-texel-corner results -- not the same thing as what m=-1 does
+// here, which keeps the one-step/one-dilation-span invariant every other mip already relies on.
+//
+// Resolves "ambiguous" (cell bound straddles the ray) by descending internally in its own loop,
+// so callers never see that state -- they only ever get HIT or ADVANCE (CLEAR, or ambiguous even
+// at mip 0, treated identically: never register a grazing ridge as a hit, advance instead). On
+// ADVANCE, t0/t1 bound the segment just evaluated and clearance is a sentinel (-1.0, "no
+// reliable margin") unless the segment was genuinely, confidently clear (gMin above the cell's
+// max by more than kEps), in which case it's gMin's real positive margin above that max --
+// callers must check clearance >= 0.0 before trusting it for anything, rather than treating the
+// old 0-via-clamp value as if it meant "zero margin but still clear" (it didn't: it covered
+// ambiguous and layer-transition-bypassed segments too, which calculateTerrainSoftShadow used to
+// silently treat as full occlusion before this was a sentinel -- see its own comment).
+#define TERRAIN_MARCH_HIT 0
+#define TERRAIN_MARCH_ADVANCE 1
+
+int terrainMarchStep(
+	TerrainOcclusionContext ctx,
+	vec3  origin,
+	vec3  d,
+	float A,
+	float B,
+	float C,
+	vec2  camXZ,
+	float maxDistance,
+	inout uint  L,
+	inout int   m,
+	inout float t,
+	out float t0,
+	out float t1,
+	out float clearance
+) {
+	const float kEps = 0.1;    // bias toward "ambiguous" (resolved by descending) over a wrong call
+	const float kNudge = 1e-3; // push just past a cell/layer boundary so the next floor() is unambiguous
+
+	t0 = t;
+	clearance = -1.0; // sentinel: "no reliable margin" until a genuinely clear branch sets it
+
+	// Bounded by the mip range itself (m descends at most 11 times, mip 0..10) -- not a
+	// heuristic cap, just loud insurance against ever spinning here forever.
+	for (int descend = 0; descend < 12; ++descend) {
+		float cellSize = texelSize(L) * exp2(float(m + 1));
+		vec3  p = origin + d * t;
+
+		float cellExitT = terrainCellExitT(origin, d, p.xz, cellSize);
+		float layerHalfExtent = terrainLevelHalfExtent(L, ctx.textureDim);
+		float layerExitT = terrainLayerExitT(origin, d, camXZ, layerHalfExtent);
+		bool  exitingLayer = layerExitT <= cellExitT;
+		float tEnd = min(min(cellExitT, layerExitT), maxDistance);
+		if (tEnd <= t) {
+			tEnd = t + cellSize * 1e-4; // degenerate (e.g. dir parallel to a cell edge through its corner)
+		}
+		t1 = tEnd;
+
+		vec2  cellMinMax = sampleTerrainMinMaxMip(ctx.minMaxIndex, p.xz, L, uint(m + 1), ctx.textureDim);
+		float gMin = terrainRaySegmentMinG(A, B, C, t, tEnd);
+
+		// Exiting the layer's own safety window takes priority over whatever gMin/cellMinMax
+		// said, at ANY mip -- not just the ones where this cell's own exit happens to be the
+		// binding constraint. Descending to resolve a HIT/ambiguous call here used to shrink
+		// cellExitT (a finer cell's own exit is always nearer than a coarser one's), which could
+		// make exitingLayer read false again at the finer mip even though the coarser mip
+		// correctly saw the layer edge as the real limit -- so a HIT/ambiguous result right at a
+		// layer boundary would get "resolved" against a tiny, boundary-truncated cell instead of
+		// ever reaching the next level's own slice, and a march that got stuck doing that one
+		// finest-mip-sized step at a time could burn its whole iteration budget before actually
+		// crossing the edge (TERRAIN_OCCLUSION_MAX_ITERATIONS is nowhere near big enough to crawl
+		// a whole layer's width one mip-0 cell at a time). tEnd is already clamped to layerExitT
+		// exactly whenever exitingLayer is true, at any mip, so jumping straight to L+1 here is
+		// exact, not approximate.
+		//
+		// m = max(m - 1, -1) on the new level, not a fixed coarsest mip: texelSize doubles between
+		// adjacent levels, so decrementing m by exactly 1 keeps cellSize = texelSize(L)*2^(m+1)
+		// identical in world units across the boundary, whatever m happened to be. A fixed m=9
+		// looks appealing ("jump to coarsest, don't bother special-casing") but is actually always
+		// too coarse to use: layerHalfExtent(L) = 0.5*dim*texelSize(L)*0.9 (~460.8*texelSize(L) for
+		// dim=1024) while a mip-9 cell is texelSize(L)*2^10 = 1024*texelSize(L) -- over twice the
+		// *entire* level's own window, at every level, since both scale with texelSize(L) the same
+		// way. Starting a level at m=9 means the very next sample's cellExitT is almost guaranteed
+		// to exceed layerExitT again immediately, cascading through several levels in a few
+		// iterations without ever actually sampling their real data -- exactly the kind of thing a
+		// long, shallow ray (low sun angle, grazing a ridge) would hit hardest, since those are the
+		// rays that need the most level transitions.
+		if (exitingLayer) {
+			// clearance stays at its sentinel here: this bypasses the clear/hit/ambiguous
+			// classification entirely (that's the whole point -- see the comment above), so
+			// there's no genuine margin to report either way.
+			t = tEnd + kNudge;
+			if (L + 1u >= ctx.numLevels) {
+				t = maxDistance;
+				return TERRAIN_MARCH_ADVANCE;
+			}
+			L += 1u;
+			m = max(m - 1, -1);
+			return TERRAIN_MARCH_ADVANCE;
+		}
+
+		if (gMin > cellMinMax.y + kEps) {
+			// Clear: nothing in [t, tEnd] can occlude. Advance, then zoom out one mip.
+			clearance = gMin - cellMinMax.y;
+			t = tEnd + kNudge;
+			m = min(m + 1, 9);
+			return TERRAIN_MARCH_ADVANCE;
+		}
+
+		if (gMin < cellMinMax.x - kEps) {
+			// A hit -- but confirm it at progressively finer mips rather than trusting
+			// whichever coarse mip first flagged it, since a coarse cell's min can sit well
+			// below the exact point the ray actually dips under. Can now descend to m=-1 (mip
+			// 0, read-dilated -- sampleTerrainMinMaxMip's own comment) before giving up.
+			if (m > -1) {
+				m -= 1;
+				continue;
+			}
+			return TERRAIN_MARCH_HIT;
+		}
+
+		// Ambiguous: this cell's bound straddles the ray's segment. Descend to resolve it.
+		if (m > -1) {
+			m -= 1;
+			continue;
+		}
+
+		// Still ambiguous even at mip 0, the finest the chain offers -- the conservative
+		// default is "not occluded here" (grazing a ridge must never register as a hit), so
+		// advance past this cell rather than treat it as a hit. clearance stays at its sentinel:
+		// this genuinely isn't a known-clear margin, and calculateTerrainSoftShadow must not
+		// treat it as one (its own comment). Ascends afterward (m = min(m+1, 9), same as the
+		// CLEAR path) rather than staying at the finest mip: an earlier version stayed at the
+		// same resolution on the theory that nearby terrain is likely rough too, but a stretch
+		// that's genuinely ambiguous across many consecutive mip-0 cells (plausible near rough
+		// terrain, or near a layer edge where coarse-mip dilation makes a wide span look
+		// ambiguous) would then crawl one mip-0-cell-width at a time with no way back to a
+		// larger stride -- TERRAIN_OCCLUSION_MAX_ITERATIONS (64, shared across the whole trace,
+		// every level) is nowhere near enough iterations to cross such a stretch that way, let
+		// alone still reach a layer transition after it. Ascending costs nothing when the next,
+		// larger cell turns out ambiguous too -- it just re-descends -- but lets a clear cell
+		// immediately after a rough patch make real progress instead of continuing to crawl.
+		t = tEnd + kNudge;
+		m = min(m + 1, 9);
+		return TERRAIN_MARCH_ADVANCE;
+	}
+
+	// Unreachable in practice (mip only spans -1..9) -- advance rather than loop forever.
+	t = t1 + kNudge;
+	return TERRAIN_MARCH_ADVANCE;
 }
 
 // Core occlusion routine: a hierarchical min-max march from origin along dir, up to
@@ -246,8 +426,7 @@ bool traceTerrainOcclusion(
 	vec3  origin,
 	vec3  dir,
 	float maxDistance,
-	inout float hitDistance,
-	out float nearestApproach
+	inout float hitDistance
 ) {
 	if (ctx.minMaxIndex == 0u || ctx.numLevels == 0u || maxDistance <= 0.0) {
 		return false;
@@ -263,96 +442,24 @@ bool traceTerrainOcclusion(
 	float B = d.y + dot(o2, d.xz) / FAKE_PLANET_RADIUS;
 	float C = origin.y + dot(o2, o2) / (2.0 * FAKE_PLANET_RADIUS);
 
-	uint L = min(terrainClipmapLevelFor(origin.xz, ctx.textureDim, ctx.numLevels), ctx.numLevels - 1u);
-	int  m = 0;
-	float t = InterleavedGradientNoise(origin.xz, int(origin.y));
-
-	const float kEps = 0.1;     // bias toward "ambiguous" (resolved by descending) over a wrong call
-	const float kNudge = 1e-3;  // push just past a cell/layer boundary so the next floor() is unambiguous
+	uint  L = min(terrainClipmapLevelFor(origin.xz, ctx.textureDim, ctx.numLevels), ctx.numLevels - 1u);
+	int   m = 0;
+	float t = 0.0;
 
 	for (int iter = 0; iter < TERRAIN_OCCLUSION_MAX_ITERATIONS; ++iter) {
 		if (t >= maxDistance) {
 			return false;
 		}
 
-		float tsL = texelSize(L);
-		float cellSize = tsL * exp2(float(m));
-		vec3  p = origin + d * t;
-
-		float cellExitT = terrainCellExitT(origin, d, p.xz, cellSize);
-		float layerHalfExtent = terrainLevelHalfExtent(L, ctx.textureDim);
-		float layerExitT = terrainLayerExitT(origin, d, camXZ, layerHalfExtent);
-		bool  exitingLayer = layerExitT <= cellExitT;
-		float t1 = min(min(cellExitT, layerExitT), maxDistance);
-		if (t1 <= t) {
-			t1 = t + cellSize * 1e-4; // degenerate (e.g. dir parallel to a cell edge through its corner)
-		}
-
-		vec2  cellMinMax = terrainCellMinMax(ctx, p.xz, L, uint(m));
-		float gMin = terrainRaySegmentMinG(A, B, C, t, t1);
-
-		if (gMin > cellMinMax.y + kEps) {
-			// Clear: nothing in [t, t1] can occlude. Advance, then zoom out one mip -- unless
-			// that would exit this layer's own safety window, in which case move out to the
-			// next (coarser) layer one mip finer than its own 0, keeping the world cell size
-			// roughly continuous across the layer boundary instead of jumping.
-			nearestApproach = min(nearestApproach, gMin - cellMinMax.y);
-			t = t1 + kNudge;
-			if (exitingLayer) {
-				if (L + 1u >= ctx.numLevels) {
-					return false;
-				}
-				L += 1u;
-				m = max(m - 1, 0);
-			} else {
-				m = min(m + 1, 10);
-			}
-			continue;
-		}
-
-		if (gMin < cellMinMax.x - kEps) {
-			// A hit -- but confirm it at progressively finer mips rather than trusting
-			// whichever coarse mip first flagged it, since a coarse cell's min can sit well
-			// below the exact point the ray actually dips under.
-			nearestApproach = min(nearestApproach, cellMinMax.x - gMin);
-			if (m > 0) {
-				m -= 1;
-				continue;
-			}
+		float t0, t1, clearance;
+		int   result = terrainMarchStep(ctx, origin, d, A, B, C, camXZ, maxDistance, L, m, t, t0, t1, clearance);
+		if (result == TERRAIN_MARCH_HIT) {
 			hitDistance = t1;
 			return true;
-		}
-
-		// Ambiguous: this cell's bound straddles the ray's segment. Descend to resolve it.
-		if (m > 0) {
-			m -= 1;
-			continue;
-		}
-
-		// Still ambiguous at mip 0, the finest level the dilated chain offers -- the
-		// conservative default is "not occluded here" (grazing a ridge must never register as
-		// a hit), so advance past this cell at the same resolution instead of ascending.
-		t = t1 + kNudge;
-		if (exitingLayer) {
-			if (L + 1u >= ctx.numLevels) {
-				return false;
-			}
-			L += 1u;
 		}
 	}
 
 	return false;
-}
-
-bool traceTerrainOcclusion(
-	TerrainOcclusionContext ctx,
-	vec3  origin,
-	vec3  dir,
-	float maxDistance,
-	inout float hitDistance
-) {
-	float near;
-	return traceTerrainOcclusion(ctx, origin, dir, maxDistance, hitDistance, near);
 }
 
 // Requested shape: vector + origin + distance. distance is in/out -- read as the max range to
@@ -362,8 +469,74 @@ bool isDirectionOccludedByTerrain(TerrainOcclusionContext ctx, vec3 origin, vec3
 	return traceTerrainOcclusion(ctx, origin, dir, distance, distance);
 }
 
-bool isDirectionOccludedByTerrain(TerrainOcclusionContext ctx, vec3 origin, vec3 dir, inout float distance, out float near) {
-	return traceTerrainOcclusion(ctx, origin, dir, distance, distance, near);
+// Calculates smooth soft terrain shadow penumbra factor in [0.0, 1.0].
+// 0.0 = fully shadowed (umbra), 1.0 = fully lit.
+float calculateTerrainSoftShadow(
+	TerrainOcclusionContext ctx,
+	vec3  origin,
+	vec3  dir,
+	float maxDistance,
+	float kPenumbra
+) {
+	if (ctx.minMaxIndex == 0u || ctx.numLevels == 0u || maxDistance <= 0.0) {
+		return 1.0;
+	}
+
+	vec3 d = normalize(dir);
+	vec2 camXZ = uCameraPosition.xz;
+
+	vec2  o2 = origin.xz - camXZ;
+	float A = dot(d.xz, d.xz) / (2.0 * FAKE_PLANET_RADIUS);
+	float B = d.y + dot(o2, d.xz) / FAKE_PLANET_RADIUS;
+	float C = origin.y + dot(o2, o2) / (2.0 * FAKE_PLANET_RADIUS);
+
+	uint  L = min(terrainClipmapLevelFor(origin.xz, ctx.textureDim, ctx.numLevels), ctx.numLevels - 1u);
+	int   m = 0;
+	float t = 0.0;
+
+	float softShadow = 1.0;
+
+	for (int iter = 0; iter < TERRAIN_OCCLUSION_MAX_ITERATIONS; ++iter) {
+		if (t >= maxDistance) {
+			break;
+		}
+
+		float t0, t1, clearance;
+		int   result = terrainMarchStep(ctx, origin, d, A, B, C, camXZ, maxDistance, L, m, t, t0, t1, clearance);
+		if (result == TERRAIN_MARCH_HIT) {
+			return 0.0;
+		}
+
+		// clearance < 0.0 is terrainMarchStep's sentinel for "no reliable margin" (an ambiguous
+		// resolution, or a layer transition that bypassed classification entirely) -- previously
+		// this was clamped to exactly 0.0 at the source, which made every one of those segments
+		// read as "zero margin, so fully shadowed" (stepPenumbra = 0 -> softShadow = 0 ->
+		// immediate return) despite the march's own stated policy being "not occluded here,"
+		// not "fully occluded here." That silently turned every ambiguous cell and every level
+		// transition into forced full shadow, which is backwards: uncertain should mean "this
+		// segment contributes no information," not "this segment is definitely dark." Skipping
+		// the update entirely when clearance is the sentinel lets only genuinely, confidently
+		// clear segments narrow the penumbra.
+		if (t1 > 0.2 && clearance >= 0.0) {
+			float evalT = max(t0, 0.2);
+			float stepPenumbra = clamp(kPenumbra * clearance / evalT, 0.0, 1.0);
+			softShadow = min(softShadow, stepPenumbra);
+			if (softShadow <= 0.0) {
+				return 0.0;
+			}
+		}
+	}
+
+	return softShadow;
+}
+
+float calculateTerrainSoftShadow(
+	TerrainOcclusionContext ctx,
+	vec3  origin,
+	vec3  dir,
+	float maxDistance
+) {
+	return calculateTerrainSoftShadow(ctx, origin, dir, maxDistance, 16.0);
 }
 
 // Shared by isAABBOccludedByTerrain's three rays: traces from `from` toward `target` (both

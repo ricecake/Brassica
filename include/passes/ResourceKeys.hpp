@@ -150,6 +150,16 @@ namespace brassica {
 
 	struct TerrainBiomeTexture {};
 
+	// TerrainBiomeNode's blended climate/biome-classification output (TerrainBiomeMapA/B's
+	// ping-pong target) -- deliberately a distinct key from TerrainBiomeTexture above, which
+	// TerrainGenNode owns and writes per-texel into the terrain clipmap's own layer/mip shape
+	// (TerrainBiomeDesc). The two used to collide on one key (both Create<>'d it with different,
+	// incompatible descs -- TerrainClipmapDesc's numLODs-layer shape vs WeatherBiomeImageDesc's
+	// single-layer kBiomeTextureDim shape -- which silently reprovisioned/retired the resource
+	// every frame and left its bindless descriptor racing between the two shapes, confirmed via
+	// GPU-assisted validation as "descriptor index never updated").
+	struct TerrainBiomeMainTexture {};
+
 	struct TerrainWeatherBiomeTexture {};
 
 	struct TerrainWeatherPingPongTexture {};

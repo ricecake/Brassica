@@ -148,7 +148,8 @@ void evaluate_tectonics_geocentric(
     out float out_base_h, out vec3 out_grad_h,
     out float out_fault,  out vec3 out_grad_f,
     out vec3 out_vel,     out mat3 out_J_vel,
-    out vec3 P_geo, out vec3 dP_dx, out vec3 dP_dz)
+    out vec3 P_geo, out vec3 dP_dx, out vec3 dP_dz,
+    out vec3 out_grad_I1)
 {
     float theta = p_local.x / FAKE_PLANET_RADIUS;
     float phi   = p_local.z / FAKE_PLANET_RADIUS;
@@ -175,6 +176,14 @@ void evaluate_tectonics_geocentric(
     vec3 grad_w_crump = vec3(0.0); mat3 J_sum_v = mat3(0.0);
     vec3 grad_w2_crump = vec3(0.0);
 
+    // Second-derivative accumulators for I1 = trace(J_vel), needed by uplift's gradient below.
+    // dw_crump_i is a scalar multiple of S_i (dw_crump_i = k_crumple*w_crump_i*S_i), which is what
+    // keeps H_grad_w_crump (the Hessian of sum_w_crump) a simple closed-form per-plate sum instead
+    // of needing a separately-tracked second derivative.
+    float sum_w2v_dot = 0.0;
+    vec3  grad_sum_w2v_dot = vec3(0.0);
+    mat3  H_grad_w_crump = mat3(0.0);
+
     for(int i = 0; i < plates.length(); i++) {
         vec3 S = plates[i].seed_dir;
         float d = dot(P_geo, S);
@@ -197,6 +206,11 @@ void evaluate_tectonics_geocentric(
 
         sum_w2_crump += w_crump * w_crump;
         grad_w2_crump += 2.0 * w_crump * dw_crump;
+
+        float velDotS = dot(plates[i].velocity, S);
+        sum_w2v_dot      += w_crump * w_crump * velDotS;
+        grad_sum_w2v_dot += 2.0 * w_crump * dw_crump * velDotS;
+        H_grad_w_crump   += (k_crumple * k_crumple * w_crump) * outerProduct(S, S);
     }
 
     float inv_W_macro = 1.0 / sum_w_macro;
@@ -208,6 +222,18 @@ void evaluate_tectonics_geocentric(
 
     out_vel   = sum_v * inv_W_crump;
     out_J_vel = (J_sum_v - outerProduct(out_vel, grad_w_crump)) * inv_W_crump;
+
+    // grad_I1 = d(trace(J_vel))/d(P_geo). trace(J_vel) = k_crumple*sum_w2v_dot*inv_W_crump -
+    // dot(sum_v,grad_w_crump)*inv_W_crump^2 (an algebraic identity, since trace(outerProduct(a,b))
+    // = dot(a,b)); differentiating that closed form once more via the product/quotient rule gives
+    // the expression below. H_grad_w_crump is symmetric (built from outerProduct(S,S) terms), so
+    // transpose(H_grad_w_crump)*sum_v below is interchangeable with H_grad_w_crump*sum_v.
+    float B_quantity = dot(sum_v, grad_w_crump);
+    vec3  grad_B = transpose(J_sum_v) * grad_w_crump + H_grad_w_crump * sum_v;
+
+    out_grad_I1 = k_crumple * inv_W_crump * grad_sum_w2v_dot
+                - grad_B * inv_W_crump2
+                + (2.0 * B_quantity * inv_W_crump2 * inv_W_crump - k_crumple * sum_w2v_dot * inv_W_crump2) * grad_w_crump;
 
     float sum_N2_crump = sum_w2_crump * inv_W_crump2;
     float raw_fault = 1.0 - sum_N2_crump;
@@ -221,20 +247,45 @@ void evaluate_tectonics_geocentric(
     out_grad_f = raw_grad_f * d_smooth_fault;
 }
 
-// Added out_water_level to output absolute water elevation for the renderer
-float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength, TerrainConfig config, out vec3 out_normal, out float out_water_level) {
-
-    vec3 p_tectonic = p_local + 20000.0 * cross_noise_fbm(16*p_local / FAKE_PLANET_RADIUS, 6, 0.0);
+// Integrated analytical terrain evaluation with guided erosion filter
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal,
+    out float out_water_level,
+    out float out_ridge_map
+) {
+    mat3 J_tectonicWarp;
+    vec3 tectonicWarp = cross_noise_fbm(16*p_local / FAKE_PLANET_RADIUS, 6, 0.0, J_tectonicWarp);
+    vec3 p_tectonic = p_local + 20000.0 * tectonicWarp;
 
     // 1. Evaluate Tectonics
     float base_h, fault_mask;
-    vec3 grad_base_h, grad_fault, vel, P_geo, dP_dx, dP_dz;
+    vec3 grad_base_h, grad_fault, vel, P_geo, dP_dx, dP_dz, grad_I1;
     mat3 J_vel;
     float k_crumple = 350.0;
 
     evaluate_tectonics_geocentric(p_tectonic, k_crumple,
         base_h, grad_base_h, fault_mask, grad_fault,
-        vel, J_vel, P_geo, dP_dx, dP_dz);
+        vel, J_vel, P_geo, dP_dx, dP_dz, grad_I1);
+
+    // dP_dx/dP_dz above are d(P_geo)/d(p_tectonic.x/z), but p_tectonic is itself a warped
+    // function of p_local (20000-unit-amplitude cross-noise warp, comparable in scale to a
+    // plate boundary's own width) -- correct them into d(P_geo)/d(p_local.x/z) via the warp's
+    // own Jacobian so downstream slope/normal math differentiates the thing that's actually
+    // being evaluated, not the pre-warp position.
+    {
+        float warpChain = 20000.0 * 16.0 / FAKE_PLANET_RADIUS;
+        vec3  dPTectonic_dLocalX = vec3(1.0, 0.0, 0.0) + warpChain * J_tectonicWarp[0];
+        vec3  dPTectonic_dLocalZ = vec3(0.0, 0.0, 1.0) + warpChain * J_tectonicWarp[2];
+
+        vec3 dP_dx_corrected = dP_dx * dPTectonic_dLocalX.x + dP_dz * dPTectonic_dLocalX.z;
+        vec3 dP_dz_corrected = dP_dx * dPTectonic_dLocalZ.x + dP_dz * dPTectonic_dLocalZ.z;
+        dP_dx = dP_dx_corrected;
+        dP_dz = dP_dz_corrected;
+    }
 
     // 2. Uplift
     mat3 S = 0.5 * (J_vel + transpose(J_vel));
@@ -242,6 +293,14 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     float collision_intensity = smoothstep(-0.5, -2.0, I1);
     float uplift = collision_intensity * 0.4;
     base_h += uplift;
+
+    // d(collision_intensity)/dI1, matching GLSL smoothstep's own cubic (edge0=-0.5 > edge1=-2.0,
+    // so this is decreasing in I1; zero outside the transition band, same as smoothstep's clamp).
+    float t_uplift = clamp((I1 - (-0.5)) / (-2.0 - (-0.5)), 0.0, 1.0);
+    float d_collision_dI1 = (t_uplift > 0.0 && t_uplift < 1.0)
+        ? (6.0 * t_uplift * (1.0 - t_uplift) / (-2.0 - (-0.5)))
+        : 0.0;
+    grad_base_h += (d_collision_dI1 * 0.4) * grad_I1;
 
     // 3. Base Continent & Regional Biomes
     float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
@@ -251,7 +310,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     float base_noise = dot_noise_fbm(P_noise, 5, phase+32, grad_base_noise);
     float base_noise_amp = 0.95;
     float continent_h = base_noise * base_noise_amp;
-    vec3 grad_continent_h = grad_base_noise * base_noise_amp;
+    vec3 grad_continent_h = grad_base_noise * base_noise_amp * radius_scale;
 
     float interior_mask = 1.0 - fault_mask;
     vec3 grad_interior_mask = -grad_fault;
@@ -264,12 +323,12 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     float t_macro = clamp((macro_noise - (-0.2)) / 0.6, 0.0, 1.0);
     float hill_multiplier = t_macro * t_macro * (3.0 - 2.0 * t_macro) * 2.5;
     float d_hill_multiplier = 2.5 * 6.0 * t_macro * (1.0 - t_macro) / 0.6;
-    vec3 grad_hill_multiplier = d_hill_multiplier * grad_macro_noise * 0.1;
+    vec3 grad_hill_multiplier = d_hill_multiplier * grad_macro_noise * 0.1 * radius_scale;
 
     vec3 grad_raw_hills;
     float raw_hills = dot_noise_fbm(P_noise, 4, phase+89, grad_raw_hills);
     float hill_profile = pow(1.0 - abs(raw_hills), 2.0);
-    vec3 grad_hill_profile = -2.0 * (1.0 - abs(raw_hills)) * sign(raw_hills) * grad_raw_hills;
+    vec3 grad_hill_profile = -2.0 * (1.0 - abs(raw_hills)) * sign(raw_hills) * grad_raw_hills * radius_scale;
 
     // Product rule for hills * interior * biome macro mask
     float hill_h = hill_profile * interior_mask * hill_multiplier;
@@ -285,7 +344,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     float raw_ridge = dot_noise_fbm(P_warped, 6, phase + 42.0, grad_raw_ridge);
     vec3 grad_ridge_warped = transpose(J_warp) * grad_raw_ridge;
 
-    float exponent = 2.5;
+    float exponent = 3.0;
     float massive_ridge = pow(abs(raw_ridge), exponent);
     vec3 grad_massive_ridge = exponent * pow(abs(raw_ridge), exponent - 1.0) * sign(raw_ridge) * grad_ridge_warped;
 
@@ -337,7 +396,7 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     vec3 grad_canyon_carve = canyon_depth * (grad_canyon_profile * canyon_mask + canyon_profile * grad_canyon_mask);
 
     // LAKE BASINS (Cellular-like structural flattening)
-    vec3 grad_basin_noise;// = vec3(0.0);
+    vec3 grad_basin_noise;
     float basin_noise = dot_noise_fbm(P_geo * radius_scale * 1.2, 3, phase + 200.0, grad_basin_noise);
 
     float t_basin = clamp((basin_noise - 0.65) / 0.25, 0.0, 1.0);
@@ -356,18 +415,67 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     float final_h = mix(raw_final_h, lake_water_level, basin_mask);
     vec3 final_grad_geo = mix(raw_final_grad, grad_lake_water_level, basin_mask) + (lake_water_level - raw_final_h) * grad_basin_mask;
 
-    // 7. Resolve Output Structs
+    // 7. Resolve Un-eroded Height and Normal
     float true_height = remap(final_h, 0.0, 1.0, config.min_height, config.max_height);
     float height_amplitude = config.max_height - config.min_height;
 
     final_grad_geo *= height_amplitude;
 
-    vec3 grad_local = vec3(
-        dot(final_grad_geo, dP_dx),
-        0.0,
-        dot(final_grad_geo, dP_dz)
+    vec3 grad_local = vec3(dot(final_grad_geo, dP_dx), 0.0, dot(final_grad_geo, dP_dz));
+
+    // 8. Integrated Erosion Filter Guided by Structural Generation Fields
+    vec3 heightAndSlope = vec3(true_height, grad_local.x, grad_local.z);
+
+    // Derive erosion parameters dynamically from structural fields:
+    // - High mountain ridges (fault_mask) & high elevation fade towards ridges (+1.0)
+    // - Canyons & rivers carved channels fade towards creases (-1.0)
+    // - Lake basins buffer towards flat sediment deposition (+0.3)
+    float frameworkHeightPeak = config.max_height;
+    float elevRatio = clamp(true_height / (frameworkHeightPeak * 0.6), -1.0, 1.0);
+    float erosionFadeTarget = clamp(
+        mix(elevRatio, 1.0, fault_mask * 0.5) - canyon_mask * 0.6 - river_profile * river_mask * 0.4 + basin_mask * 0.5,
+        -1.0, 1.0
     );
-    out_normal = normalize(vec3(-grad_local.x, 1.0, -grad_local.z));
+
+    // Erosion strength increases in mountain/canyon fault regions and reduces in flat lake basins
+    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3)) * (1.0 - basin_mask * 0.7);
+
+    // Gully carving weight is sharper in steep mountain fault zones and canyon walls
+    float erosion_gully_weight = mix(0.40, 0.70, clamp01(fault_mask + canyon_mask * 0.5));
+
+    // Detail restriction and spatial scale adjust according to ridge features
+    float erosion_detail = mix(1.2, 1.8, clamp01(fault_mask + canyon_mask));
+    float erosion_scale = mix(0.12, 0.22, fault_mask);
+
+    float ridgeMapVal = 0.0;
+    float substrateVal = 0.0;
+    float debugVal = 0.0;
+
+    vec4 erosionDelta = ErosionFilter(
+        p_local.xz,
+        heightAndSlope,
+        erosionFadeTarget,
+        erosion_strength,
+        erosion_gully_weight,
+        erosion_detail,
+        vec4(2.0, 0.0, 0.1, 2.0),       // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
+        vec4(1.25, 1.25, 2.8, 1.5),     // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
+        vec2(0.7, 1.0),                 // assumedSlope
+        erosion_scale,
+        5,                              // octaves
+        2.3,                            // lacunarity
+        0.52,                           // gain
+        1.70,                           // cellScale
+        0.5,                            // normalization
+        ridgeMapVal,
+        substrateVal,
+        debugVal
+    );
+
+    true_height += erosionDelta.x;
+    vec2 newSlope = heightAndSlope.yz + erosionDelta.yz;
+    out_normal = normalize(vec3(-newSlope.x, 1.0, -newSlope.y));
+    out_ridge_map = ridgeMapVal;
 
     // Calculate water level in normalized height space
     float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
@@ -389,4 +497,30 @@ float evaluate_terrain_analytical(vec3 p_local, float phase, float warp_strength
     out_water_level = mix(config.min_height - 1000.0, remap(local_water_norm, 0.0, 1.0, config.min_height, config.max_height), has_water_mask);
 
     return true_height;
+}
+
+// Overload for callers requesting out_water_level
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal,
+    out float out_water_level
+) {
+    float dummyRidgeMap;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, dummyRidgeMap);
+}
+
+// Overload for callers requesting only out_normal
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal
+) {
+    float dummyWaterLevel;
+    float dummyRidgeMap;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummyWaterLevel, dummyRidgeMap);
 }

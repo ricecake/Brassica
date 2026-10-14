@@ -105,6 +105,16 @@ namespace {
 	struct FakeHeightWriterNode {
 		using Resources = graph::Declares<graph::Modify<TerrainMinMaxTexture>>;
 
+		// Must match TerrainMinMaxDownsampleNode's own kPhase (both SubPhase::Prepare in
+		// production, via TerrainGenNode): a Modify<K>-vs-Modify<K> pair a phase apart is ordered
+		// by phase alone, not resource flow (Graph.hpp's Compile() comment on cross-phase edges --
+		// the "backward, consumer also produces the key" case is dropped silently by design). Left
+		// at the implicit Phase::Default here, this node landed in a *later* phase than
+		// TerrainMinMaxDownsampleNode's Prepare, so the downsample ran first and reduced
+		// mip 0's pre-write (zero) contents -- a test-harness bug, not a reproduction of the real
+		// engine's behavior, since production's TerrainGenNode already declares this same phase.
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
+
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            shader;
 		glm::uvec4               gridParams{14, 16, 3584, 1024}; // numLODs, _, _, mapDim
@@ -343,17 +353,15 @@ namespace {
 
 } // namespace
 
-// KNOWN FAILING on at least one real-hardware environment (confirmed via `git stash` against
-// unmodified main, so this predates and is unrelated to the subregion-rebuild/dilation work in
-// this file): mip 1 reads back all-zero here, while an equivalent computation in this file's
-// "partial dirty-tile rebuild" test (same shaders, differently-shaped command-buffer/readback
-// sequence) reads back the mathematically correct dilated values. Push constants, bindless
-// indices, and the dilation math were all independently verified correct (spirv-dis + targeted
-// GPU probes) before concluding this. Leading theory, not yet confirmed: FakeHeightWriterNode
-// and TerrainMinMaxDownsampleNode both only declare Modify<TerrainMinMaxTexture> (neither
-// Create<>s it, unlike production's TerrainGenNode), and Graph::CollectEdges may not guarantee
-// an order between two Modify-only nodes on the same key -- flagged for investigation, not fixed
-// here.
+// Previously KNOWN FAILING here (mip 1 read back all-zero): root-caused as a test-harness bug,
+// not a real engine defect. FakeHeightWriterNode had no kPhase, so it defaulted to Phase::Default
+// -- a *later* phase than TerrainMinMaxDownsampleNode's SubPhase::Prepare. Graph::Compile()
+// treats a Modify<K>-vs-Modify<K> pair a phase apart as ordered by phase alone, not resource flow
+// (its own comment on the "backward, consumer also produces the key" cross-phase case, dropped
+// silently by design -- exactly what lets DeferredNode and a later WaterNode both plain
+// Modify<Swapchain> with no version number). With the fake writer in a later phase, the
+// downsample ran *first* and reduced mip 0's pre-write (zero) contents. Fixed by giving
+// FakeHeightWriterNode the same kPhase as production's TerrainGenNode.
 TEST_CASE(
 	"TerrainMinMaxDownsampleNode produces a real, correct min/max mip chain on real hardware"
 ) {

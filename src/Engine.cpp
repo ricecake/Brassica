@@ -824,13 +824,19 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
-		// Trigger a new ground-height readback for next frame, if TerrainMinMaxTexture is
-		// initialized and has been populated/transitioned in the frame graph. Reads a 128x128
+		// Trigger a new ground-height-and-normal readback for next frame, if TerrainClipmapTexture
+		// is initialized and has been populated/transitioned in the frame graph. Reads a 128x128
 		// window at LOD 0 mip 0 (64m x 64m footprint) to support smooth bilinear ground height
-		// interpolation below the camera and significantly reduce transfer frequency.
-		auto minMaxTex = physicalRegistry.GetTexture<TerrainMinMaxTexture>();
-		if (minMaxTex && minMaxTex->GetImage() && terrainManager.GetNumLODs() > 0 &&
-		    minMaxTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
+		// interpolation below the camera and significantly reduce transfer frequency. Reads the
+		// real per-texel height+normal map rather than TerrainMinMaxTexture's hierarchical
+		// occlusion bound (what this used to read, before it turned out unrelated to the terrain
+		// shadow investigation that prompted a closer look here) -- it's written directly by
+		// TerrainGenNode with no downstream pass to wait on, and carries the surface normal
+		// (TerrainManager::GetInterpolatedGroundNormal) for physics besides, which is part of why
+		// this readback existed in the first place.
+		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
+		if (clipmapTex && clipmapTex->GetImage() && terrainManager.GetNumLODs() > 0 &&
+		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
 			bool shouldTrigger = !terrainManager.IsReadbackInFlight();
 			if (shouldTrigger && terrainManager.HasReadbackData()) {
 				float distFromLastTrigger = glm::distance(camPos2D, terrainManager.GetLastReadbackCamPos());
@@ -866,7 +872,7 @@ namespace brassica {
 				);
 
 				terrainManager.TriggerImageRegionReadbackAsync(
-					minMaxTex->GetImage(),
+					clipmapTex->GetImage(),
 					0, // arrayLayer (LOD 0)
 					0, // mipLevel 0
 					vk::Offset2D{minU, minV},
@@ -874,7 +880,7 @@ namespace brassica {
 					originWorld,
 					texelSize,
 					camPos2D,
-					minMaxTex->GetCurrentLayout()
+					clipmapTex->GetCurrentLayout()
 				);
 			}
 		}

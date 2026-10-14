@@ -50,7 +50,7 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 			CHECK(real.desc.width == constants::Weather::kCoverageTextureDim);
 			CHECK(real.desc.height == constants::Weather::kCoverageTextureDim);
 		}
-		if (real.key == graph::IdOf<TerrainBiomeTexture>()) {
+		if (real.key == graph::IdOf<TerrainBiomeMainTexture>()) {
 			foundBiome = true;
 			CHECK(real.desc.width == constants::Weather::kBiomeTextureDim);
 			CHECK(real.desc.height == constants::Weather::kBiomeTextureDim);

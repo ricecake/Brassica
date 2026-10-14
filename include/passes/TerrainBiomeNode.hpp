@@ -91,7 +91,7 @@ namespace brassica {
 			graph::Create<TerrainWeatherPingPongTexture>,
 			graph::Create<TerrainWeatherMapATexture>,
 			graph::Create<TerrainWeatherMapBTexture>,
-			graph::Create<TerrainBiomeTexture>,
+			graph::Create<TerrainBiomeMainTexture>,
 			graph::Create<TerrainBiomeMapATexture>,
 			graph::Create<TerrainBiomeMapBTexture>>;
 
@@ -180,7 +180,7 @@ namespace brassica {
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainBiomeTexture>(),
+					.key = graph::IdOf<TerrainBiomeMainTexture>(),
 					.access = graph::AccessKind::ReadWrite,
 					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
 				}
@@ -265,7 +265,7 @@ namespace brassica {
 			std::uint32_t pingPongSimIdx = ctx.StorageIndex<TerrainWeatherPingPongTexture>();
 			std::uint32_t weatherMapAIdx = ctx.StorageIndex<TerrainWeatherMapATexture>();
 			std::uint32_t weatherMapBIdx = ctx.StorageIndex<TerrainWeatherMapBTexture>();
-			std::uint32_t mainBiomeIdx   = ctx.StorageIndex<TerrainBiomeTexture>();
+			std::uint32_t mainBiomeIdx   = ctx.StorageIndex<TerrainBiomeMainTexture>();
 			std::uint32_t biomeMapAIdx   = ctx.StorageIndex<TerrainBiomeMapATexture>();
 			std::uint32_t biomeMapBIdx   = ctx.StorageIndex<TerrainBiomeMapBTexture>();
 
