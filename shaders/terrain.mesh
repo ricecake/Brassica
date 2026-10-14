@@ -324,11 +324,9 @@ void main() {
 			outDir = normalize(outDir);
 		}
 
-		float overlapWidth = 0.66*meshletSize;
+		float overlapWidth = (1.0 / 3.0) * meshletSize;
 
-		vec3 dir = normalize(vec3(outDir.x, 0, outDir.y));
-		dir -= normal;
-		vec3 relSkirtPos = relWorldPos + overlapWidth * normalize(dir);
+		vec3 relSkirtPos = relWorldPos + vec3(outDir.x, 0.0, outDir.y) * overlapWidth - normal * (0.05 * overlapWidth);
 
 		vec3 skirtViewPos = mat3(uViewMatrix) * relSkirtPos;
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);

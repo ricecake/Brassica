@@ -27,7 +27,9 @@ layout(push_constant) uniform CloudRenderPushConstants {
 
 vec4 sampleCloudShadow(vec3 p) {
 	if (push.cloudShadowIndex == 0u) return vec4(0.0, 0.0, 0.0, 1.0);
-	vec2 shadowUV = (p.xz - uCameraPosition.xz) / 160000.0 + 0.5;
+	vec3 sunDir = normalize(push.sunDir.xyz);
+	vec2 projXZ = p.xz - (p.y / max(sunDir.y, 0.001)) * sunDir.xz;
+	vec2 shadowUV = (projXZ - uCameraPosition.xz) / 160000.0 + 0.5;
 	if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0) {
 		return vec4(0.0, 0.0, 0.0, 1.0);
 	}
