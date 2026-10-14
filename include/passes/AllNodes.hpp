@@ -14,6 +14,7 @@
 #include "passes/AtmosphereLUTNode.hpp"
 #include "passes/CirrusNode.hpp"
 #include "passes/CloudRenderNode.hpp"
+#include "passes/CloudShadowGenNode.hpp"
 #include "passes/CloudVolumeGenNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
 #include "passes/DeferredNode.hpp"

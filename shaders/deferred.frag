@@ -23,6 +23,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
 	uint  gtaoIndex;
+	uint  cloudShadowIndex;
 }
 
 params;
@@ -161,6 +162,14 @@ void main() {
 
 				if (hit) {
 					shadowMask = 0.0 + clamp(near * pow(distanceInOut,1), 0,1);
+				}
+			}
+
+			if (params.cloudShadowIndex > 0u) {
+				vec2 shadowUV = (pos.xz - uCameraPosition.xz) / 160000.0 + 0.5;
+				if (shadowUV.x >= 0.0 && shadowUV.x <= 1.0 && shadowUV.y >= 0.0 && shadowUV.y <= 1.0) {
+					vec4 cloudShadowData = SAMPLE_ARRAY_CLAMP(params.cloudShadowIndex, vec3(shadowUV, 4.0));
+					shadowMask *= cloudShadowData.a;
 				}
 			}
 
