@@ -497,6 +497,80 @@ void emitRockItem(
 	pCount += 20u;
 }
 
+// Emits a 3D low-poly sphere blob (octahedron with 6 vertices and 8 triangular faces)
+void emitSphereBlob(
+	vec3 sphereCenter,
+	vec3 radiusVec,
+	vec4 colorBottom,
+	vec4 colorTop,
+	uint materialType,
+	float fade,
+	vec3 overallCenter,
+	uint sphereSeed,
+	inout uint vCount,
+	inout uint pCount
+) {
+	uint vBase = vCount;
+	uint pBase = pCount;
+
+	// 6 unit direction vectors defining an octahedron sphere:
+	// 0: Top (+Y), 1: Bottom (-Y), 2: Front (+Z), 3: Right (+X), 4: Back (-Z), 5: Left (-X)
+	const vec3 unitDirs[6] = vec3[6](
+		vec3(0.0, 1.0, 0.0),
+		vec3(0.0, -1.0, 0.0),
+		vec3(0.0, 0.0, 1.0),
+		vec3(1.0, 0.0, 0.0),
+		vec3(0.0, 0.0, -1.0),
+		vec3(-1.0, 0.0, 0.0)
+	);
+
+	// Rotation per sphere blob using sphereSeed for natural organic variation
+	float rotAngle = (pcg_hash(sphereSeed) * 0.8 - 0.4);
+	float sRot = sin(rotAngle);
+	float cRot = cos(rotAngle);
+
+	for (uint i = 0u; i < 6u; ++i) {
+		vec3 uDir = unitDirs[i];
+		vec3 rDir = vec3(uDir.x * cRot - uDir.z * sRot, uDir.y, uDir.x * sRot + uDir.z * cRot);
+
+		vec3 vPos = sphereCenter + rDir * radiusVec;
+
+		// Surface normal: blend local sphere radial normal with global cluster normal for smooth 3D shading
+		vec3 sphereNorm = normalize(rDir);
+		vec3 globalNorm = normalize(vPos - overallCenter + vec3(0.0, 0.2, 0.0));
+		vec3 finalNorm = normalize(mix(sphereNorm, globalNorm, 0.35));
+
+		// Vertical color blend based on normalized height
+		float t = clamp(rDir.y * 0.5 + 0.5, 0.0, 1.0);
+		vec4 vertColor = mix(colorBottom, colorTop, t);
+
+		vec3 viewP = mat3(uViewMatrix) * vPos;
+		gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+		outWorldPos[vBase + i] = vPos + uCameraPosition.xyz;
+		outNormal[vBase + i] = finalNorm;
+		outUV[vBase + i] = vec2(0.5) + rDir.xz * 0.5;
+		outColor[vBase + i] = vertColor;
+		outMaterialType[vBase + i] = materialType;
+		outFade[vBase + i] = fade;
+	}
+
+	// 8 triangular faces forming full 3D closed sphere volume
+	// Top cap triangles (4)
+	gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 2u, vBase + 3u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 0u, vBase + 3u, vBase + 4u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 2u] = uvec3(vBase + 0u, vBase + 4u, vBase + 5u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 3u] = uvec3(vBase + 0u, vBase + 5u, vBase + 2u);
+
+	// Bottom cap triangles (4)
+	gl_PrimitiveTriangleIndicesEXT[pBase + 4u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 5u] = uvec3(vBase + 1u, vBase + 4u, vBase + 3u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 6u] = uvec3(vBase + 1u, vBase + 5u, vBase + 4u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 7u] = uvec3(vBase + 1u, vBase + 2u, vBase + 5u);
+
+	vCount += 6u;
+	pCount += 8u;
+}
+
 void emitBushItem(
 	vec3 basePos, float angle, float windStrength, uint itemSeed, vec3 terrainNormal, inout uint vCount,
 	inout uint pCount
@@ -507,72 +581,27 @@ void emitBushItem(
 	vec4 bushBottomColor = vec4(0.06, 0.24, 0.05, 1.0);
 	vec4 bushTopColor = vec4(0.18 + pcg_hash(itemSeed + 5u) * 0.08, 0.58, 0.12, 1.0);
 
-	uint vBase = vCount;
 	vec3 bushCenter = basePos + vec3(windStrength * 0.3, bushHeight * 0.5, windStrength * 0.3);
-
-	// 3 vertical crossed quads (60 degrees apart)
 	float halfW = bushWidth * 0.5;
-	for (uint q = 0u; q < 3u; ++q) {
-		float a = angle + float(q) * (TAU / 6.0);
-		vec3  d = vec3(cos(a), 0.0, sin(a)) * halfW;
-		vec3  v0 = basePos - d;
-		vec3  v1 = basePos + d;
-		vec3  v2 = basePos + vec3(0.0, bushHeight, 0.0) - d * 0.7;
-		vec3  v3 = basePos + vec3(0.0, bushHeight, 0.0) + d * 0.7;
 
-		vec3 qv[4] = vec3[4](v0, v1, v2, v3);
-		vec2 qUVs[4] = vec2[4](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 1.0));
+	// Tetrahedron of 4 overlapping spheres forming a 3D volumetric bush
+	// Apex (top) sphere
+	float rApexH = bushHeight * 0.38 * (0.85 + pcg_hash(itemSeed + 10u) * 0.3);
+	float rApexW = halfW * 0.70 * (0.85 + pcg_hash(itemSeed + 11u) * 0.3);
+	vec3 apexCenter = bushCenter + vec3(0.0, bushHeight * 0.20, 0.0);
+	emitSphereBlob(apexCenter, vec3(rApexW, rApexH, rApexW), bushBottomColor, bushTopColor, 5u, 1.0, bushCenter, itemSeed + 100u, vCount, pCount);
 
-		uint qBase = vBase + q * 4u;
-		for (uint i = 0u; i < 4u; ++i) {
-			vec3 viewP = mat3(uViewMatrix) * qv[i];
-			gl_MeshVerticesEXT[qBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
-			outWorldPos[qBase + i] = qv[i] + uCameraPosition.xyz;
-			outNormal[qBase + i] = normalize(qv[i] - bushCenter + vec3(0.0, bushHeight * 0.1, 0.0));
-			outUV[qBase + i] = qUVs[i];
-			outColor[qBase + i] = mix(bushBottomColor, bushTopColor, float(i >> 1u));
-			outMaterialType[qBase + i] = 5u;
-			outFade[qBase + i] = 1.0;
-		}
+	// 3 base spheres forming the tetrahedral base triangle (120 degrees apart)
+	float baseSpread = halfW * 0.55;
+	for (uint i = 0u; i < 3u; ++i) {
+		float bAngle = angle + float(i) * (TAU / 3.0) + (pcg_hash(itemSeed + 20u + i) * 0.3 - 0.15);
+		vec3  bOffset = vec3(cos(bAngle) * baseSpread, -bushHeight * 0.12, sin(bAngle) * baseSpread);
 
-		uint qp = pCount + q * 2u;
-		gl_PrimitiveTriangleIndicesEXT[qp] = uvec3(qBase, qBase + 1u, qBase + 2u);
-		gl_PrimitiveTriangleIndicesEXT[qp + 1u] = uvec3(qBase + 1u, qBase + 3u, qBase + 2u);
+		float rH = bushHeight * 0.32 * (0.85 + pcg_hash(itemSeed + 30u + i) * 0.3);
+		float rW = halfW * 0.62 * (0.85 + pcg_hash(itemSeed + 40u + i) * 0.3);
+
+		emitSphereBlob(bushCenter + bOffset, vec3(rW, rH, rW), bushBottomColor, bushTopColor, 5u, 1.0, bushCenter, itemSeed + 200u + i * 10u, vCount, pCount);
 	}
-
-	// 2 horizontal canopy dome panels at mid and top heights for dense 3D volume
-	uint hBase = vBase + 12u;
-	for (uint h = 0u; h < 2u; ++h) {
-		float hFrac = (h == 0u) ? 0.55 : 0.85;
-		float hRad = halfW * ((h == 0u) ? 0.9 : 0.65);
-		vec3  hCenter = basePos + vec3(0.0, bushHeight * hFrac, 0.0);
-
-		vec3 hv[4] = vec3[4](
-			hCenter + vec3(-hRad, 0.0, -hRad),
-			hCenter + vec3(hRad, 0.0, -hRad),
-			hCenter + vec3(-hRad, 0.0, hRad),
-			hCenter + vec3(hRad, 0.0, hRad)
-		);
-
-		uint quadBase = hBase + h * 4u;
-		for (uint i = 0u; i < 4u; ++i) {
-			vec3 viewP = mat3(uViewMatrix) * hv[i];
-			gl_MeshVerticesEXT[quadBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
-			outWorldPos[quadBase + i] = hv[i] + uCameraPosition.xyz;
-			outNormal[quadBase + i] = normalize(hv[i] - bushCenter + vec3(0.0, bushHeight * 0.2, 0.0));
-			outUV[quadBase + i] = vec2(float(i & 1u), float(i >> 1u));
-			outColor[quadBase + i] = bushTopColor;
-			outMaterialType[quadBase + i] = 5u;
-			outFade[quadBase + i] = 1.0;
-		}
-
-		uint qp = pCount + 6u + h * 2u;
-		gl_PrimitiveTriangleIndicesEXT[qp] = uvec3(quadBase, quadBase + 1u, quadBase + 2u);
-		gl_PrimitiveTriangleIndicesEXT[qp + 1u] = uvec3(quadBase + 1u, quadBase + 3u, quadBase + 2u);
-	}
-
-	vCount += 20u;
-	pCount += 10u;
 }
 
 void emitPalmTreeItem(
@@ -797,6 +826,7 @@ void emitDeciduousTreeItem(
 	vec3 sideAxis = vec3(cos(angle), 0.0, sin(angle));
 	float trunkRadius = crownWidth * 0.12;
 
+	// Trunk (4 cross-sections along height = 8 vertices, 6 triangles)
 	for (uint s = 0u; s < 4u; ++s) {
 		float t = float(s) * 0.25;
 		vec3 center = basePos + vec3(0.0, treeHeight * t * 0.55, 0.0) + sway * (t * t * 0.3);
@@ -836,66 +866,28 @@ void emitDeciduousTreeItem(
 	vCount += 8u;
 	pCount += 6u;
 
-	vec3 crownCenter = basePos + vec3(0.0, treeHeight * 0.7, 0.0) + sway * 0.5;
+	// Canopy: Tetrahedral cluster of 4 overlapping 3D spheres
+	vec3 crownCenter = basePos + vec3(0.0, treeHeight * 0.70, 0.0) + sway * 0.5;
 	float halfW = crownWidth * 0.5;
-	float crownH = treeHeight * 0.55;
+	float crownH = treeHeight * 0.50;
 
-	uint cBase = vCount;
-	for (uint q = 0u; q < 3u; ++q) {
-		float a = angle + float(q) * (TAU / 6.0);
-		vec3 d = vec3(cos(a), 0.0, sin(a)) * halfW;
-		vec3 v0 = crownCenter - d - vec3(0.0, crownH * 0.5, 0.0);
-		vec3 v1 = crownCenter + d - vec3(0.0, crownH * 0.5, 0.0);
-		vec3 v2 = crownCenter - d + vec3(0.0, crownH * 0.5, 0.0);
-		vec3 v3 = crownCenter + d + vec3(0.0, crownH * 0.5, 0.0);
+	// Apex (top) sphere
+	float rApexH = crownH * 0.42 * (0.85 + pcg_hash(itemSeed + 10u) * 0.3);
+	float rApexW = halfW * 0.65 * (0.85 + pcg_hash(itemSeed + 11u) * 0.3);
+	vec3 apexCenter = crownCenter + vec3(0.0, crownH * 0.30, 0.0);
+	emitSphereBlob(apexCenter, vec3(rApexW, rApexH, rApexW), leafBottomColor, leafTopColor, 7u, 1.0, crownCenter, itemSeed + 100u, vCount, pCount);
 
-		vec3 qv[4] = vec3[4](v0, v1, v2, v3);
-		uint qBase = cBase + q * 4u;
+	// 3 base spheres forming the tetrahedral base triangle (120 degrees apart)
+	float baseSpread = halfW * 0.52;
+	for (uint i = 0u; i < 3u; ++i) {
+		float bAngle = angle + float(i) * (TAU / 3.0) + (pcg_hash(itemSeed + 20u + i) * 0.3 - 0.15);
+		vec3  bOffset = vec3(cos(bAngle) * baseSpread, -crownH * 0.15, sin(bAngle) * baseSpread);
 
-		for (uint i = 0u; i < 4u; ++i) {
-			vec3 viewP = mat3(uViewMatrix) * qv[i];
-			gl_MeshVerticesEXT[qBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
-			outWorldPos[qBase + i] = qv[i] + uCameraPosition.xyz;
-			outNormal[qBase + i] = normalize(qv[i] - crownCenter + vec3(0.0, crownH * 0.2, 0.0));
-			outUV[qBase + i] = vec2(float(i & 1u), float(i >> 1u));
-			outColor[qBase + i] = mix(leafBottomColor, leafTopColor, float(i >> 1u));
-			outMaterialType[qBase + i] = 7u;
-			outFade[qBase + i] = 1.0;
-		}
+		float rH = crownH * 0.38 * (0.85 + pcg_hash(itemSeed + 30u + i) * 0.3);
+		float rW = halfW * 0.60 * (0.85 + pcg_hash(itemSeed + 40u + i) * 0.3);
 
-		uint qp = pCount + q * 2u;
-		gl_PrimitiveTriangleIndicesEXT[qp] = uvec3(qBase, qBase + 1u, qBase + 2u);
-		gl_PrimitiveTriangleIndicesEXT[qp + 1u] = uvec3(qBase + 1u, qBase + 3u, qBase + 2u);
+		emitSphereBlob(crownCenter + bOffset, vec3(rW, rH, rW), leafBottomColor, leafTopColor, 7u, 1.0, crownCenter, itemSeed + 200u + i * 10u, vCount, pCount);
 	}
-
-	uint hQuadBase = cBase + 12u;
-	float hRad = halfW * 0.85;
-	vec3 hCenter = crownCenter + vec3(0.0, crownH * 0.25, 0.0);
-
-	vec3 hv[4] = vec3[4](
-		hCenter + vec3(-hRad, 0.0, -hRad),
-		hCenter + vec3(hRad, 0.0, -hRad),
-		hCenter + vec3(-hRad, 0.0, hRad),
-		hCenter + vec3(hRad, 0.0, hRad)
-	);
-
-	for (uint i = 0u; i < 4u; ++i) {
-		vec3 viewP = mat3(uViewMatrix) * hv[i];
-		gl_MeshVerticesEXT[hQuadBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
-		outWorldPos[hQuadBase + i] = hv[i] + uCameraPosition.xyz;
-		outNormal[hQuadBase + i] = normalize(hv[i] - crownCenter + vec3(0.0, crownH * 0.3, 0.0));
-		outUV[hQuadBase + i] = vec2(float(i & 1u), float(i >> 1u));
-		outColor[hQuadBase + i] = leafTopColor;
-		outMaterialType[hQuadBase + i] = 7u;
-		outFade[hQuadBase + i] = 1.0;
-	}
-
-	uint hqp = pCount + 6u;
-	gl_PrimitiveTriangleIndicesEXT[hqp] = uvec3(hQuadBase, hQuadBase + 1u, hQuadBase + 2u);
-	gl_PrimitiveTriangleIndicesEXT[hqp + 1u] = uvec3(hQuadBase + 1u, hQuadBase + 3u, hQuadBase + 2u);
-
-	vCount += 16u;
-	pCount += 8u;
 }
 
 void emitCactusItem(
@@ -1180,8 +1172,8 @@ void main() {
 			itemVerts = 14u;
 			itemPrims = 20u;
 		} else if (foliageType == 5u) {
-			itemVerts = 20u;
-			itemPrims = 10u;
+			itemVerts = 24u;
+			itemPrims = 32u;
 		} else if (foliageType == 1u) {
 			itemVerts = 60u;
 			itemPrims = 48u;
@@ -1189,7 +1181,7 @@ void main() {
 			itemVerts = 17u;
 			itemPrims = 14u;
 		} else if (foliageType == 6u) {
-			itemVerts = 48u;
+			itemVerts = 32u;
 			itemPrims = 38u;
 		} else {
 			itemVerts = 12u;
