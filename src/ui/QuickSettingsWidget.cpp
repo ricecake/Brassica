@@ -108,6 +108,27 @@ namespace brassica::ui {
 						cfg->SetAppSetting("quick_gtao_enabled", gtaoEnabled);
 					}
 				}
+				if (gtaoEnabled) {
+					float radius = lightMgr->GetGTAORadius();
+					if (ImGui::SliderFloat("AO Radius##Quick", &radius, 0.1f, 5.0f, "%.2f m")) {
+						lightMgr->SetGTAORadius(radius);
+					}
+
+					float intensity = lightMgr->GetGTAOIntensity();
+					if (ImGui::SliderFloat("AO Intensity##Quick", &intensity, 0.0f, 3.0f)) {
+						lightMgr->SetGTAOIntensity(intensity);
+					}
+
+					float directInfluence = lightMgr->GetGTAODirectInfluence();
+					if (ImGui::SliderFloat("AO Direct Light Influence##Quick", &directInfluence, 0.0f, 1.0f)) {
+						lightMgr->SetGTAODirectInfluence(directInfluence);
+					}
+
+					bool debugVisualize = lightMgr->IsGTAODebugVisualizeEnabled();
+					if (ImGui::Checkbox("Debug Visualize AO##Quick", &debugVisualize)) {
+						lightMgr->SetGTAODebugVisualizeEnabled(debugVisualize);
+					}
+				}
 			}
 
 			ImGui::Separator();

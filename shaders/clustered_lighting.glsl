@@ -40,7 +40,8 @@ LightingResult evaluateClusteredLightContributionPBR(
 	uint skyViewIndex,
 	uint weatherBiomeIndex,
 	uint gtaoIndex,
-	vec2 uv
+	vec2 uv,
+	float aoDirectInfluence
 ) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
@@ -178,6 +179,12 @@ LightingResult evaluateClusteredLightContributionPBR(
 
 	vec3 multiBounceAO = gtaoMultiBounce(gtaoVal, material.albedo);
 
+	// AO is physically an indirect-light-only effect, but indirect light is a small fraction
+	// of outdoor daylight here, so a pure indirect-only application is nearly invisible.
+	// aoDirectInfluence lets a configurable fraction of it read as contact shadowing on
+	// direct-lit surfaces too, purely for visual legibility of contouring/enclosure.
+	result.color *= mix(vec3(1.0), multiBounceAO, clamp(aoDirectInfluence, 0.0, 1.0));
+
 	vec3 spatialSHAmbient = getSpatialAmbientSH(frag_pos, N);
 	vec3 finalAmbient = (spatialSHAmbient + ambientLight) * uAmbientLight.rgb;
 
@@ -188,7 +195,7 @@ LightingResult evaluateClusteredLightContributionPBR(
 }
 
 LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
-	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u, 0u, vec2(0.5));
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u, 0u, vec2(0.5), 0.0);
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL

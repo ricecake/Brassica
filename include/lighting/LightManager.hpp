@@ -24,6 +24,10 @@ namespace brassica {
 			state.starExposure = _starExposure;
 			state.terrainExposure = _terrainExposure;
 			state.enableGTAO = _enableGTAO;
+			state.gtaoRadius = _gtaoRadius;
+			state.gtaoIntensity = _gtaoIntensity;
+			state.gtaoDirectInfluence = _gtaoDirectInfluence;
+			state.debugVisualizeGTAO = _debugVisualizeGTAO;
 
 			state.cycleEnabled = _cycle.enabled;
 			state.cycleTime = _cycle.time;
@@ -43,6 +47,10 @@ namespace brassica {
 			_starExposure = state.starExposure;
 			_terrainExposure = state.terrainExposure;
 			_enableGTAO = state.enableGTAO;
+			_gtaoRadius = state.gtaoRadius;
+			_gtaoIntensity = state.gtaoIntensity;
+			_gtaoDirectInfluence = state.gtaoDirectInfluence;
+			_debugVisualizeGTAO = state.debugVisualizeGTAO;
 
 			_cycle.enabled = state.cycleEnabled;
 			_cycle.time = state.cycleTime;
@@ -83,6 +91,22 @@ namespace brassica {
 
 		void SetGTAOEnabled(bool enable) override { _enableGTAO = enable; }
 
+		float GetGTAORadius() const override { return _gtaoRadius; }
+
+		void SetGTAORadius(float radius) override { _gtaoRadius = radius; }
+
+		float GetGTAOIntensity() const override { return _gtaoIntensity; }
+
+		void SetGTAOIntensity(float intensity) override { _gtaoIntensity = intensity; }
+
+		float GetGTAODirectInfluence() const override { return _gtaoDirectInfluence; }
+
+		void SetGTAODirectInfluence(float influence) override { _gtaoDirectInfluence = influence; }
+
+		bool IsGTAODebugVisualizeEnabled() const override { return _debugVisualizeGTAO; }
+
+		void SetGTAODebugVisualizeEnabled(bool enable) override { _debugVisualizeGTAO = enable; }
+
 		DayNightCycle& GetDayNightCycle() override { return _cycle; }
 
 		const DayNightCycle& GetDayNightCycle() const override { return _cycle; }
@@ -118,6 +142,10 @@ namespace brassica {
 		float _starExposure = constants::Class::Lighting::DefaultStarExposure;
 		float _terrainExposure = constants::Class::Lighting::DefaultTerrainExposure;
 		bool  _enableGTAO = true;
+		float _gtaoRadius = constants::Class::Lighting::DefaultGTAORadius;
+		float _gtaoIntensity = constants::Class::Lighting::DefaultGTAOIntensity;
+		float _gtaoDirectInfluence = constants::Class::Lighting::DefaultGTAODirectInfluence;
+		bool  _debugVisualizeGTAO = false;
 	};
 
 } // namespace brassica

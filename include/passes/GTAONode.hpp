@@ -25,6 +25,8 @@ namespace brassica {
 		std::uint32_t gDepthIndex{0};
 		std::uint32_t outGtaoIndex{0};
 		glm::uvec2    screenSize{0, 0};
+		float         radiusWorld{1.0f};
+		float         intensity{1.0f};
 	};
 
 	struct GTAONode: render::NodeRegistrar<GTAONode> {
@@ -45,7 +47,10 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			if (ServiceLocator::Instance().Has<ILightManager>()) {
-				enabled = ServiceLocator::Instance().Get<ILightManager>()->IsGTAOEnabled();
+				auto lightManager = ServiceLocator::Instance().Get<ILightManager>();
+				enabled = lightManager->IsGTAOEnabled();
+				push.radiusWorld = lightManager->GetGTAORadius();
+				push.intensity = lightManager->GetGTAOIntensity();
 			}
 		}
 

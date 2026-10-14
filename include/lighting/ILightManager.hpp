@@ -17,6 +17,10 @@ namespace brassica {
 		float     starExposure = constants::Class::Lighting::DefaultStarExposure;
 		float     terrainExposure = constants::Class::Lighting::DefaultTerrainExposure;
 		bool      enableGTAO = true;
+		float     gtaoRadius = constants::Class::Lighting::DefaultGTAORadius;
+		float     gtaoIntensity = constants::Class::Lighting::DefaultGTAOIntensity;
+		float     gtaoDirectInfluence = constants::Class::Lighting::DefaultGTAODirectInfluence;
+		bool      debugVisualizeGTAO = false;
 
 		bool      cycleEnabled = true;
 		float     cycleTime = constants::Class::Lighting::DefaultCycleTime;
@@ -78,7 +82,25 @@ namespace brassica {
 					UIHint::Slider
 				),
 				MakeColorField("moonTint", "Moon Tint Color", &LightManagerState::moonTint),
-				MakeField("enableGTAO", "Enable GTAO", &LightManagerState::enableGTAO)
+				MakeField("enableGTAO", "Enable GTAO", &LightManagerState::enableGTAO),
+				MakeField("gtaoRadius", "GTAO Radius (m)", &LightManagerState::gtaoRadius, 0.1f, 5.0f, UIHint::Slider),
+				MakeField(
+					"gtaoIntensity",
+					"GTAO Intensity",
+					&LightManagerState::gtaoIntensity,
+					0.0f,
+					3.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"gtaoDirectInfluence",
+					"GTAO Direct Light Influence",
+					&LightManagerState::gtaoDirectInfluence,
+					0.0f,
+					1.0f,
+					UIHint::Slider
+				),
+				MakeField("debugVisualizeGTAO", "Debug Visualize GTAO", &LightManagerState::debugVisualizeGTAO)
 			);
 		}
 	};
@@ -128,6 +150,18 @@ namespace brassica {
 
 		virtual bool  IsGTAOEnabled() const = 0;
 		virtual void  SetGTAOEnabled(bool enable) = 0;
+
+		virtual float GetGTAORadius() const = 0;
+		virtual void  SetGTAORadius(float radius) = 0;
+
+		virtual float GetGTAOIntensity() const = 0;
+		virtual void  SetGTAOIntensity(float intensity) = 0;
+
+		virtual float GetGTAODirectInfluence() const = 0;
+		virtual void  SetGTAODirectInfluence(float influence) = 0;
+
+		virtual bool  IsGTAODebugVisualizeEnabled() const = 0;
+		virtual void  SetGTAODebugVisualizeEnabled(bool enable) = 0;
 
 		virtual DayNightCycle&       GetDayNightCycle() = 0;
 		virtual const DayNightCycle& GetDayNightCycle() const = 0;

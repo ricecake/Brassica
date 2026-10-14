@@ -8,6 +8,8 @@ layout(push_constant) uniform GTAOPushConstants {
 	uint  gDepthIndex;
 	uint  outGtaoIndex;
 	uvec2 screenSize;
+	float radiusWorld;
+	float intensity;
 }
 params;
 
@@ -48,7 +50,16 @@ void main() {
 
 	const int NUM_SLICES = 4;
 	const int NUM_STEPS = 4;
-	float radiusScreen = clamp(16.0 / max(-viewPos.z, 0.1), 2.0, 32.0);
+
+	// Convert the world-space search radius to a screen-space pixel radius using the
+	// camera's actual vertical focal length, so the AO reach stays physically consistent
+	// across resolution/FOV/distance instead of being an arbitrary pixel count.
+	float focalLenPx = uProjMatrix[1][1] * float(params.screenSize.y) * 0.5;
+	float radiusScreen = clamp(
+		params.radiusWorld * focalLenPx / max(-viewPos.z, 0.1),
+		2.0,
+		float(params.screenSize.y)
+	);
 
 	float totalVis = 0.0;
 	float totalWeight = 0.0;
@@ -124,6 +135,11 @@ void main() {
 	}
 
 	float visibility = (totalWeight > 0.0) ? clamp(totalVis / totalWeight, 0.0, 1.0) : 1.0;
+
+	// Strength control: scale the occlusion amount (not the raw visibility) so intensity=1.0
+	// reproduces the unscaled horizon-based result exactly.
+	float occlusion = clamp(1.0 - visibility, 0.0, 1.0) * params.intensity;
+	visibility = clamp(1.0 - occlusion, 0.0, 1.0);
 
 	imageStore(uImagesGenericWrite[nonuniformEXT(params.outGtaoIndex)], pixel, vec4(visibility, 0.0, 0.0, 0.0));
 }

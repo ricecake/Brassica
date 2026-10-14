@@ -23,6 +23,8 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
 	uint  gtaoIndex;
+	float aoDirectInfluence;
+	uint  debugVisualizeGTAO;
 }
 
 params;
@@ -110,6 +112,12 @@ void main() {
 		float ao         = normalSample.a > 0.0 ? normalSample.a : 1.0;
 		float emissivity = posSample.a;
 
+		if (params.debugVisualizeGTAO != 0u) {
+			float sampledGTAO = params.gtaoIndex > 0u ? SAMPLE_NEAREST(params.gtaoIndex, inUV).r : 1.0;
+			outColor = vec4(vec3(sampledGTAO), 1.0);
+			return;
+		}
+
 		Material material = Material(albedo.rgb, roughness, metallic, ao, emissivity, glint);
 
 		// Aerial perspective / underwater extinction is no longer applied here: it happens
@@ -122,7 +130,8 @@ void main() {
 			params.skyViewIndex,
 			params.weatherBiomeIndex,
 			params.gtaoIndex,
-			inUV
+			inUV,
+			params.aoDirectInfluence
 		).color;
 
 		if (uLights[0].intensity > 0.0) {

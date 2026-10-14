@@ -122,6 +122,11 @@ namespace brassica {
 				constexpr float DefaultStarExposure = 1.0f;
 				constexpr float DefaultTerrainExposure = 1.0f;
 
+				// GTAO Defaults
+				constexpr float DefaultGTAORadius = 1.0f;           // horizon-search radius, world-space meters
+				constexpr float DefaultGTAOIntensity = 1.0f;        // linear strength multiplier on raw occlusion
+				constexpr float DefaultGTAODirectInfluence = 0.35f; // how much AO also darkens direct lighting (0 = indirect-only)
+
 				// Lightning Defaults
 				constexpr float DefaultLightningMaxLifetime = 0.3f;
 				constexpr float DefaultLightningBranchProbability = 0.15f;

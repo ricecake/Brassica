@@ -44,6 +44,8 @@ namespace brassica {
 		std::uint32_t gMaterialIndex{0};
 		std::uint32_t skyViewIndex{0};
 		std::uint32_t gtaoIndex{0};
+		float         aoDirectInfluence{0.0f};
+		std::uint32_t debugVisualizeGTAO{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -99,7 +101,11 @@ namespace brassica {
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.gridParams = p.terrainGridParams;
 			if (ServiceLocator::Instance().Has<ILightManager>()) {
-				enableGTAO = ServiceLocator::Instance().Get<ILightManager>()->IsGTAOEnabled();
+				auto lightManager = ServiceLocator::Instance().Get<ILightManager>();
+				enableGTAO = lightManager->IsGTAOEnabled();
+				push.aoDirectInfluence = enableGTAO ? lightManager->GetGTAODirectInfluence() : 0.0f;
+				push.debugVisualizeGTAO =
+					(enableGTAO && lightManager->IsGTAODebugVisualizeEnabled()) ? 1u : 0u;
 			}
 		}
 
