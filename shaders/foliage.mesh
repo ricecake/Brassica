@@ -497,7 +497,7 @@ void emitRockItem(
 	pCount += 20u;
 }
 
-// Emits a 3D low-poly sphere blob (octahedron with 6 vertices and 8 triangular faces)
+// Emits a 3D low-poly icosahedron sphere blob (12 vertices, 20 triangular faces)
 void emitSphereBlob(
 	vec3 sphereCenter,
 	vec3 radiusVec,
@@ -513,15 +513,29 @@ void emitSphereBlob(
 	uint vBase = vCount;
 	uint pBase = pCount;
 
-	// 6 unit direction vectors defining an octahedron sphere:
-	// 0: Top (+Y), 1: Bottom (-Y), 2: Front (+Z), 3: Right (+X), 4: Back (-Z), 5: Left (-X)
-	const vec3 unitDirs[6] = vec3[6](
-		vec3(0.0, 1.0, 0.0),
-		vec3(0.0, -1.0, 0.0),
-		vec3(0.0, 0.0, 1.0),
-		vec3(1.0, 0.0, 0.0),
-		vec3(0.0, 0.0, -1.0),
-		vec3(-1.0, 0.0, 0.0)
+	const float kIcoA = 0.5257311121191336;
+	const float kIcoB = 0.8506508083520399;
+
+	const vec3 icoUnitDirs[12] = vec3[12](
+		vec3(-kIcoA,  kIcoB, 0.0),
+		vec3( kIcoA,  kIcoB, 0.0),
+		vec3(-kIcoA, -kIcoB, 0.0),
+		vec3( kIcoA, -kIcoB, 0.0),
+		vec3(0.0, -kIcoA,  kIcoB),
+		vec3(0.0,  kIcoA,  kIcoB),
+		vec3(0.0, -kIcoA, -kIcoB),
+		vec3(0.0,  kIcoA, -kIcoB),
+		vec3( kIcoB, 0.0, -kIcoA),
+		vec3( kIcoB, 0.0,  kIcoA),
+		vec3(-kIcoB, 0.0, -kIcoA),
+		vec3(-kIcoB, 0.0,  kIcoA)
+	);
+
+	const uvec3 icoTris[20] = uvec3[20](
+		uvec3(0u, 11u, 5u),  uvec3(0u, 5u, 1u),   uvec3(0u, 1u, 7u),   uvec3(0u, 7u, 10u),  uvec3(0u, 10u, 11u),
+		uvec3(1u, 5u, 9u),   uvec3(5u, 11u, 4u),  uvec3(11u, 10u, 2u), uvec3(10u, 7u, 6u),  uvec3(7u, 1u, 8u),
+		uvec3(3u, 9u, 4u),   uvec3(3u, 4u, 2u),   uvec3(3u, 2u, 6u),   uvec3(3u, 6u, 8u),   uvec3(3u, 8u, 9u),
+		uvec3(4u, 9u, 5u),   uvec3(2u, 4u, 11u),  uvec3(6u, 2u, 10u),  uvec3(8u, 6u, 7u),   uvec3(9u, 8u, 1u)
 	);
 
 	// Rotation per sphere blob using sphereSeed for natural organic variation
@@ -529,8 +543,8 @@ void emitSphereBlob(
 	float sRot = sin(rotAngle);
 	float cRot = cos(rotAngle);
 
-	for (uint i = 0u; i < 6u; ++i) {
-		vec3 uDir = unitDirs[i];
+	for (uint i = 0u; i < 12u; ++i) {
+		vec3 uDir = icoUnitDirs[i];
 		vec3 rDir = vec3(uDir.x * cRot - uDir.z * sRot, uDir.y, uDir.x * sRot + uDir.z * cRot);
 
 		vec3 vPos = sphereCenter + rDir * radiusVec;
@@ -554,21 +568,17 @@ void emitSphereBlob(
 		outFade[vBase + i] = fade;
 	}
 
-	// 8 triangular faces forming full 3D closed sphere volume
-	// Top cap triangles (4)
-	gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 2u, vBase + 3u);
-	gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 0u, vBase + 3u, vBase + 4u);
-	gl_PrimitiveTriangleIndicesEXT[pBase + 2u] = uvec3(vBase + 0u, vBase + 4u, vBase + 5u);
-	gl_PrimitiveTriangleIndicesEXT[pBase + 3u] = uvec3(vBase + 0u, vBase + 5u, vBase + 2u);
+	// 20 triangular faces forming full 3D closed icosahedron sphere volume
+	for (uint f = 0u; f < 20u; ++f) {
+		gl_PrimitiveTriangleIndicesEXT[pBase + f] = uvec3(
+			vBase + icoTris[f].x,
+			vBase + icoTris[f].y,
+			vBase + icoTris[f].z
+		);
+	}
 
-	// Bottom cap triangles (4)
-	gl_PrimitiveTriangleIndicesEXT[pBase + 4u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
-	gl_PrimitiveTriangleIndicesEXT[pBase + 5u] = uvec3(vBase + 1u, vBase + 4u, vBase + 3u);
-	gl_PrimitiveTriangleIndicesEXT[pBase + 6u] = uvec3(vBase + 1u, vBase + 5u, vBase + 4u);
-	gl_PrimitiveTriangleIndicesEXT[pBase + 7u] = uvec3(vBase + 1u, vBase + 2u, vBase + 5u);
-
-	vCount += 6u;
-	pCount += 8u;
+	vCount += 12u;
+	pCount += 20u;
 }
 
 void emitBushItem(
@@ -584,7 +594,7 @@ void emitBushItem(
 	vec3 bushCenter = basePos + vec3(windStrength * 0.3, bushHeight * 0.5, windStrength * 0.3);
 	float halfW = bushWidth * 0.5;
 
-	// Tetrahedron of 4 overlapping spheres forming a 3D volumetric bush
+	// Tetrahedron of 4 overlapping icosahedron spheres forming a 3D volumetric bush
 	// Apex (top) sphere
 	float rApexH = bushHeight * 0.38 * (0.85 + pcg_hash(itemSeed + 10u) * 0.3);
 	float rApexW = halfW * 0.70 * (0.85 + pcg_hash(itemSeed + 11u) * 0.3);
@@ -822,51 +832,53 @@ void emitDeciduousTreeItem(
 	vec4 leafTopColor = vec4(0.24, 0.62, 0.16, 1.0);
 
 	uint vBase = vCount;
-
-	vec3 sideAxis = vec3(cos(angle), 0.0, sin(angle));
 	float trunkRadius = crownWidth * 0.12;
 
-	// Trunk (4 cross-sections along height = 8 vertices, 6 triangles)
+	// 3D Triangular Cylinder Trunk (4 height levels = 12 vertices, 3 segments * 6 = 18 triangles)
 	for (uint s = 0u; s < 4u; ++s) {
 		float t = float(s) * 0.25;
 		vec3 center = basePos + vec3(0.0, treeHeight * t * 0.55, 0.0) + sway * (t * t * 0.3);
 		float rad = trunkRadius * (1.2 - t * 0.4);
 
-		vec3 pL = center - sideAxis * rad;
-		vec3 pR = center + sideAxis * rad;
+		for (uint i = 0u; i < 3u; ++i) {
+			float ringAngle = angle + float(i) * (TAU / 3.0);
+			vec3 ringDir = vec3(cos(ringAngle), 0.0, sin(ringAngle));
+			vec3 pPos = center + ringDir * rad;
 
-		uint li = vBase + s * 2u;
-		vec3 viewL = mat3(uViewMatrix) * pL;
-		gl_MeshVerticesEXT[li].gl_Position = uProjMatrix * vec4(viewL, 1.0);
-		outWorldPos[li] = pL + uCameraPosition.xyz;
-		outNormal[li] = normalize(pL - center + vec3(0.0, 0.1, 0.0));
-		outUV[li] = vec2(0.0, t);
-		outColor[li] = barkColor;
-		outMaterialType[li] = 6u;
-		outFade[li] = 1.0;
-
-		uint ri = li + 1u;
-		vec3 viewR = mat3(uViewMatrix) * pR;
-		gl_MeshVerticesEXT[ri].gl_Position = uProjMatrix * vec4(viewR, 1.0);
-		outWorldPos[ri] = pR + uCameraPosition.xyz;
-		outNormal[ri] = normalize(pR - center + vec3(0.0, 0.1, 0.0));
-		outUV[ri] = vec2(1.0, t);
-		outColor[ri] = barkColor;
-		outMaterialType[ri] = 6u;
-		outFade[ri] = 1.0;
+			uint vi = vBase + s * 3u + i;
+			vec3 viewP = mat3(uViewMatrix) * pPos;
+			gl_MeshVerticesEXT[vi].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+			outWorldPos[vi] = pPos + uCameraPosition.xyz;
+			outNormal[vi] = normalize(ringDir + vec3(0.0, 0.1, 0.0));
+			outUV[vi] = vec2(float(i) / 3.0, t);
+			outColor[vi] = barkColor;
+			outMaterialType[vi] = 6u;
+			outFade[vi] = 1.0;
+		}
 	}
 
 	uint pBase = pCount;
 	for (uint s = 0u; s < 3u; ++s) {
-		uint i0 = vBase + s * 2u;
-		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u] = uvec3(i0, i0 + 1u, i0 + 2u);
-		gl_PrimitiveTriangleIndicesEXT[pBase + s * 2u + 1u] = uvec3(i0 + 1u, i0 + 3u, i0 + 2u);
+		uint layer0 = vBase + s * 3u;
+		uint layer1 = vBase + (s + 1u) * 3u;
+
+		for (uint i = 0u; i < 3u; ++i) {
+			uint iNext = (i + 1u) % 3u;
+
+			uint i0 = layer0 + i;
+			uint i1 = layer0 + iNext;
+			uint i2 = layer1 + i;
+			uint i3 = layer1 + iNext;
+
+			gl_PrimitiveTriangleIndicesEXT[pBase + s * 6u + i * 2u] = uvec3(i0, i1, i2);
+			gl_PrimitiveTriangleIndicesEXT[pBase + s * 6u + i * 2u + 1u] = uvec3(i1, i3, i2);
+		}
 	}
 
-	vCount += 8u;
-	pCount += 6u;
+	vCount += 12u;
+	pCount += 18u;
 
-	// Canopy: Tetrahedral cluster of 4 overlapping 3D spheres
+	// Canopy: Tetrahedral cluster of 4 overlapping 3D icosahedron spheres
 	vec3 crownCenter = basePos + vec3(0.0, treeHeight * 0.70, 0.0) + sway * 0.5;
 	float halfW = crownWidth * 0.5;
 	float crownH = treeHeight * 0.50;
@@ -1172,8 +1184,8 @@ void main() {
 			itemVerts = 14u;
 			itemPrims = 20u;
 		} else if (foliageType == 5u) {
-			itemVerts = 24u;
-			itemPrims = 32u;
+			itemVerts = 48u;
+			itemPrims = 80u;
 		} else if (foliageType == 1u) {
 			itemVerts = 60u;
 			itemPrims = 48u;
@@ -1181,8 +1193,8 @@ void main() {
 			itemVerts = 17u;
 			itemPrims = 14u;
 		} else if (foliageType == 6u) {
-			itemVerts = 32u;
-			itemPrims = 38u;
+			itemVerts = 60u;
+			itemPrims = 98u;
 		} else {
 			itemVerts = 12u;
 			itemPrims = 10u;
