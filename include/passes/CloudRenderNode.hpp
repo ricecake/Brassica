@@ -31,8 +31,8 @@ namespace brassica {
 
 		std::uint32_t skyViewIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
+		std::uint32_t cloudShadowIndex{0};
 		float         cirrusOpacity{0.0125f};
-		float         _padding;
 	};
 
 	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
@@ -46,6 +46,7 @@ namespace brassica {
 			graph::Read<TransmittanceLUT>,
 			graph::Read<SkyViewLUT>,
 			graph::Read<TerrainWeatherBiomeTexture>,
+			graph::Read<CloudShadowMap>,
 			graph::Modify<HdrColor>>;
 
 		// static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
@@ -133,6 +134,13 @@ namespace brassica {
 					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
 				}
 			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<CloudShadowMap>(),
+					.access = graph::AccessKind::Read,
+					.desc = CloudShadowMapDesc(1024, 1024),
+				}
+			);
 
 			return r;
 		}
@@ -147,6 +155,7 @@ namespace brassica {
 			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};

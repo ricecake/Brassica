@@ -116,6 +116,9 @@ layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
 #define SAMPLE_ARRAY_WRAP(idx, uvw)                                                                                    \
 	texture(sampler2DArray(uTextureArrays[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
 
+#define SAMPLE_ARRAY_CLAMP(idx, uvw)                                                                                   \
+	texture(sampler2DArray(uTextureArrays[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uvw)
+
 // idx is a bindless index into uTextures3D (NodeContext::Index<K>() on the C++ side, same as
 // SAMPLE_NEAREST/SAMPLE_LINEAR -- StorageIndex<K>() is a different catalog entirely, for
 // imageStore/imageLoad writers, not this). Same no-fallback-at-0 caveat as SAMPLE_ARRAY_WRAP:
