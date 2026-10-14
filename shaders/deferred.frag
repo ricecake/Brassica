@@ -157,9 +157,13 @@ void main() {
 				// Fast exit for surfaces facing away from light or at extreme grazing angles
 				shadowMask = 0.0;
 			} else {
-				// Surface faces light: trace terrain ray for soft shadow penumbra
-				float slopeFactor = 1.0 - clamp(geoNorm.y, 0.0, 1.0);
-				vec3 biasVector = geoNorm * (0.15 + 0.35 * slopeFactor) + lightDir * (0.2 + 0.3 * slopeFactor);
+				vec3 biasNorm = norm;//normalize(cross(dFdx(pos), dFdy(pos)));
+				float cosTheta = clamp(dot(biasNorm, lightDir), 0.0, 1.0);
+				float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+				float minBias = 0.01;
+				float maxBias = 0.05;
+				vec3 biasVector = (lightDir * cosTheta * minBias) + (biasNorm * sinTheta * maxBias);
+
 				vec3 rayOrigin = pos + biasVector;
 
 				float raySoftShadow = calculateTerrainSoftShadow(occCtx, rayOrigin, lightDir, 20000.0, kPenumbra);
