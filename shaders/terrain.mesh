@@ -315,8 +315,20 @@ void main() {
 		}
 		uint skirtIdx = 121 + skirtID;
 
-		float skirtDepth = max(10.0, meshletSize * 0.1);
-		vec3  relSkirtPos = relWorldPos - vec3(0.0, skirtDepth, 0.0);
+		vec2 outDir = vec2(0.0);
+		if (lx == 0)  outDir.x -= 1.0;
+		if (lx == 10) outDir.x += 1.0;
+		if (ly == 0)  outDir.y -= 1.0;
+		if (ly == 10) outDir.y += 1.0;
+		if (length(outDir) > 0.0) {
+			outDir = normalize(outDir);
+		}
+
+		float overlapWidth = 0.66*meshletSize;
+
+		vec3 dir = normalize(vec3(outDir.x, 0, outDir.y));
+		dir -= normal;
+		vec3 relSkirtPos = relWorldPos + overlapWidth * normalize(dir);
 
 		vec3 skirtViewPos = mat3(uViewMatrix) * relSkirtPos;
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);
@@ -353,8 +365,8 @@ void main() {
 			}
 		}
 
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = false;
 	}
 
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
@@ -367,8 +379,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtTop;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtTop;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
 	if (ly == 10 && lx < 10 && lx % 2 == 0) { // Bottom edge
@@ -381,8 +393,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtBottom;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtBottom;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
 	if (lx == 0 && ly < 10 && ly % 2 == 0) { // Left edge
@@ -395,8 +407,8 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtLeft;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtLeft;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 
 	if (lx == 10 && ly < 10 && ly % 2 == 0) { // Right edge
@@ -409,7 +421,7 @@ void main() {
 
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
 		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = !drawSkirtRight;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = !drawSkirtRight;
+		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
 	}
 }
