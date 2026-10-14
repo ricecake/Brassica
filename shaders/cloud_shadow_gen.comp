@@ -69,8 +69,8 @@ float sampleCloudExtinction(vec3 p_cloud, vec3 camPos) {
 		float baseDensity = sampleCloudCascades(p_cloud, distFromCam) * weatherCoverage;
 		float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
 		if (density > 0.0) {
-			// Scaled down extinction coefficient to match cloud_render.frag step density integration
-			return max(0.0, density * (0.0005 + 0.002 * weatherMoisture));
+			// Realistic physical cloud extinction allowing smooth optical depth accumulation across the entire cloud volume
+			return max(0.0, density * (0.00003 + 0.00012 * weatherMoisture));
 		}
 	}
 	return 0.0;
