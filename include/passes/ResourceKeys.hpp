@@ -39,6 +39,22 @@ namespace brassica {
 		};
 	}
 
+	struct CloudShadowMap {};
+
+	inline graph::ResourceDesc CloudShadowMapDesc(std::uint32_t width = 1024, std::uint32_t height = 1024) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 5,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
 	struct CloudVolumeCascade0 {};
 
 	struct CloudVolumeCascade1 {};

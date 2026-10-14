@@ -21,8 +21,40 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	uint  transmittanceIndex;
 	uint  skyViewIndex;
 	uint  weatherBiomeIndex;
-	float cloudOpacity;
+	uint  cloudShadowIndex;
+	float cirrusOpacity;
 } push;
+
+vec4 sampleCloudShadow(vec3 p) {
+	if (push.cloudShadowIndex == 0u) return vec4(0.0, 0.0, 0.0, 1.0);
+	vec2 shadowUV = (p.xz - uCameraPosition.xz) / 160000.0 + 0.5;
+	if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0) {
+		return vec4(0.0, 0.0, 0.0, 1.0);
+	}
+	float y = p.y;
+	vec4 s0, s1;
+	float mixVal = 0.0;
+	if (y >= 20000.0) {
+		return SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 0.0));
+	} else if (y >= 12500.0) {
+		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 0.0));
+		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 1.0));
+		mixVal = (20000.0 - y) / 7500.0;
+	} else if (y >= 5000.0) {
+		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 1.0));
+		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 2.0));
+		mixVal = (12500.0 - y) / 7500.0;
+	} else if (y >= 2500.0) {
+		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 2.0));
+		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 3.0));
+		mixVal = (5000.0 - y) / 2500.0;
+	} else {
+		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 3.0));
+		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 4.0));
+		mixVal = (2500.0 - clamp(y, 0.0, 2500.0)) / 2500.0;
+	}
+	return mix(s0, s1, clamp(mixVal, 0.0, 1.0));
+}
 
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
@@ -343,23 +375,8 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float stepOpticalDepth = stepDensity * stepSize;
 				float stepTransmittance = exp(-stepOpticalDepth);
 
-				float opticalDepthToLight = 0.0;
-				float light_t = stepSize;
-				float lightStepSize = stepSize * 2.0;
-
-				for (int i = 0; i < 5; i++) {
-					vec3 sp_c = p_cloud + sunDir * light_t;
-					float shadow_dist = length(sp_c - uCameraPosition.xyz);
-					vec2 shadowWeatherUV = fract((sp_c.xz / worldExtent) + 0.5);
-					vec4 shadowWeatherSample = SAMPLE_LINEAR(push.weatherBiomeIndex, shadowWeatherUV);
-					float shadow_coverage = shadowWeatherSample.r;
-					float shadow_moisture = shadowWeatherSample.b;
-					float shadow_density = sampleCloudCascades(sp_c, shadow_dist) * shadow_coverage;
-
-					opticalDepthToLight += max(0.0, shadow_density * (0.005 + 0.02 * shadow_moisture)) * lightStepSize;
-					light_t += lightStepSize;
-					lightStepSize *= 2.0;
-				}
+				vec4 cloudShadowData = sampleCloudShadow(p_cloud);
+				float opticalDepthToLight = cloudShadowData.b;
 
 				float r_km = r_world / 1000.0;
                 float mu = dot(surfaceDir, sunDir);

@@ -46,6 +46,7 @@ namespace brassica {
 		std::uint32_t gtaoIndex{0};
 		float         aoDirectInfluence{0.0f};
 		std::uint32_t debugVisualizeGTAO{0};
+		std::uint32_t cloudShadowIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -60,6 +61,7 @@ namespace brassica {
 			graph::Read<SkyViewLUT>,
 			graph::Read<GTAOTexture>,
 			graph::Read<TerrainTLAS>,
+			graph::Read<CloudShadowMap>,
 			graph::Create<HdrColor>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::DeferredShading;
@@ -135,6 +137,7 @@ namespace brassica {
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.gtaoIndex = enableGTAO ? ctx.Index<GTAOTexture>() : 0u;
+			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
