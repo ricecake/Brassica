@@ -1,6 +1,7 @@
 #version 460
 #include "bindless.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 
 layout(location = 0) in vec3 inPosition;
@@ -8,6 +9,15 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec4 inAlbedo;
 layout(location = 3) in vec4 inMaterial;
 layout(location = 4) in vec4 inMaterialWeights; // x=grass, y=rock, z=sand, w=snow
+
+layout(push_constant) uniform TerrainPushConstants {
+	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
+} params;
 
 layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
@@ -41,7 +51,86 @@ void main() {
 
 	vec2 perturbedGradSum = vec2(0.0);
 
-	// 1. Macro Tier (0m - 1000m): Provides broad geological shape, cliff banding, and distant normal structure
+	// -------------------------------------------------------------------------
+	// 1. Procedural Tree Forest Canopy Proxy & Normal Perturbation
+	// -------------------------------------------------------------------------
+	// Serves as a 3D canopy standin at distance where explicit foliage meshes
+	// fade out, providing normal mapping, crevice shadowing, and roughness tweaks.
+	if (params.weatherBiomeIndex > 0u && grassW > 0.02 && N.y > 0.50 && worldPos.y > params.waterLevel - 0.5) {
+		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, worldPos);
+		float temp = weatherSample.r;
+		float moisture = weatherSample.g;
+		float severity = weatherSample.b;
+		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+
+		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+		uint biomeIdx = uint(clamp(wb.biomeIndex, 0.0, 9.0));
+
+		// Determine forest density and appropriate tree species canopy profile:
+		// 0: Pine/Evergreen (Taiga/Tundra/Rainforest)
+		// 1: Deciduous (Temperate Deciduous/Woodland)
+		// 2: Palm/Tropical (Tropical Rainforest/Savanna)
+		// 3: Cactus/Arid Shrub (Subtropical Desert)
+		uint treeType = 1u;
+		float forestDensity = smoothstep(0.20, 0.70, moisture) * smoothstep(0.50, 0.88, N.y);
+		vec3 leafColor = vec3(0.18, 0.48, 0.14); // Default deciduous
+
+		if (biomeIdx == 7u || moisture < 0.25) {
+			treeType = 3u; // Cactus / Arid Scrub
+			forestDensity = smoothstep(0.10, 0.35, moisture) * 0.4;
+			leafColor = vec3(0.22, 0.45, 0.24);
+		} else if (biomeIdx == 8u || biomeIdx == 9u || (temp > 0.70 && moisture > 0.60)) {
+			treeType = 2u; // Palm / Tropical Canopy
+			forestDensity = smoothstep(0.30, 0.80, moisture);
+			leafColor = vec3(0.15, 0.55, 0.20);
+		} else if (biomeIdx == 0u || biomeIdx == 1u || biomeIdx == 2u || temp < 0.38) {
+			treeType = 0u; // Pine / Evergreen
+			forestDensity = smoothstep(0.20, 0.65, moisture);
+			leafColor = vec3(0.08, 0.30, 0.12);
+		} else {
+			treeType = 1u; // Deciduous
+			forestDensity = smoothstep(0.25, 0.75, moisture);
+			leafColor = vec3(0.18, 0.48, 0.14);
+		}
+
+		if (forestDensity > 0.01) {
+			// Proxy weight increases with distance (as explicit foliage mesh instances fade out beyond ~40-150m)
+			float proxyDistFade = mix(0.35, 1.0, smoothstep(30.0, 180.0, camDist));
+			float proxyAmount = grassW * forestDensity * proxyDistFade;
+
+			// Multi-scale canopy noise evaluating tree crowns, branch clusters, and foliage micro-texture
+			vec2 fGrad1, fGrad2, fGrad3;
+			float fNoise1 = psrdnoise(worldXZ * 0.28, vec2(0.0), 0.0, fGrad1); // Crown scale (~3.5m)
+			float fNoise2 = psrdnoise(worldXZ * 0.85, vec2(0.0), 0.0, fGrad2); // Branch cluster scale (~1.2m)
+			float fNoise3 = psrdnoise(worldXZ * 2.20, vec2(0.0), 0.0, fGrad3); // Foliage micro-bump scale (~0.45m)
+
+			vec2 forestGrad = vec2(0.0);
+
+			if (treeType == 0u) { // Pine: Conical peaked crowns with vertical branch texture
+				forestGrad = (fGrad1 * 1.3 * 0.50 + fGrad2 * 0.35 + fGrad3 * 0.15) * 1.2;
+			} else if (treeType == 2u) { // Tropical/Palm: Broad radial frond canopy domes
+				forestGrad = (fGrad1 * 0.45 + fGrad2 * 0.35 + fGrad3 * 0.20) * 1.1;
+			} else if (treeType == 3u) { // Cactus/Arid: Scattered columnar bumps
+				forestGrad = (fGrad2 * 0.60 + fGrad3 * 0.40) * 0.7;
+			} else { // Deciduous: Rounded canopy clusters
+				forestGrad = (fGrad1 * 0.45 + fGrad2 * 0.35 + fGrad3 * 0.20) * 1.0;
+			}
+
+			perturbedGradSum += forestGrad * proxyAmount;
+
+			// Gap crevice shadowing between adjacent tree crowns
+			float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
+			vec3 canopyColor = mix(leafColor * 0.55, leafColor * 1.15, crownCrevice);
+
+			// Blend canopy color and increase surface roughness in dense forest areas
+			finalAlbedo = mix(finalAlbedo, canopyColor, proxyAmount * 0.70);
+			roughness = mix(roughness, clamp(roughness + 0.22, 0.75, 0.95), proxyAmount);
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// 2. Macro Tier (0m - 1000m): Broad geological shape & cliff normal structure
+	// -------------------------------------------------------------------------
 	if (macroFade > 0.001) {
 		vec2 mGrad1, mGrad2;
 		float mNoise1 = psrdnoise(worldXZ * 0.25, vec2(0.0), 0.0, mGrad1);
@@ -59,7 +148,9 @@ void main() {
 		}
 	}
 
-	// 2. Medium Tier (0m - 400m): Medium-frequency rock strata, sand ripples, grass color variations
+	// -------------------------------------------------------------------------
+	// 3. Medium Tier (0m - 400m): Rock strata, sand ripples & grass ground normals
+	// -------------------------------------------------------------------------
 	if (mediumFade > 0.001) {
 		float mediumWeight = mediumFade * 0.55;
 
@@ -67,6 +158,7 @@ void main() {
 			vec2 gGrad1;
 			float gNoise1 = psrdnoise(worldXZ * 3.5, vec2(0.0), 0.0, gGrad1);
 			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.15 * gNoise1), grassW * mediumWeight);
+			perturbedGradSum += gGrad1 * 0.22 * grassW * mediumWeight;
 		}
 
 		if (rockW > 0.001) {
@@ -89,7 +181,9 @@ void main() {
 		}
 	}
 
-	// 3. Micro Tier (0m - 120m): High-frequency fine texture & cracks
+	// -------------------------------------------------------------------------
+	// 4. Micro Tier (0m - 120m): Fine soil texture & bumpy close-up ground
+	// -------------------------------------------------------------------------
 	if (microFade > 0.001) {
 		float microWeight = microFade;
 
@@ -98,6 +192,7 @@ void main() {
 			float gNoise2 = psrdnoise(worldXZ * 11.0, vec2(0.0), 0.0, gGrad2);
 			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.1 * gNoise2), grassW * microWeight);
 			roughness = mix(roughness, clamp(roughness + 0.1 * gNoise2, 0.4, 0.95), grassW * microWeight);
+			perturbedGradSum += gGrad2 * 0.25 * grassW * microWeight;
 		}
 
 		if (rockW > 0.001) {
@@ -118,6 +213,9 @@ void main() {
 		}
 	}
 
+	// -------------------------------------------------------------------------
+	// 5. Toksvig Roughness Filtering & Normal Perturbation Derivation
+	// -------------------------------------------------------------------------
 	if (length(perturbedGradSum) > 0.0001) {
 		vec3 grad3D = vec3(perturbedGradSum.x, 0.0, perturbedGradSum.y);
 
