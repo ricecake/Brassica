@@ -517,11 +517,23 @@ float calculateTerrainSoftShadow(
 		// the update entirely when clearance is the sentinel lets only genuinely, confidently
 		// clear segments narrow the penumbra.
 		if (t1 > 0.2 && clearance >= 0.0) {
-			float evalT = max(t0, 0.2);
-			float stepPenumbra = clamp(kPenumbra * clearance / evalT, 0.0, 1.0);
-			softShadow = min(softShadow, stepPenumbra);
-			if (softShadow <= 0.0) {
-				return 0.0;
+			// Evaluate continuous position at the center of the step
+			float evalT = (t0 + t1) * 0.5;
+			vec3 p = origin + d * evalT;
+
+			// Sample the finest min-max bounds (mip 0) directly under the ray
+			// to avoid blocky bounding box artifacts
+			vec2 exactMinMax = sampleTerrainMinMaxMip(ctx.minMaxIndex, p.xz, L, 0u, ctx.textureDim);
+
+			float rayHeight = C + B * evalT + A * evalT * evalT;
+			float trueClearance = rayHeight - exactMinMax.y;
+
+			if (trueClearance >= 0.0) {
+				float stepPenumbra = clamp(kPenumbra * trueClearance / evalT, 0.0, 1.0);
+				softShadow = min(softShadow, stepPenumbra);
+				if (softShadow <= 0.0) {
+					return 0.0;
+				}
 			}
 		}
 	}
