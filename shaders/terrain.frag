@@ -53,7 +53,13 @@ void main() {
 	// -------------------------------------------------------------------------
 	// Serves as a 3D canopy standin at distance where explicit foliage meshes
 	// fade out, providing normal mapping, crevice shadowing, and roughness tweaks.
-	if (params.weatherBiomeIndex > 0u && grassW > 0.02 && N.y > 0.50 && worldPos.y > params.waterLevel - 0.5) {
+	float localWaterLevel = params.waterLevel;
+	if (params.biomeIndex > 0u) {
+		float bWL = sampleTerrainBiome(params.biomeIndex, worldPos.xz, 0u, params.gridParams.w).a;
+		localWaterLevel = max(localWaterLevel, bWL);
+	}
+
+	if (params.weatherBiomeIndex > 0u && grassW > 0.02 && N.y > 0.50 && worldPos.y > localWaterLevel - 0.5) {
 		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, worldPos);
 		float temp = weatherSample.r;
 		float moisture = weatherSample.g;
