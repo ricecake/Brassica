@@ -27,24 +27,16 @@ namespace brassica {
 	};
 
 	struct VolumetricFroxelGenPushConstants {
-		alignas(16) glm::vec4 cameraPos{0.0f};
-		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
-		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 0.0f};
-		alignas(16) glm::vec4 camRight{1.0f, 0.0f, 0.0f, 0.0f};
-		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};
-		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 1.0f};
-		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 0.6f}; // density, height falloff, base height, anisotropy g
-		alignas(16) glm::vec4 fovAspect{1.0f, 1.777f, 0.0f, 0.0f};   // tanHalfFov, aspect
-		alignas(16) glm::uvec4 cascadeScatteringIdx{0xFFFFFFFFu};
-		alignas(16) glm::uvec4 cascadeExtinctionIdx{0xFFFFFFFFu};
-		std::uint32_t noiseTextureIdx{0xFFFFFFFFu};
-		std::uint32_t clipmapIndex{0xFFFFFFFFu};
-		std::uint32_t minMaxIndex{0xFFFFFFFFu};
-		std::uint32_t gridTextureDim{1024u};
-		std::uint32_t skyViewIndex{0xFFFFFFFFu};
-		std::uint32_t cloudShadowIndex{0xFFFFFFFFu};
-		std::uint32_t _pad[2]{0u, 0u};
+		alignas(16) glm::vec4 cameraPos{0.0f};             // xyz = cameraPos, w = time
+		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 1.0f}; // xyz = camForward, w = tanHalfFov
+		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 1.777f};      // xyz = camUp, w = aspect
+		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};     // xyz = sunDir, w = sunIntensity
+		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 0.6f}; // rgb = sunColor, w = phase anisotropy g
+		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 1024.0f}; // x = density, y = falloff, z = base, w = gridTextureDim
+		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu};      // x = scat0|1, y = scat2|ext0, z = ext1|2, w = noise|skyView
+		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu};      // x = clipmap|minMax, y = cloudShadow, z = 0, w = 0
 	};
+	static_assert(sizeof(VolumetricFroxelGenPushConstants) == 128, "VolumetricFroxelGenPushConstants must be exactly 128 bytes");
 
 	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
 	// Operates in SubPhase::LightPreparation (Phase 500).
@@ -99,13 +91,11 @@ namespace brassica {
 			time = p.time;
 
 			genPush.cameraPos = glm::vec4(cameraPos, time);
-			genPush.camForward = glm::vec4(p.cameraForward, 0.0f);
-			genPush.camUp = glm::vec4(p.cameraUp, 0.0f);
-			genPush.camRight = glm::vec4(p.cameraRight, 0.0f);
-			genPush.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
+			genPush.camForward = glm::vec4(p.cameraForward, std::tan(p.fov * 0.5f));
+			genPush.camUp = glm::vec4(p.cameraUp, p.aspectRatio);
 			genPush.sunDir = glm::vec4(p.sunDir, 1.0f);
-			genPush.sunColor = glm::vec4(p.sunRadiance, 1.0f);
-			genPush.gridTextureDim = p.terrainGridParams.w;
+			genPush.sunColor = glm::vec4(p.sunRadiance, 0.6f); // w = anisotropy g
+			genPush.fogParams = glm::vec4(0.003f, 0.003f, 0.0f, static_cast<float>(p.terrainGridParams.w));
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
@@ -219,19 +209,33 @@ namespace brassica {
 			vkCmd.dispatch(32, 32, 1);
 
 			// 2. Generate froxel cascade volumes
-			genPush.cascadeScatteringIdx.x = ctx.StorageIndex<VolumetricCascade0Scattering>();
-			genPush.cascadeScatteringIdx.y = ctx.StorageIndex<VolumetricCascade1Scattering>();
-			genPush.cascadeScatteringIdx.z = ctx.StorageIndex<VolumetricCascade2Scattering>();
+			auto pack16 = [](std::uint32_t low, std::uint32_t high) -> std::uint32_t {
+				return (low & 0xFFFFu) | ((high & 0xFFFFu) << 16u);
+			};
 
-			genPush.cascadeExtinctionIdx.x = ctx.StorageIndex<VolumetricCascade0Extinction>();
-			genPush.cascadeExtinctionIdx.y = ctx.StorageIndex<VolumetricCascade1Extinction>();
-			genPush.cascadeExtinctionIdx.z = ctx.StorageIndex<VolumetricCascade2Extinction>();
+			std::uint32_t scat0 = ctx.StorageIndex<VolumetricCascade0Scattering>();
+			std::uint32_t scat1 = ctx.StorageIndex<VolumetricCascade1Scattering>();
+			std::uint32_t scat2 = ctx.StorageIndex<VolumetricCascade2Scattering>();
 
-			genPush.noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
-			genPush.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
-			genPush.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
-			genPush.skyViewIndex = ctx.Index<SkyViewLUT>();
-			genPush.cloudShadowIndex = ctx.Index<CloudShadowMap>();
+			std::uint32_t ext0 = ctx.StorageIndex<VolumetricCascade0Extinction>();
+			std::uint32_t ext1 = ctx.StorageIndex<VolumetricCascade1Extinction>();
+			std::uint32_t ext2 = ctx.StorageIndex<VolumetricCascade2Extinction>();
+
+			std::uint32_t noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
+			std::uint32_t skyViewIndex = ctx.Index<SkyViewLUT>();
+			std::uint32_t clipmapIndex = ctx.Index<TerrainClipmapTexture>();
+			std::uint32_t minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
+			std::uint32_t cloudShadowIndex = ctx.Index<CloudShadowMap>();
+
+			genPush.indices0.x = pack16(scat0, scat1);
+			genPush.indices0.y = pack16(scat2, ext0);
+			genPush.indices0.z = pack16(ext1, ext2);
+			genPush.indices0.w = pack16(noiseTextureIdx, skyViewIndex);
+
+			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
+			genPush.indices1.y = pack16(cloudShadowIndex, 0u);
+			genPush.indices1.z = 0u;
+			genPush.indices1.w = 0u;
 
 			std::array<vk::PushConstantRange, 1> genPushRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricFroxelGenPushConstants)}
