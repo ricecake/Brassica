@@ -101,7 +101,7 @@ namespace brassica {
 			(void)ctx;
 			graph::Recipe r{
 				.domain = graph::ExecutionDomain::Compute,
-				.isActive = (frameCount++ % 3 == 0) || hasUpdate || forceRegeneration,
+				.isActive = true,
 			};
 			r.realizations.reserve(3);
 			r.realizations.push_back(
@@ -129,6 +129,11 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			bool shouldRun = (frameCount++ % 3 == 0) || hasUpdate || forceRegeneration;
+			if (!shouldRun) {
+				return;
+			}
+
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
 				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout))
