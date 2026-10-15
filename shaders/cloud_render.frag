@@ -8,6 +8,7 @@
 #include "helpers/cloud_shadow.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 #include "common.glsl"
+#include "helpers/cloud_density.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -339,8 +340,29 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 		float weatherMoisture = weatherSample.b;
 
 		if (weatherCoverage > 0.01) {
-			float baseDensity = sampleCloudCascades(p_cloud, distFromCam) * weatherCoverage;
-			float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
+			float baseDensity = 0.0;
+
+			if (distFromCam < 10000.0) {
+				// Derive LOD from ray footprint (approx 1 meter per 1km distance)
+				float pixelFootprint = distFromCam * 0.001;
+
+				// Evaluate high-frequency analytical noise near the camera
+				float analyticalDensity = EvaluateAnalyticalCloudDensity(p_cloud, pixelFootprint, 0.01*(uFrameIndex/30));
+
+				if (distFromCam > 8000.0) {
+					// Smoothly crossfade into Cascade 1 to hide the transition
+					vec3 uvw1 = vec3(fract(p_cloud.x / 80000.0), (p_cloud.y - 5000.0)/15000.0, fract(p_cloud.z / 80000.0));
+					float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
+					baseDensity = mix(analyticalDensity, d1, smoothstep(8000.0, 10000.0, distFromCam));
+				} else {
+					baseDensity = analyticalDensity;
+				}
+			} else {
+				// Rely purely on the pre-computed cascades for distance
+				baseDensity = sampleCloudCascades(p_cloud, distFromCam);
+			}
+
+			float density = 10.0 * baseDensity * weatherCoverage * (0.5 + 1.5 * weatherMoisture);
 
 			if (density > 0.0) {
 				float extinction = max(0.0, density * (0.005 + 0.02 * weatherMoisture));

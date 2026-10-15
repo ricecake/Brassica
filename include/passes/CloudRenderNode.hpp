@@ -156,6 +156,7 @@ namespace brassica {
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
 
+
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{

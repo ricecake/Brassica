@@ -2,7 +2,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 #include "bindless.glsl"
-#include "lygia/generative/psrdnoise.glsl"
+#include "helpers/cloud_density.glsl"
 #include "common.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
@@ -82,38 +82,7 @@ void main() {
 			snappedCenter.y + float(spatialOffset.y) * voxelSize
 		);
 
-		// 3. Frequency-Clamped fBm Evaluation
-		float density = 0.0;
-		float frequency = 1.0 / 32000.0; // Base shape frequency (100km)
-		float amplitude = 1.0;
-		float maxAmplitude = 0.0;
-
-		for (int i = 0; i < 3; i++) {
-			float wavelength = 1.0 / frequency;
-
-			// Nyquist clamp: Stop accumulating detail if the noise feature is smaller than 2 voxels.
-			// We fade it out smoothly to guarantee that Cascade 0 and Cascade 1 match perfectly at their boundary.
-			float fade = clamp((wavelength - 2.0 * voxelSize) / (2.0 * voxelSize), 0.0, 1.0);
-			if (fade <= 0.0) break;
-
-			float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), push.cadencePhase);
-
-			density += n * amplitude * fade;
-			maxAmplitude += amplitude * fade;
-
-			frequency *= 1.87;
-			amplitude *= 0.43; // Or use an exposed roughness parameter
-		}
-
-		density = max(0.0, density / maxAmplitude);
-
-		// // Shape the final density using global height bounds
-		// density *= smoothstep(0.1, 0.15, voxelNorm.y) * (1.0 - smoothstep(0.85, 1.0, voxelNorm.y));
-
-        float voxelNormY = float(vox.y) / 256.0;
-        density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
-
-		density *= smoothstep(0.15, 0.85, density);
+		float density = EvaluateAnalyticalCloudDensity(worldPos, 2.0 * voxelSize, push.cadencePhase);
 
         imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], localVox, vec4(density, 0.0, 0.0, 1.0));
 	}
