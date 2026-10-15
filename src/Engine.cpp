@@ -934,7 +934,6 @@ namespace brassica {
 
 		if (options.headless) {
 			builder.set_headless(true);
-			builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
 
 			uint32_t count = 0;
 			if (vk::enumerateInstanceExtensionProperties(nullptr, &count, nullptr) == vk::Result::eSuccess &&
@@ -942,9 +941,12 @@ namespace brassica {
 				std::vector<vk::ExtensionProperties> exts(count);
 				if (vk::enumerateInstanceExtensionProperties(nullptr, &count, exts.data()) == vk::Result::eSuccess) {
 					for (const auto& ext : exts) {
-						if (std::string(ext.extensionName.data()) == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
+						std::string extName(ext.extensionName.data());
+						if (extName == VK_KHR_SURFACE_EXTENSION_NAME) {
+							builder.enable_extension(VK_KHR_SURFACE_EXTENSION_NAME);
+						}
+						if (extName == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) {
 							builder.enable_extension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
-							break;
 						}
 					}
 				}
