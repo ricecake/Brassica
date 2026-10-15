@@ -73,12 +73,13 @@ void main() {
 
 		if (params.minMaxIndex > 0u) {
 			vec2 centerXZ = cameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5 + vec2(0.5)) * meshletSize;
-			vec2 minMax = sampleTerrainMinMax(
-				params.minMaxIndex,
-				centerXZ,
-				lodLevel,
-				params.gridParams.w
-			);
+			// vec2 minMax = sampleTerrainMinMax(
+			// 	params.minMaxIndex,
+			// 	centerXZ,
+			// 	lodLevel,
+			// 	params.gridParams.w
+			// );
+			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, centerXZ, lodLevel, 5, params.gridParams.w);
 			relMinB.y = minMax.x - 100.0 - uCameraPosition.y;
 			relMaxB.y = minMax.y + 100.0 - uCameraPosition.y;
 		}

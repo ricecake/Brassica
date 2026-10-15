@@ -9,18 +9,17 @@
 
 // Toroidal UV mapping helper for terrain clipmap textures
 vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
-	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
-	float texelSize = baseTexelSize * getLODScale(float(level));
-	float dim = float((textureDim > 0u) ? textureDim : 1024u);
+    float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+    float texelSize = baseTexelSize * getLODScale(float(level));
+    float dim = float((textureDim > 0u) ? textureDim : 1024u);
 
-	// Find the discrete world grid coordinate
-	vec2 worldGrid = floor(worldXZ / texelSize);
+    // Remove floor() to preserve continuous sub-texel precision
+    vec2 worldGrid = worldXZ / texelSize;
 
-	// Map directly to the wrapped texture coordinate.
-	// The dim * 0.5 shift maintains the camera-centered local window.
-	vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
+    vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
 
-	return texelCoord / dim;
+    // Add 0.5 to shift from texel corners to texel centers
+    return (texelCoord + 0.5) / dim;
 }
 
 // Sample terrain height (r) and normal (gba) from clipmap
