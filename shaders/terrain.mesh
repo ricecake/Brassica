@@ -324,13 +324,16 @@ void main() {
 			outDir = normalize(outDir);
 		}
 
-		float overlapWidth = (1.0 / 3.0) * meshletSize;
+		// float overlapWidth = (1.0 / 3.0) * meshletSize;
 
-		vec3 out3D = vec3(outDir.x, 0.0, outDir.y);
-		vec3 proj = out3D - dot(out3D, normal) * normal;
-		float lenP = length(proj);
-		vec3 tangentOut = (lenP > 0.001) ? (proj / lenP) : out3D;
-		vec3 relSkirtPos = relWorldPos + tangentOut * overlapWidth - normal * (0.05 * overlapWidth);
+		// vec3 out3D = vec3(outDir.x, 0.0, outDir.y);
+		// vec3 proj = out3D - dot(out3D, normal) * normal;
+		// float lenP = length(proj);
+		// vec3 tangentOut = (lenP > 0.001) ? (proj / lenP) : out3D;
+		// vec3 relSkirtPos = relWorldPos + tangentOut * overlapWidth - normal * (0.05 * overlapWidth);
+
+		float overlapWidth = (1.0 / 3.0) * meshletSize;
+		vec3 relSkirtPos = relWorldPos - vec3(0.0, overlapWidth, 0.0);
 
 		vec3 skirtViewPos = mat3(uViewMatrix) * relSkirtPos;
 		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);
