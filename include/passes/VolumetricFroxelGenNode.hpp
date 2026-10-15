@@ -58,7 +58,8 @@ namespace brassica {
 			graph::Read<SkyViewLUT>,
 			graph::Read<TerrainClipmapTexture>,
 			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<CloudShadowMap>>;
+			graph::Read<CloudShadowMap>,
+			graph::Read<TerrainWeatherBiomeTexture>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
@@ -232,6 +233,7 @@ namespace brassica {
 			std::uint32_t clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			std::uint32_t minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			std::uint32_t cloudShadowIndex = ctx.Index<CloudShadowMap>();
+			std::uint32_t weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
@@ -239,7 +241,7 @@ namespace brassica {
 			genPush.indices0.w = pack16(noiseTextureIdx, skyViewIndex);
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
-			genPush.indices1.y = pack16(cloudShadowIndex, 0u);
+			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
 			genPush.indices1.z = 0u;
 			genPush.indices1.w = 0u;
 
