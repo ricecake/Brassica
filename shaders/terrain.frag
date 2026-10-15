@@ -29,10 +29,7 @@ void main() {
 	vec2 worldXZ = worldPos.xz;
 	float camDist = length(inPosition);
 
-	// Progressive multi-tier distance fading:
-	// - Micro tier (0m to 120m): High-frequency fine texture & cracks
-	// - Medium tier (0m to 400m): Medium-scale rock strata, sand ripples & grass variation
-	// - Macro tier (0m to 1000m): Low-frequency geological formations & shape-providing normal perturbations
+	// Progressive multi-tier distance fading for general terrain texturing:
 	float microFade  = 1.0 - smoothstep(15.0, 120.0, camDist);
 	float mediumFade = 1.0 - smoothstep(40.0, 400.0, camDist);
 	float macroFade  = 1.0 - smoothstep(100.0, 1000.0, camDist);
@@ -52,7 +49,7 @@ void main() {
 	vec2 perturbedGradSum = vec2(0.0);
 
 	// -------------------------------------------------------------------------
-	// 1. Procedural Tree Forest Canopy Proxy & Normal Perturbation
+	// 1. Procedural Tree Forest Canopy Proxy & Feature-Size Normal Perturbation
 	// -------------------------------------------------------------------------
 	// Serves as a 3D canopy standin at distance where explicit foliage meshes
 	// fade out, providing normal mapping, crevice shadowing, and roughness tweaks.
@@ -94,26 +91,59 @@ void main() {
 		}
 
 		if (forestDensity > 0.01) {
-			// Proxy weight increases with distance (as explicit foliage mesh instances fade out beyond ~40-150m)
+			// Proxy weight increases with distance as explicit foliage mesh instances fade out beyond ~40-180m
 			float proxyDistFade = mix(0.35, 1.0, smoothstep(30.0, 180.0, camDist));
 			float proxyAmount = grassW * forestDensity * proxyDistFade;
 
-			// Multi-scale canopy noise evaluating tree crowns, branch clusters, and foliage micro-texture
-			vec2 fGrad1, fGrad2, fGrad3;
-			float fNoise1 = psrdnoise(worldXZ * 0.28, vec2(0.0), 0.0, fGrad1); // Crown scale (~3.5m)
-			float fNoise2 = psrdnoise(worldXZ * 0.85, vec2(0.0), 0.0, fGrad2); // Branch cluster scale (~1.2m)
-			float fNoise3 = psrdnoise(worldXZ * 2.20, vec2(0.0), 0.0, fGrad3); // Foliage micro-bump scale (~0.45m)
+			// Anti-shimmer distance fading for noise octaves:
+			// Higher-frequency feature octaves fade out smoothly before reaching subpixel sampling
+			// frequencies to eliminate shimmering and temporal aliasing artifacts at long range.
+			float microCanopyFade  = 1.0 - smoothstep(30.0, 100.0, camDist);   // Fine leaf/needle tufts (~0.5m - 0.8m)
+			float mediumCanopyFade = 1.0 - smoothstep(80.0, 300.0, camDist);   // Branch clusters (~2.0m - 3.5m)
+			float macroCanopyFade  = 1.0 - smoothstep(200.0, 1200.0, camDist); // Individual tree crowns (~6.0m - 10.0m)
 
 			vec2 forestGrad = vec2(0.0);
+			float fNoise1 = 0.0;
+			float fNoise2 = 0.0;
 
-			if (treeType == 0u) { // Pine: Conical peaked crowns with vertical branch texture
-				forestGrad = (fGrad1 * 1.3 * 0.50 + fGrad2 * 0.35 + fGrad3 * 0.15) * 1.2;
-			} else if (treeType == 2u) { // Tropical/Palm: Broad radial frond canopy domes
-				forestGrad = (fGrad1 * 0.45 + fGrad2 * 0.35 + fGrad3 * 0.20) * 1.1;
-			} else if (treeType == 3u) { // Cactus/Arid: Scattered columnar bumps
-				forestGrad = (fGrad2 * 0.60 + fGrad3 * 0.40) * 0.7;
+			if (treeType == 0u) { // Pine / Evergreen: Conical peaked crowns with vertical branch texture
+				// Frequencies tied to physical sizes: crown ~6m (0.166), branch ~2m (0.50), needle tuft ~0.5m (2.0)
+				vec2 g1, g2, g3;
+				fNoise1 = psrdnoise(worldXZ * 0.166, vec2(0.0), 0.0, g1);
+				fNoise2 = psrdnoise(worldXZ * 0.500, vec2(0.0), 0.0, g2);
+				float fn3 = psrdnoise(worldXZ * 2.000, vec2(0.0), 0.0, g3);
+
+				forestGrad = g1 * (1.3 * 0.50 * macroCanopyFade) +
+				             g2 * (0.35 * mediumCanopyFade) +
+				             g3 * (0.15 * microCanopyFade);
+			} else if (treeType == 2u) { // Tropical / Palm: Broad umbrella domes
+				// Frequencies tied to physical sizes: dome ~10m (0.10), fronds ~3m (0.33), frond blade ~0.8m (1.25)
+				vec2 g1, g2, g3;
+				fNoise1 = psrdnoise(worldXZ * 0.100, vec2(0.0), 0.0, g1);
+				fNoise2 = psrdnoise(worldXZ * 0.333, vec2(0.0), 0.0, g2);
+				float fn3 = psrdnoise(worldXZ * 1.250, vec2(0.0), 0.0, g3);
+
+				forestGrad = g1 * (0.50 * macroCanopyFade) +
+				             g2 * (0.35 * mediumCanopyFade) +
+				             g3 * (0.20 * microCanopyFade);
+			} else if (treeType == 3u) { // Cactus / Arid Scrub: Scattered columnar bumps
+				// Frequencies tied to physical sizes: shrub ~3m (0.33), column ~1m (1.0)
+				vec2 g2, g3;
+				fNoise2 = psrdnoise(worldXZ * 0.333, vec2(0.0), 0.0, g2);
+				float fn3 = psrdnoise(worldXZ * 1.000, vec2(0.0), 0.0, g3);
+
+				forestGrad = g2 * (0.60 * mediumCanopyFade) +
+				             g3 * (0.40 * microCanopyFade);
 			} else { // Deciduous: Rounded canopy clusters
-				forestGrad = (fGrad1 * 0.45 + fGrad2 * 0.35 + fGrad3 * 0.20) * 1.0;
+				// Frequencies tied to physical sizes: crown ~8m (0.125), cluster ~2.5m (0.40), leaf tuft ~0.6m (1.66)
+				vec2 g1, g2, g3;
+				fNoise1 = psrdnoise(worldXZ * 0.125, vec2(0.0), 0.0, g1);
+				fNoise2 = psrdnoise(worldXZ * 0.400, vec2(0.0), 0.0, g2);
+				float fn3 = psrdnoise(worldXZ * 1.666, vec2(0.0), 0.0, g3);
+
+				forestGrad = g1 * (0.45 * macroCanopyFade) +
+				             g2 * (0.35 * mediumCanopyFade) +
+				             g3 * (0.20 * microCanopyFade);
 			}
 
 			perturbedGradSum += forestGrad * proxyAmount;
