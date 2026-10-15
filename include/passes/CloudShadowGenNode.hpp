@@ -22,11 +22,11 @@ namespace brassica {
 	struct CloudShadowGenPushConstants {
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};
 		alignas(16) glm::uvec4 cascadeSampledIdx{0};
+		alignas(16) glm::vec4 cameraPos{0.0f};
+		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 0.6f};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t shadowMapStorageIdx{0};
-		alignas(16) glm::vec4 cameraPos{0.0f};
-		float shadowMapExtent{160000.0f};
-		float _pad[3];
+		std::uint32_t _pad[2]{0};
 	};
 
 	// Evaluates top-down atmospheric and cloud extinction across 5 altitude layers:
@@ -102,10 +102,10 @@ namespace brassica {
 			push.cascadeSampledIdx.x = ctx.Index<CloudVolumeCascade0>();
 			push.cascadeSampledIdx.y = ctx.Index<CloudVolumeCascade1>();
 			push.cascadeSampledIdx.z = ctx.Index<CloudVolumeCascade2>();
+			push.cascadeSampledIdx.w = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.shadowMapStorageIdx = ctx.StorageIndex<CloudShadowMap>();
-			push.cameraPos = glm::vec4(cameraPos, 1.0f);
-			push.shadowMapExtent = 160000.0f;
+			push.cameraPos = glm::vec4(cameraPos, 320000.0f);
 
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudShadowGenPushConstants)}

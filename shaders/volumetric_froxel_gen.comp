@@ -5,6 +5,7 @@
 #include "common.glsl"
 #include "lighting.glsl"
 #include "helpers/lighting.glsl"
+#include "helpers/cloud_shadow.glsl"
 #include "terrain.glsl"
 #include "atmosphere/common.glsl"
 
@@ -26,6 +27,7 @@ layout(push_constant) uniform VolumetricFroxelGenPushConstants {
 	uint  minMaxIndex;          // bindless index for TerrainMinMaxTexture
 	uint  gridTextureDim;       // terrain map dimension (1024)
 	uint  skyViewIndex;         // bindless index for SkyViewLUT
+	uint  cloudShadowIndex;     // bindless index for CloudShadowMap
 } push;
 
 float dualHenyeyGreenstein(float cosTheta, float g) {
@@ -124,8 +126,12 @@ void main() {
 			float extinctionCoeff = density * 1.0;
 			float emissivity = 0.01 * density;
 
-			// Volumetric shadowing for god rays
+			// Volumetric shadowing for god rays and cloud shadows
 			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz);
+			if (push.cloudShadowIndex > 0u && push.cloudShadowIndex != 0xFFFFFFFFu && push.sunDir.y > 0.001) {
+				vec4 cloudShadowData = sampleCloudShadow(push.cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
+				shadowTerm *= cloudShadowData.a;
+			}
 
 			// Direct sun light + phase function along viewRayDir
 			float cosTheta = dot(viewRayDir, push.sunDir.xyz);

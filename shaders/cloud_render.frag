@@ -5,6 +5,7 @@
 #include "lighting.glsl"
 #include "atmosphere/common.glsl"
 #include "helpers/octahedral.glsl"
+#include "helpers/cloud_shadow.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 #include "common.glsl"
 
@@ -26,39 +27,7 @@ layout(push_constant) uniform CloudRenderPushConstants {
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
-	if (push.cloudShadowIndex == 0u) return vec4(0.0, 0.0, 0.0, 1.0);
-	float sunLen = length(push.sunDir.xyz);
-	if (sunLen < 0.001) return vec4(0.0, 0.0, 0.0, 1.0);
-	vec3 sunDir = push.sunDir.xyz / sunLen;
-	if (sunDir.y <= 0.001) return vec4(0.0, 0.0, 0.0, 1.0);
-	vec2 projXZ = p.xz - (p.y / sunDir.y) * sunDir.xz;
-	vec2 shadowUV = (projXZ - uCameraPosition.xz) / 160000.0 + 0.5;
-	if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0) {
-		return vec4(0.0, 0.0, 0.0, 1.0);
-	}
-	float y = p.y;
-	vec4 s0, s1;
-	float mixVal = 0.0;
-	if (y >= 20000.0) {
-		return SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 0.0));
-	} else if (y >= 12500.0) {
-		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 0.0));
-		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 1.0));
-		mixVal = (20000.0 - y) / 7500.0;
-	} else if (y >= 5000.0) {
-		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 1.0));
-		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 2.0));
-		mixVal = (12500.0 - y) / 7500.0;
-	} else if (y >= 2500.0) {
-		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 2.0));
-		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 3.0));
-		mixVal = (5000.0 - y) / 2500.0;
-	} else {
-		s0 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 3.0));
-		s1 = SAMPLE_ARRAY_CLAMP(push.cloudShadowIndex, vec3(shadowUV, 4.0));
-		mixVal = (2500.0 - clamp(y, 0.0, 2500.0)) / 2500.0;
-	}
-	return mix(s0, s1, clamp(mixVal, 0.0, 1.0));
+	return sampleCloudShadow(push.cloudShadowIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
 }
 
 vec3 getTransmittance(float r, float mu) {
