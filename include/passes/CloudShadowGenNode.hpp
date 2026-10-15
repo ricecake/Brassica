@@ -78,12 +78,40 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			(void)ctx;
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(1);
+			r.realizations.reserve(5);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudShadowMap>(),
 					.access = graph::AccessKind::Write,
 					.desc = CloudShadowMapDesc(1024, 1024),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<CloudVolumeCascade0>(),
+					.access = graph::AccessKind::Read,
+					.desc = CloudVolumeDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<CloudVolumeCascade1>(),
+					.access = graph::AccessKind::Read,
+					.desc = CloudVolumeDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<CloudVolumeCascade2>(),
+					.access = graph::AccessKind::Read,
+					.desc = CloudVolumeDesc(),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
+					.access = graph::AccessKind::Read,
+					.desc = graph::ComputeStorageImageDesc(2048, 2048, vk::Format::eR16G16B16A16Sfloat),
 				}
 			);
 			return r;
