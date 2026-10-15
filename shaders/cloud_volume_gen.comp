@@ -107,13 +107,13 @@ void main() {
 
 		density = max(0.0, density / maxAmplitude);
 
-		// Shape the final density using global height bounds
-		density *= smoothstep(0.1, 0.15, voxelNorm.y) * (1.0 - smoothstep(0.85, 1.0, voxelNorm.y));
+		// // Shape the final density using global height bounds
+		// density *= smoothstep(0.1, 0.15, voxelNorm.y) * (1.0 - smoothstep(0.85, 1.0, voxelNorm.y));
 
         float voxelNormY = float(vox.y) / 256.0;
         density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
 
-		density *= smoothstep(0.15, 1.0, density);
+		density *= smoothstep(0.15, 0.85, density);
 
         imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], localVox, vec4(density, 0.0, 0.0, 1.0));
 	}
