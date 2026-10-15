@@ -4,6 +4,7 @@
 #include "common.glsl"
 #include "terrain.glsl"
 #include "clustered_lighting.glsl"
+#include "helpers/cloud_shadow.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -183,12 +184,8 @@ void main() {
 			}
 
 			if (params.cloudShadowIndex > 0u && lightDir.y > 0.001) {
-				vec2 projXZ = pos.xz - (pos.y / lightDir.y) * lightDir.xz;
-				vec2 shadowUV = (projXZ - uCameraPosition.xz) / 160000.0 + 0.5;
-				if (shadowUV.x >= 0.0 && shadowUV.x <= 1.0 && shadowUV.y >= 0.0 && shadowUV.y <= 1.0) {
-					vec4 cloudShadowData = SAMPLE_ARRAY_CLAMP(params.cloudShadowIndex, vec3(shadowUV, 4.0));
-					shadowMask *= cloudShadowData.a;
-				}
+				vec4 cloudShadowData = sampleCloudShadow(params.cloudShadowIndex, pos, lightDir, uCameraPosition.xyz, 320000.0);
+				shadowMask *= cloudShadowData.a;
 			}
 
 			float shadowStrength = 0.5*clamp(uLights[0].intensity, 0.0, 1.0);
