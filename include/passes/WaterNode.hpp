@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -17,7 +18,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "VulkanCompat.hpp"
 
 namespace brassica {
@@ -25,7 +25,7 @@ namespace brassica {
 	class ShaderWatcher;
 
 	struct WaterPushConstants {
-		glm::uvec4    gridParams{
+		glm::uvec4 gridParams{
 			constants::Class::Terrain::DefaultMaxLODs,
 			constants::Class::Terrain::MeshletsPerRow,
 			constants::Class::Terrain::TotalMeshlets,

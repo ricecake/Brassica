@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -15,10 +16,8 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
-
 
 	struct alignas(16) CloudRenderPushConstants {
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};

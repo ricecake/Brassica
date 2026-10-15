@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "spdlog/spdlog.h"
+
 #include "audio/ProceduralAudioSource.hpp"
 #include "audio/RainAudioEffect.hpp"
 #include "audio/RustleAudioEffect.hpp"
@@ -141,13 +142,7 @@ namespace brassica {
 
 			// Update Listener
 			auto vel = state.listenerSpeed * state.listenerFront;
-			ma_engine_listener_set_position(
-				&engine,
-				0,
-				state.listenerPos.x,
-				state.listenerPos.y,
-				state.listenerPos.z
-			);
+			ma_engine_listener_set_position(&engine, 0, state.listenerPos.x, state.listenerPos.y, state.listenerPos.z);
 			ma_engine_listener_set_direction(
 				&engine,
 				0,
@@ -193,15 +188,14 @@ namespace brassica {
 			// Update procedural sources
 			{
 				std::lock_guard<std::mutex> lock(m_soundsMutex);
-				proceduralSources.remove_if(
-					[deltaTime, &state](const std::weak_ptr<ProceduralAudioSource>& weakSource) {
-						if (auto source = weakSource.lock()) {
-							source->OnUpdate(deltaTime, state);
-							return false;
-						}
-						return true;
+				proceduralSources.remove_if([deltaTime,
+				                             &state](const std::weak_ptr<ProceduralAudioSource>& weakSource) {
+					if (auto source = weakSource.lock()) {
+						source->OnUpdate(deltaTime, state);
+						return false;
 					}
-				);
+					return true;
+				});
 
 				// Cleanup finished sounds
 				sounds.remove_if([](const std::weak_ptr<Sound>& weakSound) {
@@ -214,8 +208,7 @@ namespace brassica {
 		}
 	};
 
-	AudioManager::AudioManager()
-		: m_pimpl(std::make_unique<AudioManagerImpl>()) {}
+	AudioManager::AudioManager(): m_pimpl(std::make_unique<AudioManagerImpl>()) {}
 
 	AudioManager::~AudioManager() {
 		Shutdown();
@@ -289,12 +282,7 @@ namespace brassica {
 		);
 	}
 
-	void AudioManager::PlayAmbientSound(
-		const std::string& name,
-		const std::string& filepath,
-		bool               loop,
-		float              volume
-	) {
+	void AudioManager::PlayAmbientSound(const std::string& name, const std::string& filepath, bool loop, float volume) {
 		if (!m_pimpl->initialized)
 			return;
 		std::lock_guard<std::mutex> lock(m_pimpl->m_soundsMutex);
@@ -325,12 +313,8 @@ namespace brassica {
 		}
 	}
 
-	std::shared_ptr<Sound> AudioManager::CreateSound(
-		const std::string& filepath,
-		const glm::vec3&   position,
-		float              volume,
-		bool               loop
-	) {
+	std::shared_ptr<Sound>
+	AudioManager::CreateSound(const std::string& filepath, const glm::vec3& position, float volume, bool loop) {
 		if (!m_pimpl->initialized)
 			return nullptr;
 

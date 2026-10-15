@@ -9,11 +9,7 @@
 
 namespace brassica {
 
-	enum class CameraMode {
-		Instant,
-		Accelerated,
-		FirstPerson
-	};
+	enum class CameraMode { Instant, Accelerated, FirstPerson };
 
 	struct CameraData {
 		// Position and Orientation
@@ -26,15 +22,15 @@ namespace brassica {
 		float roll{0.0f};         // radians
 
 		// FOV data and frustum settings
-		float fov{1.2f};        // current vertical FOV in radians (~68.75 deg)
-		float baseFov{1.2f};    // base vertical FOV in radians (~68.75 deg)
+		float fov{1.2f};          // current vertical FOV in radians (~68.75 deg)
+		float baseFov{1.2f};      // base vertical FOV in radians (~68.75 deg)
 		float maxFovBoost{0.25f}; // extra vertical FOV at top speed (~14.3 deg)
 		float nearPlane{0.1f};
 		float farPlane{32768.0f};
 		float aspectRatio{16.0f / 9.0f};
 
 		// Speed and speed limits
-		float speed{10.0f};        // configured maximum speed
+		float speed{10.0f};       // configured maximum speed
 		float currentSpeed{0.0f}; // actual current speed in m/s
 		float defaultSpeed{10.0f};
 		float minSpeed{1.0f};

@@ -97,7 +97,11 @@ namespace brassica {
 			ballData.spawnTime = currentTime;
 			ballData.lifespan = 4.0f + (m_balls.size() % 4) * 1.5f;
 			ballData.basePos = transform.position;
-			ballData.velocity = glm::vec3((m_balls.size() % 2 == 0 ? 1.0f : -1.0f) * 1.5f, 0.0f, (m_balls.size() % 3 - 1) * 1.0f);
+			ballData.velocity = glm::vec3(
+				(m_balls.size() % 2 == 0 ? 1.0f : -1.0f) * 1.5f,
+				0.0f,
+				(m_balls.size() % 3 - 1) * 1.0f
+			);
 
 			m_balls.push_back(ballData);
 		}

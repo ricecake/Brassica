@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-#include "VulkanCompat.hpp"
+#include "spdlog/spdlog.h"
 #include <glm/glm.hpp>
 
 #include "constants.h"
@@ -19,12 +19,12 @@
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
+#include "VulkanCompat.hpp"
 
 namespace brassica {
 
 	struct FoliagePushConstants {
-		glm::uvec4 gridParams{8u, 16u, 2048u, 1024u}; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
+		glm::uvec4    gridParams{8u, 16u, 2048u, 1024u}; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		// Reserved: TerrainBiomeTexture's per-location value is hardcoded to 0 in

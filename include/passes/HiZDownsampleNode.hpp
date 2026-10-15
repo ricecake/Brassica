@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -20,18 +21,17 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "vk_mem_alloc.h"
 
 namespace brassica {
 
 	struct HiZDownsamplePushConstants {
-		std::uint32_t srcIndex{0};       // bindless SAMPLED index for GBufferDepth (mip 0 read)
-		std::uint32_t mips{10};          // SPD output mips
-		std::uint32_t numWorkGroups{0};  // workgroups dispatched
-		std::uint32_t _pad0{0};
-		glm::uvec2    workGroupOffset{0, 0};        // (0,0)
-		std::array<std::uint32_t, 12> mipIndices{}; // bindless STORAGE indices for mips 1..12
+		std::uint32_t                 srcIndex{0};      // bindless SAMPLED index for GBufferDepth (mip 0 read)
+		std::uint32_t                 mips{10};         // SPD output mips
+		std::uint32_t                 numWorkGroups{0}; // workgroups dispatched
+		std::uint32_t                 _pad0{0};
+		glm::uvec2                    workGroupOffset{0, 0}; // (0,0)
+		std::array<std::uint32_t, 12> mipIndices{};          // bindless STORAGE indices for mips 1..12
 	};
 
 	static_assert(offsetof(HiZDownsamplePushConstants, srcIndex) == 0);
@@ -63,7 +63,7 @@ namespace brassica {
 			layoutInfo.setBindings(binding);
 			result.layout = device.createDescriptorSetLayout(layoutInfo);
 
-			vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageBuffer, 1};
+			vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eStorageBuffer, 1};
 			vk::DescriptorPoolCreateInfo poolInfo{};
 			poolInfo.setPoolSizes(poolSize).setMaxSets(1);
 			result.pool = device.createDescriptorPool(poolInfo);
@@ -136,14 +136,20 @@ namespace brassica {
 
 			VmaAllocationCreateInfo allocCreateInfo{};
 			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-			allocCreateInfo.flags =
-				VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+				VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 			VkBuffer          rawBuffer{};
 			VmaAllocation     rawAllocation{};
 			VmaAllocationInfo allocResultInfo{};
-			if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &rawAllocation, &allocResultInfo) !=
-			    VK_SUCCESS) {
+			if (vmaCreateBuffer(
+					allocator,
+					&bufferInfo,
+					&allocCreateInfo,
+					&rawBuffer,
+					&rawAllocation,
+					&allocResultInfo
+				) != VK_SUCCESS) {
 				spdlog::critical("HiZDownsampleNode: failed to allocate the atomic-counter buffer.");
 				throw std::runtime_error("HiZDownsampleNode: failed to allocate the atomic-counter buffer.");
 			}

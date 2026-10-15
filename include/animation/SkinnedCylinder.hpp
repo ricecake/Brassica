@@ -1,11 +1,7 @@
 #pragma once
 
-#include <memory>
-#include <vector>
-
 #include <geometrycentral/surface/surface_mesh.h>
 #include <geometrycentral/surface/vertex_position_geometry.h>
-
 #include <ozz/animation/offline/raw_skeleton.h>
 #include <ozz/animation/offline/skeleton_builder.h>
 #include <ozz/animation/runtime/local_to_model_job.h>
@@ -14,6 +10,9 @@
 #include <ozz/base/maths/vec_float.h>
 #include <ozz/base/memory/unique_ptr.h>
 #include <ozz/geometry/runtime/skinning_job.h>
+
+#include <memory>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -28,7 +27,8 @@ namespace brassica {
 			std::size_t heightSegments{8};
 		};
 
-		SkinnedCylinder() : SkinnedCylinder(Parameters{}) {}
+		SkinnedCylinder(): SkinnedCylinder(Parameters{}) {}
+
 		explicit SkinnedCylinder(const Parameters& params);
 		~SkinnedCylinder();
 
@@ -36,15 +36,20 @@ namespace brassica {
 		void Update(float timeSeconds);
 
 		// Accessors
-		[[nodiscard]] const std::vector<glm::vec3>&     GetPositions() const { return m_skinnedPositions; }
-		[[nodiscard]] const std::vector<glm::vec3>&     GetNormals() const { return m_skinnedNormals; }
+		[[nodiscard]] const std::vector<glm::vec3>& GetPositions() const { return m_skinnedPositions; }
+
+		[[nodiscard]] const std::vector<glm::vec3>& GetNormals() const { return m_skinnedNormals; }
+
 		[[nodiscard]] const std::vector<std::uint32_t>& GetIndices() const { return m_indices; }
 
 		[[nodiscard]] geometrycentral::surface::SurfaceMesh* GetSurfaceMesh() const { return m_mesh.get(); }
+
 		[[nodiscard]] geometrycentral::surface::VertexPositionGeometry* GetGeometry() const { return m_geometry.get(); }
+
 		[[nodiscard]] const ozz::animation::Skeleton* GetSkeleton() const { return m_skeleton.get(); }
 
 		[[nodiscard]] std::size_t GetVertexCount() const { return m_skinnedPositions.size(); }
+
 		[[nodiscard]] std::size_t GetTriangleCount() const { return m_indices.size() / 3; }
 
 	private:

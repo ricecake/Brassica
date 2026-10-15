@@ -62,7 +62,12 @@ namespace brassica::ui {
 							}
 
 							if (layer.useAutoExposure != 0) {
-								ImGui::SliderFloat("Screen Brightness (Key Value)", &layer.targetLuminance, 0.01f, 1.0f);
+								ImGui::SliderFloat(
+									"Screen Brightness (Key Value)",
+									&layer.targetLuminance,
+									0.01f,
+									1.0f
+								);
 								ImGui::SliderFloat("Speed Up", &layer.speedUp, 0.1f, 10.0f);
 								ImGui::SliderFloat("Speed Down", &layer.speedDown, 0.1f, 10.0f);
 								ImGui::SliderFloat("Min EV100", &m_minEV100[layerIdx], -20.0f, 20.0f, "%.1f");
@@ -71,8 +76,10 @@ namespace brassica::ui {
 								// targetLuminance regardless of which slider last changed (matches
 								// the boidish source's BloomEffect::Apply, which recalculates this
 								// every frame rather than only on edit).
-								layer.minExposure = layer.targetLuminance / (1.2f * std::pow(2.0f, m_maxEV100[layerIdx]));
-								layer.maxExposure = layer.targetLuminance / (1.2f * std::pow(2.0f, m_minEV100[layerIdx]));
+								layer.minExposure = layer.targetLuminance /
+									(1.2f * std::pow(2.0f, m_maxEV100[layerIdx]));
+								layer.maxExposure = layer.targetLuminance /
+									(1.2f * std::pow(2.0f, m_minEV100[layerIdx]));
 								ImGui::SliderFloat("Center Weight", &layer.centerWeightTightness, 0.0f, 10.0f);
 								ImGui::SliderFloat2("Focus Point", &layer.focusPoint.x, 0.0f, 1.0f);
 								ImGui::SliderFloat("Histogram Low Cutoff", &layer.histogramLowCutoff, 0.0f, 1.0f);
@@ -81,7 +88,11 @@ namespace brassica::ui {
 								ImGui::Separator();
 								ImGui::Text("Statistics (Live Data):");
 								const LayerDataHost& liveLayer = s_exposureReadback.layers[layerIdx];
-								ImGui::Text("Adapted Luma: %.4f | Avg: %.4f", liveLayer.adaptedLuminance, liveLayer.avgLuma);
+								ImGui::Text(
+									"Adapted Luma: %.4f | Avg: %.4f",
+									liveLayer.adaptedLuminance,
+									liveLayer.avgLuma
+								);
 								ImGui::Text(
 									"Min Luma: %.4f | Max: %.4f | StdDev: %.4f",
 									liveLayer.minLuma,
@@ -91,7 +102,7 @@ namespace brassica::ui {
 
 								if (ImGui::TreeNode("Luminance Histogram (256 bins)")) {
 									std::vector<float> histValues(256);
-									float               maxHistVal = 1.0f;
+									float              maxHistVal = 1.0f;
 									for (int i = 0; i < 256; i++) {
 										histValues[i] = static_cast<float>(liveLayer.histogram[i]);
 										if (histValues[i] > maxHistVal) {
@@ -122,8 +133,17 @@ namespace brassica::ui {
 								layer.toneMappingEnabled = tmEnabled ? 1 : 0;
 							}
 							if (layer.toneMappingEnabled != 0) {
-								const char* modes[] =
-									{"ACES", "Filmic", "Lottes", "Reinhard", "Reinhard II", "Uchimura", "Uncharted 2", "Unreal 3", "Debug"};
+								const char* modes[] = {
+									"ACES",
+									"Filmic",
+									"Lottes",
+									"Reinhard",
+									"Reinhard II",
+									"Uchimura",
+									"Uncharted 2",
+									"Unreal 3",
+									"Debug"
+								};
 								ImGui::Combo("Mode", &layer.toneMapMode, modes, IM_ARRAYSIZE(modes));
 
 								if (layer.toneMapMode == 5) { // Uchimura
@@ -181,9 +201,24 @@ namespace brassica::ui {
 											if (ImGui::Checkbox("Enabled##CdlLayer", &entryEnabled)) {
 												entry.enabled = entryEnabled ? 1 : 0;
 											}
-											ImGui::SliderFloat("Target Depth##CdlLayer", &entry.targetDepth, 0.1f, 1000.0f);
-											ImGui::SliderFloat("Falloff Width##CdlLayer", &entry.falloffWidth, 0.1f, 500.0f);
-											ImGui::SliderFloat("Falloff Rate##CdlLayer", &entry.falloffRate, 0.1f, 10.0f);
+											ImGui::SliderFloat(
+												"Target Depth##CdlLayer",
+												&entry.targetDepth,
+												0.1f,
+												1000.0f
+											);
+											ImGui::SliderFloat(
+												"Falloff Width##CdlLayer",
+												&entry.falloffWidth,
+												0.1f,
+												500.0f
+											);
+											ImGui::SliderFloat(
+												"Falloff Rate##CdlLayer",
+												&entry.falloffRate,
+												0.1f,
+												10.0f
+											);
 											ImGui::InputInt("Priority##CdlLayer", &entry.priority);
 
 											DrawCdlFields(entry);
@@ -217,8 +252,18 @@ namespace brassica::ui {
 										ImGui::SliderFloat("Well Exposed Sigma", &layer.ltmSigma, 0.01f, 1.0f);
 										ImGui::SliderFloat("Weight Contrast", &layer.ltmWeightContrast, 0.0f, 1.0f);
 										ImGui::SliderFloat("Weight Saturation", &layer.ltmWeightSaturation, 0.0f, 1.0f);
-										ImGui::SliderFloat("Weight Exposedness", &layer.ltmWeightExposedness, 0.0f, 1.0f);
-										ImGui::SliderFloat("Boost Local Contrast", &layer.ltmBoostLocalContrast, 0.0f, 2.0f);
+										ImGui::SliderFloat(
+											"Weight Exposedness",
+											&layer.ltmWeightExposedness,
+											0.0f,
+											1.0f
+										);
+										ImGui::SliderFloat(
+											"Boost Local Contrast",
+											&layer.ltmBoostLocalContrast,
+											0.0f,
+											2.0f
+										);
 									}
 								}
 								ImGui::TreePop();

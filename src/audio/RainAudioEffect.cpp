@@ -5,8 +5,7 @@
 
 namespace brassica {
 
-	RainAudioEffect::RainAudioEffect()
-		: ProceduralAudioSource(2, 48000) {}
+	RainAudioEffect::RainAudioEffect(): ProceduralAudioSource(2, 48000) {}
 
 	float RainAudioEffect::NextWhiteNoise() {
 		m_xorshiftState ^= m_xorshiftState << 13;

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "miniaudio.h"
 #include "audio/AudioTypes.hpp"
+#include "miniaudio.h"
 
 namespace brassica {
 
@@ -15,6 +15,7 @@ namespace brassica {
 		ProceduralAudioSource& operator=(const ProceduralAudioSource&) = delete;
 
 		virtual void OnRead(float* pOutput, ma_uint64 frameCount) = 0;
+
 		virtual void OnUpdate(float deltaTime, const AudioState& state) {}
 
 		ma_data_source* GetDataSource() { return &m_base.ds; }

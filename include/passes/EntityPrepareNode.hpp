@@ -4,8 +4,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "VulkanCompat.hpp"
-
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
@@ -15,15 +13,13 @@
 #include "render/NodeLifecycle.hpp"
 #include "types/EntityRenderComponent.hpp"
 #include "types/TransformComponent.hpp"
+#include "VulkanCompat.hpp"
 #include <entt/entity/registry.hpp>
 
 namespace brassica {
 
-	struct EntityPrepareNode : render::NodeRegistrar<EntityPrepareNode> {
-		using Resources = graph::Declares<
-			graph::Create<EntityInstanceBuffer>,
-			graph::Create<EntityIndirectBuffer>
-		>;
+	struct EntityPrepareNode: render::NodeRegistrar<EntityPrepareNode> {
+		using Resources = graph::Declares<graph::Create<EntityInstanceBuffer>, graph::Create<EntityIndirectBuffer>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
@@ -34,18 +30,18 @@ namespace brassica {
 		entt::registry*                 m_registry{nullptr};
 
 		void Init(const render::NodeServices& /*services*/) {}
+
 		void Destroy(vk::Device /*device*/) {}
 
-		void SetFrameParams(const render::NodeFrameParams& params) {
-			m_registry = params.registry;
-		}
+		void SetFrameParams(const render::NodeFrameParams& params) { m_registry = params.registry; }
 
 		graph::Recipe Setup(const graph::FrameContext& /*ctx*/) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 
 			// Capacity for up to 1024 entity instances
 			std::size_t instBufferSize = sizeof(EntityInstanceData) * 1024;
-			if (instBufferSize == 0) instBufferSize = 1024;
+			if (instBufferSize == 0)
+				instBufferSize = 1024;
 
 			graph::ResourceDesc instDesc = graph::MappedStorageBufferDesc(instBufferSize);
 			instDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
@@ -92,9 +88,7 @@ namespace brassica {
 				.groupCountY = 1,
 				.groupCountZ = 1
 			};
-			ctx.WriteSpan<EntityIndirectBuffer>(
-				std::span<const MeshTasksIndirectCommand>(&m_indirectCommand, 1)
-			);
+			ctx.WriteSpan<EntityIndirectBuffer>(std::span<const MeshTasksIndirectCommand>(&m_indirectCommand, 1));
 
 			// 4. Query Buffer Device Address for EntityInstanceBuffer
 			m_bufferDeviceAddress = 0;
@@ -105,7 +99,8 @@ namespace brassica {
 						if (vkBuf) {
 							vk::BufferDeviceAddressInfo bdaInfo(vkBuf);
 							m_bufferDeviceAddress = physReg->GetDevice().getBufferAddress(bdaInfo);
-							std::uint64_t sliceOffset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
+							std::uint64_t sliceOffset = physBuf->SliceStride() *
+								(ctx.frameIndex % physBuf->RingSlots());
 							m_bufferDeviceAddress += sliceOffset;
 						}
 					}
@@ -118,15 +113,16 @@ namespace brassica {
 			auto view = registry.view<TransformComponent, EntityRenderComponent>();
 
 			struct Entry {
-				entt::entity entity;
+				entt::entity       entity;
 				EntityInstanceData inst;
 			};
+
 			std::vector<Entry> entries;
 			entries.reserve(view.size_hint());
 
 			for (auto entity : view) {
 				const auto& transform = view.get<TransformComponent>(entity);
-				auto& renderComp = view.get<EntityRenderComponent>(entity);
+				auto&       renderComp = view.get<EntityRenderComponent>(entity);
 
 				EntityInstanceData inst{};
 				inst.positionAndScale = glm::vec4(transform.position, transform.scale.x);
@@ -157,7 +153,10 @@ namespace brassica {
 		}
 
 		[[nodiscard]] std::uint64_t GetBufferDeviceAddress() const { return m_bufferDeviceAddress; }
-		[[nodiscard]] std::uint32_t GetTotalInstances() const { return static_cast<std::uint32_t>(m_batchedInstances.size()); }
+
+		[[nodiscard]] std::uint32_t GetTotalInstances() const {
+			return static_cast<std::uint32_t>(m_batchedInstances.size());
+		}
 	};
 
 	BRASSICA_REGISTER_NODE(EntityPrepareNode);

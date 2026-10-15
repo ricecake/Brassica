@@ -5,8 +5,7 @@
 
 namespace brassica {
 
-	SpeedWooshAudioEffect::SpeedWooshAudioEffect()
-		: ProceduralAudioSource(2, 48000) {}
+	SpeedWooshAudioEffect::SpeedWooshAudioEffect(): ProceduralAudioSource(2, 48000) {}
 
 	float SpeedWooshAudioEffect::NextWhiteNoise() {
 		m_xorshiftState ^= m_xorshiftState << 13;

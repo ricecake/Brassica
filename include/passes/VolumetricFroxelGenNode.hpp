@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -16,7 +17,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -27,16 +27,22 @@ namespace brassica {
 	};
 
 	struct VolumetricFroxelGenPushConstants {
-		alignas(16) glm::vec4 cameraPos{0.0f};             // xyz = cameraPos, w = time
+		alignas(16) glm::vec4 cameraPos{0.0f};                     // xyz = cameraPos, w = time
 		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 1.0f}; // xyz = camForward, w = tanHalfFov
-		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 1.777f};      // xyz = camUp, w = aspect
-		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};     // xyz = sunDir, w = sunIntensity
-		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 0.6f}; // rgb = sunColor, w = phase anisotropy g
-		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 1024.0f}; // x = density, y = falloff, z = base, w = gridTextureDim
-		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu};      // x = scat0|1, y = scat2|ext0, z = ext1|2, w = noise|skyView
-		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu};      // x = clipmap|minMax, y = cloudShadow, z = 0, w = 0
+		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 1.777f};     // xyz = camUp, w = aspect
+		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};      // xyz = sunDir, w = sunIntensity
+		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 0.6f};  // rgb = sunColor, w = phase anisotropy g
+		alignas(
+			16
+		) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 1024.0f}; // x = density, y = falloff, z = base, w = gridTextureDim
+		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu}; // x = scat0|1, y = scat2|ext0, z = ext1|2, w = noise|skyView
+		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu}; // x = clipmap|minMax, y = cloudShadow, z = 0, w = 0
 	};
-	static_assert(sizeof(VolumetricFroxelGenPushConstants) == 128, "VolumetricFroxelGenPushConstants must be exactly 128 bytes");
+
+	static_assert(
+		sizeof(VolumetricFroxelGenPushConstants) == 128,
+		"VolumetricFroxelGenPushConstants must be exactly 128 bytes"
+	);
 
 	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
 	// Operates in SubPhase::LightPreparation (Phase 500).

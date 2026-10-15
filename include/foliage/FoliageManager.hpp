@@ -22,11 +22,12 @@ namespace brassica {
 		void SetBiomeProperties(uint32_t biomeIdx, const GrassProperties& props) override;
 
 		[[nodiscard]] GlobalGrassProperties GetGlobalProperties() const override;
-		void SetGlobalProperties(const GlobalGrassProperties& props) override;
+		void                                SetGlobalProperties(const GlobalGrassProperties& props) override;
 
 		void Initialize() override {}
+
 		[[nodiscard]] FoliageState GetState() const override;
-		void SetState(const FoliageState& state) override;
+		void                       SetState(const FoliageState& state) override;
 
 		// Registers the host-written per-biome properties texture (FoliageBiomeTableTexture) into
 		// this frame's graph -- same RegisterBufferNode-into-Engine::DrawFrame pattern
@@ -35,8 +36,8 @@ namespace brassica {
 		void RegisterTableNode(graph::Graph& frameGraph);
 
 	private:
-		std::array<GrassProperties, kFoliageBiomeCount>                     m_biomeProps{};
-		FoliageState                                                        m_state{};
+		std::array<GrassProperties, kFoliageBiomeCount>                           m_biomeProps{};
+		FoliageState                                                              m_state{};
 		graph::PredefinedTextureNode<FoliageBiomeTableTexture, SubPhase::Prepare> m_biomeTableNode;
 
 		void PopulateDefaults();

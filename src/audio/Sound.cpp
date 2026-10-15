@@ -1,6 +1,7 @@
 #include "audio/Sound.hpp"
 
 #include "spdlog/spdlog.h"
+
 #include "audio/ProceduralAudioSource.hpp"
 
 namespace brassica {
@@ -44,8 +45,8 @@ namespace brassica {
 		bool                                   spatialized,
 		const glm::vec3&                       position,
 		ma_sound_group*                        group
-	)
-		: _proceduralSource(source) {
+	):
+		_proceduralSource(source) {
 		if (!engine) {
 			spdlog::error("Procedural Sound created with null audio engine.");
 			return;

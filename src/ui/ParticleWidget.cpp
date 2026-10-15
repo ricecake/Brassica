@@ -54,7 +54,8 @@ namespace brassica::ui {
 						bool propsChanged = false;
 						propsChanged |= ImGui::SliderFloat("Birds Proportion##Widget", &birdProp, 0.0f, 1.0f, "%.2f");
 						propsChanged |= ImGui::SliderFloat("Fish Proportion##Widget", &fishProp, 0.0f, 1.0f, "%.2f");
-						propsChanged |= ImGui::SliderFloat("Fireflies Proportion##Widget", &fireflyProp, 0.0f, 1.0f, "%.2f");
+						propsChanged |=
+							ImGui::SliderFloat("Fireflies Proportion##Widget", &fireflyProp, 0.0f, 1.0f, "%.2f");
 
 						if (propsChanged) {
 							mgr->SetBirdProportion(birdProp);

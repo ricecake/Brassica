@@ -5,8 +5,7 @@
 
 namespace brassica {
 
-	SpaceAudioEffect::SpaceAudioEffect()
-		: ProceduralAudioSource(2, 48000) {}
+	SpaceAudioEffect::SpaceAudioEffect(): ProceduralAudioSource(2, 48000) {}
 
 	float SpaceAudioEffect::NextWhiteNoise() {
 		m_xorshiftState ^= m_xorshiftState << 13;

@@ -102,7 +102,8 @@ namespace brassica {
 				for (const auto& prefix : fallbacks) {
 					std::string candidatePath = prefix + baseStr;
 
-					if (std::find(attemptedPaths.begin(), attemptedPaths.end(), candidatePath) == attemptedPaths.end()) {
+					if (std::find(attemptedPaths.begin(), attemptedPaths.end(), candidatePath) ==
+					    attemptedPaths.end()) {
 						attemptedPaths.push_back(candidatePath);
 					}
 
@@ -131,8 +132,7 @@ namespace brassica {
 
 		class CustomIncluder: public shaderc::CompileOptions::IncluderInterface {
 		public:
-			explicit CustomIncluder(std::set<std::string>& includedFiles)
-				: m_includedFiles(includedFiles) {}
+			explicit CustomIncluder(std::set<std::string>& includedFiles): m_includedFiles(includedFiles) {}
 
 			shaderc_include_result* GetInclude(
 				const char*          requested_source,
@@ -271,7 +271,7 @@ namespace brassica {
 						std::string includePath = line.substr(firstQuote + 1, lastQuote - firstQuote - 1);
 
 						std::vector<std::string> attemptedPaths;
-						std::string fullPathStr = resolveIncludePath(p, includePath, attemptedPaths);
+						std::string              fullPathStr = resolveIncludePath(p, includePath, attemptedPaths);
 
 						if (!fullPathStr.empty()) {
 							std::string includedSource = loadShaderSourceInternal(fullPathStr, includedFiles);
@@ -299,7 +299,8 @@ namespace brassica {
 								attemptedLog += "  - " + pathTried + "\n";
 							}
 							spdlog::error(
-								"Shader #include error: file '{}' not found (requested in '{}').\nSearch paths tried:\n{}",
+								"Shader #include error: file '{}' not found (requested in '{}').\nSearch paths "
+								"tried:\n{}",
 								includePath,
 								normalizedPath,
 								attemptedLog

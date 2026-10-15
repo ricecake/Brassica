@@ -148,8 +148,8 @@ namespace brassica {
 		virtual float GetTerrainExposure() const = 0;
 		virtual void  SetTerrainExposure(float exp) = 0;
 
-		virtual bool  IsGTAOEnabled() const = 0;
-		virtual void  SetGTAOEnabled(bool enable) = 0;
+		virtual bool IsGTAOEnabled() const = 0;
+		virtual void SetGTAOEnabled(bool enable) = 0;
 
 		virtual float GetGTAORadius() const = 0;
 		virtual void  SetGTAORadius(float radius) = 0;
@@ -160,8 +160,8 @@ namespace brassica {
 		virtual float GetGTAODirectInfluence() const = 0;
 		virtual void  SetGTAODirectInfluence(float influence) = 0;
 
-		virtual bool  IsGTAODebugVisualizeEnabled() const = 0;
-		virtual void  SetGTAODebugVisualizeEnabled(bool enable) = 0;
+		virtual bool IsGTAODebugVisualizeEnabled() const = 0;
+		virtual void SetGTAODebugVisualizeEnabled(bool enable) = 0;
 
 		virtual DayNightCycle&       GetDayNightCycle() = 0;
 		virtual const DayNightCycle& GetDayNightCycle() const = 0;

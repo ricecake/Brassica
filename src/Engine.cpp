@@ -7,13 +7,13 @@
 #include <iostream>
 
 #include "spdlog/spdlog.h"
-#include "terrain/TerrainMapExporter.hpp"
-#include "types/AutoExposureData.hpp"
-#include "types/CdlGradingData.hpp"
 
 #include "graph/Dot.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
+#include "terrain/TerrainMapExporter.hpp"
+#include "types/AutoExposureData.hpp"
+#include "types/CdlGradingData.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace brassica {
@@ -495,16 +495,26 @@ namespace brassica {
 		serviceLocator.Provide<LightManager>(std::shared_ptr<LightManager>(&lightManager, [](LightManager*) {}));
 
 		foliageManager.Initialize();
-		serviceLocator.Provide<IFoliageManager>(std::shared_ptr<IFoliageManager>(&foliageManager, [](IFoliageManager*) {}));
-		serviceLocator.Provide<FoliageManager>(std::shared_ptr<FoliageManager>(&foliageManager, [](FoliageManager*) {}));
+		serviceLocator.Provide<IFoliageManager>(std::shared_ptr<IFoliageManager>(&foliageManager, [](IFoliageManager*) {
+		}));
+		serviceLocator.Provide<FoliageManager>(std::shared_ptr<FoliageManager>(&foliageManager, [](FoliageManager*) {
+		}));
 
 		materialManager.Initialize();
-		serviceLocator.Provide<IMaterialManager>(std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {}));
-		serviceLocator.Provide<MaterialManager>(std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {}));
+		serviceLocator.Provide<IMaterialManager>(
+			std::shared_ptr<IMaterialManager>(&materialManager, [](IMaterialManager*) {})
+		);
+		serviceLocator.Provide<MaterialManager>(
+			std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {})
+		);
 
 		particleManager.Initialize();
-		serviceLocator.Provide<IParticleManager>(std::shared_ptr<IParticleManager>(&particleManager, [](IParticleManager*) {}));
-		serviceLocator.Provide<ParticleManager>(std::shared_ptr<ParticleManager>(&particleManager, [](ParticleManager*) {}));
+		serviceLocator.Provide<IParticleManager>(
+			std::shared_ptr<IParticleManager>(&particleManager, [](IParticleManager*) {})
+		);
+		serviceLocator.Provide<ParticleManager>(
+			std::shared_ptr<ParticleManager>(&particleManager, [](ParticleManager*) {})
+		);
 
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
@@ -574,14 +584,16 @@ namespace brassica {
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_EQUAL)) {
 				camera.CycleMode();
 				if (camera.mode == CameraMode::FirstPerson) {
-					float groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight : std::max(currentGroundHeight, 0.0f);
+					float groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight
+																				 : std::max(currentGroundHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
 				spdlog::info(
 					"Camera mode switched to: {}",
-					camera.mode == CameraMode::FirstPerson ? "FirstPerson" :
-					(camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
+					camera.mode == CameraMode::FirstPerson
+						? "FirstPerson"
+						: (camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
 				);
 			}
 
@@ -590,14 +602,16 @@ namespace brassica {
 					camera.mode = CameraMode::Accelerated;
 				} else {
 					camera.mode = CameraMode::FirstPerson;
-					float groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight : std::max(currentGroundHeight, 0.0f);
+					float groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight
+																				 : std::max(currentGroundHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
 				spdlog::info(
 					"Camera mode switched to: {}",
-					camera.mode == CameraMode::FirstPerson ? "FirstPerson" :
-					(camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
+					camera.mode == CameraMode::FirstPerson
+						? "FirstPerson"
+						: (camera.mode == CameraMode::Accelerated ? "Accelerated" : "Instant")
 				);
 			}
 
@@ -670,15 +684,19 @@ namespace brassica {
 
 		if (camera.mode == CameraMode::FirstPerson) {
 			float terrainHeight = currentGroundHeight;
-			bool isUnderwater = (camera.position.y < 0.0f) && (terrainHeight < 0.0f);
+			bool  isUnderwater = (camera.position.y < 0.0f) && (terrainHeight < 0.0f);
 
-			bool isCtrlHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_CONTROL) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
-			bool isShiftHeld = defaultHandler && (defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) || defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT));
+			bool isCtrlHeld = defaultHandler &&
+				(defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_CONTROL) ||
+				 defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
+			bool isShiftHeld = defaultHandler &&
+				(defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ||
+				 defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT));
 			bool isSpacePressed = defaultHandler && defaultHandler->IsKeyPressed(GLFW_KEY_SPACE);
 
 			if (isUnderwater) {
 				// Ignore gravity and move in 3D direction for swimming
-				float targetMaxSpeed = 5.0f; // Swimming speed ~5 m/s (~twice peak swimmer)
+				float     targetMaxSpeed = 5.0f; // Swimming speed ~5 m/s (~twice peak swimmer)
 				glm::vec3 targetVelocity{0.0f};
 				if (glm::length(moveDir) > 0.0001f) {
 					targetVelocity = glm::normalize(moveDir) * targetMaxSpeed;
@@ -704,7 +722,8 @@ namespace brassica {
 				}
 
 				float targetEyeHeight = isCtrlHeld ? 1.5f : 3.0f; // Crouching vs standing height
-				float groundSurfaceHeight = terrainManager.HasReadbackData() ? terrainHeight : std::max(terrainHeight, 0.0f);
+				float groundSurfaceHeight = terrainManager.HasReadbackData() ? terrainHeight
+																			 : std::max(terrainHeight, 0.0f);
 				float groundLevel = groundSurfaceHeight + targetEyeHeight;
 
 				// Horizontal movement directions
@@ -720,10 +739,14 @@ namespace brassica {
 
 				glm::vec3 horizMoveDir{0.0f};
 				if (camera.isCaptured && defaultHandler) {
-					if (defaultHandler->IsKeyPressed(GLFW_KEY_W)) horizMoveDir += fwdXZ;
-					if (defaultHandler->IsKeyPressed(GLFW_KEY_S)) horizMoveDir -= fwdXZ;
-					if (defaultHandler->IsKeyPressed(GLFW_KEY_D)) horizMoveDir += rightXZ;
-					if (defaultHandler->IsKeyPressed(GLFW_KEY_A)) horizMoveDir -= rightXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_W))
+						horizMoveDir += fwdXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_S))
+						horizMoveDir -= fwdXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_D))
+						horizMoveDir += rightXZ;
+					if (defaultHandler->IsKeyPressed(GLFW_KEY_A))
+						horizMoveDir -= rightXZ;
 				}
 
 				glm::vec3 targetHorizVel{0.0f};
@@ -760,7 +783,7 @@ namespace brassica {
 
 				// Collision check with ground using basketball radius (~0.15m)
 				constexpr float kBasketballRadius = 0.15f;
-				float minGroundHeight = groundSurfaceHeight + kBasketballRadius;
+				float           minGroundHeight = groundSurfaceHeight + kBasketballRadius;
 				if (camera.position.y <= groundLevel) {
 					camera.position.y = groundLevel;
 					camera.velocity.y = 0.0f;
@@ -801,9 +824,8 @@ namespace brassica {
 			camera.currentSpeed = speedLen;
 			camera.position += camera.velocity * deltaTime;
 
-			float speedRatio = (camera.speed > 0.001f)
-				? std::clamp(camera.currentSpeed / camera.speed, 0.0f, 1.0f)
-				: 0.0f;
+			float speedRatio = (camera.speed > 0.001f) ? std::clamp(camera.currentSpeed / camera.speed, 0.0f, 1.0f)
+													   : 0.0f;
 			camera.fov = camera.baseFov + speedRatio * camera.maxFovBoost;
 		} else { // Instant mode
 			camera.velocity = glm::vec3(0.0f);
@@ -849,8 +871,8 @@ namespace brassica {
 				constexpr int kReadbackWidth = 128;
 				constexpr int kReadbackHeight = 128;
 				int           dim = static_cast<int>(constants::Class::Terrain::MapDim); // 1024
-				float         texelSize =
-					terrainManager.GetBaseTexelSize() > 0.0001f ? terrainManager.GetBaseTexelSize() : 0.5f;
+				float     texelSize = terrainManager.GetBaseTexelSize() > 0.0001f ? terrainManager.GetBaseTexelSize()
+																				  : 0.5f;
 				glm::vec2 camGrid = glm::floor(camPos2D / texelSize);
 
 				int camU = static_cast<int>(camGrid.x) % dim;
@@ -888,8 +910,9 @@ namespace brassica {
 		// Apply camera height constraint with basketball collision radius for free-fly modes
 		if (camera.mode != CameraMode::FirstPerson) {
 			constexpr float kBasketballRadius = 0.15f;
-			float           groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight : std::max(currentGroundHeight, 0.0f);
-			float           minHeight = groundSurfaceHeight + kBasketballRadius;
+			float groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight
+																		 : std::max(currentGroundHeight, 0.0f);
+			float minHeight = groundSurfaceHeight + kBasketballRadius;
 			if (camera.position.y < minHeight) {
 				camera.position.y = minHeight;
 			}
@@ -970,8 +993,10 @@ namespace brassica {
 		// expensive (GPU-AV instruments every shader), so this stays opt-in via --aggressive-
 		// validation rather than always on.
 		if (options.aggressiveValidation) {
-			spdlog::warn("Engine: --aggressive-validation enabled (GPU-assisted + synchronization "
-						 "validation) -- rendering will be significantly slower.");
+			spdlog::warn(
+				"Engine: --aggressive-validation enabled (GPU-assisted + synchronization "
+				"validation) -- rendering will be significantly slower."
+			);
 			builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
 				.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
 				.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
@@ -1215,7 +1240,11 @@ namespace brassica {
 	}
 
 	void Engine::Run() {
-		spdlog::info("Engine::Run options.renderTerrainMap = {}, path = '{}'", options.renderTerrainMap, options.terrainMapPath);
+		spdlog::info(
+			"Engine::Run options.renderTerrainMap = {}, path = '{}'",
+			options.renderTerrainMap,
+			options.terrainMapPath
+		);
 
 		if (!device) {
 			spdlog::warn("Engine::Run called but Vulkan device is null.");
@@ -1270,7 +1299,7 @@ namespace brassica {
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
-			vk::Extent2D extent = GetSwapchainExtent();
+			vk::Extent2D        extent = GetSwapchainExtent();
 			graph::FrameContext ctx{
 				.width = extent.width > 0 ? extent.width : 1280u,
 				.height = extent.height > 0 ? extent.height : 720u,
@@ -1341,7 +1370,10 @@ namespace brassica {
 			RecreateSwapchain();
 			return;
 		} else if (acquireResult.result != vk::Result::eSuccess && acquireResult.result != vk::Result::eSuboptimalKHR) {
-			spdlog::critical("Failed to acquire swapchain image: {} -- shutting down.", vk::to_string(acquireResult.result));
+			spdlog::critical(
+				"Failed to acquire swapchain image: {} -- shutting down.",
+				vk::to_string(acquireResult.result)
+			);
 			fatalErrorEncountered = true;
 			return;
 		}
@@ -1531,7 +1563,7 @@ namespace brassica {
 		TerrainPushConstants terrainPush{};
 		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
 
-		bool       forceRegeneration = terrainManager.ShouldForceRegeneration();
+		bool forceRegeneration = terrainManager.ShouldForceRegeneration();
 
 		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 

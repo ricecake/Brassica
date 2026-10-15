@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 
 #include "graph/Declaration.hpp"
@@ -15,7 +16,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/SkyViewPushConstants.hpp"
 

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -15,7 +16,6 @@
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -65,9 +65,7 @@ namespace brassica {
 			}
 		}
 
-		void Destroy(vk::Device device) {
-			gtaoShader.Destroy(device);
-		}
+		void Destroy(vk::Device device) { gtaoShader.Destroy(device); }
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			width = ctx.width;
@@ -121,13 +119,8 @@ namespace brassica {
 			if (boundSets[0] && boundSets[1]) {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(GTAOPushConstants),
-				&push
-			);
+			vkCmd
+				.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(GTAOPushConstants), &push);
 
 			std::uint32_t dispatchX = (width + 7) / 8;
 			std::uint32_t dispatchY = (height + 7) / 8;

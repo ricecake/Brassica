@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -15,7 +16,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -26,15 +26,15 @@ namespace brassica {
 		alignas(16) glm::vec4 cascadeCenterPos[3]{};
 		alignas(16) glm::ivec4 cascadeGridOffset[3]{};
 		std::uint32_t forceRegeneration{1};
-		float cadencePhase{0.0f};
+		float         cadencePhase{0.0f};
 	};
 
 	struct CloudVolumeCascadeState {
-		glm::vec2 centerPos{0.0f};
+		glm::vec2  centerPos{0.0f};
 		glm::ivec3 gridOffset{0};
 
 		void Update(const glm::vec3& cameraPos, float hExtent, bool forceRegen) {
-			float voxelSize = hExtent / 256.0f;
+			float     voxelSize = hExtent / 256.0f;
 			glm::vec2 newCenter = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / voxelSize) * voxelSize;
 			glm::vec2 diff = newCenter - centerPos;
 
@@ -44,9 +44,11 @@ namespace brassica {
 			if (forceRegen || deltaX != 0 || deltaZ != 0) {
 				centerPos = newCenter;
 				gridOffset.x = (gridOffset.x + deltaX) % 256;
-				if (gridOffset.x < 0) gridOffset.x += 256;
+				if (gridOffset.x < 0)
+					gridOffset.x += 256;
 				gridOffset.z = (gridOffset.z + deltaZ) % 256;
-				if (gridOffset.z < 0) gridOffset.z += 256;
+				if (gridOffset.z < 0)
+					gridOffset.z += 256;
 			}
 		}
 	};
@@ -67,7 +69,7 @@ namespace brassica {
 		glm::vec3                   previousCameraPos{0.0f};
 		bool                        hasUpdate{true};
 		bool                        forceRegeneration{true};
-		uint32_t frameCount{0};
+		uint32_t                    frameCount{0};
 
 		CloudVolumeCascadeState cascades[3]{};
 
@@ -82,13 +84,9 @@ namespace brassica {
 			}
 		}
 
-		void RegisterShaders(ShaderWatcher& watcher) {
-			watcher.RegisterShader(&genShader);
-		}
+		void RegisterShaders(ShaderWatcher& watcher) { watcher.RegisterShader(&genShader); }
 
-		void Destroy(vk::Device device) {
-			genShader.Destroy(device);
-		}
+		void Destroy(vk::Device device) { genShader.Destroy(device); }
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			previousCameraPos = cameraPos;
@@ -143,51 +141,51 @@ namespace brassica {
 				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
 			};
 
-				// Update cascade states
-				float extents[3] = {push.cascadeExtents.x, push.cascadeExtents.y, push.cascadeExtents.z};
-				for (int i = 0; i < 3; ++i) {
-					cascades[i].Update(cameraPos, extents[i], forceRegeneration);
-					push.cascadeCenterPos[i] = glm::vec4(cascades[i].centerPos.x, 0.0f, cascades[i].centerPos.y, 0.0f);
-					push.cascadeGridOffset[i] = glm::ivec4(cascades[i].gridOffset, 0);
-				}
+			// Update cascade states
+			float extents[3] = {push.cascadeExtents.x, push.cascadeExtents.y, push.cascadeExtents.z};
+			for (int i = 0; i < 3; ++i) {
+				cascades[i].Update(cameraPos, extents[i], forceRegeneration);
+				push.cascadeCenterPos[i] = glm::vec4(cascades[i].centerPos.x, 0.0f, cascades[i].centerPos.y, 0.0f);
+				push.cascadeGridOffset[i] = glm::ivec4(cascades[i].gridOffset, 0);
+			}
 
-				push.cascadeStorageIdx.x = ctx.StorageIndex<CloudVolumeCascade0>();
-				push.cascadeStorageIdx.y = ctx.StorageIndex<CloudVolumeCascade1>();
-				push.cascadeStorageIdx.z = ctx.StorageIndex<CloudVolumeCascade2>();
-				push.cameraPos = glm::vec4(cameraPos, 1.0f);
-				push.forceRegeneration = forceRegeneration ? 1 : 0;
-				push.cadencePhase = static_cast<float>(frameCount / 30) * 0.1f;
+			push.cascadeStorageIdx.x = ctx.StorageIndex<CloudVolumeCascade0>();
+			push.cascadeStorageIdx.y = ctx.StorageIndex<CloudVolumeCascade1>();
+			push.cascadeStorageIdx.z = ctx.StorageIndex<CloudVolumeCascade2>();
+			push.cameraPos = glm::vec4(cameraPos, 1.0f);
+			push.forceRegeneration = forceRegeneration ? 1 : 0;
+			push.cadencePhase = static_cast<float>(frameCount / 30) * 0.1f;
 
-				std::array<vk::PushConstantRange, 1> pushConstantRanges{
-					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudVolumeGenPushConstants)}
-				};
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudVolumeGenPushConstants)}
+			};
 
-				render::ComputePipelineRequest request{
-					.shader = &genShader,
-					.setLayouts = setLayouts,
-					.pushConstantRanges = pushConstantRanges,
-				};
-				render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ComputePipelineRequest request{
+				.shader = &genShader,
+				.setLayouts = setLayouts,
+				.pushConstantRanges = pushConstantRanges,
+			};
+			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
 
-				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-				if (resolved.pipeline) {
-					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-				}
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (resolved.pipeline) {
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
+			}
 
-				if (boundSets[0] && boundSets[1]) {
-					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-				}
+			if (boundSets[0] && boundSets[1]) {
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
+			}
 
-				vkCmd.pushConstants(
-					resolved.layout,
-					vk::ShaderStageFlagBits::eCompute,
-					0,
-					sizeof(CloudVolumeGenPushConstants),
-					&push
-				);
+			vkCmd.pushConstants(
+				resolved.layout,
+				vk::ShaderStageFlagBits::eCompute,
+				0,
+				sizeof(CloudVolumeGenPushConstants),
+				&push
+			);
 
-				// Dispatch 256 / 8 = 32 workgroups per dimension
-				vkCmd.dispatch(32, 32, 32);
+			// Dispatch 256 / 8 = 32 workgroups per dimension
+			vkCmd.dispatch(32, 32, 32);
 		}
 	};
 

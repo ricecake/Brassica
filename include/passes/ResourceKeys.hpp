@@ -10,8 +10,9 @@
 #include <algorithm>
 #include <cmath>
 
-#include "graph/Execution.hpp"
 #include "vulkan/vulkan.hpp"
+
+#include "graph/Execution.hpp"
 
 namespace brassica {
 
@@ -21,7 +22,9 @@ namespace brassica {
 		std::uint32_t calculatedMips = mips;
 		if (calculatedMips == 0) {
 			const std::uint32_t maxDim = (std::max)(width, height);
-			calculatedMips = maxDim > 0 ? static_cast<std::uint32_t>(std::floor(std::log2(static_cast<float>(maxDim)))) + 1 : 1;
+			calculatedMips = maxDim > 0
+				? static_cast<std::uint32_t>(std::floor(std::log2(static_cast<float>(maxDim)))) + 1
+				: 1;
 		}
 		calculatedMips = (std::min)(calculatedMips, 12u);
 
@@ -50,7 +53,8 @@ namespace brassica {
 			.layers = 5,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
 	}
@@ -69,16 +73,22 @@ namespace brassica {
 			.depth = 256,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
 	}
 
 	struct VolumetricCascade0Scattering {};
+
 	struct VolumetricCascade0Extinction {};
+
 	struct VolumetricCascade1Scattering {};
+
 	struct VolumetricCascade1Extinction {};
+
 	struct VolumetricCascade2Scattering {};
+
 	struct VolumetricCascade2Extinction {};
 
 	struct VolumetricNoiseTexture {};
@@ -91,7 +101,8 @@ namespace brassica {
 			.depth = 64,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
 	}
@@ -104,7 +115,8 @@ namespace brassica {
 			.depth = 1,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
 	}
@@ -130,21 +142,33 @@ namespace brassica {
 	struct AutoExposureBuffer {};
 
 	struct BloomTextureMip0 {};
+
 	struct BloomTextureMip1 {};
+
 	struct BloomTextureMip2 {};
+
 	struct BloomTextureMip3 {};
+
 	struct BloomTextureMip4 {};
 
 	struct LtmExpTextureMip0 {};
+
 	struct LtmExpTextureMip1 {};
+
 	struct LtmExpTextureMip2 {};
+
 	struct LtmExpTextureMip3 {};
+
 	struct LtmExpTextureMip4 {};
 
 	struct LtmWgtTextureMip0 {};
+
 	struct LtmWgtTextureMip1 {};
+
 	struct LtmWgtTextureMip2 {};
+
 	struct LtmWgtTextureMip3 {};
+
 	struct LtmWgtTextureMip4 {};
 
 	struct LtmFusedTexture {};

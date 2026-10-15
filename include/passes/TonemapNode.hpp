@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.hpp>
 
@@ -15,7 +16,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "types/AutoExposureData.hpp"
 #include "types/BloomPushConstants.hpp"
 #include "types/CdlGradingData.hpp"
@@ -55,13 +55,13 @@ namespace brassica {
 
 		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
 
-		ComputeShader               downsampleShader;
-		ComputeShader               upsampleShader;
-		ComputeShader               ltmFuseShader;
-		render::PipelineLibrary*    pipelineLibrary = nullptr;
-		DownsamplePushConstants     downPush{};
-		BloomUpsamplePushConstants  upPush{};
-		LtmFusePushConstants        fusePush{};
+		ComputeShader              downsampleShader;
+		ComputeShader              upsampleShader;
+		ComputeShader              ltmFuseShader;
+		render::PipelineLibrary*   pipelineLibrary = nullptr;
+		DownsamplePushConstants    downPush{};
+		BloomUpsamplePushConstants upPush{};
+		LtmFusePushConstants       fusePush{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -135,7 +135,11 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<LtmFusedTexture>(),
 					.access = graph::AccessKind::Write,
-					.desc = graph::ComputeStorageImageDesc(std::max(1u, w), std::max(1u, h), vk::Format::eR16G16B16A16Sfloat),
+					.desc = graph::ComputeStorageImageDesc(
+						std::max(1u, w),
+						std::max(1u, h),
+						vk::Format::eR16G16B16A16Sfloat
+					),
 				}
 			);
 
@@ -197,7 +201,13 @@ namespace brassica {
 					static_cast<VkDescriptorSet>(ctx.globalSet)
 				};
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, downResolved.layout, 0, boundSets, nullptr);
-				vkCmd.pushConstants(downResolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(DownsamplePushConstants), &downPush);
+				vkCmd.pushConstants(
+					downResolved.layout,
+					vk::ShaderStageFlagBits::eCompute,
+					0,
+					sizeof(DownsamplePushConstants),
+					&downPush
+				);
 
 				std::uint32_t groupsX = (ctx.width / 2 + 15) / 16;
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
@@ -267,7 +277,13 @@ namespace brassica {
 						static_cast<VkDescriptorSet>(ctx.frameSet),
 						static_cast<VkDescriptorSet>(ctx.globalSet)
 					};
-					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, upResolved.layout, 0, upBoundSets, nullptr);
+					vkCmd.bindDescriptorSets(
+						vk::PipelineBindPoint::eCompute,
+						upResolved.layout,
+						0,
+						upBoundSets,
+						nullptr
+					);
 					vkCmd.pushConstants(
 						upResolved.layout,
 						vk::ShaderStageFlagBits::eCompute,
@@ -319,7 +335,13 @@ namespace brassica {
 					static_cast<VkDescriptorSet>(ctx.globalSet)
 				};
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, fuseResolved.layout, 0, boundSets, nullptr);
-				vkCmd.pushConstants(fuseResolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(LtmFusePushConstants), &fusePush);
+				vkCmd.pushConstants(
+					fuseResolved.layout,
+					vk::ShaderStageFlagBits::eCompute,
+					0,
+					sizeof(LtmFusePushConstants),
+					&fusePush
+				);
 
 				std::uint32_t groupsX = (ctx.width / 2 + 15) / 16;
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;

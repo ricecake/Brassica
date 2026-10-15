@@ -164,7 +164,7 @@ namespace brassica::graph {
 
 		inline std::string PhaseClusterId(const std::vector<std::size_t>& path, Phase phase) {
 			std::int32_t val = static_cast<std::int32_t>(phase);
-			std::string id = "cluster_phase";
+			std::string  id = "cluster_phase";
 			for (std::size_t index : path) {
 				id += '_';
 				id += std::to_string(index);
@@ -234,8 +234,8 @@ namespace brassica::graph {
 
 			for (const auto& [phase, nodeIndices] : phaseGroups) {
 				std::int32_t val = static_cast<std::int32_t>(phase);
-				std::string pName = PhaseName(phase);
-				std::string labelStr = "Phase ";
+				std::string  pName = PhaseName(phase);
+				std::string  labelStr = "Phase ";
 				if (phase == Phase::PreviousFrame) {
 					labelStr += "PreviousFrame";
 				} else if (phase == Phase::NextFrame) {

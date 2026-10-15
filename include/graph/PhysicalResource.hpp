@@ -306,8 +306,8 @@ namespace brassica::graph {
 			const auto format = static_cast<vk::Format>(
 				m_desc.formatCode ? m_desc.formatCode : static_cast<std::uint32_t>(vk::Format::eR8G8B8A8Srgb)
 			);
-			const auto viewType =
-				is3D ? vk::ImageViewType::e3D : (is2DArray ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D);
+			const auto          viewType = is3D ? vk::ImageViewType::e3D
+												: (is2DArray ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D);
 			const std::uint32_t mips = m_desc.mips ? m_desc.mips : 1;
 			const std::uint32_t layers = m_desc.layers ? m_desc.layers : 1;
 
@@ -391,8 +391,8 @@ namespace brassica::graph {
 		// mip at once (legal for the sampled descriptor, illegal for storage). Empty for every
 		// resource that doesn't need per-mip storage writes -- which, today, is everything
 		// except the terrain min/max chain.
-		std::vector<vk::ImageView>   m_mipViews{};
-		std::vector<std::uint32_t>   m_mipStorageIndices{};
+		std::vector<vk::ImageView> m_mipViews{};
+		std::vector<std::uint32_t> m_mipStorageIndices{};
 	};
 
 	// Move-only RAII owner of a Vulkan buffer. Same three ownership modes as PhysicalTexture,
@@ -1024,7 +1024,6 @@ namespace brassica::graph {
 		desc.hostAccess = HostAccess::Staged;
 		return desc;
 	}
-
 
 	inline ResourceDesc MappedUniformBufferDesc(std::uint64_t byteSize) {
 		ResourceDesc desc = UniformBufferDesc(byteSize);

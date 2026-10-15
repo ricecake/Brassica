@@ -35,7 +35,8 @@ namespace brassica {
 
 	static_assert(
 		sizeof(DownsamplePushConstants) == 100,
-		"DownsamplePushConstants size must be 100 bytes -- must match bloom_downsample.comp's push_constant block exactly"
+		"DownsamplePushConstants size must be 100 bytes -- must match bloom_downsample.comp's push_constant block "
+		"exactly"
 	);
 
 	// Bloom-wide tunables that aren't per-frame derived (unlike the resource indices/resolution
@@ -56,7 +57,8 @@ namespace brassica {
 
 	static_assert(
 		sizeof(BloomUpsamplePushConstants) == 36,
-		"BloomUpsamplePushConstants size must be 36 bytes -- must match bloom_upsample.comp's push_constant block exactly"
+		"BloomUpsamplePushConstants size must be 36 bytes -- must match bloom_upsample.comp's push_constant block "
+		"exactly"
 	);
 
 } // namespace brassica

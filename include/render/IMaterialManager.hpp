@@ -5,8 +5,8 @@
 #include <tuple>
 #include <vector>
 
-#include "IManager.hpp"
 #include "graph/Node.hpp"
+#include "IManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "types/MaterialData.hpp"
@@ -20,9 +20,14 @@ namespace brassica {
 		std::uint32_t materialCount{0};
 
 		auto GetReflection() const {
-			return std::make_tuple(
-				MakeField("materialCount", "Material Count", &MaterialManagerState::materialCount, 0u, 10000u, UIHint::Drag)
-			);
+			return std::make_tuple(MakeField(
+				"materialCount",
+				"Material Count",
+				&MaterialManagerState::materialCount,
+				0u,
+				10000u,
+				UIHint::Drag
+			));
 		}
 	};
 

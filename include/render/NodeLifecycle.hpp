@@ -51,18 +51,18 @@ namespace brassica::render {
 			constants::Class::Terrain::TotalMeshlets,
 			constants::Class::Terrain::MapDim
 		};
-		bool       forceRegeneration{true};
-		glm::vec3  waterColor{0.05f, 0.45f, 0.85f};
-		float      waterLevel{0.0f};
-		glm::vec3  sunDir{0.0f, 1.0f, 0.0f};
-		glm::vec3  sunRadiance{3.0f, 2.94f, 2.76f};
-		glm::vec3  moonDir{0.0f, -1.0f, 0.0f};
-		glm::vec3  moonRadiance{0.1f, 0.12f, 0.16f};
-		float      time{0.0f};
-		float      worldScale{1.0f};
-		float      multiScatScale{1.0f};
-		float      cloudShadowIntensity{0.5f};
-		float      skyExposure{1.0f};
+		bool            forceRegeneration{true};
+		glm::vec3       waterColor{0.05f, 0.45f, 0.85f};
+		float           waterLevel{0.0f};
+		glm::vec3       sunDir{0.0f, 1.0f, 0.0f};
+		glm::vec3       sunRadiance{3.0f, 2.94f, 2.76f};
+		glm::vec3       moonDir{0.0f, -1.0f, 0.0f};
+		glm::vec3       moonRadiance{0.1f, 0.12f, 0.16f};
+		float           time{0.0f};
+		float           worldScale{1.0f};
+		float           multiScatScale{1.0f};
+		float           cloudShadowIntensity{0.5f};
+		float           skyExposure{1.0f};
 		entt::registry* registry = nullptr;
 		// Not for shader delivery -- shaders read the real values from the global AtmosphereUBO
 		// (atmosphere/common.glsl, set 0 binding 4). This is here purely so

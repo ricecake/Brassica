@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -16,7 +17,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -54,9 +54,9 @@ namespace brassica {
 		};
 
 		render::PipelineLibrary*      pipelineLibrary = nullptr;
-		VertexShader                   vertShader;
-		FragmentShader                 fragShader;
-		VolumetricRenderPushConstants  push{};
+		VertexShader                  vertShader;
+		FragmentShader                fragShader;
+		VolumetricRenderPushConstants push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -190,7 +190,8 @@ namespace brassica {
 			}
 
 			vk::Extent2D extent{ctx.width, ctx.height};
-			vk::Viewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
+			vk::Viewport
+				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 			vkCmd.setViewport(0, viewport);
 			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 

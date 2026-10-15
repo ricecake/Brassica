@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -10,15 +11,14 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
-#include "passes/ResourceGroups.hpp"
 #include "lighting/ILightManager.hpp"
+#include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -106,8 +106,7 @@ namespace brassica {
 				auto lightManager = ServiceLocator::Instance().Get<ILightManager>();
 				enableGTAO = lightManager->IsGTAOEnabled();
 				push.aoDirectInfluence = enableGTAO ? lightManager->GetGTAODirectInfluence() : 0.0f;
-				push.debugVisualizeGTAO =
-					(enableGTAO && lightManager->IsGTAODebugVisualizeEnabled()) ? 1u : 0u;
+				push.debugVisualizeGTAO = (enableGTAO && lightManager->IsGTAODebugVisualizeEnabled()) ? 1u : 0u;
 			}
 		}
 

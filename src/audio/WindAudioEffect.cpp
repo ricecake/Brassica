@@ -5,8 +5,7 @@
 
 namespace brassica {
 
-	WindAudioEffect::WindAudioEffect()
-		: ProceduralAudioSource(2, 48000) {}
+	WindAudioEffect::WindAudioEffect(): ProceduralAudioSource(2, 48000) {}
 
 	float WindAudioEffect::NextWhiteNoise() {
 		m_xorshiftState ^= m_xorshiftState << 13;

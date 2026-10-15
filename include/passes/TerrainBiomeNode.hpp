@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -17,7 +18,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -27,7 +27,7 @@ namespace brassica {
 		constexpr std::uint32_t kBiomeTextureDim = 2048;
 		constexpr std::uint32_t kBlendDitherDivisor = 8;
 		constexpr std::uint32_t kUpdateInterval = 300;
-	}
+	} // namespace constants::Weather
 
 	struct ClimateInitialPushConstants {
 		std::uint32_t outStorageIdx{0};
@@ -146,10 +146,7 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{
-				.domain = graph::ExecutionDomain::Compute,
-				.isActive = true
-			};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = true};
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
@@ -204,12 +201,12 @@ namespace brassica {
 
 		template <typename PushT>
 		void DispatchCompute(
-			vk::CommandBuffer                              vkCmd,
-			ComputeShader&                                 shader,
-			const std::array<vk::DescriptorSetLayout, 2>&  setLayouts,
-			const std::array<vk::DescriptorSet, 2>&        boundSets,
-			const PushT&                                   push,
-			std::uint32_t                                  dispatchDim
+			vk::CommandBuffer                             vkCmd,
+			ComputeShader&                                shader,
+			const std::array<vk::DescriptorSetLayout, 2>& setLayouts,
+			const std::array<vk::DescriptorSet, 2>&       boundSets,
+			const PushT&                                  push,
+			std::uint32_t                                 dispatchDim
 		) {
 			std::array<vk::PushConstantRange, 1> pushRanges{
 				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushT)}
@@ -235,7 +232,6 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
@@ -251,16 +247,18 @@ namespace brassica {
 			std::uint32_t pingPongSimIdx = ctx.StorageIndex<TerrainWeatherPingPongTexture>();
 			std::uint32_t weatherMapAIdx = ctx.StorageIndex<TerrainWeatherMapATexture>();
 			std::uint32_t weatherMapBIdx = ctx.StorageIndex<TerrainWeatherMapBTexture>();
-			std::uint32_t mainBiomeIdx   = ctx.StorageIndex<TerrainBiomeMainTexture>();
-			std::uint32_t biomeMapAIdx   = ctx.StorageIndex<TerrainBiomeMapATexture>();
-			std::uint32_t biomeMapBIdx   = ctx.StorageIndex<TerrainBiomeMapBTexture>();
+			std::uint32_t mainBiomeIdx = ctx.StorageIndex<TerrainBiomeMainTexture>();
+			std::uint32_t biomeMapAIdx = ctx.StorageIndex<TerrainBiomeMapATexture>();
+			std::uint32_t biomeMapBIdx = ctx.StorageIndex<TerrainBiomeMapBTexture>();
 
 			auto insertComputeBarrier = [&](vk::CommandBuffer cmd) {
 				vk::MemoryBarrier2 barrier{};
 				barrier.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader)
 					.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite)
 					.setDstStageMask(vk::PipelineStageFlagBits2::eComputeShader)
-					.setDstAccessMask(vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+					.setDstAccessMask(
+						vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
+					);
 
 				vk::DependencyInfo depInfo{};
 				depInfo.setMemoryBarriers(barrier);
@@ -276,7 +274,10 @@ namespace brassica {
 					initialShader,
 					setLayouts,
 					boundSets,
-					ClimateInitialPushConstants{.outStorageIdx = pingPongSimIdx, .textureDim = constants::Weather::kSimTextureDim},
+					ClimateInitialPushConstants{
+						.outStorageIdx = pingPongSimIdx,
+						.textureDim = constants::Weather::kSimTextureDim
+					},
 					constants::Weather::kSimTextureDim
 				);
 				insertComputeBarrier(vkCmd);
@@ -288,7 +289,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateAdvectPushConstants{
-						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+						.inStorageIdx = pingPongSimIdx,
+						.outStorageIdx = mainWeatherIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 1.0f
 					},
 					constants::Weather::kSimTextureDim
 				);
@@ -316,7 +320,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateAdvectPushConstants{
-						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+						.inStorageIdx = pingPongSimIdx,
+						.outStorageIdx = mainWeatherIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 1.0f
 					},
 					constants::Weather::kSimTextureDim
 				);
@@ -328,7 +335,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateAdvectPushConstants{
-						.inStorageIdx = mainWeatherIdx, .outStorageIdx = pingPongSimIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 0.0f
+						.inStorageIdx = mainWeatherIdx,
+						.outStorageIdx = pingPongSimIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 0.0f
 					},
 					constants::Weather::kSimTextureDim
 				);
@@ -399,7 +409,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateAdvectPushConstants{
-						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+						.inStorageIdx = pingPongSimIdx,
+						.outStorageIdx = mainWeatherIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 1.0f
 					},
 					constants::Weather::kSimTextureDim
 				);
@@ -427,7 +440,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateAdvectPushConstants{
-						.inStorageIdx = pingPongSimIdx, .outStorageIdx = mainWeatherIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 1.0f
+						.inStorageIdx = pingPongSimIdx,
+						.outStorageIdx = mainWeatherIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 1.0f
 					},
 					constants::Weather::kSimTextureDim
 				);
@@ -439,7 +455,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateAdvectPushConstants{
-						.inStorageIdx = mainWeatherIdx, .outStorageIdx = pingPongSimIdx, .textureDim = constants::Weather::kSimTextureDim, .dt = 0.0f
+						.inStorageIdx = mainWeatherIdx,
+						.outStorageIdx = pingPongSimIdx,
+						.textureDim = constants::Weather::kSimTextureDim,
+						.dt = 0.0f
 					},
 					constants::Weather::kSimTextureDim
 				);
@@ -465,7 +484,8 @@ namespace brassica {
 
 			// Every frame: 1/8th dithered blend pass of Map A -> Map B into main display textures
 			float blendFactor = std::clamp(
-				static_cast<float>(frameCounter - lastSimFrame) / static_cast<float>(constants::Weather::kUpdateInterval),
+				static_cast<float>(frameCounter - lastSimFrame) /
+					static_cast<float>(constants::Weather::kUpdateInterval),
 				0.0f,
 				1.0f
 			);

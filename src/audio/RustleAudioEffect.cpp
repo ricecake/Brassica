@@ -5,8 +5,7 @@
 
 namespace brassica {
 
-	RustleAudioEffect::RustleAudioEffect()
-		: ProceduralAudioSource(2, 48000) {}
+	RustleAudioEffect::RustleAudioEffect(): ProceduralAudioSource(2, 48000) {}
 
 	float RustleAudioEffect::NextWhiteNoise() {
 		m_xorshiftState ^= m_xorshiftState << 13;

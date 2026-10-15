@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -19,7 +20,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "terrain/TerrainManager.hpp"
 #include "vk_mem_alloc.h"
 
@@ -34,8 +34,8 @@ namespace brassica {
 		std::uint32_t mips{10};         // SPD output mip count -- our mip 1..10 for MapDim = 1024
 		std::uint32_t isFullRebuild{1}; // 1 = every tile dirty (first frame/force/resize), 0 = subregion
 		std::uint32_t textureDim{constants::Class::Terrain::MapDim}; // per-layer map width, for the
-		                                                              // shader's own dirty-tile test
-		std::array<std::uint32_t, 10> mipIndices{}; // bindless STORAGE indices for our mip 1..10
+		                                                             // shader's own dirty-tile test
+		std::array<std::uint32_t, 10> mipIndices{};                  // bindless STORAGE indices for our mip 1..10
 	};
 
 	static_assert(offsetof(TerrainDownsamplePushConstants, srcIndex) == 0);
@@ -70,7 +70,7 @@ namespace brassica {
 			layoutInfo.setBindings(binding);
 			result.layout = device.createDescriptorSetLayout(layoutInfo);
 
-			vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageBuffer, 1};
+			vk::DescriptorPoolSize       poolSize{vk::DescriptorType::eStorageBuffer, 1};
 			vk::DescriptorPoolCreateInfo poolInfo{};
 			poolInfo.setPoolSizes(poolSize).setMaxSets(1);
 			result.pool = device.createDescriptorPool(poolInfo);
@@ -171,8 +171,8 @@ namespace brassica {
 			// after that is GPU-internal to SPD's own atomic-counter protocol, which self-resets
 			// (shaders/terrain_downsample.comp's SpdResetAtomicCounter) -- there's no per-frame
 			// transfer to make staging it through device-local memory worth the complexity.
-			vk::DeviceSize bufferSize =
-				static_cast<vk::DeviceSize>(constants::Class::Terrain::DefaultMaxLODs) * sizeof(std::uint32_t);
+			vk::DeviceSize bufferSize = static_cast<vk::DeviceSize>(constants::Class::Terrain::DefaultMaxLODs) *
+				sizeof(std::uint32_t);
 
 			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 			bufferInfo.size = bufferSize;
@@ -180,14 +180,20 @@ namespace brassica {
 
 			VmaAllocationCreateInfo allocCreateInfo{};
 			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-			allocCreateInfo.flags =
-				VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+				VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 			VkBuffer          rawBuffer{};
 			VmaAllocation     rawAllocation{};
 			VmaAllocationInfo allocResultInfo{};
-			if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &rawAllocation, &allocResultInfo) !=
-			    VK_SUCCESS) {
+			if (vmaCreateBuffer(
+					allocator,
+					&bufferInfo,
+					&allocCreateInfo,
+					&rawBuffer,
+					&rawAllocation,
+					&allocResultInfo
+				) != VK_SUCCESS) {
 				spdlog::critical("TerrainMinMaxDownsampleNode: failed to allocate the atomic-counter buffer.");
 				throw std::runtime_error("TerrainMinMaxDownsampleNode: failed to allocate the atomic-counter buffer.");
 			}

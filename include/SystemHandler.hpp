@@ -3,10 +3,10 @@
 #include <memory>
 #include <vector>
 
-#include "VulkanCompat.hpp"
 #include "types/EntityRenderComponent.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
+#include "VulkanCompat.hpp"
 #include <entt/entity/entity.hpp>
 
 namespace brassica {
@@ -48,8 +48,8 @@ namespace brassica {
 
 		// Registers a new entity in the entt registry with TransformComponent and EntityRenderComponent
 		entt::entity RegisterEntity(
-			Engine& engine,
-			const TransformComponent& transform = {},
+			Engine&                      engine,
+			const TransformComponent&    transform = {},
 			const EntityRenderComponent& renderComp = {}
 		);
 
@@ -65,6 +65,7 @@ namespace brassica {
 		[[nodiscard]] const std::vector<entt::entity>& GetEntities() const { return m_entities; }
 
 		virtual void InitNode(const render::NodeServices& /*services*/) {}
+
 		virtual void DestroyNode(const vk::Device& /*device*/) {}
 
 	protected:

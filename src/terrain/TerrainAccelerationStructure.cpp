@@ -83,7 +83,7 @@ namespace brassica {
 				return static_cast<void*>(nullptr);
 			};
 
-		uint32_t       maxAABBs = constants::Class::Terrain::DefaultMaxLODs * constants::Class::Terrain::MeshletCountPerLOD;
+		uint32_t maxAABBs = constants::Class::Terrain::DefaultMaxLODs * constants::Class::Terrain::MeshletCountPerLOD;
 		vk::DeviceSize aabbBufferSize = sizeof(std::uint64_t) + sizeof(VkAabbPositionsKHR) * maxAABBs;
 
 		createBuffer(

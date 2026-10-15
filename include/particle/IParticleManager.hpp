@@ -29,8 +29,22 @@ namespace brassica {
 					8192u,
 					UIHint::Slider
 				),
-				MakeField("birdProportion", "Bird Proportion", &ParticleManagerState::birdProportion, 0.0f, 1.0f, UIHint::Slider),
-				MakeField("fishProportion", "Fish Proportion", &ParticleManagerState::fishProportion, 0.0f, 1.0f, UIHint::Slider),
+				MakeField(
+					"birdProportion",
+					"Bird Proportion",
+					&ParticleManagerState::birdProportion,
+					0.0f,
+					1.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"fishProportion",
+					"Fish Proportion",
+					&ParticleManagerState::fishProportion,
+					0.0f,
+					1.0f,
+					UIHint::Slider
+				),
 				MakeField(
 					"fireflyProportion",
 					"Firefly Proportion",

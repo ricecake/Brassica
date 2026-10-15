@@ -16,10 +16,10 @@ namespace brassica {
 
 		glm::vec4 cameraPosition{0.0f, 15.0f, 30.0f, 1.0f}; // xyz = position, w = baseTexelSize
 		glm::vec4 previousCameraPosition{-999.0f, -15.0f, -30.0f, 0.0f};
-		float time{0.0f};
-		float fov{1.2f};
-		float aspectRatio{16.0f / 9.0f};
-		float nearPlane{0.1f};
+		float     time{0.0f};
+		float     fov{1.2f};
+		float     aspectRatio{16.0f / 9.0f};
+		float     nearPlane{0.1f};
 
 		float    farPlane{32768.0f};
 		uint32_t frameIndex{0};

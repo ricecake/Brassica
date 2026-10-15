@@ -13,7 +13,7 @@ namespace brassica {
 		glm::vec4     color{1.0f, 0.95f, 0.7f, 1.0f};    // Particle color / glow
 		glm::vec4     misc{0.0f};                        // Miscellaneous purpose vector (x = phase, y = counter)
 		std::uint32_t type{0};
-		float         lifetime{5.0f};                    // Marked alive initially (5.0s lifetime)
+		float         lifetime{5.0f}; // Marked alive initially (5.0s lifetime)
 		float         maxLifetime{5.0f};
 		std::uint32_t padding{0};
 	};

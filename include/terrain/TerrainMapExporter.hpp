@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <string>
 
-#include <glm/glm.hpp>
 #include "vulkan/vulkan.hpp"
+#include <glm/glm.hpp>
 
 namespace brassica {
 
@@ -74,12 +74,8 @@ namespace brassica {
 
 	class TerrainMapExporter {
 	public:
-		static bool ExportGPU(
-			Engine&            engine,
-			const std::string& outputPath,
-			uint32_t           width = 4096,
-			uint32_t           height = 2048
-		);
+		static bool
+		ExportGPU(Engine& engine, const std::string& outputPath, uint32_t width = 4096, uint32_t height = 2048);
 	};
 
 } // namespace brassica

@@ -2,8 +2,9 @@
 
 #include <array>
 #include <cstdint>
-#include <glm/glm.hpp>
 #include <string>
+
+#include <glm/glm.hpp>
 
 #include "IManager.hpp"
 #include "ManagerReflection.hpp"
@@ -77,12 +78,54 @@ namespace brassica {
 		auto GetReflection() {
 			return std::make_tuple(
 				MakeField("enabled", "Enable Foliage", &FoliageState::enabled),
-				MakeField("lengthMultiplier", "Length Multiplier", &FoliageState::lengthMultiplier, 0.1f, 5.0f, UIHint::Slider),
-				MakeField("widthMultiplier", "Width Multiplier", &FoliageState::widthMultiplier, 0.1f, 5.0f, UIHint::Slider),
-				MakeField("densityMultiplier", "Density Multiplier", &FoliageState::densityMultiplier, 0.0f, 5.0f, UIHint::Slider),
-				MakeField("rigidityMultiplier", "Rigidity Multiplier", &FoliageState::rigidityMultiplier, 0.0f, 2.0f, UIHint::Slider),
-				MakeField("windMultiplier", "Wind Multiplier", &FoliageState::windMultiplier, 0.0f, 5.0f, UIHint::Slider),
-				MakeField("lodScaleFactor", "LOD Scale Factor", &FoliageState::lodScaleFactor, 0.5f, 5.0f, UIHint::Slider),
+				MakeField(
+					"lengthMultiplier",
+					"Length Multiplier",
+					&FoliageState::lengthMultiplier,
+					0.1f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"widthMultiplier",
+					"Width Multiplier",
+					&FoliageState::widthMultiplier,
+					0.1f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"densityMultiplier",
+					"Density Multiplier",
+					&FoliageState::densityMultiplier,
+					0.0f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"rigidityMultiplier",
+					"Rigidity Multiplier",
+					&FoliageState::rigidityMultiplier,
+					0.0f,
+					2.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"windMultiplier",
+					"Wind Multiplier",
+					&FoliageState::windMultiplier,
+					0.0f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"lodScaleFactor",
+					"LOD Scale Factor",
+					&FoliageState::lodScaleFactor,
+					0.5f,
+					5.0f,
+					UIHint::Slider
+				),
 				MakeField("lodBaseRange", "LOD Base Range", &FoliageState::lodBaseRange, 5.0f, 1000.0f, UIHint::Slider),
 				MakeField("baseScale", "Base Scale", &FoliageState::baseScale, 0.1f, 2.0f, UIHint::Slider),
 				MakeField("flowerRatio", "Flower Ratio", &FoliageState::flowerRatio, 0.0f, 1.0f, UIHint::Slider),
@@ -94,21 +137,61 @@ namespace brassica {
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),
-				MakeField(
-					"enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling
-				)
+				MakeField("enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling)
 			);
 		}
 
 		auto GetReflection() const {
 			return std::make_tuple(
 				MakeField("enabled", "Enable Foliage", &FoliageState::enabled),
-				MakeField("lengthMultiplier", "Length Multiplier", &FoliageState::lengthMultiplier, 0.1f, 5.0f, UIHint::Slider),
-				MakeField("widthMultiplier", "Width Multiplier", &FoliageState::widthMultiplier, 0.1f, 5.0f, UIHint::Slider),
-				MakeField("densityMultiplier", "Density Multiplier", &FoliageState::densityMultiplier, 0.0f, 5.0f, UIHint::Slider),
-				MakeField("rigidityMultiplier", "Rigidity Multiplier", &FoliageState::rigidityMultiplier, 0.0f, 2.0f, UIHint::Slider),
-				MakeField("windMultiplier", "Wind Multiplier", &FoliageState::windMultiplier, 0.0f, 5.0f, UIHint::Slider),
-				MakeField("lodScaleFactor", "LOD Scale Factor", &FoliageState::lodScaleFactor, 0.5f, 5.0f, UIHint::Slider),
+				MakeField(
+					"lengthMultiplier",
+					"Length Multiplier",
+					&FoliageState::lengthMultiplier,
+					0.1f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"widthMultiplier",
+					"Width Multiplier",
+					&FoliageState::widthMultiplier,
+					0.1f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"densityMultiplier",
+					"Density Multiplier",
+					&FoliageState::densityMultiplier,
+					0.0f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"rigidityMultiplier",
+					"Rigidity Multiplier",
+					&FoliageState::rigidityMultiplier,
+					0.0f,
+					2.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"windMultiplier",
+					"Wind Multiplier",
+					&FoliageState::windMultiplier,
+					0.0f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"lodScaleFactor",
+					"LOD Scale Factor",
+					&FoliageState::lodScaleFactor,
+					0.5f,
+					5.0f,
+					UIHint::Slider
+				),
 				MakeField("lodBaseRange", "LOD Base Range", &FoliageState::lodBaseRange, 5.0f, 1000.0f, UIHint::Slider),
 				MakeField("baseScale", "Base Scale", &FoliageState::baseScale, 0.1f, 2.0f, UIHint::Slider),
 				MakeField("flowerRatio", "Flower Ratio", &FoliageState::flowerRatio, 0.0f, 1.0f, UIHint::Slider),
@@ -120,9 +203,7 @@ namespace brassica {
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),
-				MakeField(
-					"enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling
-				)
+				MakeField("enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling)
 			);
 		}
 	};
@@ -140,7 +221,7 @@ namespace brassica {
 		virtual void SetBiomeProperties(uint32_t biomeIdx, const GrassProperties& props) = 0;
 
 		[[nodiscard]] virtual GlobalGrassProperties GetGlobalProperties() const = 0;
-		virtual void SetGlobalProperties(const GlobalGrassProperties& props) = 0;
+		virtual void                                SetGlobalProperties(const GlobalGrassProperties& props) = 0;
 	};
 
 } // namespace brassica

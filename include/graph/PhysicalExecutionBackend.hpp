@@ -12,7 +12,7 @@
 #include "graph/VulkanSeam.hpp"
 
 #ifdef MemoryBarrier
-#undef MemoryBarrier
+	#undef MemoryBarrier
 #endif
 
 namespace brassica::graph {

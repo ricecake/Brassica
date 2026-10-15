@@ -43,9 +43,9 @@ namespace brassica::ui {
 			// Camera
 			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Camera:");
 			if (ServiceLocator::Instance().Has<CameraData>()) {
-				auto cam = ServiceLocator::Instance().Get<CameraData>();
+				auto        cam = ServiceLocator::Instance().Get<CameraData>();
 				const char* camModes[] = {"Instant", "Accelerated", "FirstPerson"};
-				int currentCamMode = static_cast<int>(cam->mode);
+				int         currentCamMode = static_cast<int>(cam->mode);
 				if (ImGui::Combo("Mode##Cam", &currentCamMode, camModes, IM_ARRAYSIZE(camModes))) {
 					cam->mode = static_cast<CameraMode>(currentCamMode);
 				}

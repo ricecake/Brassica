@@ -405,8 +405,7 @@ namespace brassica::graph {
 			};
 
 			std::vector<std::pair<std::pair<Phase, ResourceId>, std::vector<std::size_t>>> selfModifyGroups;
-			auto                                                                           groupFor =
-				[&](Phase phase, ResourceId key) -> std::vector<std::size_t>& {
+			auto groupFor = [&](Phase phase, ResourceId key) -> std::vector<std::size_t>& {
 				for (auto& [phaseKey, members] : selfModifyGroups) {
 					if (phaseKey.first == phase && phaseKey.second == key) {
 						return members;
@@ -452,7 +451,8 @@ namespace brassica::graph {
 						if (alreadyChained(producer, consumer, key)) {
 							continue;
 						}
-						if (nodes[producer].phase == nodes[consumer].phase && producer > consumer && isSelfModifyMember(nodes[producer], key)) {
+						if (nodes[producer].phase == nodes[consumer].phase && producer > consumer &&
+						    isSelfModifyMember(nodes[producer], key)) {
 							continue;
 						}
 						edges.push_back(Edge{producer, consumer, key});

@@ -112,10 +112,10 @@ namespace brassica {
 		}
 
 		std::vector<CylinderInstanceData> m_cylinders;
-		SkinnedCylinder                    m_cylinder;
-		float                              m_spawnTimer{0.0f};
-		float                              m_spawnInterval{1.5f};
-		std::size_t                        m_maxCylinders{8};
+		SkinnedCylinder                   m_cylinder;
+		float                             m_spawnTimer{0.0f};
+		float                             m_spawnInterval{1.5f};
+		std::size_t                       m_maxCylinders{8};
 	};
 
 } // namespace brassica

@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-#include "VulkanCompat.hpp"
+#include "spdlog/spdlog.h"
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
@@ -17,17 +17,14 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "types/EntityRenderComponent.hpp"
+#include "VulkanCompat.hpp"
 
 namespace brassica {
 
-	struct EntityNode : render::NodeRegistrar<EntityNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::ModifyKey>,
-			graph::Read<EntityInstanceBuffer>,
-			graph::Read<EntityIndirectBuffer>
-		>;
+	struct EntityNode: render::NodeRegistrar<EntityNode> {
+		using Resources = graph::
+			Declares<GBuffer<graph::ModifyKey>, graph::Read<EntityInstanceBuffer>, graph::Read<EntityIndirectBuffer>>;
 
 		static constexpr graph::Phase kPhase = SubPhase::GBuffer;
 
@@ -166,7 +163,7 @@ namespace brassica {
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange {
+			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
 				0,
 				sizeof(EntityPushConstants)

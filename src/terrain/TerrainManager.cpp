@@ -55,13 +55,19 @@ namespace brassica {
 
 		VmaAllocationCreateInfo allocCreateInfo{};
 		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-		allocCreateInfo.flags =
-			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+			VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 		VkBuffer          buf{VK_NULL_HANDLE};
 		VmaAllocationInfo allocationInfo{};
-		if (vmaCreateBuffer(allocator, &bufferInfo, &allocCreateInfo, &buf, &readbackStagingAllocation, &allocationInfo) ==
-		    VK_SUCCESS) {
+		if (vmaCreateBuffer(
+				allocator,
+				&bufferInfo,
+				&allocCreateInfo,
+				&buf,
+				&readbackStagingAllocation,
+				&allocationInfo
+			) == VK_SUCCESS) {
 			readbackStagingBuffer = buf;
 			readbackStagingMapped = allocationInfo.pMappedData;
 		} else {
@@ -131,7 +137,9 @@ namespace brassica {
 		barrier1.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
 		barrier1.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
 		barrier1.setImage(image);
-		barrier1.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, mipLevel, 1, arrayLayer, 1});
+		barrier1.setSubresourceRange(
+			vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, mipLevel, 1, arrayLayer, 1}
+		);
 
 		vk::DependencyInfo depInfo1{};
 		depInfo1.setImageMemoryBarriers(barrier1);
@@ -141,7 +149,9 @@ namespace brassica {
 		copyRegion.setBufferOffset(0);
 		copyRegion.setBufferRowLength(extent.width);
 		copyRegion.setBufferImageHeight(extent.height);
-		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, mipLevel, arrayLayer, 1});
+		copyRegion.setImageSubresource(
+			vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, mipLevel, arrayLayer, 1}
+		);
 		copyRegion.setImageOffset(vk::Offset3D{offset.x, offset.y, 0});
 		copyRegion.setImageExtent(vk::Extent3D{extent.width, extent.height, 1});
 
@@ -158,7 +168,9 @@ namespace brassica {
 		barrier2.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
 		barrier2.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
 		barrier2.setImage(image);
-		barrier2.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, mipLevel, 1, arrayLayer, 1});
+		barrier2.setSubresourceRange(
+			vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, mipLevel, 1, arrayLayer, 1}
+		);
 
 		vk::DependencyInfo depInfo2{};
 		depInfo2.setImageMemoryBarriers(barrier2);
@@ -238,10 +250,10 @@ namespace brassica {
 		float fz_clamped = std::clamp(fz, 0.0f, 1.0f);
 
 		uint32_t w = cachedReadbackWidth;
-		float h00 = cachedReadbackData[j0_clamped * w + i0_clamped].x;
-		float h10 = cachedReadbackData[j0_clamped * w + i1].x;
-		float h01 = cachedReadbackData[j1 * w + i0_clamped].x;
-		float h11 = cachedReadbackData[j1 * w + i1].x;
+		float    h00 = cachedReadbackData[j0_clamped * w + i0_clamped].x;
+		float    h10 = cachedReadbackData[j0_clamped * w + i1].x;
+		float    h01 = cachedReadbackData[j1 * w + i0_clamped].x;
+		float    h11 = cachedReadbackData[j1 * w + i1].x;
 
 		float top = glm::mix(h00, h10, fx_clamped);
 		float bot = glm::mix(h01, h11, fx_clamped);
@@ -287,8 +299,8 @@ namespace brassica {
 		float fx_clamped = std::clamp(fx, 0.0f, 1.0f);
 		float fz_clamped = std::clamp(fz, 0.0f, 1.0f);
 
-		uint32_t w = cachedReadbackWidth;
-		auto     normalOf = [](const glm::vec4& p) { return glm::vec3(p.y, p.z, p.w); };
+		uint32_t  w = cachedReadbackWidth;
+		auto      normalOf = [](const glm::vec4& p) { return glm::vec3(p.y, p.z, p.w); };
 		glm::vec3 n00 = normalOf(cachedReadbackData[j0_clamped * w + i0_clamped]);
 		glm::vec3 n10 = normalOf(cachedReadbackData[j0_clamped * w + i1]);
 		glm::vec3 n01 = normalOf(cachedReadbackData[j1 * w + i0_clamped]);

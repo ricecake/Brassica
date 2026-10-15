@@ -20,12 +20,12 @@ namespace brassica {
 		State GetState() const override;
 		void  SetState(const State& state) override;
 
-		std::uint32_t RegisterMaterial(const MaterialData& material) override;
-		bool          UpdateMaterial(std::uint32_t id, const MaterialData& material) override;
-		const MaterialData* GetMaterial(std::uint32_t id) const override;
-		std::size_t   GetMaterialCount() const override;
+		std::uint32_t                    RegisterMaterial(const MaterialData& material) override;
+		bool                             UpdateMaterial(std::uint32_t id, const MaterialData& material) override;
+		const MaterialData*              GetMaterial(std::uint32_t id) const override;
+		std::size_t                      GetMaterialCount() const override;
 		const std::vector<MaterialData>& GetMaterials() const override;
-		void          ClearMaterials() override;
+		void                             ClearMaterials() override;
 
 		graph::PredefinedBufferNode<MaterialBuffer, MaterialData, SubPhase::Prepare>& GetBufferNode() override;
 		void RegisterBufferNode(graph::Graph& frameGraph) override;
@@ -33,7 +33,7 @@ namespace brassica {
 	private:
 		void SyncBufferNode();
 
-		std::vector<MaterialData> m_materials;
+		std::vector<MaterialData>                                                    m_materials;
 		graph::PredefinedBufferNode<MaterialBuffer, MaterialData, SubPhase::Prepare> m_bufferNode;
 	};
 

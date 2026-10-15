@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "spdlog/spdlog.h"
+
 #include "EngineConstants.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Graph.hpp"
@@ -16,7 +18,6 @@
 #include "graph/ResourceState.hpp"
 #include "graph/VulkanSeam.hpp"
 #include "IManager.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica::graph {
 
@@ -710,10 +711,10 @@ namespace brassica::graph {
 		enum class SampledImageKind { Plain2D, Array2D, Volume3D };
 
 		void WriteSampledImageDescriptor(
-			std::uint32_t     index,
-			vk::ImageView     view,
-			vk::ImageLayout   layout,
-			SampledImageKind  kind
+			std::uint32_t    index,
+			vk::ImageView    view,
+			vk::ImageLayout  layout,
+			SampledImageKind kind
 		) {
 			if (!m_bindless.set) {
 				return;
@@ -820,12 +821,13 @@ namespace brassica::graph {
 			if (!m_bindless.set) {
 				return;
 			}
-			const auto& desc = tex.GetDesc();
-			const auto  usage = desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{};
-			const bool  isVolume = desc.kind == ResourceDesc::Kind::Image3D;
-			const bool  isArray = !isVolume && desc.layers > 1;
-			const SampledImageKind sampledKind =
-				isVolume ? SampledImageKind::Volume3D : (isArray ? SampledImageKind::Array2D : SampledImageKind::Plain2D);
+			const auto&            desc = tex.GetDesc();
+			const auto             usage = desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{};
+			const bool             isVolume = desc.kind == ResourceDesc::Kind::Image3D;
+			const bool             isArray = !isVolume && desc.layers > 1;
+			const SampledImageKind sampledKind = isVolume
+				? SampledImageKind::Volume3D
+				: (isArray ? SampledImageKind::Array2D : SampledImageKind::Plain2D);
 
 			if (usage & vk::ImageUsageFlagBits::eSampled) {
 				// A plain-2D, a 2D-array, and a 3D-volume texture each write into an independently-
@@ -835,8 +837,7 @@ namespace brassica::graph {
 				// spill into whatever binding happens to sit next, which the validation layer
 				// reports as a descriptorType mismatch on the overflowed write, not as an
 				// out-of-range index.
-				BindlessArena& arena =
-					isVolume ? m_sampled3DArena : (isArray ? m_sampledArrayArena : m_sampledArena);
+				BindlessArena& arena = isVolume ? m_sampled3DArena : (isArray ? m_sampledArrayArena : m_sampledArena);
 				const std::uint32_t index = arena.Allocate();
 				tex.SetSampledBindlessIndex(index);
 				// Derived by the same function BarrierTranslator uses (ResourceState.hpp), so this
@@ -884,8 +885,8 @@ namespace brassica::graph {
 				// single source of truth for which array a texture's sampled index lives in.
 				const auto&    texDesc = tex.GetDesc();
 				const bool     isVolume = texDesc.kind == ResourceDesc::Kind::Image3D;
-				BindlessArena& arena =
-					isVolume ? m_sampled3DArena : (texDesc.layers > 1 ? m_sampledArrayArena : m_sampledArena);
+				BindlessArena& arena = isVolume ? m_sampled3DArena
+												: (texDesc.layers > 1 ? m_sampledArrayArena : m_sampledArena);
 				arena.Retire(tex.GetSampledBindlessIndex(), frameIndex);
 			}
 			if (tex.HasPerMipStorage()) {
@@ -944,9 +945,8 @@ namespace brassica::graph {
 		// decision from usageMask, so a stale mask must never silently survive a desc-mismatch
 		// check), and a single definition means the two can't drift apart from each other.
 		static bool ImageDescMatches(const ResourceDesc& a, const ResourceDesc& b) {
-			return a.width == b.width && a.height == b.height && a.depth == b.depth &&
-				a.formatCode == b.formatCode && a.usageMask == b.usageMask && a.mips == b.mips &&
-				a.layers == b.layers;
+			return a.width == b.width && a.height == b.height && a.depth == b.depth && a.formatCode == b.formatCode &&
+				a.usageMask == b.usageMask && a.mips == b.mips && a.layers == b.layers;
 		}
 
 		// Runs once per Provision() call, before the ordinary collection/provisioning loops below:

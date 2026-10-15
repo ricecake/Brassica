@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -16,7 +17,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "terrain/TerrainAccelerationStructure.hpp"
 #include "terrain/TerrainManager.hpp"
 
@@ -32,7 +32,7 @@ namespace brassica {
 		std::uint32_t clipmapStorageIdx{0};
 		std::uint32_t minMaxStorageIdx{0};
 		std::uint32_t biomeStorageIdx{0};
-		bool forceRegeneration = true;
+		bool          forceRegeneration = true;
 	};
 
 	struct TerrainGenNode: render::NodeRegistrar<TerrainGenNode> {
@@ -63,7 +63,7 @@ namespace brassica {
 		TerrainGenPushConstants          push{};
 		glm::vec3                        cameraPos{0.0f};
 		bool                             hasUpdate{true};
-		bool forceRegeneration{true};
+		bool                             forceRegeneration{true};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;

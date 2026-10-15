@@ -22,8 +22,8 @@ namespace brassica {
 		float     grassDensity{0.0f};
 
 		// Camera state for altitude & speed effects
-		float     altitude{0.0f}; // camera height/altitude in meters
-		float     speed{0.0f};    // camera current speed in m/s
+		float altitude{0.0f}; // camera height/altitude in meters
+		float speed{0.0f};    // camera current speed in m/s
 	};
 
 } // namespace brassica

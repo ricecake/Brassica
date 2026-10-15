@@ -64,8 +64,8 @@ namespace brassica {
 		0        // flags
 	};
 
-	ProceduralAudioSource::ProceduralAudioSource(ma_uint32 channels, ma_uint32 sampleRate)
-		: m_channels(channels), m_sampleRate(sampleRate) {
+	ProceduralAudioSource::ProceduralAudioSource(ma_uint32 channels, ma_uint32 sampleRate):
+		m_channels(channels), m_sampleRate(sampleRate) {
 		m_base.pParent = this;
 		ma_data_source_config config = ma_data_source_config_init();
 		config.vtable = &g_ProceduralAudioSourceVTable;

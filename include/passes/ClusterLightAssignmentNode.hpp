@@ -2,6 +2,7 @@
 
 #include <array>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 
 #include "graph/Declaration.hpp"
@@ -13,7 +14,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 

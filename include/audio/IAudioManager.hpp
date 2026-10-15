@@ -5,8 +5,8 @@
 
 #include <glm/glm.hpp>
 
-#include "IManager.hpp"
 #include "audio/AudioTypes.hpp"
+#include "IManager.hpp"
 
 namespace brassica {
 
@@ -27,7 +27,14 @@ namespace brassica {
 
 		auto GetReflection() const {
 			return std::make_tuple(
-				MakeField("masterVolume", "Master Volume", &AudioManagerState::masterVolume, 0.0f, 1.0f, UIHint::Slider),
+				MakeField(
+					"masterVolume",
+					"Master Volume",
+					&AudioManagerState::masterVolume,
+					0.0f,
+					1.0f,
+					UIHint::Slider
+				),
 				MakeField("musicVolume", "Music Volume", &AudioManagerState::musicVolume, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("sfxVolume", "SFX Volume", &AudioManagerState::sfxVolume, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("globalPitch", "Global Pitch", &AudioManagerState::globalPitch, 0.1f, 2.0f, UIHint::Slider),

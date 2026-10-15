@@ -50,7 +50,9 @@ namespace brassica {
 		void Cleanup();
 
 		void Regenerate() override { m_forceRegenerate = true; }
+
 		bool ShouldForceRegeneration() { return m_forceRegenerate; }
+
 		void ResetForceRegeneration() { m_forceRegenerate = false; }
 
 		uint32_t GetNumLODs() const { return numLODs; }
@@ -87,7 +89,15 @@ namespace brassica {
 			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
 		) {
 			return TriggerImageRegionReadbackAsync(
-				image, arrayLayer, mipLevel, offset, extent, glm::vec2(0.0f), 0.5f, glm::vec2(0.0f), currentLayout
+				image,
+				arrayLayer,
+				mipLevel,
+				offset,
+				extent,
+				glm::vec2(0.0f),
+				0.5f,
+				glm::vec2(0.0f),
+				currentLayout
 			);
 		}
 
@@ -107,8 +117,10 @@ namespace brassica {
 		glm::vec3 GetInterpolatedGroundNormal(glm::vec2 worldXZ, glm::vec3 fallback) const;
 		glm::vec3 GetInterpolatedGroundNormal(glm::vec3 fallback) const;
 
-		bool      IsReadbackInFlight() const { return readbackInFlight; }
-		bool      HasReadbackData() const { return hasReadbackData; }
+		bool IsReadbackInFlight() const { return readbackInFlight; }
+
+		bool HasReadbackData() const { return hasReadbackData; }
+
 		glm::vec2 GetLastReadbackCamPos() const { return cachedReadbackCamPos; }
 
 	private:
@@ -154,7 +166,8 @@ namespace brassica {
 			.layers = numLODs,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eTransferSrc
 			),
 			.persistent = true,
 		};
@@ -174,7 +187,8 @@ namespace brassica {
 			.layers = numLODs,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eTransferSrc
 			),
 			.persistent = true,
 		};

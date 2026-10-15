@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -20,7 +21,6 @@
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 #include "types/Particle.hpp"
 #include "VulkanCompat.hpp"
 
@@ -89,7 +89,8 @@ namespace brassica {
 		auto pGridHeadsBuf = registry->GetBuffer<ParticleGridHeadsBuffer>();
 		auto pGridNextBuf = registry->GetBuffer<ParticleGridNextBuffer>();
 
-		if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf || !pGridHeadsBuf || !pGridNextBuf)
+		if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf ||
+		    !pGridHeadsBuf || !pGridNextBuf)
 			return;
 
 		vk::Buffer b0 = pBuf->GetBuffer();
@@ -210,7 +211,8 @@ namespace brassica {
 			auto pGridHeadsBuf = registry->GetBuffer<ParticleGridHeadsBuffer>();
 			auto pGridNextBuf = registry->GetBuffer<ParticleGridNextBuffer>();
 
-			if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf || !pGridHeadsBuf || !pGridNextBuf) {
+			if (!pBuf || !pTypeBuf || !pAboveAliveBuf || !pAboveIndirectBuf || !pUnderAliveBuf || !pUnderIndirectBuf ||
+			    !pGridHeadsBuf || !pGridNextBuf) {
 				return;
 			}
 
@@ -259,11 +261,11 @@ namespace brassica {
 			graph::Create<ParticleGridHeadsBuffer>>;
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
-		render::PipelineLibrary*        pipelineLibrary = nullptr;
-		ComputeShader                   compShader;
-		std::uint32_t                   gridSize{1024};
-		vk::DescriptorSetLayout         particleSetLayout;
-		vk::DescriptorSet               particleSet;
+		render::PipelineLibrary*         pipelineLibrary = nullptr;
+		ComputeShader                    compShader;
+		std::uint32_t                    gridSize{1024};
+		vk::DescriptorSetLayout          particleSetLayout;
+		vk::DescriptorSet                particleSet;
 		detail::ParticleDescriptorCache* descriptorCache{nullptr};
 
 		void Init(
@@ -326,7 +328,12 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(
+						*descriptorCache,
+						registry->GetDevice(),
+						particleSet,
+						registry
+					);
 				}
 			}
 
@@ -478,7 +485,12 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(
+						*descriptorCache,
+						registry->GetDevice(),
+						particleSet,
+						registry
+					);
 				}
 			}
 
@@ -613,7 +625,12 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(
+						*descriptorCache,
+						registry->GetDevice(),
+						particleSet,
+						registry
+					);
 				}
 			}
 
@@ -772,7 +789,12 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					detail::RefreshParticleDescriptorSet(*descriptorCache, registry->GetDevice(), particleSet, registry);
+					detail::RefreshParticleDescriptorSet(
+						*descriptorCache,
+						registry->GetDevice(),
+						particleSet,
+						registry
+					);
 				}
 			}
 
@@ -1003,7 +1025,6 @@ namespace brassica {
 		}
 	};
 
-
 	struct AboveWaterParticleRenderNode: render::NodeRegistrar<AboveWaterParticleRenderNode> {
 		using Resources = graph::Declares<
 			graph::Read<ParticleBuffer>,
@@ -1180,13 +1201,16 @@ namespace brassica {
 		}
 	};
 
-
 	using ParticleRenderNode = AboveWaterParticleRenderNode;
 
 	using ParticleTypeBufferNode = graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType, SubPhase::Prepare>;
 
-	using ParticleSystemSpec =
-		graph::FrameSpec<ParticleTypeBufferNode, ParticleResetNode, ParticleLivenessNode, ParticleGridBuildNode, ParticleBehaviorNode>;
+	using ParticleSystemSpec = graph::FrameSpec<
+		ParticleTypeBufferNode,
+		ParticleResetNode,
+		ParticleLivenessNode,
+		ParticleGridBuildNode,
+		ParticleBehaviorNode>;
 	using ParticleSystemSubgraph = graph::Subgraph<ParticleSystemSpec>;
 
 	struct ParticleSystemNode: render::NodeRegistrar<ParticleSystemNode> {
@@ -1213,12 +1237,7 @@ namespace brassica {
 				.gravityScale = 0.0f,
 				.drag = 0.1f
 			},
-			ParticleType{
-				.color = glm::vec4(0.9f, 1.0f, 0.3f, 1.0f),
-				.size = 1.2f,
-				.gravityScale = 0.0f,
-				.drag = 0.05f
-			},
+			ParticleType{.color = glm::vec4(0.9f, 1.0f, 0.3f, 1.0f), .size = 1.2f, .gravityScale = 0.0f, .drag = 0.05f},
 		}};
 		ParticleResetNode      resetNode;
 		ParticleLivenessNode   livenessNode;
@@ -1306,9 +1325,9 @@ namespace brassica {
 		[[nodiscard]] const graph::Graph& InnerGraph() const { return m_subgraph.InnerGraph(); }
 	};
 
-	//BRASSICA_REGISTER_NODE(UnderwaterParticleRenderNode);
-	//BRASSICA_REGISTER_NODE(AboveWaterParticleRenderNode);
-	//BRASSICA_REGISTER_NODE(ParticleSystemNode);
+	// BRASSICA_REGISTER_NODE(UnderwaterParticleRenderNode);
+	// BRASSICA_REGISTER_NODE(AboveWaterParticleRenderNode);
+	// BRASSICA_REGISTER_NODE(ParticleSystemNode);
 
 } // namespace brassica
 

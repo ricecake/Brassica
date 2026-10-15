@@ -9,14 +9,14 @@
 #include "vulkan/vulkan.hpp"
 
 #include "ArgparseManager.hpp"
+#include "audio/AudioManager.hpp"
 #include "ConfigManager.hpp"
 #include "EngineConstants.hpp"
+#include "foliage/FoliageManager.hpp"
 #include "GLFW/glfw3.h"
 #include "graph/PhysicalRegistry.hpp"
 #include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
-#include "audio/AudioManager.hpp"
-#include "foliage/FoliageManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
 #include "particle/ParticleManager.hpp"
@@ -107,13 +107,16 @@ namespace brassica {
 		vk::Device GetDevice() const { return device; }
 
 		vk::Queue GetGraphicsQueue() const { return graphicsQueue; }
-		uint32_t  GetGraphicsQueueFamily() const { return graphicsQueueFamily; }
+
+		uint32_t GetGraphicsQueueFamily() const { return graphicsQueueFamily; }
 
 		vk::Queue GetComputeQueue() const { return computeQueue; }
-		uint32_t  GetComputeQueueFamily() const { return computeQueueFamily; }
+
+		uint32_t GetComputeQueueFamily() const { return computeQueueFamily; }
 
 		vk::Queue GetTransferQueue() const { return transferQueue; }
-		uint32_t  GetTransferQueueFamily() const { return transferQueueFamily; }
+
+		uint32_t GetTransferQueueFamily() const { return transferQueueFamily; }
 
 		const graph::QueueSet& GetQueueSet() const { return queueSet; }
 
@@ -178,6 +181,7 @@ namespace brassica {
 		FoliageManager& GetFoliageManager() { return foliageManager; }
 
 		const FoliageManager& GetFoliageManager() const { return foliageManager; }
+
 		ParticleManager& GetParticleManager() { return particleManager; }
 
 		const ParticleManager& GetParticleManager() const { return particleManager; }
@@ -262,7 +266,7 @@ namespace brassica {
 		std::vector<vk::Semaphore> swapchainRenderSemaphores;
 		vk::Semaphore              frameTimelineSemaphore{nullptr};
 
-		bool       windowResized{false};
+		bool windowResized{false};
 		// Set by DrawFrame on an unrecoverable failure (frame graph compile/execute throwing, or a
 		// real swapchain acquire error -- not the routine eOutOfDateKHR/eSuboptimalKHR cases, which
 		// RecreateSwapchain already handles). These are deterministic bugs, not transient hiccups:

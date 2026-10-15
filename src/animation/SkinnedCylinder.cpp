@@ -1,19 +1,17 @@
 #include "animation/SkinnedCylinder.hpp"
 
+#include <geometrycentral/surface/surface_mesh_factories.h>
+#include <ozz/base/maths/simd_math.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <numbers>
 #include <stdexcept>
 
-#include <geometrycentral/surface/surface_mesh_factories.h>
-
-#include <ozz/base/maths/simd_math.h>
-
 namespace brassica {
 
-	SkinnedCylinder::SkinnedCylinder(const Parameters& params)
-		: m_params(params) {
+	SkinnedCylinder::SkinnedCylinder(const Parameters& params): m_params(params) {
 		GenerateGeometryCentralMesh(m_params);
 		BuildOzzSkeletonAndWeights(m_params);
 		Update(0.0f);
@@ -34,7 +32,8 @@ namespace brassica {
 		for (std::size_t j = 0; j <= heightSegs; ++j) {
 			float y = -height * 0.5f + static_cast<float>(j) * (height / static_cast<float>(heightSegs));
 			for (std::size_t i = 0; i < radialSegs; ++i) {
-				float angle = static_cast<float>(i) * (2.0f * std::numbers::pi_v<float> / static_cast<float>(radialSegs));
+				float angle = static_cast<float>(i) *
+					(2.0f * std::numbers::pi_v<float> / static_cast<float>(radialSegs));
 				float x = radius * std::cos(angle);
 				float z = radius * std::sin(angle);
 				positions.push_back(geometrycentral::Vector3{x, y, z});
@@ -80,7 +79,10 @@ namespace brassica {
 		m_geometry.reset();
 		m_mesh.reset();
 
-		auto [manifoldMesh, geometry] = geometrycentral::surface::makeManifoldSurfaceMeshAndGeometry(polygons, positions);
+		auto [manifoldMesh, geometry] = geometrycentral::surface::makeManifoldSurfaceMeshAndGeometry(
+			polygons,
+			positions
+		);
 
 		m_mesh = std::move(manifoldMesh);
 		m_geometry = std::move(geometry);
@@ -198,10 +200,7 @@ namespace brassica {
 
 		float angle = std::sin(timeSeconds * 2.0f) * 0.5f;
 		transforms[1].translation = ozz::math::Float3(0.0f, m_params.height, 0.0f);
-		transforms[1].rotation = ozz::math::Quaternion::FromAxisAngle(
-			ozz::math::Float3(0.0f, 0.0f, 1.0f),
-			angle
-		);
+		transforms[1].rotation = ozz::math::Quaternion::FromAxisAngle(ozz::math::Float3(0.0f, 0.0f, 1.0f), angle);
 		transforms[1].scale = ozz::math::Float3(1.0f, 1.0f, 1.0f);
 
 		// Pack into SoaTransforms
@@ -258,14 +257,26 @@ namespace brassica {
 		skinningJob.joint_weights = ozz::make_span(m_jointWeights);
 		skinningJob.joint_weights_stride = sizeof(float) * 1;
 
-		skinningJob.in_positions = ozz::span<const float>(reinterpret_cast<const float*>(m_restPositions.data()), m_restPositions.size() * 3);
+		skinningJob.in_positions = ozz::span<const float>(
+			reinterpret_cast<const float*>(m_restPositions.data()),
+			m_restPositions.size() * 3
+		);
 		skinningJob.in_positions_stride = sizeof(glm::vec3);
-		skinningJob.out_positions = ozz::span<float>(reinterpret_cast<float*>(m_skinnedPositions.data()), m_skinnedPositions.size() * 3);
+		skinningJob.out_positions = ozz::span<float>(
+			reinterpret_cast<float*>(m_skinnedPositions.data()),
+			m_skinnedPositions.size() * 3
+		);
 		skinningJob.out_positions_stride = sizeof(glm::vec3);
 
-		skinningJob.in_normals = ozz::span<const float>(reinterpret_cast<const float*>(m_restNormals.data()), m_restNormals.size() * 3);
+		skinningJob.in_normals = ozz::span<const float>(
+			reinterpret_cast<const float*>(m_restNormals.data()),
+			m_restNormals.size() * 3
+		);
 		skinningJob.in_normals_stride = sizeof(glm::vec3);
-		skinningJob.out_normals = ozz::span<float>(reinterpret_cast<float*>(m_skinnedNormals.data()), m_skinnedNormals.size() * 3);
+		skinningJob.out_normals = ozz::span<float>(
+			reinterpret_cast<float*>(m_skinnedNormals.data()),
+			m_skinnedNormals.size() * 3
+		);
 		skinningJob.out_normals_stride = sizeof(glm::vec3);
 
 		skinningJob.Run();

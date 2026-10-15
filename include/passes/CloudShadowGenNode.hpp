@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
@@ -15,7 +16,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "spdlog/spdlog.h"
 
 namespace brassica {
 
@@ -46,10 +46,10 @@ namespace brassica {
 
 		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
 
-		render::PipelineLibrary*   pipelineLibrary = nullptr;
-		ComputeShader              genShader;
+		render::PipelineLibrary*    pipelineLibrary = nullptr;
+		ComputeShader               genShader;
 		CloudShadowGenPushConstants push{};
-		glm::vec3                  cameraPos{0.0f};
+		glm::vec3                   cameraPos{0.0f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -62,13 +62,9 @@ namespace brassica {
 			}
 		}
 
-		void RegisterShaders(ShaderWatcher& watcher) {
-			watcher.RegisterShader(&genShader);
-		}
+		void RegisterShaders(ShaderWatcher& watcher) { watcher.RegisterShader(&genShader); }
 
-		void Destroy(vk::Device device) {
-			genShader.Destroy(device);
-		}
+		void Destroy(vk::Device device) { genShader.Destroy(device); }
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.sunDir = glm::vec4(p.sunDir, 0.0f);

@@ -65,7 +65,10 @@ namespace brassica {
 		std::int32_t numCdlEntries{1};
 	};
 
-	static_assert(sizeof(TonemapPushConstants) == 152, "TonemapPushConstants size must be 152 bytes -- must match tonemap.frag's push_constant block exactly");
+	static_assert(
+		sizeof(TonemapPushConstants) == 152,
+		"TonemapPushConstants size must be 152 bytes -- must match tonemap.frag's push_constant block exactly"
+	);
 
 	inline TonemapPushConstants s_tonemapPush{};
 

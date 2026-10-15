@@ -1,13 +1,14 @@
 #include "SystemHandler.hpp"
 
-#include "Engine.hpp"
 #include <algorithm>
+
+#include "Engine.hpp"
 
 namespace brassica {
 
 	entt::entity SystemHandler::RegisterEntity(
-		Engine& engine,
-		const TransformComponent& transform,
+		Engine&                      engine,
+		const TransformComponent&    transform,
 		const EntityRenderComponent& renderComp
 	) {
 		entt::entity entity = engine.GetRegistry().create();

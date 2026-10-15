@@ -1,16 +1,16 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
 #include "terrain/TerrainMapExporter.hpp"
 
 #include <algorithm>
 #include <vector>
 
+#include "spdlog/spdlog.h"
+
 #include "Engine.hpp"
-#include "Shader.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "render/PipelineLibrary.hpp"
-#include "spdlog/spdlog.h"
+#include "Shader.hpp"
+#include "stb_image_write.h"
 
 namespace brassica {
 
@@ -47,10 +47,11 @@ namespace brassica {
 			VmaAllocationCreateInfo allocCreateInfo{};
 			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
-			VkImage       rawImage = VK_NULL_HANDLE;
-			VmaAllocation imageAllocation = nullptr;
+			VkImage           rawImage = VK_NULL_HANDLE;
+			VmaAllocation     imageAllocation = nullptr;
 			VkImageCreateInfo rawImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
-			if (vmaCreateImage(allocator, &rawImageInfo, &allocCreateInfo, &rawImage, &imageAllocation, nullptr) != VK_SUCCESS) {
+			if (vmaCreateImage(allocator, &rawImageInfo, &allocCreateInfo, &rawImage, &imageAllocation, nullptr) !=
+			    VK_SUCCESS) {
 				spdlog::error("vmaCreateImage failed for terrain map export.");
 				return false;
 			}
@@ -65,12 +66,15 @@ namespace brassica {
 			vk::ImageView imageView = device.createImageView(viewInfo);
 
 			struct TerrainMapExportKey {};
+
 			graph::ResourceDesc storageDesc{};
 			storageDesc.kind = graph::ResourceDesc::Kind::Image2D;
 			storageDesc.width = width;
 			storageDesc.height = height;
 			storageDesc.formatCode = static_cast<uint32_t>(vk::Format::eR32G32B32A32Sfloat);
-			storageDesc.usageMask = static_cast<uint32_t>(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc);
+			storageDesc.usageMask = static_cast<uint32_t>(
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc
+			);
 
 			physicalRegistry.RegisterImportedTexture<TerrainMapExportKey>(
 				image,
@@ -95,7 +99,14 @@ namespace brassica {
 			VkBuffer          stagingBuffer = VK_NULL_HANDLE;
 			VmaAllocation     stagingAllocation = nullptr;
 			VmaAllocationInfo stagingResultInfo{};
-			if (vmaCreateBuffer(allocator, &bufferInfo, &stagingAllocInfo, &stagingBuffer, &stagingAllocation, &stagingResultInfo) != VK_SUCCESS) {
+			if (vmaCreateBuffer(
+					allocator,
+					&bufferInfo,
+					&stagingAllocInfo,
+					&stagingBuffer,
+					&stagingAllocation,
+					&stagingResultInfo
+				) != VK_SUCCESS) {
 				spdlog::error("vmaCreateBuffer failed for terrain map export staging buffer.");
 				device.destroyImageView(imageView);
 				vmaDestroyImage(allocator, image, imageAllocation);
@@ -128,11 +139,11 @@ namespace brassica {
 			render::ResolvedPipeline resolvedPipeline = pipelineLibrary->ResolveCached(pipelineReq);
 
 			// 4. Record and Submit Commands
-			uint32_t queueFamily = 0;
-			vk::CommandPoolCreateInfo poolInfo{vk::CommandPoolCreateFlagBits::eTransient, queueFamily};
-			vk::CommandPool pool = device.createCommandPool(poolInfo);
+			uint32_t                      queueFamily = 0;
+			vk::CommandPoolCreateInfo     poolInfo{vk::CommandPoolCreateFlagBits::eTransient, queueFamily};
+			vk::CommandPool               pool = device.createCommandPool(poolInfo);
 			vk::CommandBufferAllocateInfo cmdInfo{pool, vk::CommandBufferLevel::ePrimary, 1};
-			vk::CommandBuffer cmd = device.allocateCommandBuffers(cmdInfo).front();
+			vk::CommandBuffer             cmd = device.allocateCommandBuffers(cmdInfo).front();
 
 			cmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
@@ -161,7 +172,13 @@ namespace brassica {
 			}
 
 			TerrainMapPushConstants push{storageIdx, width, height, 600000.0f};
-			cmd.pushConstants(resolvedPipeline.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainMapPushConstants), &push);
+			cmd.pushConstants(
+				resolvedPipeline.layout,
+				vk::ShaderStageFlagBits::eCompute,
+				0,
+				sizeof(TerrainMapPushConstants),
+				&push
+			);
 
 			uint32_t groupX = (width + 15) / 16;
 			uint32_t groupY = (height + 15) / 16;
@@ -199,7 +216,7 @@ namespace brassica {
 
 			// Convert float pixels to 8-bit RGBA
 			std::vector<uint8_t> pixels(width * height * 4);
-			const float* floatData = static_cast<const float*>(stagingResultInfo.pMappedData);
+			const float*         floatData = static_cast<const float*>(stagingResultInfo.pMappedData);
 			if (floatData) {
 				for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i) {
 					pixels[i * 4 + 0] = static_cast<uint8_t>(std::clamp(floatData[i * 4 + 0] * 255.0f, 0.0f, 255.0f));

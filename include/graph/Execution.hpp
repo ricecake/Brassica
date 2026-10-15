@@ -9,7 +9,7 @@
 #include "graph/ResourceKey.hpp"
 
 #ifdef MemoryBarrier
-#undef MemoryBarrier
+	#undef MemoryBarrier
 #endif
 
 // This is the entire Vulkan seam for the graph skeleton. Nothing in this file, or anything

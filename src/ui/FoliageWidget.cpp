@@ -41,7 +41,8 @@ namespace brassica::ui {
 					modified |= ImGui::SliderFloat("Length Multiplier", &props.lengthMultiplier, 0.1f, 5.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Width Multiplier", &props.widthMultiplier, 0.1f, 5.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Wind Multiplier", &props.windMultiplier, 0.0f, 5.0f, "%.2f");
-					modified |= ImGui::SliderFloat("Rigidity Multiplier", &props.rigidityMultiplier, 0.0f, 2.0f, "%.2f");
+					modified |=
+						ImGui::SliderFloat("Rigidity Multiplier", &props.rigidityMultiplier, 0.0f, 2.0f, "%.2f");
 
 					if (modified) {
 						mgr->SetGlobalProperties(props);
@@ -118,7 +119,7 @@ namespace brassica::ui {
 					);
 
 					GrassProperties bProps = mgr->GetBiomeProperties(static_cast<uint32_t>(selectedBiome));
-					bool bModified = false;
+					bool            bModified = false;
 
 					bool bEnabled = (bProps.enabled != 0u);
 					if (ImGui::Checkbox("Biome Enabled", &bEnabled)) {
