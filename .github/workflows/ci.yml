@@ -110,12 +110,12 @@ jobs:
         run: cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config Release --parallel 2
 
       - name: Build Tests
-        if: steps.filter.outputs.core == 'true' || steps.filter.outputs.tests == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.filter.outputs.core == 'true' || steps.filter.outputs.tests == 'true' || steps.filter.outputs.shaders == 'true' || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: cmake --build "${{ steps.strings.outputs.build-output-dir }}" --config Release --target tests --parallel 2
 
       - name: Run CTest
-        if: steps.filter.outputs.core == 'true' || steps.filter.outputs.tests == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.filter.outputs.core == 'true' || steps.filter.outputs.tests == 'true' || steps.filter.outputs.shaders == 'true' || github.event_name == 'workflow_dispatch'
         working-directory: "${{ steps.strings.outputs.build-output-dir }}"
         shell: pwsh
         run: ctest --build-config Release --output-on-failure

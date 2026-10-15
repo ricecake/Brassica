@@ -143,9 +143,7 @@ TEST_CASE("First Person Camera: Standing Height, Crouching Height, and Speeds") 
 	REQUIRE(engine.GetCamera().isCaptured);
 
 	// No real device in this test, so TerrainManager's async readback never completes --
-	// UpdateCamera's ground height falls back to its floor default (clamped to 0.0f via
-	// std::max), not a real terrain sample. This is real, legitimate device-less fallback
-	// behavior, not an approximation of it.
+	// UpdateCamera's ground height falls back to its default (0.0f), not a real terrain sample.
 	float expectedStandingGroundLevel = 0.0f + 3.0f;
 
 	// Ground snapping check: standing camera height should be about 3 units above ground
@@ -203,8 +201,7 @@ TEST_CASE("First Person Camera: Earth Gravity and Jump Physics") {
 	REQUIRE(engine.GetCamera().mode == brassica::CameraMode::FirstPerson);
 
 	// No real device in this test, so TerrainManager's async readback never completes --
-	// UpdateCamera's ground height falls back to its floor default (clamped to 0.0f via
-	// std::max), not a real terrain sample.
+	// UpdateCamera's ground height falls back to its default (0.0f), not a real terrain sample.
 	float groundLevel = 0.0f + 3.0f;
 
 	// Initial position is grounded

@@ -183,7 +183,7 @@ namespace brassica {
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
-				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(TerrainPushConstants)
 			}};
@@ -218,7 +218,7 @@ namespace brassica {
 
 			vkCmd.pushConstants(
 				resolved.layout,
-				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT | vk::ShaderStageFlagBits::eFragment,
 				0,
 				sizeof(TerrainPushConstants),
 				&push

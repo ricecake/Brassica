@@ -199,20 +199,6 @@ namespace brassica {
 					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
 				}
 			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherMapATexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherMapBTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
-				}
-			);
 			return r;
 		}
 
