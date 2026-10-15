@@ -424,7 +424,13 @@ float evaluate_terrain_analytical(
     vec3 grad_local = vec3(dot(final_grad_geo, dP_dx), 0.0, dot(final_grad_geo, dP_dz));
 
     // 8. Integrated Erosion Filter Guided by Structural Generation Fields
-    vec3 heightAndSlope = vec3(true_height, grad_local.x, grad_local.z);
+    // Project 3D geocentric velocity into the local 2D plane
+    vec2 local_vel = vec2(dot(vel, dP_dx), dot(vel, dP_dz));
+
+    // Skew the slope vector so erosion tracks along the fold direction
+    vec2 tectonic_skewed_slope = grad_local.xz + local_vel * 0.5;
+    vec3 heightAndSlope = vec3(true_height, tectonic_skewed_slope);
+    // vec3 heightAndSlope = vec3(true_height, grad_local.x, grad_local.z);
 
     // Derive erosion parameters dynamically from structural fields:
     // - High mountain ridges (fault_mask) & high elevation fade towards ridges (+1.0)
@@ -437,15 +443,21 @@ float evaluate_terrain_analytical(
         -1.0, 1.0
     );
 
-    // Erosion strength increases in mountain/canyon fault regions and reduces in flat lake basins
-    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3)) * (1.0 - basin_mask * 0.7);
+    // Erosion strength increases in mountain/canyon fault regions and reduces in flat lake basins and water regions in general (?)
+    float hydrology_protection = max(basin_mask * 0.7,
+                                max(river_profile * river_mask,
+                                    canyon_profile * canyon_mask));
+
+    // float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3)) * (1.0 - basin_mask * 0.7);
+    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3)) * (1.0 - hydrology_protection);
 
     // Gully carving weight is sharper in steep mountain fault zones and canyon walls
-    float erosion_gully_weight = mix(0.40, 0.70, clamp01(fault_mask + canyon_mask * 0.5));
-
+    float erosion_gully_weight = mix(0.40, 0.70, clamp01(collision_intensity + canyon_mask * 0.5));
     // Detail restriction and spatial scale adjust according to ridge features
-    float erosion_detail = mix(1.2, 1.8, clamp01(fault_mask + canyon_mask));
+    float erosion_detail = mix(1.2, 1.8, clamp01(collision_intensity + canyon_mask));
+
     float erosion_scale = mix(0.12, 0.22, fault_mask);
+    vec4 erosion_rounding = vec4(mix(1.0, 3.0, t_macro), mix(0.5, 0.0, t_macro), 0.1, 2.0);
 
     float ridgeMapVal = 0.0;
     float substrateVal = 0.0;
@@ -458,15 +470,15 @@ float evaluate_terrain_analytical(
         erosion_strength,
         erosion_gully_weight,
         erosion_detail,
-        vec4(2.0, 0.0, 0.1, 2.0),       // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
-        vec4(1.25, 1.25, 2.8, 1.5),     // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
-        vec2(0.7, 1.0),                 // assumedSlope
+        erosion_rounding,                                  // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
+        vec4(1.25, 1.25, 2.8, 1.5),                        // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
+        normalize(vec2(dot(vel, dP_dx), dot(vel, dP_dz))), // assumedSlope
         erosion_scale,
-        5,                              // octaves
-        2.3,                            // lacunarity
-        0.52,                           // gain
-        1.70,                           // cellScale
-        0.5,                            // normalization
+        5,                                                 // octaves
+        2.3,                                               // lacunarity
+        0.52,                                              // gain
+        1.70,                                              // cellScale
+        0.5,                                               // normalization
         ridgeMapVal,
         substrateVal,
         debugVal
@@ -475,7 +487,7 @@ float evaluate_terrain_analytical(
     true_height += erosionDelta.x;
     vec2 newSlope = heightAndSlope.yz + erosionDelta.yz;
     out_normal = normalize(vec3(-newSlope.x, 1.0, -newSlope.y));
-    out_ridge_map = ridgeMapVal;
+    out_ridge_map = max(massive_ridge, ridgeMapVal);
 
     // Calculate water level in normalized height space
     float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
