@@ -55,7 +55,7 @@ void main() {
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;
 	vec2 worldXZ = centerWorldPos + deltaWorld;
 
-	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
+	TerrainConfig con = TerrainConfig(0.00001, -500.0, 2000.0, 0.14, 0.5);
 	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
 
 	float h = 0.0;
