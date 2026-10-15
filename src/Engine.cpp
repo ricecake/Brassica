@@ -574,7 +574,7 @@ namespace brassica {
 			if (defaultHandler->IsKeyJustPressed(GLFW_KEY_EQUAL)) {
 				camera.CycleMode();
 				if (camera.mode == CameraMode::FirstPerson) {
-					float groundSurfaceHeight = std::max(currentGroundHeight, -1024.0f);
+					float groundSurfaceHeight = std::max(currentGroundHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
@@ -590,7 +590,7 @@ namespace brassica {
 					camera.mode = CameraMode::Accelerated;
 				} else {
 					camera.mode = CameraMode::FirstPerson;
-					float groundSurfaceHeight = std::max(currentGroundHeight, -1024.0f);
+					float groundSurfaceHeight = std::max(currentGroundHeight, 0.0f);
 					camera.position.y = groundSurfaceHeight + 3.0f;
 					camera.velocity = glm::vec3(0.0f);
 				}
@@ -704,7 +704,7 @@ namespace brassica {
 				}
 
 				float targetEyeHeight = isCtrlHeld ? 1.5f : 3.0f; // Crouching vs standing height
-				float groundSurfaceHeight = std::max(terrainHeight, -1024.0f);
+				float groundSurfaceHeight = std::max(terrainHeight, 0.0f);
 				float groundLevel = groundSurfaceHeight + targetEyeHeight;
 
 				// Horizontal movement directions
@@ -888,7 +888,7 @@ namespace brassica {
 		// Apply camera height constraint with basketball collision radius for free-fly modes
 		if (camera.mode != CameraMode::FirstPerson) {
 			constexpr float kBasketballRadius = 0.15f;
-			float           groundSurfaceHeight = std::max(currentGroundHeight, -1024.0f);
+			float           groundSurfaceHeight = std::max(currentGroundHeight, 0.0f);
 			float           minHeight = groundSurfaceHeight + kBasketballRadius;
 			if (camera.position.y < minHeight) {
 				camera.position.y = minHeight;
