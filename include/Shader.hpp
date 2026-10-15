@@ -31,6 +31,8 @@ namespace brassica {
 
 		static std::unordered_map<std::string, std::string>& GetReplacements();
 
+		static bool ResolveShader(const std::string& shaderPath, const std::string& outputPath);
+
 		bool LoadFromFile(const std::string& filepath);
 		bool CompileFromSource(
 			vk::Device          device,

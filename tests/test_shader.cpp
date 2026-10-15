@@ -360,3 +360,78 @@ TEST_CASE("Terrain Occlusion Helper Consumers Compile") {
 
 	brassica::Shader::ClearConstants();
 }
+
+TEST_CASE("Shader::ResolveShader Writes to Output Directory with resolved_ Prefix") {
+	std::filesystem::path testDir = std::filesystem::current_path() / "test_resolve_dir";
+	std::filesystem::path inDir = testDir / "input";
+	std::filesystem::path outDir = testDir / "output";
+	std::filesystem::create_directories(inDir);
+	std::filesystem::create_directories(outDir);
+
+	std::filesystem::path vertPath = inDir / "sample.vert";
+	{
+		std::ofstream out(vertPath);
+		out << "#version 460\n";
+		out << "void main() { gl_Position = vec4(0.0); }\n";
+	}
+
+	bool resolved = brassica::Shader::ResolveShader(vertPath.string(), outDir.string());
+	CHECK(resolved);
+
+	std::filesystem::path expectedOutFile = outDir / "resolved_sample.vert";
+	CHECK(std::filesystem::exists(expectedOutFile));
+
+	if (std::filesystem::exists(expectedOutFile)) {
+		std::ifstream in(expectedOutFile);
+		std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		CHECK(content.find("#version 460") != std::string::npos);
+		CHECK(content.find("#define VERTEX_SHADER") != std::string::npos);
+		CHECK(content.find("gl_Position") != std::string::npos);
+	}
+
+	std::filesystem::remove_all(testDir);
+}
+
+TEST_CASE("Shader Resolution Handling for Includes and Single Files") {
+	std::filesystem::path testDir = std::filesystem::current_path() / "test_resolve_mix_dir";
+	std::filesystem::path inDir = testDir / "input";
+	std::filesystem::path outDir = testDir / "output";
+	std::filesystem::create_directories(inDir);
+
+	std::filesystem::path incPath = inDir / "helper.glsl";
+	{
+		std::ofstream out(incPath);
+		out << "float getVal() { return 42.0; }\n";
+	}
+
+	std::filesystem::path fragPath = inDir / "main_shader.frag";
+	{
+		std::ofstream out(fragPath);
+		out << "#version 460\n";
+		out << "#include \"helper.glsl\"\n";
+		out << "void main() { float v = getVal(); }\n";
+	}
+
+	// Directly resolving a .glsl file when explicitly specified as input
+	bool resolvedGlsl = brassica::Shader::ResolveShader(incPath.string(), outDir.string());
+	CHECK(resolvedGlsl);
+	std::filesystem::path expectedOutGlsl = outDir / "resolved_helper.glsl";
+	CHECK(std::filesystem::exists(expectedOutGlsl));
+
+	// Resolving main shader that includes helper.glsl
+	bool resolvedFrag = brassica::Shader::ResolveShader(fragPath.string(), outDir.string());
+	CHECK(resolvedFrag);
+	std::filesystem::path expectedOutFrag = outDir / "resolved_main_shader.frag";
+	CHECK(std::filesystem::exists(expectedOutFrag));
+
+	if (std::filesystem::exists(expectedOutFrag)) {
+		std::ifstream in(expectedOutFrag);
+		std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		CHECK(content.find("#version 460") != std::string::npos);
+		CHECK(content.find("#define FRAGMENT_SHADER") != std::string::npos);
+		CHECK(content.find("getVal()") != std::string::npos);
+		CHECK(content.find("42.0") != std::string::npos);
+	}
+
+	std::filesystem::remove_all(testDir);
+}
