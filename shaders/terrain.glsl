@@ -2,6 +2,38 @@
 #define BRASSICA_TERRAIN_GLSL
 
 #include "bindless.glsl"
+#include "common.glsl"
+#include "lygia/generative/psrdnoise.glsl"
+
+void eval_terrain(vec3 p, TerrainConfig config, out float out_height, out vec3 out_normal, out vec3 out_grad) {
+	p *= config.spatial_scale;
+
+	float continent_mask;
+	vec3 grad_continent_mask;
+	evaluate_soft_voronoi_pseudosphere2(p, 32, continent_mask, grad_continent_mask);
+
+	vec3 grad_noise;
+	float warp = psrdnoise(p*continent_mask, vec3(0), 0.0);
+
+	float noise_height = dot_noise_fbm(p+warp, 4, 0.0, grad_noise);
+
+	vec3 grad_noise2;
+	float warp2 = psrdnoise(p/continent_mask, vec3(0), 10.0);
+	float noise_height2 = dot_noise_fbm(p*warp2, 4, 3.0, grad_noise2);
+
+	grad_noise += grad_noise2;
+	noise_height += noise_height2;
+
+	float final_height = noise_height * continent_mask;
+	vec3 final_grad = (grad_noise * continent_mask) + (noise_height * grad_continent_mask);
+
+	float height_amplitude = config.max_height - config.min_height;
+	vec3 scaled_grad = final_grad * height_amplitude * config.spatial_scale;
+
+	out_normal = normalize(vec3(-scaled_grad.x, 1.0, -scaled_grad.z));
+	out_height = remap(final_height, 0.0, 1.0, config.min_height, config.max_height);
+	out_grad = scaled_grad;
+}
 
 float getLODScale(float lod) {
 	if (lod <= 3.0) {
@@ -119,6 +151,10 @@ vec4 sampleTerrainBiome(
 	uvec4 lodOffsets4_7
 ) {
 	return sampleTerrainBiome(biomeIndex, worldXZ, level, textureDim, lodOffsets0_3, lodOffsets4_7, uvec4(0u));
+}
+
+vec4 sampleTerrainBiome(uint biomeIndex, vec2 worldXZ, uint level) {
+	return sampleTerrainBiome(biomeIndex, worldXZ, level, 1088u, uvec4(0u), uvec4(0u), uvec4(0u));
 }
 
 // Sample terrain tile visibility map (r = visibility flag / occlusion factor)

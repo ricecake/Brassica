@@ -46,6 +46,18 @@ namespace brassica {
 
 	struct TerrainTileVisibilityTexture {};
 
+	struct TerrainLowResChunkTexture {};
+
+	struct TerrainQuadtreeBuffer {};
+
+	struct TerrainPageTableBuffer {};
+
+	struct TerrainVertexPageBuffer {};
+
+	struct TerrainNodeCreateBuffer {};
+
+	struct TerrainFreePagePoolBuffer {};
+
 	struct TransmittanceLUT {};
 
 	struct MultiScatteringLUT {};

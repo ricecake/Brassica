@@ -168,4 +168,17 @@ namespace brassica {
 		return TerrainClipmapDesc(numLODs);
 	}
 
+	inline graph::ResourceDesc TerrainLowResChunkDesc(std::uint32_t numLayers) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = 1024,
+			.height = 1024,
+			.layers = numLayers,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
+			),
+		};
+	}
+
 } // namespace brassica

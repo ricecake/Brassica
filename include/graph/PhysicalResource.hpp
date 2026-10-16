@@ -458,6 +458,12 @@ namespace brassica::graph {
 
 		[[nodiscard]] vk::Buffer GetBuffer() const { return m_buffer; }
 
+		[[nodiscard]] vk::DeviceAddress GetDeviceAddress() const {
+			if (!m_buffer || !m_device) return 0;
+			vk::BufferDeviceAddressInfo info{m_buffer};
+			return m_device.getBufferAddress(info);
+		}
+
 		[[nodiscard]] const ResourceDesc& GetDesc() const { return m_desc; }
 
 		[[nodiscard]] bool IsImported() const { return m_ownership == Ownership::Imported; }
@@ -909,10 +915,10 @@ namespace brassica::graph {
 	inline ResourceDesc StorageBufferDesc(std::uint64_t byteSize) {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Buffer,
-			// eTransferDst: same reason as UniformBufferDesc above -- ParticleSystemNode's
-			// typeBufferNode is exactly this preset, uploaded via HostWriteNode/WriteSpan.
+			// eTransferDst + eShaderDeviceAddress for Buffer Device Address (BDA)
 			.usageMask = static_cast<std::uint32_t>(
-				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst
+				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst |
+				vk::BufferUsageFlagBits::eShaderDeviceAddress
 			),
 			.byteSize = byteSize,
 		};

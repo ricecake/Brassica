@@ -378,7 +378,9 @@ namespace brassica {
 				shaderDir = std::string(BRASSICA_BUILD_DIR) + "/../shaders";
 			}
 		}
-		shaderWatcher.WatchDirectory(shaderDir);
+		if (!options.headless) {
+			shaderWatcher.WatchDirectory(shaderDir);
+		}
 
 		terrainAS.Init(instance, device, allocator);
 
@@ -993,15 +995,18 @@ namespace brassica {
 		}
 
 		// 2. Acquire Swapchain Image
-		auto acquireResult = device.acquireNextImageKHR(vkbSwapchain.swapchain, 1000000000, frame.swapchainSemaphore);
-		if (acquireResult.result == vk::Result::eErrorOutOfDateKHR) {
-			RecreateSwapchain();
-			return;
-		} else if (acquireResult.result != vk::Result::eSuccess && acquireResult.result != vk::Result::eSuboptimalKHR) {
-			spdlog::error("Failed to acquire swapchain image!");
-			return;
+		uint32_t swapchainImageIndex = 0;
+		if (!options.headless && vkbSwapchain.swapchain) {
+			auto acquireResult = device.acquireNextImageKHR(vkbSwapchain.swapchain, 1000000000, frame.swapchainSemaphore);
+			if (acquireResult.result == vk::Result::eErrorOutOfDateKHR) {
+				RecreateSwapchain();
+				return;
+			} else if (acquireResult.result != vk::Result::eSuccess && acquireResult.result != vk::Result::eSuboptimalKHR) {
+				spdlog::error("Failed to acquire swapchain image!");
+				return;
+			}
+			swapchainImageIndex = acquireResult.value;
 		}
-		uint32_t swapchainImageIndex = acquireResult.value;
 
 		// 3. Record Commands
 		frame.commandBuffer.reset();
@@ -1030,9 +1035,12 @@ namespace brassica {
 		graph::ResourceDesc swapchainDesc = graph::ColorAttachmentDesc(extent.width, extent.height, format);
 		swapchainDesc.usageMask &= ~static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled);
 
+		vk::Image swapchainImg = (!swapchainImages.empty() && swapchainImageIndex < swapchainImages.size()) ? swapchainImages[swapchainImageIndex] : vk::Image{};
+		vk::ImageView swapchainView = (!swapchainImageViews.empty() && swapchainImageIndex < swapchainImageViews.size()) ? swapchainImageViews[swapchainImageIndex] : vk::ImageView{};
+
 		physicalRegistry.RegisterImportedTexture<Swapchain>(
-			swapchainImages[swapchainImageIndex],
-			swapchainImageViews[swapchainImageIndex],
+			swapchainImg,
+			swapchainView,
 			swapchainDesc,
 			vk::ImageLayout::eUndefined,
 			false,
@@ -1326,11 +1334,12 @@ namespace brassica {
 		);
 		presentBarrier.setNewLayout(vk::ImageLayout::ePresentSrcKHR);
 		presentBarrier.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-		presentBarrier.setImage(swapchainImages[swapchainImageIndex]);
-
-		vk::DependencyInfo presentDepInfo{};
-		presentDepInfo.setImageMemoryBarriers(presentBarrier);
-		frame.commandBuffer.pipelineBarrier2(presentDepInfo);
+		if (!swapchainImages.empty() && swapchainImageIndex < swapchainImages.size()) {
+			presentBarrier.setImage(swapchainImages[swapchainImageIndex]);
+			vk::DependencyInfo presentDepInfo{};
+			presentDepInfo.setImageMemoryBarriers(presentBarrier);
+			frame.commandBuffer.pipelineBarrier2(presentDepInfo);
+		}
 
 		frame.commandBuffer.end();
 
@@ -1340,18 +1349,21 @@ namespace brassica {
 
 		std::vector<vk::SemaphoreSubmitInfo> waitInfos;
 
-		vk::SemaphoreSubmitInfo waitInfo{};
-		waitInfo.setSemaphore(frame.swapchainSemaphore);
-		waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
-
-		waitInfos.push_back(waitInfo);
+		if (!swapchainImages.empty()) {
+			vk::SemaphoreSubmitInfo waitInfo{};
+			waitInfo.setSemaphore(frame.swapchainSemaphore);
+			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+			waitInfos.push_back(waitInfo);
+		}
 
 		std::vector<vk::SemaphoreSubmitInfo> signalInfos;
 
-		vk::SemaphoreSubmitInfo renderSignalInfo{};
-		renderSignalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
-		renderSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
-		signalInfos.push_back(renderSignalInfo);
+		if (!swapchainRenderSemaphores.empty() && swapchainImageIndex < swapchainRenderSemaphores.size()) {
+			vk::SemaphoreSubmitInfo renderSignalInfo{};
+			renderSignalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
+			renderSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+			signalInfos.push_back(renderSignalInfo);
+		}
 
 		vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
 		frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
@@ -1367,17 +1379,19 @@ namespace brassica {
 		graphicsQueue.submit2(submitInfo, nullptr);
 
 		// 5. Present
-		vk::PresentInfoKHR presentInfo{};
-		presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
-		vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
-		presentInfo.setSwapchains(swapchain);
-		presentInfo.setImageIndices(swapchainImageIndex);
+		if (!options.headless && !swapchainImages.empty() && swapchainImageIndex < swapchainImages.size()) {
+			vk::PresentInfoKHR presentInfo{};
+			presentInfo.setWaitSemaphores(swapchainRenderSemaphores[swapchainImageIndex]);
+			vk::SwapchainKHR swapchain = vkbSwapchain.swapchain;
+			presentInfo.setSwapchains(swapchain);
+			presentInfo.setImageIndices(swapchainImageIndex);
 
-		vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
-		if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR ||
-		    windowResized) {
-			windowResized = false;
-			RecreateSwapchain();
+			vk::Result presentResult = graphicsQueue.presentKHR(presentInfo);
+			if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR ||
+			    windowResized) {
+				windowResized = false;
+				RecreateSwapchain();
+			}
 		}
 
 		for (auto& handler : systemHandlers) {
