@@ -38,19 +38,15 @@ float getWaterRingScale(float ring) {
 }
 
 vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
-	if (ringLevel >= 8.0) {
-		normal = vec3(0.0, 1.0, 0.0);
-		return vec3(0.0);
-	}
-
 	vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, uv, uint(ringLevel), params.gridParams.w);
 
 	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y) * mix(vec3(10, 1.0, 10), vec3(1, 1.0, 1), 1.0-smoothstep(-100.0, 0.0, minMax.x) );
 	mat3 grad;
-	vec3 amplitude = mix(vec3(1, 0.75, 1), vec3(1, 10.0, 1), 1.0-smoothstep(-200.0, 0.0, minMax.x) )* (1.0 - smoothstep(3000.0, 20000.0, distToCam));
-	float frequency = 0.004;
+	// vec3 amplitude = mix(vec3(1, 0.75, 1), vec3(1, 10.0, 1), 1.0-smoothstep(-200.0, 0.0, minMax.x) )* (1.0 - smoothstep(3000.0, 20000.0, distToCam));
+	vec3 amplitude = mix(vec3(0.25, 1.0, 0.25), vec3(1,20,1), 1.0-smoothstep(-200.0, 0.0, minMax.x));
+	float frequency = 0.01;
 
-	vec3 sinGrad = amplitude * cross_noise_fbm((inWorldPos) * frequency + abs(dot_noise(inWorldPos * 0.0025, time * 0.5)), 4, time * 0.25, grad);
+	vec3 sinGrad = amplitude * cross_noise_fbm((inWorldPos) * frequency + abs(dot_noise(inWorldPos * 0.0025, time * 0.5)), 2, time * 0.5, grad) * (1.0 - smoothstep(10.0, 100.0, distToCam));
 
 	vec3 dX = grad[0] * amplitude * frequency;
 	vec3 dZ = grad[2] * amplitude * frequency;
@@ -59,6 +55,9 @@ vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, floa
 	vec3 tangentZ = vec3(0.0, 0.0, 1.0) + dZ;
 
 	normal = normalize(cross(tangentZ, tangentX));
+	if (ringLevel >= 8.0) {
+		return vec3(0.0);
+	}
 
 	return sinGrad;
 }
