@@ -1634,26 +1634,8 @@ namespace brassica {
 		glm::vec3   moonRadiance = (lights.size() > 1) ? (lights[1].color * lights[1].intensity)
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
-		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
-		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
-		glm::vec3 camNormal = glm::normalize(camera.position - planetCenter);
-
-		float     cosTheta = glm::dot(upRef, camNormal);
-		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
-		if (cosTheta < 0.99999f) {
-			if (cosTheta < -0.99999f) {
-				rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
-			} else {
-				glm::vec3 rotAxis = glm::cross(upRef, camNormal);
-				float     s = std::sqrt((1.0f + cosTheta) * 2.0f);
-				float     invs = 1.0f / s;
-				rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
-			}
-		}
-
-		glm::quat invRotToCam = glm::inverse(rotToCam);
-		glm::vec3 sunDir = invRotToCam * sunDirGlobal;
-		glm::vec3 moonDir = invRotToCam * moonDirGlobal;
+		glm::vec3 sunDir = sunDirGlobal;
+		glm::vec3 moonDir = moonDirGlobal;
 
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,

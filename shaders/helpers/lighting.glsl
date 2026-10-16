@@ -46,38 +46,12 @@ void calculateLightContribution(
 		}
 	} else if (type == LIGHT_TYPE_DIRECTIONAL) {
 		light_dir = normalize(-light_dir_param);
-		float planetRadius = FAKE_PLANET_RADIUS;
-		vec3 planetCenter = vec3(0.0, -planetRadius, 0.0);
-		vec3 ro = frag_pos - planetCenter;
 
-		// Planetary sphere ray intersection test to evaluate true geometric planetary occlusion
-		float b = dot(ro, light_dir);
-		float rLen = length(ro);
-		float c = (rLen - planetRadius) * (rLen + planetRadius);
-		float det = b * b - c;
-
-		if (det >= 0.0) {
-			float sqrtDet = sqrt(det);
-			float t0 = -b - sqrtDet;
-			float t1 = -b + sqrtDet;
-			// If ray enters or hits the planet sphere ahead of the surface fragment (with small epsilon)
-			if (t1 > 0.001 && t0 < 0.001) {
-				// Fragment is below/inside the planet surface horizon
-				attenuation = 0.0;
-			} else if (t0 >= 0.001) {
-				// Ray towards light intersects the planet sphere body
-				attenuation = 0.0;
-			} else {
-				attenuation = 1.0;
-			}
-		} else {
-			attenuation = 1.0;
-		}
-
-		// Grazing smoothstep transition near the local surface horizon
-		vec3 surfaceNormal = ro / max(0.001, rLen);
+		// NdotL calculation
+		vec3 surfaceNormal = vec3(0.0, 1.0, 0.0); // Or use actual terrain normal if available
 		float NdotL = dot(surfaceNormal, light_dir);
-		attenuation *= smoothstep(-0.02, 0.02, NdotL);
+
+		attenuation = smoothstep(-0.02, 0.02, NdotL);
 	} else if (type == LIGHT_TYPE_SPOT) {
 		light_dir = normalize(light_pos - frag_pos);
 		float distance = length(light_pos - frag_pos);

@@ -179,15 +179,12 @@ namespace brassica {
 				// Geometric planet curvature occlusion from camera altitude
 				glm::vec3 planetCenter(0.0f, -R, 0.0f);
 				glm::vec3 roCam = cameraPosition - planetCenter;
-				float     rCamLen = glm::length(roCam);
+				float rCamLen = R + std::max(0.0f, cameraPosition.y);
 				glm::vec3 topocentricNormal = (rCamLen > 1e-4f) ? (roCam / rCamLen) : glm::vec3(0.0f, 1.0f, 0.0f);
-				float     muHorizon = -std::sqrt(std::max(0.0f, 1.0f - (R * R) / (rCamLen * rCamLen)));
+				float muHorizon = -std::sqrt(std::max(0.0f, 1.0f - (R * R) / (rCamLen * rCamLen)));
 
-				float sunNdotL = glm::dot(topocentricNormal, sunDir);
-				float moonNdotL = glm::dot(topocentricNormal, moonDir);
-
-				float sunVis = sunNdotL - muHorizon;
-				float moonVis = moonNdotL - muHorizon;
+				float sunVis = sunDir.y - muHorizon;
+				float moonVis = moonDir.y - muHorizon;
 
 				float sunFade = glm::smoothstep(-0.02f, 0.01f, sunVis);
 				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
