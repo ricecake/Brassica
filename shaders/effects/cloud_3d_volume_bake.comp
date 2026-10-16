@@ -1,0 +1,22 @@
+#version 460 core
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(binding = 0, rgba16f) uniform image3D outVolume;
+
+#include "../helpers/noise.glsl"
+
+void main() {
+	ivec3 voxel = ivec3(gl_GlobalInvocationID.xyz);
+	ivec3 size = imageSize(outVolume);
+	if (voxel.x >= size.x || voxel.y >= size.y || voxel.z >= size.z) return;
+
+	vec3 p = vec3(voxel) / vec3(size);
+
+	float noiseVal = dot_noise_fbm(p * 8.0, 4);
+	float worleyWide = cross_noise_fbm(p * 4.0, 3);
+	float worleyMedium = cross_noise_fbm(p * 8.0, 3);
+	float worleySmall = cross_noise_fbm(p * 16.0, 2);
+
+	imageStore(outVolume, voxel, vec4(noiseVal, worleyWide, worleyMedium, worleySmall));
+}

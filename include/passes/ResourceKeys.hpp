@@ -95,4 +95,22 @@ namespace brassica {
 
 	using BallIndirectBuffer = EntityIndirectBuffer<struct BallSystemHandlerTag>;
 
+	// Boidish Cloud System Resource Keys
+	struct CloudWeatherTexture {};
+	struct CloudWeatherMinMaxTexture {};
+	struct Cloud3DVolumeTexture {};
+	struct Cloud3DFrontLUTTexture {};
+	struct Cloud2DPropsLUTTexture {};
+	struct CloudBoundingTexture {};
+	struct CloudShadowMap {};
+	struct CloudErrorMap {};
+	struct CloudPackedColor {};
+	struct CloudPackedDepth {};
+	struct CloudPackedVelocity {};
+	struct CloudTemporalColor {};
+	struct CloudTemporalMoments {};
+	struct CloudFilteredColor {};
+	struct CloudTileQueueSSBO {};
+	struct CloudIndirectDispatchSSBO {};
+
 } // namespace brassica

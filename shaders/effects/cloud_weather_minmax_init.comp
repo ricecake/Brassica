@@ -1,0 +1,18 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rg16f) uniform image2D outMinMaxMip0;
+layout(binding = 1) uniform sampler2D uWeatherMap;
+
+void main() {
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(outMinMaxMip0);
+	if (pixel.x >= size.x || pixel.y >= size.y) return;
+
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+	vec4 weather = textureLod(uWeatherMap, uv, 0.0);
+
+	float coverage = weather.r;
+	imageStore(outMinMaxMip0, pixel, vec4(coverage, coverage, 0.0, 0.0));
+}
