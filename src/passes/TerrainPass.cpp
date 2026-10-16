@@ -96,16 +96,13 @@ namespace brassica {
 		}
 		lastASCameraPos = cameraPos;
 
-		// Generate distance-aware AABBs for the terrain grid chunks.
-		// For points/AABBs close to the camera, resolution is finer (e.g., 32 world units per AABB).
-		// For points/AABBs further from the camera (shadow caster point distance), resolution is coarser (64, 128,
-		// etc.).
-		std::vector<VkAabbPositionsKHR> aabbs;
+		// Generate distance-aware AABBs for the terrain grid chunks matching task shader LOD sizes.
+		std::vector<TerrainAABBData> aabbs;
 
 		uint32_t meshletsPerRow = 16;
 		for (uint32_t lod = 0; lod < numLODs; ++lod) {
 			float     baseMeshletSize = 32.0f;
-			float     meshletSize = baseMeshletSize * std::pow(2.0f, std::min(0.0f, static_cast<float>(lod - 1)));
+			float     meshletSize = baseMeshletSize * std::pow(2.0f, static_cast<float>(lod));
 			glm::vec2 cameraSnap = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / meshletSize) * meshletSize;
 
 			for (uint32_t row = 0; row < meshletsPerRow; ++row) {
@@ -119,27 +116,29 @@ namespace brassica {
 					);
 					glm::vec3 maxB = minB + glm::vec3(meshletSize, 2000.0f, meshletSize);
 
-					// Radial ring check matching task shader to only generate AABBs for active LOD regions
+					// Ring check matching task shader to only generate AABBs for active LOD regions
 					if (lod > 0) {
-						float prevMeshletSize = baseMeshletSize * std::pow(2.0f, static_cast<float>(lod - 1));
-						float safeInnerRadius = (static_cast<float>(meshletsPerRow) * 0.5f - 1.0f) * prevMeshletSize;
-						glm::vec2 maxOffset = glm::max(
-							glm::abs(glm::vec2(minB.x, minB.z) - glm::vec2(cameraPos.x, cameraPos.z)),
-							glm::abs(glm::vec2(maxB.x, maxB.z) - glm::vec2(cameraPos.x, cameraPos.z))
-						);
-						float maxDistToCam = glm::length(maxOffset);
-						if (maxDistToCam < safeInnerRadius) {
+						float     prevMeshletSize = baseMeshletSize * std::pow(2.0f, static_cast<float>(lod - 1));
+						glm::vec2 prevCameraSnap =
+							glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / prevMeshletSize) * prevMeshletSize;
+						float prevExtent = static_cast<float>(meshletsPerRow) * 0.5f * prevMeshletSize;
+
+						bool insideX = minB.x >= prevCameraSnap.x - prevExtent && maxB.x <= prevCameraSnap.x + prevExtent;
+						bool insideZ = minB.z >= prevCameraSnap.y - prevExtent && maxB.z <= prevCameraSnap.y + prevExtent;
+						if (insideX && insideZ) {
 							continue; // Region covered by finer LOD
 						}
 					}
 
-					VkAabbPositionsKHR aabb{};
+					TerrainAABBData aabb{};
 					aabb.minX = minB.x;
 					aabb.minY = minB.y;
 					aabb.minZ = minB.z;
 					aabb.maxX = maxB.x;
 					aabb.maxY = maxB.y;
 					aabb.maxZ = maxB.z;
+					aabb.lod = static_cast<float>(lod);
+					aabb.padding = 0.0f;
 
 					aabbs.push_back(aabb);
 				}
@@ -182,11 +181,11 @@ namespace brassica {
 				return static_cast<void*>(nullptr);
 			};
 
-		// 1. Upload AABBs to GPU Buffer
-		vk::DeviceSize aabbBufferSize = sizeof(VkAabbPositionsKHR) * aabbs.size();
+		// 1. Upload AABBs to GPU Buffer (usable as BLAS input & storage buffer)
+		vk::DeviceSize aabbBufferSize = sizeof(TerrainAABBData) * aabbs.size();
 		void*          aabbMapped = createBuffer(
 			aabbBufferSize,
-			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eStorageBuffer,
 			aabbBuffer,
 			true
 		);
@@ -197,7 +196,7 @@ namespace brassica {
 		// 2. Build BLAS
 		vk::AccelerationStructureGeometryAabbsDataKHR aabbGeomData{};
 		aabbGeomData.setData(aabbBuffer.deviceAddress);
-		aabbGeomData.setStride(sizeof(VkAabbPositionsKHR));
+		aabbGeomData.setStride(sizeof(TerrainAABBData));
 
 		vk::AccelerationStructureGeometryDataKHR geomData{};
 		geomData.setAabbs(aabbGeomData);

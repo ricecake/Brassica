@@ -817,6 +817,7 @@ namespace brassica {
 			.activeFrame = activeFrame,
 			.clipmapImageView = terrainClipmap.GetImageView(),
 			.clipmapSampler = terrainClipmap.GetSampler(),
+			.terrainAABBBuffer = terrainPass->GetAABBBuffer(),
 			.pushConstants = terrainPush,
 		});
 
