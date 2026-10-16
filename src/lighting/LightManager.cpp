@@ -121,7 +121,7 @@ namespace brassica {
 
 			if (_lights.size() >= 2 && _lights[0].type == DIRECTIONAL_LIGHT && _lights[1].type == DIRECTIONAL_LIGHT) {
 				constexpr float R = FAKE_PLANET_RADIUS;
-				float phi = cameraPosition.z / R; // Latitude in radians
+				float phi = -cameraPosition.z / R; // Latitude in radians
 				phi = std::clamp(phi, -glm::half_pi<float>(), glm::half_pi<float>());
 				float lambda = cameraPosition.x / R; // Longitude in radians
 				while (lambda > glm::pi<float>()) lambda -= glm::two_pi<float>();

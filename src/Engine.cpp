@@ -851,6 +851,41 @@ namespace brassica {
 		constexpr float X_max = glm::pi<float>() * R; // ~1,884,955.592 m
 		constexpr float Z_max = glm::half_pi<float>() * R; // ~942,477.796 m
 
+		// North / South seam crossing (Z axis)
+		if (camera.position.z > Z_max) {
+			float overstep = camera.position.z - Z_max;
+			camera.position.z = Z_max - overstep;
+			camera.position.z = std::clamp(camera.position.z, -Z_max, Z_max);
+			camera.yaw += glm::pi<float>();
+			while (camera.yaw > glm::pi<float>()) {
+				camera.yaw -= glm::two_pi<float>();
+			}
+			while (camera.yaw < -glm::pi<float>()) {
+				camera.yaw += glm::two_pi<float>();
+			}
+			camera.velocity.z = -camera.velocity.z;
+
+			camera.position.x += X_max;
+
+			camera.UpdateOrientation();
+		} else if (camera.position.z < -Z_max) {
+			float overstep = -Z_max - camera.position.z;
+			camera.position.z = -Z_max + overstep;
+			camera.position.z = std::clamp(camera.position.z, -Z_max, Z_max);
+			camera.yaw += glm::pi<float>();
+			while (camera.yaw > glm::pi<float>()) {
+				camera.yaw -= glm::two_pi<float>();
+			}
+			while (camera.yaw < -glm::pi<float>()) {
+				camera.yaw += glm::two_pi<float>();
+			}
+			camera.velocity.z = -camera.velocity.z;
+
+			camera.position.x += X_max;
+
+			camera.UpdateOrientation();
+		}
+
 		// East / West seam crossing (X axis)
 		while (camera.position.x > X_max) {
 			camera.position.x -= 2.0f * X_max;
@@ -859,34 +894,6 @@ namespace brassica {
 			camera.position.x += 2.0f * X_max;
 		}
 
-		// North / South seam crossing (Z axis)
-		if (camera.position.z > Z_max) {
-			float overstep = camera.position.z - Z_max;
-			camera.position.z = Z_max - overstep;
-			camera.position.z = std::clamp(camera.position.z, -Z_max, Z_max);
-			camera.yaw = glm::pi<float>() - camera.yaw;
-			while (camera.yaw > glm::pi<float>()) {
-				camera.yaw -= glm::two_pi<float>();
-			}
-			while (camera.yaw < -glm::pi<float>()) {
-				camera.yaw += glm::two_pi<float>();
-			}
-			camera.velocity.z = -camera.velocity.z;
-			camera.UpdateOrientation();
-		} else if (camera.position.z < -Z_max) {
-			float overstep = -Z_max - camera.position.z;
-			camera.position.z = -Z_max + overstep;
-			camera.position.z = std::clamp(camera.position.z, -Z_max, Z_max);
-			camera.yaw = glm::pi<float>() - camera.yaw;
-			while (camera.yaw > glm::pi<float>()) {
-				camera.yaw -= glm::two_pi<float>();
-			}
-			while (camera.yaw < -glm::pi<float>()) {
-				camera.yaw += glm::two_pi<float>();
-			}
-			camera.velocity.z = -camera.velocity.z;
-			camera.UpdateOrientation();
-		}
 
 		// Trigger a new ground-height-and-normal readback for next frame, if TerrainClipmapTexture
 		// is initialized and has been populated/transitioned in the frame graph. Reads a 128x128
