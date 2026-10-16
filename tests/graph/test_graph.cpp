@@ -31,6 +31,7 @@
 #include "lighting/LightningManager.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "ServiceLocator.hpp"
+#include "terrain/ITerrainClipmap.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "ui/QuickSettingsWidget.hpp"
@@ -1198,4 +1199,51 @@ TEST_CASE("QuickSettingsWidget camera mode UI integration via ServiceLocator") {
 
 	camData->mode = brassica::CameraMode::Accelerated;
 	CHECK(locator.Get<brassica::CameraData>()->mode == brassica::CameraMode::Accelerated);
+}
+
+TEST_CASE("ITerrainClipmap interface height queries and PNG export default methods") {
+	class MockTerrainClipmap: public brassica::ITerrainClipmap {
+	public:
+		void Initialize() override {}
+		void Shutdown() override {}
+		void Regenerate() override {}
+		bool GetHeightAtWorldPos(float x, float z, float& outH) const override {
+			if (x >= -100.0f && x <= 100.0f && z >= -100.0f && z <= 100.0f) {
+				outH = 42.0f;
+				return true;
+			}
+			return false;
+		}
+		float SampleHeight(float x, float z) const override {
+			float h = 0.0f;
+			if (GetHeightAtWorldPos(x, z, h)) {
+				return h;
+			}
+			return 10.0f;
+		}
+		bool ExportTerrainMapPNG(
+			const std::string& filepath,
+			glm::vec2          center,
+			float              extent,
+			uint32_t           res
+		) const override {
+			(void)filepath;
+			(void)center;
+			(void)extent;
+			(void)res;
+			return true;
+		}
+	};
+
+	MockTerrainClipmap clipmap;
+	float              h = 0.0f;
+	CHECK(clipmap.GetHeightAtWorldPos(0.0f, 0.0f, h));
+	CHECK(h == doctest::Approx(42.0f));
+
+	CHECK_FALSE(clipmap.GetHeightAtWorldPos(500.0f, 500.0f, h));
+
+	CHECK(clipmap.SampleHeight(0.0f, 0.0f) == doctest::Approx(42.0f));
+	CHECK(clipmap.SampleHeight(500.0f, 500.0f) == doctest::Approx(10.0f));
+
+	CHECK(clipmap.ExportTerrainMapPNG("map.png", glm::vec2(0.0f), 1024.0f, 512));
 }

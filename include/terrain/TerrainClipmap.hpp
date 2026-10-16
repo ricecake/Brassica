@@ -68,6 +68,24 @@ namespace brassica {
 
 		void Regenerate() override { m_forceRegenerate = true; }
 
+		// Heightmap Readback & Physics / Collision queries
+		void RecordReadbackCommand(vk::CommandBuffer cmd);
+		void SyncCPUHeightmap();
+
+		bool GetHeightAtWorldPos(float worldX, float worldZ, float& outHeight) const override;
+		float SampleHeight(float worldX, float worldZ) const override;
+		bool IsCPUHeightmapValid() const { return m_hasValidCpuReadback; }
+
+		const std::vector<glm::vec4>& GetCPUPhysicsHeightmap() const { return m_cpuPhysicsLODHeightmap; }
+		const ClipmapLevelInfo& GetCPUPhysicsLevelInfo() const { return m_cpuPhysicsLODInfo; }
+
+		bool ExportTerrainMapPNG(
+			const std::string& filepath,
+			glm::vec2          centerWorldPos,
+			float              chunkExtent,
+			uint32_t           resolution
+		) const override;
+
 		// Unified CPU Terrain Generator
 		static glm::vec4 SampleTerrain(float worldX, float worldZ, float texelSize);
 
@@ -138,6 +156,14 @@ namespace brassica {
 
 		std::vector<ClipmapLevelInfo> levelInfos;
 		bool                          m_forceRegenerate{false};
+
+		vk::Buffer                    m_readbackBuffer{nullptr};
+		VmaAllocation                 m_readbackAllocation{VK_NULL_HANDLE};
+		void*                         m_readbackMappedPtr{nullptr};
+
+		mutable std::vector<glm::vec4> m_cpuPhysicsLODHeightmap;
+		mutable ClipmapLevelInfo      m_cpuPhysicsLODInfo{};
+		mutable bool                  m_hasValidCpuReadback{false};
 
 		void CreateTextureArrays();
 		void CreateSampler();
