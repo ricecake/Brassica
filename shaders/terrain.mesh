@@ -119,16 +119,22 @@ void main() {
 	outPosition[vertexIndex] = worldPos;
 	outNormal[vertexIndex] = normal;
 
-	vec3 lodColor = vec3(0, 1, 0);//pal(worldPos.y / (lodLevel + 1), vec3(0.5, 0.5, 0.5), vec3(0.5, 0.5, 0.5), vec3(1.0, 1.0, 1.0), vec3(0.0, 0.33, 0.66));
-	vec3 sand = vec3(0.9, 0.6, 0.0);
-	vec3 snow = vec3(0.8, 0.9, 1.1);
+	vec3 lodColor = vec3(0.2, 0.6, 0.2);
+	vec3 sand = vec3(0.9, 0.8, 0.5);
+	vec3 snow = vec3(0.9, 0.95, 1.0);
 	vec3 rock = vec3(0.3, 0.22, 0.2);
 
 	lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
-	lodColor = mix(sand, lodColor, smoothstep(-50.0, -40.0, height));
-	lodColor = mix(lodColor, snow, smoothstep(40.0, 50.0, height));
+	lodColor = mix(sand, lodColor, smoothstep(-2.0, 4.0, height));
+	lodColor = mix(lodColor, snow, smoothstep(40.0, 60.0, height));
 
-	// lodColor += vec3(1,0,0) * lodLevel;
+	// Translucent blue water layer over areas where terrain height is below zero
+	if (height < 0.0) {
+		vec3 waterColor = vec3(0.05, 0.45, 0.85);
+		float depth = -height;
+		float waterAlpha = clamp(0.35 + depth * 0.04, 0.35, 0.85);
+		lodColor = mix(lodColor, waterColor, waterAlpha);
+	}
 
 	outAlbedo[vertexIndex] = vec4(lodColor, 1.0);
 

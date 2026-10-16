@@ -15,6 +15,7 @@ namespace brassica {
 		FastNoise::SmartNode<FastNoise::DomainScale> baseScale;
 		FastNoise::SmartNode<FastNoise::DomainScale> detailScale;
 		FastNoise::SmartNode<FastNoise::DomainScale> maskScale;
+		FastNoise::SmartNode<FastNoise::DomainScale> biomeScale;
 
 		TerrainNoiseGenerators() {
 			auto simplex = FastNoise::New<FastNoise::Simplex>();
@@ -42,12 +43,39 @@ namespace brassica {
 			maskScale = FastNoise::New<FastNoise::DomainScale>();
 			maskScale->SetSource(simplex);
 			maskScale->SetScaling(0.0008f);
+
+			// Domain Warped Worley Noise for Biomes
+			auto cellular = FastNoise::New<FastNoise::CellularDistance>();
+			cellular->SetDistanceFunction(FastNoise::DistanceFunction::Euclidean);
+			cellular->SetReturnType(FastNoise::CellularDistance::ReturnType::Index0);
+
+			auto warp = FastNoise::New<FastNoise::DomainWarpGradient>();
+			warp->SetWarpAmplitude(50.0f);
+			warp->SetSource(cellular);
+
+			biomeScale = FastNoise::New<FastNoise::DomainScale>();
+			biomeScale->SetSource(warp);
+			biomeScale->SetScaling(0.0004f);
 		}
 	};
 
 	static TerrainNoiseGenerators& GetGenerators() {
 		static TerrainNoiseGenerators gens;
 		return gens;
+	}
+
+	static float EvalHeightFromComponents(float baseVal, float detailVal, float maskVal, float biomeVal) {
+		float biome = std::clamp(biomeVal, 0.0f, 1.0f);
+
+		float mountainFactor = std::clamp((maskVal - (-0.1f)) / 0.4f, 0.0f, 1.0f);
+		mountainFactor = mountainFactor * mountainFactor * (3.0f - 2.0f * mountainFactor);
+		float detailFactor = (0.15f + 0.85f * mountainFactor) * std::lerp(0.3f, 1.2f, biome);
+
+		float baseOffset = std::lerp(-35.0f, 30.0f, biome);
+		float baseHeightScale = std::lerp(40.0f, 120.0f, biome);
+		float detailHeightScale = std::lerp(20.0f, 80.0f, biome);
+
+		return baseOffset + baseVal * baseHeightScale + detailVal * detailHeightScale * detailFactor;
 	}
 
 	glm::vec4 TerrainClipmap::SampleTerrain(float worldX, float worldZ, float texelSize) {
@@ -57,14 +85,11 @@ namespace brassica {
 
 		auto evalHeight = [&](float x, float z) {
 			float maskVal = gens.maskScale->GenSingle2D(x, z, seed);
-			float mountainFactor = std::clamp((maskVal - (-0.1f)) / 0.4f, 0.0f, 1.0f);
-			mountainFactor = mountainFactor * mountainFactor * (3.0f - 2.0f * mountainFactor);
-			float detailFactor = 0.15f + 0.85f * mountainFactor;
+			float baseVal = gens.baseScale->GenSingle2D(x, z, seed);
+			float detailVal = gens.detailScale->GenSingle2D(x, z, seed);
+			float biomeVal = gens.biomeScale->GenSingle2D(x, z, seed);
 
-			float baseVal = gens.baseScale->GenSingle2D(x, z, seed) * 100.0f;
-			float detailVal = gens.detailScale->GenSingle2D(x, z, seed) * 75.0f;
-
-			return baseVal + detailVal * detailFactor;
+			return EvalHeightFromComponents(baseVal, detailVal, maskVal, biomeVal);
 		};
 
 		float h = evalHeight(worldX, worldZ);
@@ -124,6 +149,7 @@ namespace brassica {
 		std::vector<float> basePatch(totalPadded);
 		std::vector<float> detailPatch(totalPadded);
 		std::vector<float> maskPatch(totalPadded);
+		std::vector<float> biomePatch(totalPadded);
 		std::vector<float> paddedHeights(totalPadded);
 
 		auto& gens = GetGenerators();
@@ -135,14 +161,10 @@ namespace brassica {
 		gens.baseScale->GenUniformGrid2D(basePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
 		gens.detailScale->GenUniformGrid2D(detailPatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
 		gens.maskScale->GenUniformGrid2D(maskPatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
+		gens.biomeScale->GenUniformGrid2D(biomePatch.data(), gridStartX, gridStartZ, paddedW, paddedH, texelSize, texelSize, seed);
 
 		for (size_t i = 0; i < totalPadded; ++i) {
-			float maskVal = maskPatch[i];
-			float mountainFactor = std::clamp((maskVal - (-0.1f)) / 0.4f, 0.0f, 1.0f);
-			mountainFactor = mountainFactor * mountainFactor * (3.0f - 2.0f * mountainFactor);
-			float detailFactor = 0.15f + 0.85f * mountainFactor;
-
-			paddedHeights[i] = basePatch[i] * 100.0f + detailPatch[i] * 75.0f * detailFactor;
+			paddedHeights[i] = EvalHeightFromComponents(basePatch[i], detailPatch[i], maskPatch[i], biomePatch[i]);
 		}
 
 		float eps = std::max(0.25f, texelSize);
