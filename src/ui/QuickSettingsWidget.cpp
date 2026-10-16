@@ -56,7 +56,27 @@ namespace brassica::ui {
 				}
 				ImGui::TextDisabled("(Press '=' key to cycle mode)");
 
-				ImGui::DragFloat3("Position##Cam", &cam->position.x, 1.0f);
+				constexpr float R = FAKE_PLANET_RADIUS;
+				float latDeg = std::clamp((cam->position.z / R) * (180.0f / glm::pi<float>()), -90.0f, 90.0f);
+				float lonDeg = (cam->position.x / R) * (180.0f / glm::pi<float>());
+				while (lonDeg > 180.0f) lonDeg -= 360.0f;
+				while (lonDeg < -180.0f) lonDeg += 360.0f;
+				float altM = cam->position.y;
+
+				bool changed = false;
+				changed |= ImGui::DragFloat("Latitude (deg)##Cam", &latDeg, 0.1f, -90.0f, 90.0f, "%.2f deg");
+				changed |= ImGui::DragFloat("Longitude (deg)##Cam", &lonDeg, 0.1f, -180.0f, 180.0f, "%.2f deg");
+				changed |= ImGui::DragFloat("Altitude (m)##Cam", &altM, 1.0f, -1000.0f, 1000000.0f, "%.1f m");
+
+				if (changed) {
+					latDeg = std::clamp(latDeg, -90.0f, 90.0f);
+					while (lonDeg > 180.0f) lonDeg -= 360.0f;
+					while (lonDeg < -180.0f) lonDeg += 360.0f;
+
+					cam->position.z = (latDeg / (180.0f / glm::pi<float>())) * R;
+					cam->position.x = (lonDeg / (180.0f / glm::pi<float>())) * R;
+					cam->position.y = altM;
+				}
 
 				ImGui::SliderFloat("Max Speed##Cam", &cam->speed, cam->minSpeed, cam->maxSpeed, "%.1f m/s");
 
