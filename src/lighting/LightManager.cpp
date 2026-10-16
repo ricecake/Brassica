@@ -176,10 +176,20 @@ namespace brassica {
 				_lights[1].elevation = glm::degrees(std::asin(std::clamp(moonDir.y, -1.0f, 1.0f)));
 				_lights[1].azimuth = glm::degrees(std::atan2(moonDir.x, moonDir.z));
 
-				float sunVis = std::sin(glm::radians(_lights[0].elevation));
-				float moonVis = std::sin(glm::radians(_lights[1].elevation));
+				// Geometric planet curvature occlusion from camera altitude
+				glm::vec3 planetCenter(0.0f, -R, 0.0f);
+				glm::vec3 roCam = cameraPosition - planetCenter;
+				float     rCamLen = glm::length(roCam);
+				glm::vec3 topocentricNormal = (rCamLen > 1e-4f) ? (roCam / rCamLen) : glm::vec3(0.0f, 1.0f, 0.0f);
+				float     muHorizon = -std::sqrt(std::max(0.0f, 1.0f - (R * R) / (rCamLen * rCamLen)));
 
-				float sunFade = (sunVis > -0.10f) ? 1.0f : 0.0f;
+				float sunNdotL = glm::dot(topocentricNormal, sunDir);
+				float moonNdotL = glm::dot(topocentricNormal, moonDir);
+
+				float sunVis = sunNdotL - muHorizon;
+				float moonVis = moonNdotL - muHorizon;
+
+				float sunFade = glm::smoothstep(-0.02f, 0.01f, sunVis);
 				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
 				_lights[0].baseIntensity = 10.0f * sunFade;
 
@@ -192,10 +202,10 @@ namespace brassica {
 				glm::vec3 sunFullRadiance = _lights[0].color * 10.0f;
 				_lights[1].color = sunFullRadiance * lunarAlbedo * phase * lunarTint;
 
-				float moonFade = (moonVis > 0.0f) ? 1.0f : 0.0f;
+				float moonFade = glm::smoothstep(-0.02f, 0.01f, moonVis);
 				_lights[1].baseIntensity = 1.0f * moonFade;
 
-				_cycle.nightFactor = glm::smoothstep(0.2f, -0.2f, sunVis);
+				_cycle.nightFactor = glm::smoothstep(0.1f, -0.1f, sunVis);
 
 				const glm::vec3 airglow{0.0008f, 0.0015f, 0.0022f};
 				glm::vec3       dayAmbient{0.2f, 0.2f, 0.25f};

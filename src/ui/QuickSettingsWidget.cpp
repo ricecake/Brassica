@@ -1,6 +1,10 @@
 #include "ui/QuickSettingsWidget.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #include "ConfigManager.hpp"
+#include "EngineConstants.hpp"
 #include "imgui.h"
 #include "lighting/LightManager.hpp"
 #include "particle/IParticleManager.hpp"
@@ -17,6 +21,7 @@ namespace brassica::ui {
 			auto& cfg = *ServiceLocator::Instance().Get<ConfigManager>();
 			m_timeOfDay = cfg.GetAppSetting<float>("quick_day_night_time", 12.0f);
 			m_timePaused = cfg.GetAppSetting<bool>("quick_day_night_paused", false);
+			m_useLocalTime = cfg.GetAppSetting<bool>("quick_use_local_time", false);
 			m_enableMood = cfg.GetAppSetting<bool>("quick_mood_enabled", true);
 			m_renderTerrain = cfg.GetAppSetting<bool>("render_terrain", true);
 			m_enableVolumetricLighting = cfg.GetAppSetting<bool>("enable_volumetric_lighting", true);
@@ -51,6 +56,8 @@ namespace brassica::ui {
 				}
 				ImGui::TextDisabled("(Press '=' key to cycle mode)");
 
+				ImGui::DragFloat3("Position##Cam", &cam->position.x, 1.0f);
+
 				ImGui::SliderFloat("Max Speed##Cam", &cam->speed, cam->minSpeed, cam->maxSpeed, "%.1f m/s");
 
 				float baseFovDeg = glm::degrees(cam->baseFov);
@@ -70,6 +77,16 @@ namespace brassica::ui {
 
 			// Day/Night cycle
 			ImGui::TextColored(ImVec4(0, 1, 1, 1), "Day/Night Cycle:");
+
+			float camLongitudeDeg = 0.0f;
+			if (ServiceLocator::Instance().Has<CameraData>()) {
+				auto cam = ServiceLocator::Instance().Get<CameraData>();
+				constexpr float R = FAKE_PLANET_RADIUS;
+				camLongitudeDeg = (cam->position.x / R) * (180.0f / glm::pi<float>());
+				while (camLongitudeDeg > 180.0f) camLongitudeDeg -= 360.0f;
+				while (camLongitudeDeg < -180.0f) camLongitudeDeg += 360.0f;
+			}
+
 			if (ServiceLocator::Instance().Has<LightManager>()) {
 				auto  lightMgr = ServiceLocator::Instance().Get<LightManager>();
 				auto& cycle = lightMgr->GetDayNightCycle();
@@ -77,7 +94,29 @@ namespace brassica::ui {
 				m_timePaused = cycle.paused;
 			}
 
-			if (ImGui::SliderFloat("Time (24h)##Quick", &m_timeOfDay, 0.0f, 24.0f, "%.1f h")) {
+			if (ImGui::Checkbox("Use Local Time##Quick", &m_useLocalTime)) {
+				if (cfg) {
+					cfg->SetAppSetting("quick_use_local_time", m_useLocalTime);
+				}
+			}
+
+			float displayTime = m_timeOfDay;
+			if (m_useLocalTime) {
+				displayTime = m_timeOfDay + (camLongitudeDeg / 15.0f);
+				while (displayTime >= 24.0f) displayTime -= 24.0f;
+				while (displayTime < 0.0f) displayTime += 24.0f;
+			}
+
+			const char* timeLabel = m_useLocalTime ? "Time (Local 24h)##Quick" : "Time (UTC 24h)##Quick";
+			if (ImGui::SliderFloat(timeLabel, &displayTime, 0.0f, 24.0f, "%.1f h")) {
+				if (m_useLocalTime) {
+					m_timeOfDay = displayTime - (camLongitudeDeg / 15.0f);
+					while (m_timeOfDay >= 24.0f) m_timeOfDay -= 24.0f;
+					while (m_timeOfDay < 0.0f) m_timeOfDay += 24.0f;
+				} else {
+					m_timeOfDay = displayTime;
+				}
+
 				if (ServiceLocator::Instance().Has<LightManager>()) {
 					auto  lightMgr = ServiceLocator::Instance().Get<LightManager>();
 					auto& cycle = lightMgr->GetDayNightCycle();
