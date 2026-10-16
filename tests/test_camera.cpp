@@ -359,3 +359,99 @@ TEST_CASE("Camera Controls: WASD, Space, Shift, Q, E, Mouse Look") {
 	engine.UpdateCamera(0.016f); // Mouse moved right -> Yaw decreases
 	CHECK(engine.GetCamera().yaw != initYaw);
 }
+
+TEST_CASE("Camera World Wrap: East/West Seam Crossing") {
+	brassica::Engine engine;
+	auto& cam = engine.GetCamera();
+	cam.mode = brassica::CameraMode::Instant;
+
+	constexpr float R = brassica::FAKE_PLANET_RADIUS;
+	constexpr float X_max = glm::pi<float>() * R;
+
+	// Position camera just past East seam (+X)
+	cam.position = glm::vec3(X_max + 100.0f, 10.0f, 0.0f);
+	float initYaw = cam.yaw;
+	float initPitch = cam.pitch;
+
+	engine.UpdateCamera(0.016f);
+
+	// Position should wrap to West side (-X_max + 100.0f)
+	CHECK(cam.position.x == doctest::Approx(-X_max + 100.0f));
+	// Orientation should NOT change
+	CHECK(cam.yaw == doctest::Approx(initYaw));
+	CHECK(cam.pitch == doctest::Approx(initPitch));
+
+	// Position camera just past West seam (-X)
+	cam.position = glm::vec3(-X_max - 50.0f, 10.0f, 0.0f);
+	engine.UpdateCamera(0.016f);
+
+	// Position should wrap to East side (X_max - 50.0f)
+	CHECK(cam.position.x == doctest::Approx(X_max - 50.0f));
+	CHECK(cam.yaw == doctest::Approx(initYaw));
+}
+
+TEST_CASE("Camera World Wrap: North/South Seam Crossing") {
+	brassica::Engine engine;
+	auto& cam = engine.GetCamera();
+	cam.mode = brassica::CameraMode::Accelerated;
+
+	constexpr float R = brassica::FAKE_PLANET_RADIUS;
+	constexpr float Z_max = glm::half_pi<float>() * R;
+
+	cam.pitch = 0.0f;
+	cam.roll = 0.0f;
+	cam.yaw = 0.0f;
+	cam.UpdateOrientation();
+	glm::vec3 origFwd = cam.GetForward();
+
+	// Position camera 100m past North seam (+Z)
+	cam.position = glm::vec3(500.0f, 10.0f, Z_max + 100.0f);
+	cam.velocity = glm::vec3(0.0f, 0.0f, 12.0f);
+
+	engine.UpdateCamera(0.016f);
+
+	// Position should reflect back: Z = Z_max - 100.0f
+	CHECK(cam.position.z == doctest::Approx(Z_max - 100.0f));
+	CHECK(cam.position.x == doctest::Approx(500.0f)); // X remains unchanged
+
+	// Z velocity should negate
+	CHECK(cam.velocity.z < 0.0f);
+
+	// Forward vector North (+Z) component should negate, East (+X) component remain unchanged
+	glm::vec3 newFwd = cam.GetForward();
+	CHECK(newFwd.z == doctest::Approx(-origFwd.z));
+	CHECK(newFwd.x == doctest::Approx(origFwd.x));
+
+	// Position camera 50m past South seam (-Z)
+	cam.position = glm::vec3(-200.0f, 10.0f, -Z_max - 50.0f);
+	cam.velocity = glm::vec3(0.0f, 0.0f, -10.0f);
+	origFwd = cam.GetForward();
+
+	engine.UpdateCamera(0.016f);
+
+	CHECK(cam.position.z == doctest::Approx(-Z_max + 50.0f));
+	CHECK(cam.position.x == doctest::Approx(-200.0f));
+	CHECK(cam.velocity.z > 0.0f);
+	newFwd = cam.GetForward();
+	CHECK(newFwd.z == doctest::Approx(-origFwd.z));
+}
+
+TEST_CASE("Ephemeris Model and Light Directions") {
+	brassica::LightManager lightMgr;
+	lightMgr.GetDayNightCycle().enabled = true;
+	lightMgr.GetDayNightCycle().paused = true;
+	lightMgr.GetDayNightCycle().time = 12.0f; // UTC Noon
+
+	// At Lat 23.44 deg N (Tropic of Cancer) and Lon 0 deg at UTC noon:
+	// Sun should be directly overhead (elevation = 90 deg, sunDir = (0, 1, 0), light dir = (0, -1, 0))
+	constexpr float R = brassica::FAKE_PLANET_RADIUS;
+	float tropicZ = glm::radians(23.44f) * R;
+	glm::vec3 camPos(0.0f, 10.0f, tropicZ);
+
+	lightMgr.Update(0.0f, camPos);
+
+	const auto* sunLight = lightMgr.GetLight(1); // Sun light ID=1
+	REQUIRE(sunLight != nullptr);
+	CHECK(sunLight->elevation == doctest::Approx(90.0f).epsilon(0.05));
+	CHECK(sunLight->direction.y == doctest::Approx(-1.0f).epsilon(0.01));
+}

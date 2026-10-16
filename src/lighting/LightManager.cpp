@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <map>
 
+#include "EngineConstants.hpp"
+#include <glm/gtc/constants.hpp>
+
 namespace brassica {
 
 	static std::map<char, std::string> morseAlphabet = {
@@ -103,6 +106,10 @@ namespace brassica {
 	}
 
 	void LightManager::Update(float deltaTime) {
+		Update(deltaTime, glm::vec3(0.0f));
+	}
+
+	void LightManager::Update(float deltaTime, const glm::vec3& cameraPosition) {
 		if (_cycle.enabled) {
 			if (!_cycle.paused) {
 				_cycle.time += deltaTime * _cycle.speed;
@@ -113,47 +120,68 @@ namespace brassica {
 			}
 
 			if (_lights.size() >= 2 && _lights[0].type == DIRECTIONAL_LIGHT && _lights[1].type == DIRECTIONAL_LIGHT) {
-				// Sun
-				float sunAngleDeg = (_cycle.time / 24.0f) * 360.0f;
-				_lights[0].elevation = sunAngleDeg - 90.0f;
-				_lights[0].azimuth = 90.0f;
-				_lights[0].UpdateDirectionFromAngles();
+				constexpr float R = FAKE_PLANET_RADIUS;
+				float phi = cameraPosition.z / R; // Latitude in radians
+				phi = std::clamp(phi, -glm::half_pi<float>(), glm::half_pi<float>());
+				float lambda = cameraPosition.x / R; // Longitude in radians
+				while (lambda > glm::pi<float>()) lambda -= glm::two_pi<float>();
+				while (lambda < -glm::pi<float>()) lambda += glm::two_pi<float>();
 
-				// Moon
+				// Summer Solstice for Northern Hemisphere (solar declination = +23.44 deg)
+				constexpr float deltaSun = glm::radians(23.44f);
+
+				// Camera local time in hours
+				float localTime = _cycle.time + (lambda / glm::pi<float>()) * 12.0f;
+				while (localTime >= 24.0f) localTime -= 24.0f;
+				while (localTime < 0.0f) localTime += 24.0f;
+
+				// Hour angle of sun (0 at local solar noon = 12h)
+				float Hsun = (localTime - 12.0f) * (glm::pi<float>() / 12.0f);
+
+				// Topocentric Sun direction vector (pointing TOWARDS sun)
+				glm::vec3 sunDir;
+				sunDir.x = -std::cos(deltaSun) * std::sin(Hsun);
+				sunDir.y = std::sin(phi) * std::sin(deltaSun) + std::cos(phi) * std::cos(deltaSun) * std::cos(Hsun);
+				sunDir.z = -std::cos(phi) * std::sin(deltaSun) + std::sin(phi) * std::cos(deltaSun) * std::cos(Hsun);
+				if (glm::length(sunDir) > 1e-6f) {
+					sunDir = glm::normalize(sunDir);
+				} else {
+					sunDir = glm::vec3(0.0f, 1.0f, 0.0f);
+				}
+
+				_lights[0].direction = -sunDir;
+				_lights[0].elevation = glm::degrees(std::asin(std::clamp(sunDir.y, -1.0f, 1.0f)));
+				_lights[0].azimuth = glm::degrees(std::atan2(sunDir.x, sunDir.z));
+
+				// Moon ephemeris
 				if (!_cycle.paused) {
 					_cycle.moonPhaseDays += deltaTime * _cycle.speed / 24.0f;
 				}
 
-				float phaseDrift = std::fmod(_cycle.moonPhaseDays, _cycle.lunarMonth) / _cycle.lunarMonth * 24.0f;
-				float effectiveOffset = _cycle.moonOffset + phaseDrift;
+				float phaseRad = std::fmod(_cycle.moonPhaseDays, _cycle.lunarMonth) / _cycle.lunarMonth * glm::two_pi<float>();
+				float deltaMoon = deltaSun * std::cos(phaseRad);
+				float Hmoon = Hsun - phaseRad + glm::radians(_cycle.moonOffset * 15.0f);
 
-				float moonTime = _cycle.time + effectiveOffset;
-				if (moonTime >= 24.0f)
-					moonTime -= 24.0f;
-				if (moonTime < 0.0f)
-					moonTime += 24.0f;
-				float moonAngleDeg = (moonTime / 24.0f) * 360.0f;
-				_lights[1].elevation = moonAngleDeg - 90.0f;
-
-				float erraticAzimuth = 30.0f * std::sin(_cycle.moonPhaseDays * 0.7f) +
-					15.0f * std::sin(_cycle.moonPhaseDays * 2.3f + moonTime * 0.1f);
-				_lights[1].azimuth = _cycle.moonAzimuth + erraticAzimuth;
-				_lights[1].UpdateDirectionFromAngles();
-
-				float sunVis = glm::sin(glm::radians(_lights[0].elevation));
-				float moonVis = glm::sin(glm::radians(_lights[1].elevation));
-
-				float sunFade = 1.0f;
-				if (sunVis > -0.10f) {
-					sunFade = 1.0f;
+				glm::vec3 moonDir;
+				moonDir.x = -std::cos(deltaMoon) * std::sin(Hmoon);
+				moonDir.y = std::sin(phi) * std::sin(deltaMoon) + std::cos(phi) * std::cos(deltaMoon) * std::cos(Hmoon);
+				moonDir.z = -std::cos(phi) * std::sin(deltaMoon) + std::sin(phi) * std::cos(deltaMoon) * std::cos(Hmoon);
+				if (glm::length(moonDir) > 1e-6f) {
+					moonDir = glm::normalize(moonDir);
 				} else {
-					sunFade = 0.0f;
+					moonDir = glm::vec3(0.0f, -1.0f, 0.0f);
 				}
+
+				_lights[1].direction = -moonDir;
+				_lights[1].elevation = glm::degrees(std::asin(std::clamp(moonDir.y, -1.0f, 1.0f)));
+				_lights[1].azimuth = glm::degrees(std::atan2(moonDir.x, moonDir.z));
+
+				float sunVis = std::sin(glm::radians(_lights[0].elevation));
+				float moonVis = std::sin(glm::radians(_lights[1].elevation));
+
+				float sunFade = (sunVis > -0.10f) ? 1.0f : 0.0f;
 				_lights[0].color = glm::vec3(2.5f, 2.3f, 2.0f);
 				_lights[0].baseIntensity = 10.0f * sunFade;
-
-				glm::vec3 sunDir = glm::normalize(-_lights[0].direction);
-				glm::vec3 moonDir = glm::normalize(-_lights[1].direction);
 
 				float cosPhase = glm::dot(sunDir, moonDir);
 				float phase = glm::clamp((-cosPhase + 1.0f) * 0.5f, 0.05f, 1.0f);
@@ -164,12 +192,7 @@ namespace brassica {
 				glm::vec3 sunFullRadiance = _lights[0].color * 10.0f;
 				_lights[1].color = sunFullRadiance * lunarAlbedo * phase * lunarTint;
 
-				float moonFade = 1.0f;
-				if (moonVis > 0.0f) {
-					moonFade = 1.0f;
-				} else {
-					moonFade = 0.0f;
-				}
+				float moonFade = (moonVis > 0.0f) ? 1.0f : 0.0f;
 				_lights[1].baseIntensity = 1.0f * moonFade;
 
 				_cycle.nightFactor = glm::smoothstep(0.2f, -0.2f, sunVis);
