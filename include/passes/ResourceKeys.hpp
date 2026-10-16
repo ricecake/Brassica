@@ -25,6 +25,10 @@ namespace brassica {
 
 	struct ClusteredLighting {};
 
+	struct ScreenSpaceIndirectAO {};
+
+	struct ScreenSpaceShadow {};
+
 	// The result of TerrainPass::BuildOrUpdateAccelerationStructure, registered into the graph
 	// as an Imported AccelerationStructure resource -- see the AccelerationStructure
 	// resource-kind plan. The build itself stays entirely out-of-band (TerrainPass's own

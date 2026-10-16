@@ -17,6 +17,7 @@
 #include "passes/DeferredNode.hpp"
 #include "passes/ImGuiNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
+#include "passes/ScreenSpaceEffectsNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainNode.hpp"
 #include "passes/TonemapNode.hpp"

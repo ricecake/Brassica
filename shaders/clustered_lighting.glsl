@@ -29,7 +29,7 @@ uint getClusterIndex(vec3 frag_pos) {
 /**
  * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR BRDF.
  */
-vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albedo, float roughness, float metallic, float ao) {
+vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albedo, float roughness, float metallic, float ao, float dirShadow) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
 
@@ -56,7 +56,7 @@ vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albe
 			);
 
 			vec3 radiance = uLights[i].color * (uLights[i].intensity * PBR_INTENSITY_BOOST) * attenuation;
-			evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, 1.0, Lo, spec_lum);
+			evaluate_brdf(N, V, L, albedo, roughness, metallic, F0, radiance, dirShadow, Lo, spec_lum);
 		}
 	}
 
@@ -131,10 +131,17 @@ vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albe
 }
 
 /**
+ * Overload without shadow parameter.
+ */
+vec3 evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, vec3 albedo, float roughness, float metallic, float ao) {
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, albedo, roughness, metallic, ao, 1.0);
+}
+
+/**
  * Standard diffuse/specular wrapper for existing shaders.
  */
 vec3 evaluateClusteredLightContribution(vec3 frag_pos, vec3 normal) {
-	return evaluateClusteredLightContributionPBR(frag_pos, normal, vec3(1.0), 0.7, 0.0, 1.0);
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, vec3(1.0), 0.7, 0.0, 1.0, 1.0);
 }
 
 /**

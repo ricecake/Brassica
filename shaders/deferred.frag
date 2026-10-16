@@ -26,6 +26,8 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	uint  visibilityIndex;
+	uint  indirectAOIndex;
+	uint  screenSpaceShadowIndex;
 }
 
 params;
@@ -114,7 +116,15 @@ void main() {
 		float metallic = 0.0;
 		float ao = 1.0;
 
-		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, albedo.rgb, roughness, metallic, ao);
+		vec4 indirectAO = SAMPLE_NEAREST(params.indirectAOIndex, inUV);
+		vec3 ssgi = indirectAO.rgb;
+		float gtaoAO = indirectAO.a;
+		float sssFactor = SAMPLE_NEAREST(params.screenSpaceShadowIndex, inUV).r;
+
+		ao *= gtaoAO;
+
+		vec3 litSurface = evaluateClusteredLightContributionPBR(pos, norm, albedo.rgb, roughness, metallic, ao, sssFactor);
+		litSurface += ssgi;
 
 		// Extract primary directional light for aerial perspective / atmosphere scattering
 		vec3 sunDir = normalize(vec3(0.4, 0.8, 0.4));

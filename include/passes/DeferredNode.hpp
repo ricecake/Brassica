@@ -35,6 +35,8 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
 		std::uint32_t visibilityIndex{0};
+		std::uint32_t indirectAOIndex{0};
+		std::uint32_t screenSpaceShadowIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -47,6 +49,8 @@ namespace brassica {
 			graph::Read<TerrainBiomeTexture>,
 			graph::Read<TerrainTileVisibilityTexture>,
 			graph::Read<TerrainTLAS>,
+			graph::Read<ScreenSpaceIndirectAO>,
+			graph::Read<ScreenSpaceShadow>,
 			graph::Create<HdrColor>>;
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -109,6 +113,8 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.visibilityIndex = ctx.Index<TerrainTileVisibilityTexture>();
+			push.indirectAOIndex = ctx.Index<ScreenSpaceIndirectAO>();
+			push.screenSpaceShadowIndex = ctx.Index<ScreenSpaceShadow>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
