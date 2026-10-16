@@ -436,6 +436,67 @@ TEST_CASE("Camera World Wrap: North/South Seam Crossing") {
 	CHECK(newFwd.z == doctest::Approx(-origFwd.z));
 }
 
+TEST_CASE("Terrain Polar Coordinate Wrapping") {
+	constexpr float R = brassica::FAKE_PLANET_RADIUS;
+	constexpr float Z_max = glm::half_pi<float>() * R;
+	constexpr float X_max = glm::pi<float>() * R;
+
+	auto wrapTerrainCoords = [&](glm::vec3 p_local, bool& poleFlipped) {
+		p_local.x = std::fmod(p_local.x + X_max, 2.0f * X_max);
+		if (p_local.x < 0.0f) p_local.x += 2.0f * X_max;
+		p_local.x -= X_max;
+
+		poleFlipped = false;
+		float periodZ = 4.0f * Z_max;
+		p_local.z = std::fmod(p_local.z + 2.0f * Z_max, periodZ);
+		if (p_local.z < 0.0f) p_local.z += periodZ;
+		p_local.z -= 2.0f * Z_max;
+
+		if (p_local.z > Z_max) {
+			p_local.z = 2.0f * Z_max - p_local.z;
+			poleFlipped = true;
+		} else if (p_local.z < -Z_max) {
+			p_local.z = -2.0f * Z_max - p_local.z;
+			poleFlipped = true;
+		}
+		return p_local;
+	};
+
+	// 1. Points within valid domain [-Z_max, Z_max] remain unchanged
+	bool flipped = false;
+	glm::vec3 validPos(100.0f, 0.0f, Z_max - 500.0f);
+	glm::vec3 wrapped = wrapTerrainCoords(validPos, flipped);
+	CHECK(!flipped);
+	CHECK(wrapped.x == doctest::Approx(validPos.x));
+	CHECK(wrapped.z == doctest::Approx(validPos.z));
+
+	// 2. Points past North Pole (+Z_max + overstep) map to Z_max - overstep
+	float overstep = 120.0f;
+	glm::vec3 northOver(500.0f, 0.0f, Z_max + overstep);
+	wrapped = wrapTerrainCoords(northOver, flipped);
+	CHECK(flipped);
+	CHECK(wrapped.x == doctest::Approx(500.0f));
+	CHECK(wrapped.z == doctest::Approx(Z_max - overstep));
+
+	// 3. Points past South Pole (-Z_max - overstep) map to -Z_max + overstep
+	glm::vec3 southOver(-300.0f, 0.0f, -Z_max - overstep);
+	wrapped = wrapTerrainCoords(southOver, flipped);
+	CHECK(flipped);
+	CHECK(wrapped.x == doctest::Approx(-300.0f));
+	CHECK(wrapped.z == doctest::Approx(-Z_max + overstep));
+
+	// 4. Verification with Camera seam crossing:
+	wrapped = wrapTerrainCoords(northOver, flipped);
+	brassica::Engine engine;
+	auto& cam = engine.GetCamera();
+	cam.mode = brassica::CameraMode::Instant;
+	cam.position = glm::vec3(500.0f, 10.0f, Z_max + overstep);
+
+	engine.UpdateCamera(0.016f);
+
+	CHECK(cam.position.z == doctest::Approx(wrapped.z));
+}
+
 TEST_CASE("Ephemeris Model and Light Directions") {
 	brassica::LightManager lightMgr;
 	lightMgr.GetDayNightCycle().enabled = true;

@@ -377,6 +377,30 @@ float evaluate_terrain_analytical(
 	const TerrainConfig&              config,
 	glm::vec3&                        out_normal
 ) {
+	// 0. Apply polar and seam world coordinate wrapping
+	float Z_max = 0.5f * glm::pi<float>() * FAKE_PLANET_RADIUS;
+	float X_max = glm::pi<float>() * FAKE_PLANET_RADIUS;
+
+	// East / West seam wrapping (X axis)
+	p_local.x = std::fmod(p_local.x + X_max, 2.0f * X_max);
+	if (p_local.x < 0.0f) p_local.x += 2.0f * X_max;
+	p_local.x -= X_max;
+
+	// North / South polar wrapping (Z axis past poles)
+	bool poleFlipped = false;
+	float periodZ = 4.0f * Z_max;
+	p_local.z = std::fmod(p_local.z + 2.0f * Z_max, periodZ);
+	if (p_local.z < 0.0f) p_local.z += periodZ;
+	p_local.z -= 2.0f * Z_max;
+
+	if (p_local.z > Z_max) {
+		p_local.z = 2.0f * Z_max - p_local.z;
+		poleFlipped = true;
+	} else if (p_local.z < -Z_max) {
+		p_local.z = -2.0f * Z_max - p_local.z;
+		poleFlipped = true;
+	}
+
 	glm::vec3 p_tectonic = p_local + 20000.0f * cross_noise_fbm(4.0f * p_local / FAKE_PLANET_RADIUS, 6.0f, 0.0f);
 
 	float     base_h, fault_mask;
@@ -438,7 +462,7 @@ float evaluate_terrain_analytical(
 
 	glm::vec3 grad_local = glm::vec3(glm::dot(final_grad_geo, dP_dx), 0.0f, glm::dot(final_grad_geo, dP_dz));
 
-	out_normal = glm::normalize(glm::vec3(-grad_local.x, 1.0f, -grad_local.z));
+	out_normal = glm::normalize(glm::vec3(-grad_local.x, 1.0f, poleFlipped ? grad_local.z : -grad_local.z));
 	return true_height;
 }
 
