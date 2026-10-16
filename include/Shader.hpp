@@ -21,6 +21,7 @@ namespace brassica {
 			const char*         name = "Shader"
 		);
 		bool CompileFromFile(vk::Device device, const std::string& filepath, shaderc_shader_kind kind);
+		bool Recompile(vk::Device device);
 
 		void Destroy(vk::Device device);
 
@@ -32,6 +33,8 @@ namespace brassica {
 
 		const std::string& GetFilePath() const { return filePath; }
 
+		shaderc_shader_kind GetKind() const { return shaderKind; }
+
 		virtual vk::PipelineShaderStageCreateInfo GetStageCreateInfo(vk::ShaderStageFlagBits stage) const;
 
 	protected:
@@ -39,6 +42,7 @@ namespace brassica {
 		std::string           sourceCode;
 		std::vector<uint32_t> spirvCode;
 		vk::ShaderModule      shaderModule{nullptr};
+		shaderc_shader_kind   shaderKind{shaderc_glsl_infer_from_source};
 	};
 
 	// Compute Shader Subclass

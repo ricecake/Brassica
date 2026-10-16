@@ -24,6 +24,7 @@ namespace brassica {
 	bool
 	Shader::CompileFromSource(vk::Device device, const std::string& source, shaderc_shader_kind kind, const char* name) {
 		sourceCode = source;
+		shaderKind = kind;
 
 		shaderc::Compiler       compiler;
 		shaderc::CompileOptions options;
@@ -58,6 +59,55 @@ namespace brassica {
 			return false;
 		}
 		return CompileFromSource(device, sourceCode, kind, filepath.c_str());
+	}
+
+	bool Shader::Recompile(vk::Device device) {
+		if (filePath.empty()) {
+			spdlog::error("Cannot recompile shader without filepath");
+			return false;
+		}
+
+		std::ifstream file(filePath, std::ios::in | std::ios::binary);
+		if (!file.is_open()) {
+			spdlog::error("Failed to open shader file for recompile: {}", filePath);
+			return false;
+		}
+
+		std::stringstream buffer;
+		buffer << file.rdbuf();
+		std::string newSource = buffer.str();
+
+		shaderc::Compiler       compiler;
+		shaderc::CompileOptions options;
+		options.SetOptimizationLevel(shaderc_optimization_level_performance);
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_4);
+		options.SetTargetSpirv(shaderc_spirv_version_1_6);
+
+		auto result = compiler.CompileGlslToSpv(newSource, shaderKind, filePath.c_str(), options);
+		if (result.GetCompilationStatus() != shaderc_compilation_status_success) {
+			spdlog::error("Shader re-compilation error ({}) : {}", filePath, result.GetErrorMessage());
+			return false;
+		}
+
+		std::vector<uint32_t> newSpirv(result.cbegin(), result.cend());
+
+		vk::ShaderModuleCreateInfo createInfo{};
+		createInfo.setCodeSize(newSpirv.size() * sizeof(uint32_t));
+		createInfo.setPCode(newSpirv.data());
+
+		vk::ShaderModule newModule{nullptr};
+		try {
+			newModule = device.createShaderModule(createInfo);
+		} catch (const vk::SystemError& err) {
+			spdlog::error("Failed to create Vulkan shader module during recompile for {}: {}", filePath, err.what());
+			return false;
+		}
+
+		Destroy(device);
+		sourceCode = std::move(newSource);
+		spirvCode = std::move(newSpirv);
+		shaderModule = newModule;
+		return true;
 	}
 
 	void Shader::Destroy(vk::Device device) {
