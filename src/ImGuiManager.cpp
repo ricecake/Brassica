@@ -261,7 +261,7 @@ namespace brassica {
 				std::string localStr = formatTime(localHours);
 
 				ImGui::Text(
-					"UTC: %s | Local: %s | Lat: %.2f deg, Lon: %.2f deg | Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | %.1f FPS (%.2f ms)",
+					"%sZ|%s |%.2f,%.2f|(%.2f, %.2f, %.2f)|%.1f m/s|(P: %.1f, Y: %.1f, R: %.1f) | %.1f FPS (%.2f ms)",
 					utcStr.c_str(),
 					localStr.c_str(),
 					latDeg,
