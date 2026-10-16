@@ -14,6 +14,7 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -112,13 +113,11 @@ namespace brassica {
 	// a typical moving-camera frame, most of the 16x16-per-slice workgroups are a handful of ALU
 	// ops instead of a full downsample. isFullRebuild (the push field) forces every tile dirty on
 	// the first dispatch, an explicit regeneration, or a gridParams change.
+	// S4: no kPhase -- see TerrainGenNode's identical comment. This node's Modify<
+	// TerrainMinMaxTexture>() is ordered after TerrainGenNode's sole Create<> of the same key via
+	// Create-before-accessor, and every reader of TerrainMinMaxTexture gets a real edge from this
+	// node too (the default "reader sees final state" resource edge) -- no phase needed.
 	struct TerrainMinMaxDownsampleNode: render::NodeRegistrar<TerrainMinMaxDownsampleNode> {
-		using Resources = graph::Declares<graph::Modify<TerrainMinMaxTexture>>;
-
-		// See TerrainGenNode's identical comment: particle shaders now read terrain data at
-		// SubPhase::Prepare, so every terrain-producing node has to run at or before Prepare too.
-		static constexpr graph::Phase kPhase = SubPhase::Prepare;
-
 		// FFX SPD's fixed contract: one workgroup per 64x64 source tile. For MapDim = 1024 that's
 		// 16x16 tiles per slice -- matches the dispatch in Execute.
 		static constexpr std::uint32_t kTileSize = 64;
@@ -162,6 +161,7 @@ namespace brassica {
 			if (!services.physicalRegistry) {
 				return;
 			}
+			services.physicalRegistry->Catalog().Get<TerrainMinMaxTexture>();
 			allocator = services.physicalRegistry->GetAllocator();
 
 			// One uint per possible clipmap slice, sized for the max rather than whatever numLODs
@@ -229,19 +229,14 @@ namespace brassica {
 			forceRegeneration = p.forceRegeneration;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainMinMaxTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					// Identical desc-building call to TerrainGenNode's own realization of this
-					// same key -- two nodes realizing one key with mismatched descs is a real,
-					// severe bug (silent reprovision-while-in-use), not just a style nit.
-					.desc = TerrainMinMaxDesc(gridParams.x),
-				}
-			);
-			return r;
+		// TerrainMinMaxTexture is catalog-converted (ResourceKeys.hpp, numLODs field published by
+		// TerrainGenNode::SetFrameParams every frame) -- no .Desc() needed here. That's what used
+		// to make this node's hand-built desc a real, severe hazard: two nodes realizing one key
+		// with mismatched descs (a stale gridParams.x read here vs. there) silently reprovisions
+		// while in use. The catalog removes the second place that number had to be read correctly.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Modify<TerrainMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

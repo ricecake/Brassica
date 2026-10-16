@@ -8,6 +8,7 @@
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/ResourceKey.hpp"
+#include "graph/SetupBuilder.hpp"
 
 namespace brassica::graph {
 
@@ -37,6 +38,23 @@ namespace brassica::graph {
 		{ t.Setup(ctx) } -> std::same_as<Recipe>;
 		{ t.Execute(nctx) };
 	};
+
+	// The builder-shaped alternative to NodeLike -- see the design plan's §B and
+	// SetupBuilder.hpp. No DeclaresResources requirement: a builder node has no compile-time
+	// Resources at all, it declares its contract at runtime by calling SetupBuilder's methods
+	// inside Setup. Distinguished from NodeLike purely by Setup's signature (two arguments,
+	// returning void, vs. one argument returning Recipe) -- a type can't satisfy both shapes at
+	// once, so NodeHandle::Make/MakeRef's two overloads below never collide.
+	template <typename T>
+	concept BuilderNode = requires(T t, SetupBuilder& builder, const FrameContext& ctx, NodeContext& nctx) {
+		{ t.Setup(builder, ctx) } -> std::same_as<void>;
+		{ t.Execute(nctx) };
+	};
+
+	// Either node shape -- for code that just needs "is this a valid node at all" (e.g.
+	// NodeLifecycle.hpp's registration machinery) without caring which Setup signature it uses.
+	template <typename T>
+	concept AnyNode = NodeLike<T> || BuilderNode<T>;
 
 	// What kind of special role (if any) a node plays, captured at NodeHandle::Make<T> time
 	// from compile-time knowledge of T. Used by Dot.hpp to style/route rendering without
@@ -100,6 +118,20 @@ namespace brassica::graph {
 			virtual Recipe Setup(const FrameContext&) = 0;
 			virtual void   Execute(NodeContext&) = 0;
 
+			// Empty for a legacy (NodeLike) node -- it has no SetupBuilder, so no relations to
+			// report. A builder node's relations are only known after this frame's Setup() has
+			// run, same lifetime caveat as Descriptor()'s consumes/produces spans below -- see
+			// ErasedBuilder's m_relations.
+			[[nodiscard]] virtual std::span<const NodeRelation> Relations() const { return {}; }
+
+			// Computed fresh on every call rather than cached once at construction (as it used
+			// to be, directly on NodeHandle) -- a legacy node's answer never actually changes
+			// from call to call (same compile-time Resources every time, trivially cheap to
+			// recompute), but a builder node's does: its consumes/produces are only known after
+			// Setup has run for this frame, so ErasedBuilder below must build this from
+			// per-instance state Setup just populated, not from anything static.
+			virtual NodeDescriptor Descriptor() const = 0;
+
 			// Non-null only for a Subgraph -- the hook that lets Dot.hpp descend into it
 			// recursively without NodeHandle/Graph knowing Subgraph exists.
 			virtual const Graph* InnerGraphIfAny() const { return nullptr; }
@@ -121,6 +153,16 @@ namespace brassica::graph {
 			Recipe Setup(const FrameContext& ctx) override { return value.Setup(ctx); }
 
 			void Execute(NodeContext& ctx) override { value.Execute(ctx); }
+
+			NodeDescriptor Descriptor() const override {
+				return NodeDescriptor{
+					TypeName<T>(),
+					IdsOf<ConsumesOf<T>>(),
+					IdsOf<ProducesOf<T>>(),
+					NodeKindOf<T>,
+					PhaseOf<T>,
+				};
+			}
 
 			const Graph* InnerGraphIfAny() const override {
 				if constexpr (HasInnerGraph<T>) {
@@ -152,6 +194,16 @@ namespace brassica::graph {
 
 			void Execute(NodeContext& ctx) override { ptr->Execute(ctx); }
 
+			NodeDescriptor Descriptor() const override {
+				return NodeDescriptor{
+					TypeName<T>(),
+					IdsOf<ConsumesOf<T>>(),
+					IdsOf<ProducesOf<T>>(),
+					NodeKindOf<T>,
+					PhaseOf<T>,
+				};
+			}
+
 			const Graph* InnerGraphIfAny() const override {
 				if constexpr (HasInnerGraph<T>) {
 					return &ptr->InnerGraph();
@@ -169,45 +221,124 @@ namespace brassica::graph {
 			}
 		};
 
-		std::unique_ptr<IErased> m_impl;
-		NodeDescriptor           m_desc;
+		// Splits an already-run SetupBuilder's recorded accesses into the two owned id vectors
+		// Descriptor() hands out as spans, and the Recipe Setup() returns -- shared by
+		// ErasedBuilder and ErasedRefBuilder below so the split logic can't drift between the
+		// owning and the referencing case.
+		static Recipe LowerBuilder(
+			SetupBuilder&              builder,
+			std::vector<ResourceId>&   consumes,
+			std::vector<ResourceId>&   produces,
+			std::vector<NodeRelation>& relations
+		) {
+			consumes.clear();
+			produces.clear();
+			Recipe recipe{.domain = builder.Domain(), .isActive = builder.Active()};
+			for (const ResourceRealization& r : builder.Realizations()) {
+				if (r.access == AccessKind::Read || r.access == AccessKind::ReadWrite) {
+					consumes.push_back(r.key);
+				}
+				if (r.access == AccessKind::Write || r.access == AccessKind::ReadWrite) {
+					produces.push_back(r.key);
+				}
+				recipe.realizations.push_back(r);
+			}
+			relations.assign(builder.Relations().begin(), builder.Relations().end());
+			return recipe;
+		}
 
-		NodeHandle(std::unique_ptr<IErased> impl, NodeDescriptor desc): m_impl(std::move(impl)), m_desc(desc) {}
+		// A builder node (BuilderNode, SetupBuilder.hpp) has no compile-time Resources, so
+		// unlike Erased<T> above, consumes/produces can't be captured once at construction --
+		// they're only known after Setup<T> has actually run for this frame. m_consumes/
+		// m_produces are therefore refreshed inside Setup() every frame, and Descriptor() just
+		// hands back spans into whichever instance of them Setup() last populated. Safe across
+		// the gap between Graph::Setup (which calls this Setup) and Graph::Compile (which calls
+		// Descriptor()) because both run against the same NodeHandle within one frame, and
+		// nothing resizes these vectors in between.
+		template <BuilderNode T>
+		struct ErasedBuilder final: IErased {
+			T                         value;
+			std::vector<ResourceId>   m_consumes;
+			std::vector<ResourceId>   m_produces;
+			std::vector<NodeRelation> m_relations;
+
+			template <typename... Args>
+			explicit ErasedBuilder(Args&&... args): value(std::forward<Args>(args)...) {}
+
+			Recipe Setup(const FrameContext& ctx) override {
+				SetupBuilder builder;
+				value.Setup(builder, ctx);
+				return LowerBuilder(builder, m_consumes, m_produces, m_relations);
+			}
+
+			void Execute(NodeContext& ctx) override { value.Execute(ctx); }
+
+			NodeDescriptor Descriptor() const override {
+				return NodeDescriptor{TypeName<T>(), m_consumes, m_produces, NodeKindOf<T>, PhaseOf<T>};
+			}
+
+			std::span<const NodeRelation> Relations() const override { return m_relations; }
+		};
+
+		template <BuilderNode T>
+		struct ErasedRefBuilder final: IErased {
+			T*                        ptr;
+			std::vector<ResourceId>   m_consumes;
+			std::vector<ResourceId>   m_produces;
+			std::vector<NodeRelation> m_relations;
+
+			explicit ErasedRefBuilder(T& ref): ptr(&ref) {}
+
+			Recipe Setup(const FrameContext& ctx) override {
+				SetupBuilder builder;
+				ptr->Setup(builder, ctx);
+				return LowerBuilder(builder, m_consumes, m_produces, m_relations);
+			}
+
+			void Execute(NodeContext& ctx) override { ptr->Execute(ctx); }
+
+			NodeDescriptor Descriptor() const override {
+				return NodeDescriptor{TypeName<T>(), m_consumes, m_produces, NodeKindOf<T>, PhaseOf<T>};
+			}
+
+			std::span<const NodeRelation> Relations() const override { return m_relations; }
+		};
+
+		std::unique_ptr<IErased> m_impl;
+
+		explicit NodeHandle(std::unique_ptr<IErased> impl): m_impl(std::move(impl)) {}
 
 	public:
 		template <NodeLike T, typename... Args>
 		static NodeHandle Make(Args&&... args) {
-			return NodeHandle(
-				std::make_unique<Erased<T>>(std::forward<Args>(args)...),
-				NodeDescriptor{
-					TypeName<T>(),
-					IdsOf<ConsumesOf<T>>(),
-					IdsOf<ProducesOf<T>>(),
-					NodeKindOf<T>,
-					PhaseOf<T>,
-				}
-			);
+			return NodeHandle(std::make_unique<Erased<T>>(std::forward<Args>(args)...));
+		}
+
+		template <BuilderNode T, typename... Args>
+		static NodeHandle Make(Args&&... args) {
+			return NodeHandle(std::make_unique<ErasedBuilder<T>>(std::forward<Args>(args)...));
 		}
 
 		template <NodeLike T>
 		static NodeHandle MakeRef(T& node) {
-			return NodeHandle(
-				std::make_unique<ErasedRef<T>>(node),
-				NodeDescriptor{
-					TypeName<T>(),
-					IdsOf<ConsumesOf<T>>(),
-					IdsOf<ProducesOf<T>>(),
-					NodeKindOf<T>,
-					PhaseOf<T>,
-				}
-			);
+			return NodeHandle(std::make_unique<ErasedRef<T>>(node));
+		}
+
+		template <BuilderNode T>
+		static NodeHandle MakeRef(T& node) {
+			return NodeHandle(std::make_unique<ErasedRefBuilder<T>>(node));
 		}
 
 		Recipe Setup(const FrameContext& ctx) { return m_impl->Setup(ctx); }
 
 		void Execute(NodeContext& ctx) { m_impl->Execute(ctx); }
 
-		[[nodiscard]] const NodeDescriptor& Descriptor() const { return m_desc; }
+		[[nodiscard]] NodeDescriptor Descriptor() const { return m_impl->Descriptor(); }
+
+		// Empty for a legacy node, see IErased::Relations()'s own comment. Valid under the same
+		// same-frame-window caveat as Descriptor() -- call after Setup(ctx), before this
+		// NodeHandle's next Setup() call.
+		[[nodiscard]] std::span<const NodeRelation> Relations() const { return m_impl->Relations(); }
 
 		[[nodiscard]] const Graph* InnerGraphIfAny() const { return m_impl->InnerGraphIfAny(); }
 

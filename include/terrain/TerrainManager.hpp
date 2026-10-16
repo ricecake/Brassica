@@ -8,6 +8,7 @@
 
 #include "constants.h"
 #include "graph/Execution.hpp"
+#include "passes/ResourceKeys.hpp"
 #include "terrain/ITerrainManager.hpp"
 #include "vk_mem_alloc.h"
 
@@ -156,46 +157,9 @@ namespace brassica {
 		bool                   hasReadbackData{false};
 	};
 
-	// mips = 1: this image has no mip chain of its own -- only TerrainMinMaxDesc below does.
-	inline graph::ResourceDesc TerrainClipmapDesc(std::uint32_t numLODs) {
-		return graph::ResourceDesc{
-			.kind = graph::ResourceDesc::Kind::Image2D,
-			.width = constants::Class::Terrain::MapDim,
-			.height = constants::Class::Terrain::MapDim,
-			.mips = 1,
-			.layers = numLODs,
-			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
-			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
-				vk::ImageUsageFlagBits::eTransferSrc
-			),
-			.persistent = true,
-		};
-	}
-
-	// floor(log2(MapDim)) + 1 -- the full mip chain down to 1x1 for a 1024-wide image (mips
-	// 0-10), well under SPD's 12-mip-per-dispatch limit. RG32F, not RGBA32F: only min (x) and
-	// max (y) are meaningful, and the per-mip storage views this needs (PhysicalTexture::
-	// CreateView, PhysicalResource.hpp) are what the broken mips=1 claim on this key used to mask
-	// -- nothing ever read past mip 0 before.
-	inline graph::ResourceDesc TerrainMinMaxDesc(std::uint32_t numLODs) {
-		return graph::ResourceDesc{
-			.kind = graph::ResourceDesc::Kind::Image2D,
-			.width = constants::Class::Terrain::MapDim,
-			.height = constants::Class::Terrain::MapDim,
-			.mips = 11,
-			.layers = numLODs,
-			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
-			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
-				vk::ImageUsageFlagBits::eTransferSrc
-			),
-			.persistent = true,
-		};
-	}
-
-	inline graph::ResourceDesc TerrainBiomeDesc(std::uint32_t numLODs) {
-		return TerrainClipmapDesc(numLODs);
-	}
+	// TerrainClipmapDesc/TerrainMinMaxDesc/TerrainBiomeDesc, and the type-owned Desc() methods on
+	// TerrainClipmapTexture/TerrainMinMaxTexture/TerrainBiomeTexture that call them, moved to
+	// passes/ResourceKeys.hpp -- the key structs live there, and a type's Desc() must be defined
+	// alongside the type itself, not in a separate header reached only by some of its callers.
 
 } // namespace brassica

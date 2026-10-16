@@ -385,14 +385,14 @@ TEST_CASE(
 		graph::PhysicalExecutionBackend backend(registry);
 
 		TransmittanceLUTNode transNode;
-		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		MultiScatteringLUTNode multiNode;
-		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		SkyViewLUTNode skyNode;
-		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 
 		AtmosphereCompositeNode compositeNode;
-		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		Shader::ClearConstants();
 
 		graph::Graph graph;
@@ -473,14 +473,14 @@ TEST_CASE("AtmosphereCompositeNode produces a real wavelength-dependent color sh
 		graph::PhysicalExecutionBackend backend(registry);
 
 		TransmittanceLUTNode transNode;
-		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		MultiScatteringLUTNode multiNode;
-		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		SkyViewLUTNode skyNode;
-		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 
 		AtmosphereCompositeNode compositeNode;
-		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		Shader::ClearConstants();
 		// Default sunDir (0,1,0) points straight at what most of this test's "looking up out of
 		// the water" reconstructed rays also point at -- a worst-case resonance with the
@@ -681,14 +681,14 @@ TEST_CASE("AtmosphereCompositeNode fogging real terrain above water stays finite
 		graph::PhysicalExecutionBackend backend(registry);
 
 		TransmittanceLUTNode transNode;
-		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		transNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		MultiScatteringLUTNode multiNode;
-		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		multiNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		SkyViewLUTNode skyNode;
-		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		skyNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 
 		AtmosphereCompositeNode compositeNode;
-		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary});
+		compositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		Shader::ClearConstants();
 		// A typical daytime sun -- mostly overhead, not the deliberately-avoided-resonance angle
 		// the other GPU test uses. If a realistic sun angle is itself what triggers the reported

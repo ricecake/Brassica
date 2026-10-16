@@ -11,7 +11,9 @@
 #include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -21,13 +23,9 @@
 
 namespace brassica {
 
-	namespace constants::Weather {
-		constexpr std::uint32_t kSimTextureDim = 1024;
-		constexpr std::uint32_t kCoverageTextureDim = 2048;
-		constexpr std::uint32_t kBiomeTextureDim = 2048;
-		constexpr std::uint32_t kBlendDitherDivisor = 8;
-		constexpr std::uint32_t kUpdateInterval = 300;
-	} // namespace constants::Weather
+	// constants::Weather and WeatherBiomeImageDesc moved to ResourceKeys.hpp (TerrainBiomeTexture
+	// etc.'s Desc() needs them, and ResourceKeys.hpp can't include this file back) -- still
+	// reachable here through the existing #include above, nothing below changes.
 
 	struct ClimateInitialPushConstants {
 		std::uint32_t outStorageIdx{0};
@@ -71,32 +69,11 @@ namespace brassica {
 		std::uint32_t ditherDivisor{constants::Weather::kBlendDitherDivisor};
 	};
 
-	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim) {
-		return graph::ResourceDesc{
-			.kind = graph::ResourceDesc::Kind::Image2D,
-			.width = dim,
-			.height = dim,
-			.layers = 1,
-			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
-			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
-			),
-			.persistent = true,
-		};
-	}
-
+	// S4: no kPhase -- this node is the sole writer of all seven of its weather/biome keys (six
+	// of them touched nowhere else in the codebase at all), so there's nothing left for a phase
+	// to order it against; every reader of TerrainWeatherBiomeTexture (the one key with other
+	// touchers) gets a real resource edge from this node's Modify<> instead.
 	struct TerrainBiomeNode: render::NodeRegistrar<TerrainBiomeNode> {
-		using Resources = graph::Declares<
-			graph::Create<TerrainWeatherBiomeTexture>,
-			graph::Create<TerrainWeatherPingPongTexture>,
-			graph::Create<TerrainWeatherMapATexture>,
-			graph::Create<TerrainWeatherMapBTexture>,
-			graph::Create<TerrainBiomeMainTexture>,
-			graph::Create<TerrainBiomeMapATexture>,
-			graph::Create<TerrainBiomeMapBTexture>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::Prepare;
-
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            initialShader;
 		ComputeShader            advectShader;
@@ -122,6 +99,17 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+
+			if (services.physicalRegistry) {
+				graph::ResourceCatalog& catalog = services.physicalRegistry->Catalog();
+				catalog.Get<TerrainWeatherBiomeTexture>();
+				catalog.Get<TerrainWeatherPingPongTexture>();
+				catalog.Get<TerrainWeatherMapATexture>();
+				catalog.Get<TerrainWeatherMapBTexture>();
+				catalog.Get<TerrainBiomeMainTexture>();
+				catalog.Get<TerrainBiomeMapATexture>();
+				catalog.Get<TerrainBiomeMapBTexture>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -145,58 +133,19 @@ namespace brassica {
 			++frameCounter;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = true};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherPingPongTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kSimTextureDim),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherMapATexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherMapBTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainBiomeMainTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainBiomeMapATexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainBiomeMapBTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = WeatherBiomeImageDesc(constants::Weather::kBiomeTextureDim),
-				}
-			);
-			return r;
+		// All seven are Modify (not Create): legacy used ReadWrite for every one of these, since
+		// each is persistent ping-pong/display state read back in by this same node next frame,
+		// not a fresh-every-frame allocation. Dims now come from each key's own catalog Desc()
+		// (ResourceKeys.hpp's WeatherBiomeImageDesc) instead of this Setup rebuilding them by hand.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Modify<TerrainWeatherBiomeTexture>();
+			r.Modify<TerrainWeatherPingPongTexture>();
+			r.Modify<TerrainWeatherMapATexture>();
+			r.Modify<TerrainWeatherMapBTexture>();
+			r.Modify<TerrainBiomeMainTexture>();
+			r.Modify<TerrainBiomeMapATexture>();
+			r.Modify<TerrainBiomeMapBTexture>();
 		}
 
 		template <typename PushT>

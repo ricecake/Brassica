@@ -282,6 +282,24 @@ namespace brassica::graph {
 		// common reported minimum; a node targeting a device with a different minimum must set
 		// this explicitly.
 		std::array<std::uint32_t, 2> shadingRateTexelSize{16, 16};
+
+		// Set via AccessHandle::AnyOrder() -- the author is asserting that a conflicting write
+		// against this exact key from another AnyOrder() access needs no relation, because the
+		// two commute (e.g. depth-tested opaque geometry writing disjoint screen regions). Without
+		// this, two writers of one key with nothing ordering them is an ambiguity error (design
+		// plan's §E); this is the single opt-out, and it only suppresses that specific check -- a
+		// real data race from an actual conflicting write still corrupts output the same as ever,
+		// this is not a correctness guarantee, just a declaration that the author already checked.
+		bool anyOrder = false;
+
+		// Set via AccessHandle::Required() on a Read access -- design plan's §E: this node is
+		// inactive unless an active writer W of this key satisfies W <= this node in the schedule
+		// order (a writer that only runs *after* this node doesn't count; that would make
+		// activity depend on something that hasn't happened yet). Meaningless on a Write/
+		// ReadWrite access -- a node always "has" whatever it itself just wrote. Distinct from
+		// Requires<A>(), which couples activity to a specific *node*; this couples it to whether
+		// a specific *key* actually has live data flowing into this read.
+		bool required = false;
 	};
 
 	// Returned by Node::Setup for a given frame. isActive drives culling; realizations are

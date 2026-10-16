@@ -10,6 +10,8 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -31,30 +33,12 @@ namespace brassica {
 		std::int32_t  endMip{0};
 	};
 
+	// S4: no kPhase -- Read<HdrColor>()/Read<GBufferDepth>() are both backed by sole-creator
+	// Create-before-accessor edges (DeferredNode, TerrainNode), and Modify<AutoExposureBuffer>()
+	// is likewise ordered after Import<AutoExposureBuffer>()'s sole Create (Engine.cpp) --
+	// nothing else writes any key this node touches, so there's no writer-pairwise pair left for
+	// a phase to disambiguate.
 	struct TonemapComputeNode: render::NodeRegistrar<TonemapComputeNode> {
-		using Resources = graph::Declares<
-			graph::Read<HdrColor>,
-			graph::Read<GBufferDepth>,
-			graph::Modify<AutoExposureBuffer>,
-			graph::Create<BloomTextureMip0>,
-			graph::Create<BloomTextureMip1>,
-			graph::Create<BloomTextureMip2>,
-			graph::Create<BloomTextureMip3>,
-			graph::Create<BloomTextureMip4>,
-			graph::Create<LtmExpTextureMip0>,
-			graph::Create<LtmExpTextureMip1>,
-			graph::Create<LtmExpTextureMip2>,
-			graph::Create<LtmExpTextureMip3>,
-			graph::Create<LtmExpTextureMip4>,
-			graph::Create<LtmWgtTextureMip0>,
-			graph::Create<LtmWgtTextureMip1>,
-			graph::Create<LtmWgtTextureMip2>,
-			graph::Create<LtmWgtTextureMip3>,
-			graph::Create<LtmWgtTextureMip4>,
-			graph::Create<LtmFusedTexture>>;
-
-		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
-
 		ComputeShader              downsampleShader;
 		ComputeShader              upsampleShader;
 		ComputeShader              ltmFuseShader;
@@ -73,6 +57,26 @@ namespace brassica {
 			}
 
 			s_exposureData.layers[1].targetLuminance = 0.5f;
+
+			if (services.physicalRegistry) {
+				graph::ResourceCatalog& catalog = services.physicalRegistry->Catalog();
+				catalog.Get<BloomTextureMip0>();
+				catalog.Get<BloomTextureMip1>();
+				catalog.Get<BloomTextureMip2>();
+				catalog.Get<BloomTextureMip3>();
+				catalog.Get<BloomTextureMip4>();
+				catalog.Get<LtmExpTextureMip0>();
+				catalog.Get<LtmExpTextureMip1>();
+				catalog.Get<LtmExpTextureMip2>();
+				catalog.Get<LtmExpTextureMip3>();
+				catalog.Get<LtmExpTextureMip4>();
+				catalog.Get<LtmWgtTextureMip0>();
+				catalog.Get<LtmWgtTextureMip1>();
+				catalog.Get<LtmWgtTextureMip2>();
+				catalog.Get<LtmWgtTextureMip3>();
+				catalog.Get<LtmWgtTextureMip4>();
+				catalog.Get<LtmFusedTexture>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -87,63 +91,34 @@ namespace brassica {
 			ltmFuseShader.Destroy(device);
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = s_tonemapComputePassEnabled};
-			if (!r.isActive) {
-				return r;
-			}
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AutoExposureBuffer>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::StorageBufferDesc(sizeof(ExposureDataHost)),
-				}
-			);
-
-			auto addStorageDesc = [&](graph::ResourceId key, std::uint32_t w, std::uint32_t h) {
-				r.realizations.push_back(
-					graph::ResourceRealization{
-						.key = key,
-						.access = graph::AccessKind::Write,
-						.desc = graph::ComputeStorageImageDesc(w, h, vk::Format::eR16G16B16A16Sfloat),
-					}
-				);
-			};
-
-			std::uint32_t w = ctx.width / 2;
-			std::uint32_t h = ctx.height / 2;
-
-			addStorageDesc(graph::IdOf<BloomTextureMip0>(), std::max(1u, w), std::max(1u, h));
-			addStorageDesc(graph::IdOf<BloomTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
-			addStorageDesc(graph::IdOf<BloomTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
-			addStorageDesc(graph::IdOf<BloomTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
-			addStorageDesc(graph::IdOf<BloomTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
-
-			addStorageDesc(graph::IdOf<LtmExpTextureMip0>(), std::max(1u, w), std::max(1u, h));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
-			addStorageDesc(graph::IdOf<LtmExpTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
-
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip0>(), std::max(1u, w), std::max(1u, h));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip1>(), std::max(1u, w / 2), std::max(1u, h / 2));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip2>(), std::max(1u, w / 4), std::max(1u, h / 4));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip3>(), std::max(1u, w / 8), std::max(1u, h / 8));
-			addStorageDesc(graph::IdOf<LtmWgtTextureMip4>(), std::max(1u, w / 16), std::max(1u, h / 16));
-
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<LtmFusedTexture>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ComputeStorageImageDesc(
-						std::max(1u, w),
-						std::max(1u, h),
-						vk::Format::eR16G16B16A16Sfloat
-					),
-				}
-			);
-
-			return r;
+		// Active(s_tonemapComputePassEnabled) only gates whether this dispatch runs -- every
+		// access below is still declared unconditionally, per the plan's §B rule (TonemapNode.hpp
+		// used to return early with no realizations at all when disabled, which would have changed
+		// the union graph frame to frame once relations become load-bearing in S3). Dimensions for
+		// the 16 mip textures + LtmFusedTexture now come from each key's own catalog Desc()
+		// (ResourceKeys.hpp's TonemapMipDesc) instead of this Setup rebuilding them by hand.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Active(s_tonemapComputePassEnabled);
+			r.Read<HdrColor>();
+			r.Read<GBufferDepth>();
+			r.Modify<AutoExposureBuffer>();
+			r.Create<BloomTextureMip0>();
+			r.Create<BloomTextureMip1>();
+			r.Create<BloomTextureMip2>();
+			r.Create<BloomTextureMip3>();
+			r.Create<BloomTextureMip4>();
+			r.Create<LtmExpTextureMip0>();
+			r.Create<LtmExpTextureMip1>();
+			r.Create<LtmExpTextureMip2>();
+			r.Create<LtmExpTextureMip3>();
+			r.Create<LtmExpTextureMip4>();
+			r.Create<LtmWgtTextureMip0>();
+			r.Create<LtmWgtTextureMip1>();
+			r.Create<LtmWgtTextureMip2>();
+			r.Create<LtmWgtTextureMip3>();
+			r.Create<LtmWgtTextureMip4>();
+			r.Create<LtmFusedTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -360,16 +335,6 @@ namespace brassica {
 	};
 
 	struct TonemapNode: render::NodeRegistrar<TonemapNode> {
-		using Resources = graph::Declares<
-			graph::Read<HdrColor>,
-			graph::Read<GBufferDepth>,
-			graph::Read<BloomTextureMip0>,
-			graph::Read<LtmFusedTexture>,
-			graph::Read<LtmExpTextureMip0>,
-			graph::Modify<Swapchain>>;
-
-		static constexpr graph::Phase kPhase = brassica::SubPhase::ToneMapping;
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 		};
@@ -407,16 +372,24 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& /*p*/) { push = s_tonemapPush; }
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<Swapchain>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, swapchainFormat),
-				}
-			);
-			return r;
+		// No .Desc() on Swapchain -- it's Imported, so Provision() skips its realization's desc
+		// entirely regardless of content (same reasoning as ImGuiNode.hpp). The three mip reads
+		// are safe to declare now that TonemapComputeNode (the real producer) creates them
+		// through the catalog instead of a hand-rolled Recipe -- Create-before-accessor orders
+		// it before this node regardless of either side's phase. S4: no kPhase -- this node is
+		// the ToneMap phase's designated keystone (design plan's §D table): ImGuiNode's
+		// After<TonemapNode>() (ImGuiNode.hpp) is the only other thing that currently needs "after
+		// ToneMap" as a named anchor, and Keystone<>() is what makes that guarantee hold even if
+		// a future ToneMap-phase node runs unordered relative to this one.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Keystone<brassica::phase::ToneMap>();
+			r.Read<HdrColor>();
+			r.Read<GBufferDepth>();
+			r.Read<BloomTextureMip0>();
+			r.Read<LtmFusedTexture>();
+			r.Read<LtmExpTextureMip0>();
+			r.Modify<Swapchain>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

@@ -11,10 +11,10 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -89,14 +89,12 @@ namespace brassica {
 
 	} // namespace detail
 
-	// Builds HiZTexture's mip chain (min/max depth pyramid) from GBufferDepth mip 0.
-	// Executed in SubPhase::LightPreparation (Phase 500) so HiZ depth data is available for
+	// Builds HiZTexture's mip chain (min/max depth pyramid) from GBufferDepth mip 0, consumed by
 	// light clustering, occlusion culling, reflections, and screen space shadow ray marching.
+	// S4: no kPhase -- its declared Read<GBufferDepth> already orders it after every GBufferDepth
+	// writer that ran this frame (TerrainNode's Create, plus Entity/FoliageNode's Modify) via
+	// ordinary resource edges, so the SubPhase::LightPreparation placement was redundant.
 	struct HiZDownsampleNode: render::NodeRegistrar<HiZDownsampleNode> {
-		using Resources = graph::Declares<graph::Read<GBufferDepth>, graph::Create<HiZTexture>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
-
 		static constexpr std::uint32_t kTileSize = 64;
 
 		render::PipelineLibrary*   pipelineLibrary = nullptr;
@@ -126,6 +124,13 @@ namespace brassica {
 			if (!services.physicalRegistry) {
 				return;
 			}
+			// Registers HiZTexture's own Desc() with the catalog (ResourceCatalog.hpp) -- a
+			// pure side effect, no change to this node's own Setup()/Recipe shape. From here
+			// on, Provision() prefers HiZTexture's type-owned desc over this node's own
+			// hand-rolled realization below, and ProvisionTemporalPairs takes History<HiZTexture>'s
+			// desc from it too, instead of requiring the reader (FoliageNode) to supply one
+			// (lesson #9).
+			services.physicalRegistry->Catalog().Get<HiZTexture>();
 			allocator = services.physicalRegistry->GetAllocator();
 
 			vk::DeviceSize bufferSize = sizeof(std::uint32_t);
@@ -179,29 +184,18 @@ namespace brassica {
 			}
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
+		// GBufferDepth/HiZTexture are both catalog-converted -- no .Desc() needed, the catalog's
+		// own Desc() wins over this builder's deliberately empty default either way.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
 			width = ctx.width;
 			height = ctx.height;
 			std::uint32_t maxDim = (std::max)(width, height);
 			outputMips = maxDim > 0 ? static_cast<std::uint32_t>(std::floor(std::log2(static_cast<float>(maxDim)))) : 1;
 			outputMips = (std::min)(outputMips, 12u);
 
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::DepthBufferDesc(width, height),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HiZTexture>(),
-					.access = graph::AccessKind::Write,
-					.desc = HiZTextureDesc(width, height, outputMips + 1),
-				}
-			);
-			return r;
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Read<GBufferDepth>();
+			r.Create<HiZTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

@@ -5,9 +5,9 @@
 #include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -26,9 +26,6 @@ namespace brassica {
 	// AtmosphereCompositeNode.hpp) -- a distinct concept from drawing the sky background, even
 	// though this node was briefly (and incorrectly) named that.
 	struct SkyBackgroundNode: render::NodeRegistrar<SkyBackgroundNode> {
-		using Resources =
-			graph::Declares<graph::Read<SkyViewLUT>, graph::Read<TransmittanceLUT>, graph::Create<AtmosphereRadiance>>;
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 		};
@@ -67,30 +64,15 @@ namespace brassica {
 			push.worldScale = p.worldScale;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
-				}
+		// SkyViewLUT/TransmittanceLUT are both catalog-converted -- no .Desc() needed. AtmosphereRadiance
+		// isn't, so it keeps the exact desc the old hand-rolled Recipe used.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Read<SkyViewLUT>();
+			r.Read<TransmittanceLUT>();
+			r.Create<AtmosphereRadiance>().Desc(
+				graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat)
 			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<AtmosphereRadiance>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
 		}
 
 		void Execute(graph::NodeContext& ctx) {

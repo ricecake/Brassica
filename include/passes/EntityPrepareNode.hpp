@@ -4,10 +4,10 @@
 #include <cstdint>
 #include <vector>
 
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -18,11 +18,10 @@
 
 namespace brassica {
 
+	// S4: no kPhase -- EntityNode's explicit After<EntityPrepareNode>() (EntityNode.hpp) is the
+	// real ordering constraint now, covering the direct-pointer/ctx.resources access this node's
+	// output gets there that no resource edge can express on its own.
 	struct EntityPrepareNode: render::NodeRegistrar<EntityPrepareNode> {
-		using Resources = graph::Declares<graph::Create<EntityInstanceBuffer>, graph::Create<EntityIndirectBuffer>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::Prepare;
-
 		// Transient execution storage
 		std::vector<EntityInstanceData> m_batchedInstances;
 		MeshTasksIndirectCommand        m_indirectCommand{0, 0, 0};
@@ -35,35 +34,19 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& params) { m_registry = params.registry; }
 
-		graph::Recipe Setup(const graph::FrameContext& /*ctx*/) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+		// EntityInstanceBuffer/EntityIndirectBuffer aren't catalog-converted, so each keeps the
+		// exact desc the old hand-rolled Recipe used (via .Desc()).
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
 
 			// Capacity for up to 1024 entity instances
-			std::size_t instBufferSize = sizeof(EntityInstanceData) * 1024;
-			if (instBufferSize == 0)
-				instBufferSize = 1024;
-
-			graph::ResourceDesc instDesc = graph::MappedStorageBufferDesc(instBufferSize);
+			graph::ResourceDesc instDesc = graph::MappedStorageBufferDesc(sizeof(EntityInstanceData) * 1024);
 			instDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<EntityInstanceBuffer>(),
-					.access = graph::AccessKind::Write,
-					.desc = instDesc,
-				}
-			);
+			r.Create<EntityInstanceBuffer>().Desc(instDesc);
 
 			graph::ResourceDesc indirectDesc = graph::MappedStorageBufferDesc(sizeof(MeshTasksIndirectCommand));
 			indirectDesc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<EntityIndirectBuffer>(),
-					.access = graph::AccessKind::Write,
-					.desc = indirectDesc,
-				}
-			);
-
-			return r;
+			r.Create<EntityIndirectBuffer>().Desc(indirectDesc);
 		}
 
 		void Execute(graph::NodeContext& ctx) {

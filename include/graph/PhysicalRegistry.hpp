@@ -14,6 +14,7 @@
 #include "graph/Execution.hpp"
 #include "graph/Graph.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/ResourceCatalog.hpp"
 #include "graph/ResourceKey.hpp"
 #include "graph/ResourceState.hpp"
 #include "graph/VulkanSeam.hpp"
@@ -97,6 +98,12 @@ namespace brassica::graph {
 		[[nodiscard]] VmaAllocator GetAllocator() const { return m_allocator; }
 
 		[[nodiscard]] vk::Queue GetQueue() const { return m_queue; }
+
+		// The one persistent instance per converted resource type -- see ResourceCatalog.hpp.
+		// Lives here, not as a separate top-level object Engine has to wire everywhere, because
+		// everything that needs it (Provision below, and the owning managers/nodes that publish
+		// config onto a converted key's instance) already reaches it through this registry.
+		[[nodiscard]] ResourceCatalog& Catalog() { return m_catalog; }
 
 		// The engine's one bindless descriptor set (set 1) and which binding holds each array --
 		// see Engine::InitGlobalDescriptors for where these are created. Bindings, not a single
@@ -449,13 +456,22 @@ namespace brassica::graph {
 		//
 		// frameIndex selects which of a History<K> pair's two physical slots K and History<K>
 		// resolve to this frame -- see ProvisionTemporalPairs below.
+		// nodes is optional (defaults empty) and used only to name nodes in diagnostics below --
+		// a caller with a real Graph passes graph.Nodes(); a caller testing Provision() against a
+		// hand-built Schedule/Recipe pair with no NodeHandle to offer gets numeric fallback names
+		// instead, not a compile error. ctx is optional too (defaults empty) and used only to
+		// evaluate a converted key's own Desc() via m_catalog -- a caller with no FrameContext to
+		// offer just never gets the catalog-preferred desc, falling back to whatever a legacy
+		// node realization supplied, same as before the catalog existed.
 		void Provision(
-			const Schedule&         schedule,
-			std::span<const Recipe> recipes,
-			std::uint64_t           frameIndex,
-			bool                    enableAliasing = true
+			const Schedule&            schedule,
+			std::span<const Recipe>    recipes,
+			std::uint64_t              frameIndex,
+			bool                       enableAliasing = true,
+			std::span<const NodeHandle> nodes = {},
+			const FrameContext&        ctx = {}
 		) {
-			ProvisionTemporalPairs(recipes, frameIndex);
+			ProvisionTemporalPairs(recipes, frameIndex, ctx);
 
 			// Bindless indices retired by an earlier Provision() (a texture replaced by a resize,
 			// most likely -- see ProvisionTexture) become reusable once enough frames have passed
@@ -465,6 +481,7 @@ namespace brassica::graph {
 			m_storageArena.ProcessRetirements(frameIndex);
 			m_accelStructArena.ProcessRetirements(frameIndex);
 			ProcessBufferRetirements(frameIndex);
+			ProcessTextureRetirements(frameIndex);
 
 			std::unordered_map<ResourceId, TemporalLifetime> lifetimes;
 			for (std::size_t stageIndex = 0; stageIndex < schedule.stages.size(); ++stageIndex) {
@@ -476,6 +493,16 @@ namespace brassica::graph {
 				// access-promotion (Execution.hpp) pick a winner. Scoped to images: a buffer has
 				// no layout to conflict over.
 				std::unordered_map<ResourceId, vk::ImageLayout> stageImageLayouts;
+
+				// Same-stage conflicting-ACCESS detection: broader than the layout check above,
+				// which only catches images whose *derived layout* disagrees -- a storage image's
+				// Read and Write both derive eGeneral (ResourceState.hpp), and a buffer has no
+				// layout at all, so neither would be caught there even though a writer sharing a
+				// stage with any other accessor of the same key is exactly as real a race on those
+				// kinds. Keyed by nodeIndex (not by realization) so one node realizing the same key
+				// twice -- a real, currently-tolerated drift bug elsewhere, not a race -- never
+				// looks like two independent nodes conflicting; see the per-node merge below.
+				std::unordered_map<ResourceId, std::unordered_map<std::size_t, AccessKind>> stageAccessByNode;
 
 				for (std::size_t nodeIndex : schedule.stages[stageIndex].nodes) {
 					if (nodeIndex >= recipes.size()) {
@@ -495,6 +522,15 @@ namespace brassica::graph {
 						auto& lt = lifetimes[resolvedKey];
 						lt.firstPass = std::min(lt.firstPass, stageIndex);
 						lt.lastPass = std::max(lt.lastPass, stageIndex);
+
+						// Merge this node's own realizations of resolvedKey into one access
+						// summary first (same promotion BarrierBatch::Add uses: either side
+						// writing makes the pair ReadWrite), *then* compare across nodes below.
+						auto& perNode = stageAccessByNode[resolvedKey];
+						auto [accessIt, accessInserted] = perNode.try_emplace(nodeIndex, r.access);
+						if (!accessInserted && accessIt->second != r.access) {
+							accessIt->second = AccessKind::ReadWrite;
+						}
 
 						// Same-stage layout conflicts only apply to images -- buffers have no
 						// layout, and an AccelerationStructure realization has no ResourceDesc
@@ -525,9 +561,52 @@ namespace brassica::graph {
 						}
 					}
 				}
+
+				for (const auto& [resolvedKey, perNode] : stageAccessByNode) {
+					if (perNode.size() < 2) {
+						continue;
+					}
+					bool anyWriter = false;
+					bool anyHost = false;
+					bool anyNonHost = false;
+					for (const auto& [nodeIndex, access] : perNode) {
+						if (access == AccessKind::Write || access == AccessKind::ReadWrite) {
+							anyWriter = true;
+						}
+						if (recipes[nodeIndex].domain == ExecutionDomain::Host) {
+							anyHost = true;
+						} else {
+							anyNonHost = true;
+						}
+					}
+					if (anyWriter) {
+						throw std::runtime_error(
+							"PhysicalResourceRegistry::Provision: " + std::to_string(perNode.size()) +
+							" distinct nodes in the same schedule stage access resource '" +
+							std::string(resolvedKey->name) +
+							"' and at least one of them writes it -- these nodes are provably "
+							"unordered relative to each other (ScheduleStage's invariant), so this "
+							"is a real race, not something a barrier can resolve"
+						);
+					}
+					if (anyHost && anyNonHost) {
+						throw std::runtime_error(
+							"PhysicalResourceRegistry::Provision: resource '" + std::string(resolvedKey->name) +
+							"' is read by both a Host-domain node and a GPU-domain node in the same "
+							"schedule stage -- these derive different resource states "
+							"(ResourceState.hpp) and cannot share a stage"
+						);
+					}
+				}
 			}
 
 			std::unordered_map<ResourceId, ResourceRealization> realizationsToProvision;
+			// Diagnostic-only: which node's realization currently occupies realizationsToProvision
+			// for a given key, so a later disagreeing realization can be warned about by name
+			// instead of just silently winning -- see the desc-equality check below. Lesson #10:
+			// the schedule-last toucher's desc is what actually reaches ProvisionTexture/Buffer,
+			// which is harmless only as long as every toucher of one key agrees on its desc.
+			std::unordered_map<ResourceId, std::size_t> realizationSourceNode;
 			for (const auto& stage : schedule.stages) {
 				for (std::size_t nodeIndex : stage.nodes) {
 					if (nodeIndex >= recipes.size()) {
@@ -559,7 +638,64 @@ namespace brassica::graph {
 							continue;
 						}
 
-						realizationsToProvision[resolvedKey] = r;
+						// A converted key's own Desc() (ResourceCatalog) always wins over
+						// whatever a legacy node realization supplied -- the type is now the
+						// one true source for it. Warn rather than silently override, so a
+						// node still carrying a stale hand-rolled desc for a converted key
+						// shows up for cleanup during its own conversion (S2b), instead of just
+						// becoming unreachable dead code with no diagnostic. Skipped when r.desc
+						// is exactly the default ResourceDesc{}: that's a builder node's
+						// deliberately-empty realization (SetupBuilder.hpp's Create/Read/Modify
+						// never set one, by design -- the catalog is the only source), not a
+						// stale hand-rolled value worth flagging.
+						ResourceRealization effective = r;
+						if (auto catalogDesc = m_catalog.DescFor(resolvedKey, ctx)) {
+							if (!DescsFullyMatch(r.desc, ResourceDesc{}) && !DescsFullyMatch(r.desc, *catalogDesc)) {
+								spdlog::warn(
+									"PhysicalResourceRegistry::Provision: {}'s realization of '{}' "
+									"disagrees with the type's own Desc() -- the type wins; update "
+									"or remove this node's hand-rolled desc",
+									NodeNameOrIndex(nodes, nodeIndex),
+									resolvedKey->name
+								);
+							}
+							effective.desc = *catalogDesc;
+						}
+
+						if (auto prevIt = realizationsToProvision.find(resolvedKey); prevIt != realizationsToProvision.end() &&
+							!DescsFullyMatch(prevIt->second.desc, effective.desc)) {
+							const bool prevEmpty = DescsFullyMatch(prevIt->second.desc, ResourceDesc{});
+							const bool currEmpty = DescsFullyMatch(effective.desc, ResourceDesc{});
+							// A builder node's Read<K>()/Modify<K>() on a key with no catalog entry
+							// (not yet converted, or converted but nothing registered it in THIS
+							// run -- an isolated test with a fake producer, most likely) carries an
+							// empty desc by construction, same as the warning suppression above.
+							// Letting it win just because it schedules later would silently
+							// corrupt whatever real desc an earlier, genuine producer/reader
+							// already supplied -- confirmed as a real regression (not hypothetical)
+							// the first time a converted-but-unregistered-in-test key was read this
+							// way. Only warn, and only let the schedule-last one actually win, when
+							// BOTH sides have a real opinion -- an empty one is simply ignored for
+							// provisioning purposes, regardless of where it falls in the schedule.
+							if (!prevEmpty && !currEmpty) {
+								const std::size_t prevNodeIndex = realizationSourceNode.at(resolvedKey);
+								spdlog::warn(
+									"PhysicalResourceRegistry::Provision: resource '{}' is realized with "
+									"disagreeing descs by {} and {} -- the schedule-last one ({}) wins, "
+									"per Provision()'s last-writer-wins collapse (see lesson #10)",
+									resolvedKey->name,
+									NodeNameOrIndex(nodes, prevNodeIndex),
+									NodeNameOrIndex(nodes, nodeIndex),
+									NodeNameOrIndex(nodes, nodeIndex)
+								);
+							}
+							if (currEmpty && !prevEmpty) {
+								continue; // keep the existing non-empty entry
+							}
+						}
+
+						realizationsToProvision[resolvedKey] = effective;
+						realizationSourceNode[resolvedKey] = nodeIndex;
 					}
 				}
 			}
@@ -949,11 +1085,31 @@ namespace brassica::graph {
 				a.usageMask == b.usageMask && a.mips == b.mips && a.layers == b.layers;
 		}
 
+		// Stricter than ImageDescMatches above (every field, not just the seven that matter for
+		// reprovisioning) and kind-agnostic (buffers included) -- this backs the diagnostic-only
+		// disagreement warning in Provision()'s realizationsToProvision loop, not a reprovisioning
+		// decision, so a false positive here only ever produces a spurious warning, never a bug.
+		static bool DescsFullyMatch(const ResourceDesc& a, const ResourceDesc& b) {
+			return a.kind == b.kind && a.width == b.width && a.height == b.height && a.depth == b.depth &&
+				a.mips == b.mips && a.layers == b.layers && a.formatCode == b.formatCode && a.usageMask == b.usageMask &&
+				a.byteSize == b.byteSize && a.hostAccess == b.hostAccess && a.persistent == b.persistent;
+		}
+
+		// Diagnostic-only name lookup -- nodes is empty for a caller that built its own
+		// Schedule/Recipe pair with no NodeHandle to offer (see Provision()'s comment), so this
+		// falls back to a numeric label rather than requiring every caller to carry names.
+		static std::string NodeNameOrIndex(std::span<const NodeHandle> nodes, std::size_t index) {
+			if (index < nodes.size()) {
+				return std::string(nodes[index].Descriptor().name);
+			}
+			return "node#" + std::to_string(index);
+		}
+
 		// Runs once per Provision() call, before the ordinary collection/provisioning loops below:
 		// by the time those loops see K or History<K>, m_textures/m_buffers already holds this
 		// frame's correctly-assigned slot for each, and ProvisionTexture/ProvisionBuffer's own
 		// desc-match early return (see below) leaves it untouched rather than reprovisioning it.
-		void ProvisionTemporalPairs(std::span<const Recipe> recipes, std::uint64_t frameIndex) {
+		void ProvisionTemporalPairs(std::span<const Recipe> recipes, std::uint64_t frameIndex, const FrameContext& ctx) {
 			std::unordered_map<ResourceId, ResourceId>   historyIdForBase;
 			std::unordered_map<ResourceId, ResourceDesc> descForBase;
 			for (const auto& recipe : recipes) {
@@ -963,6 +1119,16 @@ namespace brassica::graph {
 					}
 					const ResourceId base = r.key->historyTarget;
 					historyIdForBase[base] = r.key;
+					// Prefer the base type's own Desc() (ResourceCatalog), once it's been
+					// converted and registered -- eliminates lesson #9's whole failure mode for
+					// a converted key, since the desc no longer depends on the reader having
+					// pushed a correct realization at all. Falls back to the reader's
+					// realization (the original lesson #9 workaround) for any key not yet
+					// converted, so unconverted keys are completely unaffected.
+					if (auto catalogDesc = m_catalog.DescFor(base, ctx)) {
+						descForBase[base] = *catalogDesc;
+						continue;
+					}
 					descForBase[base] = r.desc; // PreviousFrame has no realizations of its own --
 					                            // the reader's desc is the only one available.
 				}
@@ -1042,6 +1208,14 @@ namespace brassica::graph {
 				// About to replace this texture (e.g. a resize) -- its bindless slots, if any,
 				// become reusable once ProcessRetirements confirms it's safe, not immediately.
 				RetireBindlessIndices(*existingIt->second, frameIndex);
+				// The VkImage itself must survive the same way: a command buffer recorded before
+				// this replacement (this frame's own, or an earlier frame's not yet retired by the
+				// GPU) may still reference it. Dropping the shared_ptr here instead -- which this
+				// used to do, via a bare `m_textures[id] = std::move(tex)` below with no retire --
+				// ran its destructor (vkDestroyImage) synchronously with no wait, exactly lesson
+				// #7's hazard. RetireTexture below (mirrors RetireBuffer) keeps it alive until
+				// ProcessTextureRetirements confirms FRAME_OVERLAP frames have passed.
+				RetireTexture(std::move(existingIt->second), frameIndex);
 			}
 
 			// A persistent resource never goes through the alias pool -- see ResourceDesc::persistent's
@@ -1054,6 +1228,17 @@ namespace brassica::graph {
 			AssignAndWriteBindlessIndices(*tex);
 
 			m_textures[id] = std::move(tex);
+		}
+
+		// Same shape, same reason, as RetireBuffer/ProcessBufferRetirements below -- held by
+		// shared_ptr, not destroyed, until enough frames have passed that nothing still in
+		// flight can reference it.
+		void RetireTexture(std::shared_ptr<PhysicalTexture> texture, std::uint64_t frameIndex) {
+			m_retiringTextures.emplace_back(frameIndex + brassica::FRAME_OVERLAP, std::move(texture));
+		}
+
+		void ProcessTextureRetirements(std::uint64_t frameIndex) {
+			std::erase_if(m_retiringTextures, [&](const auto& entry) { return entry.first <= frameIndex; });
 		}
 
 		void ProvisionBuffer(
@@ -1138,6 +1323,7 @@ namespace brassica::graph {
 		vk::Queue       m_queue{};
 		ImageAliasPool  m_imagePool;
 		BufferAliasPool m_bufferPool;
+		ResourceCatalog m_catalog;
 
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalTexture>>               m_textures;
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalBuffer>>                m_buffers;
@@ -1147,6 +1333,11 @@ namespace brassica::graph {
 		// replaced (grow-past-capacity, or a usage/hostAccess change), held until it's safe to
 		// actually drop the last shared_ptr to it.
 		std::vector<std::pair<std::uint64_t, std::shared_ptr<PhysicalBuffer>>> m_retiringBuffers;
+
+		// See RetireTexture/ProcessTextureRetirements -- a texture ProvisionTexture just
+		// replaced (a resize, most likely), held until it's safe to actually drop the last
+		// shared_ptr to it.
+		std::vector<std::pair<std::uint64_t, std::shared_ptr<PhysicalTexture>>> m_retiringTextures;
 
 		// Keyed by the History target's base id (never by the History<K> id itself). Both slots
 		// are Owning and allocated once, lazily, on the first frame that declares a History<K>

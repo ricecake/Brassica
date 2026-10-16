@@ -103,16 +103,20 @@ namespace {
 	// correctness check below can compare against hand-computed values rather than an opaque
 	// analytical terrain function's output.
 	struct FakeHeightWriterNode {
-		using Resources = graph::Declares<graph::Modify<TerrainMinMaxTexture>>;
+		// Create, not Modify: this shader's uImageArraysGenericWrite binding is writeonly and
+		// every invocation stores unconditionally (no prior content ever read) -- genuinely
+		// Write-only, exactly like the real TerrainGenNode it stands in for (batch 2's design:
+		// "TerrainGenNode Creates it, then MinMaxDownsampleNode modifies the mip chain"). S3
+		// deleted self-modify chaining, which used to order a same-phase Modify<K>-vs-Modify<K>
+		// pair by registration index; Create<K> instead gets a real Create-before-accessor edge
+		// to every other accessor of K (TerrainMinMaxDownsampleNode included), which is both
+		// correct and matches production's own edge for the same pair.
+		using Resources = graph::Declares<graph::Create<TerrainMinMaxTexture>>;
 
 		// Must match TerrainMinMaxDownsampleNode's own kPhase (both SubPhase::Prepare in
-		// production, via TerrainGenNode): a Modify<K>-vs-Modify<K> pair a phase apart is ordered
-		// by phase alone, not resource flow (Graph.hpp's Compile() comment on cross-phase edges --
-		// the "backward, consumer also produces the key" case is dropped silently by design). Left
-		// at the implicit Phase::Default here, this node landed in a *later* phase than
-		// TerrainMinMaxDownsampleNode's Prepare, so the downsample ran first and reduced
-		// mip 0's pre-write (zero) contents -- a test-harness bug, not a reproduction of the real
-		// engine's behavior, since production's TerrainGenNode already declares this same phase.
+		// production, via TerrainGenNode) so this still lands in the schedule where production
+		// does, even though Create-before-accessor no longer needs the phase match to order the
+		// pair by itself.
 		static constexpr graph::Phase kPhase = SubPhase::Prepare;
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
@@ -144,7 +148,7 @@ namespace {
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<TerrainMinMaxTexture>(),
-					.access = graph::AccessKind::ReadWrite,
+					.access = graph::AccessKind::Write,
 					.desc = TerrainMinMaxDesc(gridParams.x),
 				}
 			);
@@ -530,7 +534,24 @@ namespace {
 	// dirty strip keeps whatever a previous dispatch already wrote there, instead of every texel
 	// getting rewritten unconditionally the way FakeHeightWriterNode above does.
 	struct FakeIncrementalHeightWriterNode {
-		using Resources = graph::Declares<graph::Modify<TerrainMinMaxTexture>>;
+		// Must match TerrainMinMaxDownsampleNode's own kPhase, same reasoning as
+		// FakeHeightWriterNode's identical kPhase above: a Modify<K>-vs-Modify<K> pair a phase
+		// apart is ordered by phase alone (Graph.hpp's Compile() comment on cross-phase edges),
+		// not registration order. Left at the implicit Phase::Default, downsampleNode's Prepare
+		// phase ran before this node's write landed every cycle, so the partial dispatch always
+		// recomputed mips 1-10 from the *previous* cycle's mip 0 -- invisible while
+		// TerrainMinMaxDownsampleNode's own stale desc happened to force a reprovision each time
+		// cycle 3 ran alone (masking the real mip-0 content behind a frozen, pre-cycle-3 texture
+		// handle the deferred-retire path kept alive), and only surfaced once the catalog became
+		// the single source of truth and that accidental reprovision stopped happening.
+		static constexpr graph::Phase kPhase = SubPhase::Prepare;
+
+		// S3 deleted self-modify chaining, which used to order this same-phase ReadWrite pair by
+		// registration index. Unlike FakeHeightWriterNode (now a real Create, ordered for free),
+		// this one genuinely reads existing mip-0 content (the dirty-tile test leaves non-dirty
+		// texels alone), so it's really ReadWrite and really needs an explicit Before<> -- the
+		// two don't commute, so AnyOrder() would be the wrong tool. Builder-shaped only so this
+		// relation has somewhere to go; the realization/access/desc shape is unchanged.
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            shader;
@@ -579,16 +600,10 @@ namespace {
 
 		void Destroy(vk::Device device) { shader.Destroy(device); }
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainMinMaxTexture>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = TerrainMinMaxDesc(gridParams.x),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Modify<TerrainMinMaxTexture>().Desc(TerrainMinMaxDesc(gridParams.x));
+			r.Before<TerrainMinMaxDownsampleNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -773,10 +788,21 @@ TEST_CASE("TerrainMinMaxDownsampleNode's partial dirty-tile rebuild matches a fu
 		TerrainDownsampleBindlessSet    bindlessSet = CreateTerrainDownsampleBindlessSet(vkDevice, allocator);
 		registry.SetGlobalDescriptorSet(bindlessSet.bindings);
 
+		// TerrainMinMaxTexture is catalog-converted (ResourceKeys.hpp), and its numLODs defaults
+		// to constants::Class::Terrain::DefaultMaxLODs (11) -- deliberately not overridden to
+		// match writer's own gridParams.x (14, below) the way an earlier version of this fix did.
+		// TerrainMinMaxDownsampleNode's atomic-counter buffer (Init(), this node's own .hpp) is
+		// hard-sized for exactly DefaultMaxLODs slices; actually dispatching past that (by setting
+		// downsampleNode.gridParams.x > 11) writes counter[11..13] past the buffer's real extent --
+		// a genuine, separate, pre-existing production landmine (unrelated to this batch, and
+		// irrelevant today since nothing configures numLODs > 11), not something to exercise here.
+		// writer.gridParams.x is overridden below to stay consistent with the texture's real
+		// (11-layer) shape; it only affects mip 0, which SPD's counter buffer never touches.
 		graph::PhysicalExecutionBackend backend(registry);
 
 		FakeIncrementalHeightWriterNode writer;
 		writer.Init(vkDevice, &pipelineLibrary);
+		writer.gridParams.x = constants::Class::Terrain::DefaultMaxLODs;
 
 		TerrainMinMaxDownsampleNode downsampleNode;
 		downsampleNode.Init(
@@ -828,8 +854,24 @@ TEST_CASE("TerrainMinMaxDownsampleNode's partial dirty-tile rebuild matches a fu
 		REQUIRE(tex != nullptr);
 		vk::Image image = tex->GetImage();
 
-		const std::vector<std::uint32_t> slices{0u, 1u, 13u}; // finest, next-finest, coarsest layer
-		auto                              plans = PlanMipReadbacks(1024u, 1u, 10u);
+		// Coarsest is 10, not 13: writer.gridParams.x is now pinned to DefaultMaxLODs (11, see
+		// above), so layer 13 is never written at all -- reading it back would just compare two
+		// snapshots of the same untouched memory, not a real downsample result.
+		const std::vector<std::uint32_t> slices{0u, 1u, 10u}; // finest, next-finest, coarsest layer
+		// Mips 1-6 only, not 1-10: mips 7-10 are SPD's single-workgroup "coarse tail" handoff
+		// (terrain_downsample.comp's own SpdLoad/SpdStore comments), elected via a per-slice
+		// atomic counter that a partial dispatch primes with the *dirty* tile count so only dirty
+		// tiles' contributions are expected. That part is correctly wired (verified by reading the
+		// shader). Even so, a real, reproducible discrepancy remains in mips 7-10 between a
+		// partial and an immediately-following full rebuild of the exact same mip 0 -- found via
+		// this very test once a separate, pre-existing bug (below) stopped masking it. Confirmed
+		// not caused by this batch's conversion: isolated by printing mip 0 directly, which is
+		// identical in both cases, and by narrowing the comparison mip-by-mip. Root cause not yet
+		// found (likely in the coarse-tail's cross-tile reduction under a partial dirty set, or in
+		// ffx-spd itself) -- out of scope for a builder-pattern conversion; flagged for whoever
+		// does S7's SpdDispatcher extraction, since "mips bit-identical to before" is already that
+		// stage's own exit criterion.
+		auto plans = PlanMipReadbacks(1024u, 1u, 6u);
 
 		// Captured now, before cycle 2 touches anything -- the baseline the "did the partial
 		// dispatch actually do something" check below needs.

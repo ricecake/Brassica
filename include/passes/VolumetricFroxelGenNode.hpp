@@ -10,7 +10,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -45,23 +47,10 @@ namespace brassica {
 	);
 
 	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
-	// Operates in SubPhase::LightPreparation (Phase 500).
+	// S4: no kPhase -- Read<SkyViewLUT>()/Read<CloudShadowMap>() already order it after each
+	// key's sole Create via ordinary resource edges, so the SubPhase::LightPreparation
+	// placement was redundant.
 	struct VolumetricFroxelGenNode: render::NodeRegistrar<VolumetricFroxelGenNode> {
-		using Resources = graph::Declares<
-			graph::Create<VolumetricCascade0Scattering>,
-			graph::Create<VolumetricCascade0Extinction>,
-			graph::Create<VolumetricCascade1Scattering>,
-			graph::Create<VolumetricCascade1Extinction>,
-			graph::Create<VolumetricCascade2Scattering>,
-			graph::Create<VolumetricCascade2Extinction>,
-			graph::Create<VolumetricNoiseTexture>,
-			graph::Read<SkyViewLUT>,
-			graph::Read<TerrainClipmapTexture>,
-			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<CloudShadowMap>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
-
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
 		ComputeShader                    noiseShader;
 		ComputeShader                    genShader;
@@ -79,6 +68,16 @@ namespace brassica {
 			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
+			}
+			if (services.physicalRegistry) {
+				auto& catalog = services.physicalRegistry->Catalog();
+				catalog.Get<VolumetricCascade0Scattering>();
+				catalog.Get<VolumetricCascade0Extinction>();
+				catalog.Get<VolumetricCascade1Scattering>();
+				catalog.Get<VolumetricCascade1Extinction>();
+				catalog.Get<VolumetricCascade2Scattering>();
+				catalog.Get<VolumetricCascade2Extinction>();
+				catalog.Get<VolumetricNoiseTexture>();
 			}
 		}
 
@@ -104,69 +103,28 @@ namespace brassica {
 			genPush.fogParams = glm::vec4(0.003f, 0.003f, 0.0f, static_cast<float>(p.terrainGridParams.w));
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			(void)ctx;
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(7);
-
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade0Scattering>(),
-					.access = graph::AccessKind::Write,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade0Extinction>(),
-					.access = graph::AccessKind::Write,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade1Scattering>(),
-					.access = graph::AccessKind::Write,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade1Extinction>(),
-					.access = graph::AccessKind::Write,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade2Scattering>(),
-					.access = graph::AccessKind::Write,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade2Extinction>(),
-					.access = graph::AccessKind::Write,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricNoiseTexture>(),
-					.access = graph::AccessKind::Write,
-					.desc = VolumetricNoiseDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-
-			return r;
+		// No Read<TerrainClipmapTexture/TerrainMinMaxTexture>() here, matching this node's own
+		// pre-conversion Recipe exactly (it never realized either, despite the removed Resources
+		// declaring both) -- and deliberately so now too: neither key is catalog-converted yet
+		// (a later S2b batch), and TerrainGenNode's Prepare phase schedules before this node's
+		// LightPreparation, so an empty-desc realization here would win via lesson #10's last-
+		// writer-wins and corrupt the real terrain descs. See GTAONode.hpp/CloudShadowGenNode.hpp
+		// for the same reasoning. CloudShadowMap, by contrast, now IS safe to Read<>: it was
+		// already declared (but never realized) before this conversion, and it's catalog-
+		// converted as of this same batch (CloudShadowGenNode.hpp) -- adding the realization
+		// restores the genuine data dependency (this node's shader reads cloudShadowIndex) as a
+		// real edge, which nothing enforced before.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Create<VolumetricCascade0Scattering>();
+			r.Create<VolumetricCascade0Extinction>();
+			r.Create<VolumetricCascade1Scattering>();
+			r.Create<VolumetricCascade1Extinction>();
+			r.Create<VolumetricCascade2Scattering>();
+			r.Create<VolumetricCascade2Extinction>();
+			r.Create<VolumetricNoiseTexture>();
+			r.Read<SkyViewLUT>();
+			r.Read<CloudShadowMap>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

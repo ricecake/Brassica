@@ -9,6 +9,7 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/EntityPrepareNode.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
@@ -22,12 +23,14 @@
 
 namespace brassica {
 
+	// S4: no kPhase -- TerrainNode's sole Create<> of each GBuffer key this node Modify<>s
+	// already orders it after TerrainNode via Create-before-accessor, and every reader of those
+	// keys (WaterNode, GTAONode, HiZDownsampleNode, DeferredNode, the Composite-phase cluster)
+	// gets a real default edge from this node's writes regardless of phase -- confirmed none of
+	// them Modify<> the same keys (WaterNode only Reads them, despite depth-testing against
+	// them), so there's no writer-pairwise conflict left to resolve beyond FoliageNode's own
+	// AnyOrder() pairing below.
 	struct EntityNode: render::NodeRegistrar<EntityNode> {
-		using Resources = graph::
-			Declares<GBuffer<graph::ModifyKey>, graph::Read<EntityInstanceBuffer>, graph::Read<EntityIndirectBuffer>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::GBuffer;
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
@@ -63,6 +66,14 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				auto& catalog = services.physicalRegistry->Catalog();
+				catalog.Get<GBufferPosition>();
+				catalog.Get<GBufferNormal>();
+				catalog.Get<GBufferAlbedo>();
+				catalog.Get<GBufferMaterial>();
+				catalog.Get<GBufferDepth>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -77,46 +88,34 @@ namespace brassica {
 			fragShader.Destroy(device);
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferPosition>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferNormal>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferAlbedo>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferMaterial>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-
-			return r;
+		// Deliberately no Read<EntityInstanceBuffer/EntityIndirectBuffer>() here, matching this
+		// node's own pre-conversion Recipe exactly (it declared both at compile time but never
+		// realized either). Neither key is catalog-converted yet, so an empty-desc realization
+		// here would win via lesson #10 -- same reasoning as GTAONode.hpp. Ordering against
+		// EntityPrepareNode (whose GetBufferDeviceAddress()/GetTotalInstances() this node reads
+		// via a direct EngineNodeRegistry pointer lookup in Execute(), and whose
+		// EntityIndirectBuffer this node reads via ctx.resources directly -- neither going
+		// through the resource graph at all) now comes from this explicit After<>() (S4),
+		// instead of being an accident of EntityPrepareNode's Prepare phase sorting earlier than
+		// this node's old GBuffer phase.
+		//
+		// AnyOrder() on Position/Normal/Albedo/Depth (not Material, which FoliageNode doesn't
+		// touch at all): both this node and FoliageNode Modify the same four keys with nothing
+		// else ordering them, which the relational compiler (S3) treats as a hard ambiguity
+		// error unless both sides opt in. Safe specifically because both are depth-tested opaque
+		// writes to disjoint screen regions -- the visual result doesn't depend on draw order --
+		// but AnyOrder() still gets a real, deterministically-directed edge (and the barrier that
+		// comes with it): two same-stage Graphics nodes with *no* edge at all between them,
+		// writing the same attachment-backed images, would be a genuine WAW hazard regardless of
+		// how commutative the actual pixels are.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Modify<GBufferPosition>().AnyOrder();
+			r.Modify<GBufferNormal>().AnyOrder();
+			r.Modify<GBufferAlbedo>().AnyOrder();
+			r.Modify<GBufferMaterial>();
+			r.Modify<GBufferDepth>().AnyOrder();
+			r.After<EntityPrepareNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

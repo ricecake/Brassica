@@ -68,8 +68,20 @@ namespace brassica::graph {
 				continue;
 			}
 
-			out.width = std::max(out.width, r.desc.width);
-			out.height = std::max(out.height, r.desc.height);
+			// From the real provisioned texture, not r.desc: a builder node's realization
+			// (SetupBuilder.hpp) carries an empty desc by construction for any catalog-converted
+			// key (ResourceCatalog.hpp) -- Provision()'s catalog-desc override only ever updates
+			// a local copy for its own realizationsToProvision map, it never writes back into
+			// this Recipe's own stored realizations. format/usage just above already read
+			// through tex->GetDesc() for the same reason; width/height hadn't, which this closes.
+			// Confirmed as a real bug, not a hypothetical: with r.desc.width/height silently
+			// staying 0 for every attachment on a fully-converted node, DeriveAttachments
+			// reported a 0x0 render size, and Begin's `derived.width ? ... : 1` fallback below
+			// collapsed the real render area down to a single pixel -- no validation error
+			// (1x1 fits inside any real image), but only that one pixel's worth of a frame's
+			// geometry/shading ever actually got drawn.
+			out.width = std::max(out.width, tex->GetDesc().width);
+			out.height = std::max(out.height, tex->GetDesc().height);
 
 			if (role == AttachmentRole::Depth) {
 				out.depthFormat = format;
@@ -230,6 +242,123 @@ namespace brassica::graph {
 		}
 	}
 
+	// Shared clear-barrier-clear-barrier sequence for a single undefined image, called from both
+	// ZeroInitializeUndefinedReads (History<K>'s first-use case) and
+	// ZeroInitializeInactiveReads (§E's "no active writer this frame" case, S5) below -- same
+	// Vulkan sequence either way, just a different reason the image's contents aren't defined.
+	inline void ClearImageToZero(
+		vk::CommandBuffer cmd,
+		PhysicalTexture&  tex,
+		AccessKind        access,
+		ExecutionDomain   domain
+	) {
+		const auto&         desc = tex.GetDesc();
+		const auto          format = static_cast<vk::Format>(desc.formatCode);
+		const bool          isDepth = IsDepthFormat(format);
+		const std::uint32_t mips = desc.mips ? desc.mips : 1;
+		const std::uint32_t layers = desc.layers ? desc.layers : 1;
+		const auto          range = vk::ImageSubresourceRange(AspectFor(format), 0, mips, 0, layers);
+
+		vk::ImageMemoryBarrier2 toTransferDst{};
+		toTransferDst.setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe);
+		toTransferDst.setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
+		toTransferDst.setDstAccessMask(vk::AccessFlagBits2::eTransferWrite);
+		toTransferDst.setOldLayout(tex.GetCurrentLayout());
+		toTransferDst.setNewLayout(vk::ImageLayout::eTransferDstOptimal);
+		toTransferDst.setImage(tex.GetImage());
+		toTransferDst.setSubresourceRange(range);
+		vk::DependencyInfo preClearDep{};
+		preClearDep.setImageMemoryBarriers(toTransferDst);
+		cmd.pipelineBarrier2(preClearDep);
+
+		if (isDepth) {
+			cmd.clearDepthStencilImage(
+				tex.GetImage(),
+				vk::ImageLayout::eTransferDstOptimal,
+				vk::ClearDepthStencilValue{1.0f, 0},
+				range
+			);
+		} else {
+			cmd.clearColorImage(tex.GetImage(), vk::ImageLayout::eTransferDstOptimal, ZeroClearValueFor(format), range);
+		}
+
+		// Land back in whatever layout this realization's own access derives -- the same rule
+		// Provision/BarrierTranslator use, so the very next Acquire barrier this resource sees
+		// (this stage's own, synthesized right after this function returns) starts from a state
+		// it actually agrees with.
+		const ResourceState postClear =
+			DeriveImageState(access, domain, desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{}, format);
+
+		vk::ImageMemoryBarrier2 toFinal{};
+		toFinal.setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
+		toFinal.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
+		toFinal.setDstStageMask(postClear.stage);
+		toFinal.setDstAccessMask(postClear.access);
+		toFinal.setOldLayout(vk::ImageLayout::eTransferDstOptimal);
+		toFinal.setNewLayout(postClear.layout);
+		toFinal.setImage(tex.GetImage());
+		toFinal.setSubresourceRange(range);
+		vk::DependencyInfo postClearDep{};
+		postClearDep.setImageMemoryBarriers(toFinal);
+		cmd.pipelineBarrier2(postClearDep);
+
+		tex.SetCurrentLayout(postClear.layout);
+		tex.SetLastStageAccess(postClear.stage, postClear.access);
+		tex.SetHasDefinedContents(true);
+	}
+
+	// Buffer counterpart of ClearImageToZero -- same shape, minus a layout (buffers have none,
+	// see PhysicalBuffer's own accessors). vkCmdFillBuffer(..., 0) is the buffer equivalent of
+	// clearColorImage: a flat zero fill, not a format-aware clear value, since a buffer has no
+	// format to be depth-vs-color about.
+	inline void ClearBufferToZero(
+		vk::CommandBuffer cmd,
+		PhysicalBuffer&   buf,
+		AccessKind        access,
+		ExecutionDomain   domain
+	) {
+		const auto&          desc = buf.GetDesc();
+		const vk::DeviceSize size = desc.byteSize ? desc.byteSize : VK_WHOLE_SIZE;
+
+		vk::BufferMemoryBarrier2 toTransferDst{
+			buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
+			buf.GetLastAccess(),
+			vk::PipelineStageFlagBits2::eAllTransfer,
+			vk::AccessFlagBits2::eTransferWrite,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			buf.GetBuffer(),
+			0,
+			size,
+		};
+		vk::DependencyInfo preClearDep{};
+		preClearDep.setBufferMemoryBarriers(toTransferDst);
+		cmd.pipelineBarrier2(preClearDep);
+
+		cmd.fillBuffer(buf.GetBuffer(), 0, size, 0);
+
+		const ResourceState postClear =
+			DeriveBufferState(access, domain, desc.usageMask ? vk::BufferUsageFlags(desc.usageMask) : vk::BufferUsageFlags{});
+
+		vk::BufferMemoryBarrier2 toFinal{
+			vk::PipelineStageFlagBits2::eAllTransfer,
+			vk::AccessFlagBits2::eTransferWrite,
+			postClear.stage,
+			postClear.access,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			buf.GetBuffer(),
+			0,
+			size,
+		};
+		vk::DependencyInfo postClearDep{};
+		postClearDep.setBufferMemoryBarriers(toFinal);
+		cmd.pipelineBarrier2(postClearDep);
+
+		buf.SetLastStageAccess(postClear.stage, postClear.access);
+		buf.SetHasDefinedContents(true);
+	}
+
 	// A History<K> realization's physical resource genuinely has no producer within this frame's
 	// own schedule -- PreviousFrame (Frame.hpp) exists purely to satisfy validation/phase
 	// ordering and does zero real work, so on the very first frame that slot has never actually
@@ -267,74 +396,82 @@ namespace brassica::graph {
 					continue;
 				}
 
-				const auto&         desc = tex->GetDesc();
-				const auto          format = static_cast<vk::Format>(desc.formatCode);
-				const bool          isDepth = IsDepthFormat(format);
-				const std::uint32_t mips = desc.mips ? desc.mips : 1;
-				const std::uint32_t layers = desc.layers ? desc.layers : 1;
-				const auto          range = vk::ImageSubresourceRange(AspectFor(format), 0, mips, 0, layers);
-
-				vk::ImageMemoryBarrier2 toTransferDst{};
-				toTransferDst.setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe);
-				toTransferDst.setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
-				toTransferDst.setDstAccessMask(vk::AccessFlagBits2::eTransferWrite);
-				toTransferDst.setOldLayout(tex->GetCurrentLayout());
-				toTransferDst.setNewLayout(vk::ImageLayout::eTransferDstOptimal);
-				toTransferDst.setImage(tex->GetImage());
-				toTransferDst.setSubresourceRange(range);
-				vk::DependencyInfo preClearDep{};
-				preClearDep.setImageMemoryBarriers(toTransferDst);
-				cmd.pipelineBarrier2(preClearDep);
-
-				if (isDepth) {
-					cmd.clearDepthStencilImage(
-						tex->GetImage(),
-						vk::ImageLayout::eTransferDstOptimal,
-						vk::ClearDepthStencilValue{1.0f, 0},
-						range
-					);
-				} else {
-					cmd.clearColorImage(
-						tex->GetImage(),
-						vk::ImageLayout::eTransferDstOptimal,
-						ZeroClearValueFor(format),
-						range
-					);
-				}
-
-				// Land back in whatever layout this realization's own access derives -- the same
-				// rule Provision/BarrierTranslator use, so the very next Acquire barrier this
-				// resource sees (this stage's own, synthesized right after this function
-				// returns) starts from a state it actually agrees with.
-				const ResourceState postClear = DeriveImageState(
-					r.access,
-					recipe.domain,
-					desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{},
-					format
-				);
-
-				vk::ImageMemoryBarrier2 toFinal{};
-				toFinal.setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
-				toFinal.setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite);
-				toFinal.setDstStageMask(postClear.stage);
-				toFinal.setDstAccessMask(postClear.access);
-				toFinal.setOldLayout(vk::ImageLayout::eTransferDstOptimal);
-				toFinal.setNewLayout(postClear.layout);
-				toFinal.setImage(tex->GetImage());
-				toFinal.setSubresourceRange(range);
-				vk::DependencyInfo postClearDep{};
-				postClearDep.setImageMemoryBarriers(toFinal);
-				cmd.pipelineBarrier2(postClearDep);
-
-				tex->SetCurrentLayout(postClear.layout);
-				tex->SetLastStageAccess(postClear.stage, postClear.access);
-				tex->SetHasDefinedContents(true);
+				ClearImageToZero(cmd, *tex, r.access, recipe.domain);
 			}
 		}
 
 		for (std::size_t i = 0; i < recipes.size(); ++i) {
 			if (Graph* inner = graph.InnerGraphOfNode(i)) {
 				ZeroInitializeUndefinedReads(cmd, registry, *inner);
+			}
+		}
+	}
+
+	// Generalization of the same idea for §E's zero-init list (S5): Graph::ZeroInitReads()
+	// already computed exactly which (node, key) Read accesses have no active writer preceding
+	// them this frame -- any resource kind, not just History images (the live case this closes:
+	// GTAO disabled, DeferredNode's plain Read<GTAOTexture>() would otherwise see whatever
+	// garbage/stale content the texture physically has). Looks up each flagged read's own
+	// realization (for its access/desc, the same ones the compiler itself used) rather than
+	// re-deriving anything. Recurses into Subgraphs the same way ZeroInitializeUndefinedReads
+	// does, for the same reason -- a flagged read nested inside one only exists on the inner
+	// Graph's own list.
+	//
+	// Deliberately does NOT check HasDefinedContents() the way ZeroInitializeUndefinedReads
+	// does -- that flag is right for isHistory's one-time "has this slot EVER been written"
+	// question, but wrong here: ZeroInitReads() is recomputed fresh every Compile() from this
+	// frame's actual activity, which can toggle (a feature can turn on, write real data, then
+	// turn back off next frame) -- a sticky flag would clear it once, then skip re-clearing
+	// forever even after a later active frame leaves real (non-zero) data behind. Always
+	// re-clear when the compiler says this frame needs it; ClearImageToZero/ClearBufferToZero
+	// still set the flag true as a side effect, for whatever else (just ZeroInitializeUndefinedReads
+	// today) legitimately reads it.
+	inline void ZeroInitializeInactiveReads(vk::CommandBuffer cmd, PhysicalResourceRegistry& registry, Graph& graph) {
+		if (!cmd) {
+			return;
+		}
+
+		const auto recipes = graph.Recipes();
+		for (const auto& [nodeIndex, key] : graph.ZeroInitReads()) {
+			if (nodeIndex >= recipes.size()) {
+				continue;
+			}
+			const Recipe&               recipe = recipes[nodeIndex];
+			const ResourceRealization*  realization = nullptr;
+			for (const auto& r : recipe.realizations) {
+				if (r.key == key) {
+					realization = &r;
+					break;
+				}
+			}
+			if (!realization) {
+				continue;
+			}
+
+			if (realization->desc.kind == ResourceDesc::Kind::Buffer) {
+				auto buf = registry.GetBuffer(key);
+				if (!buf) {
+					continue;
+				}
+				ClearBufferToZero(cmd, *buf, realization->access, recipe.domain);
+				continue;
+			}
+
+			if (realization->desc.kind != ResourceDesc::Kind::Image2D &&
+			    realization->desc.kind != ResourceDesc::Kind::Image3D) {
+				continue; // AccelerationStructure etc. -- no zero-init concept
+			}
+
+			auto tex = registry.GetTexture(key);
+			if (!tex) {
+				continue;
+			}
+			ClearImageToZero(cmd, *tex, realization->access, recipe.domain);
+		}
+
+		for (std::size_t i = 0; i < recipes.size(); ++i) {
+			if (Graph* inner = graph.InnerGraphOfNode(i)) {
+				ZeroInitializeInactiveReads(cmd, registry, *inner);
 			}
 		}
 	}
@@ -364,7 +501,7 @@ namespace brassica::graph {
 			// 3. Provision physical resources matching concrete recipes, at every nesting level
 			// -- see ProvisionRecursive's comment for why aliasing is forced off below the top
 			// level.
-			ProvisionRecursive(graph, ctx.frameIndex, enableAliasing);
+			ProvisionRecursive(graph, ctx, enableAliasing);
 
 			// 4. The graph's opaque CommandBuffer handle, viewed as real Vulkan at this boundary
 			// only -- Execution.hpp's CommandBuffer stays untouched and Vulkan-free.
@@ -399,6 +536,12 @@ namespace brassica::graph {
 			// Subgraph itself.
 			ZeroInitializeUndefinedReads(vkCmd, m_registry, graph);
 
+			// 4c. §E's zero-init list (S5): a plain Read with no active writer this frame (e.g.
+			// GTAO disabled, DeferredNode still reading GTAOTexture) -- any resource kind, not
+			// just History images, and re-derived fresh every Compile() rather than a sticky
+			// per-resource flag.
+			ZeroInitializeInactiveReads(vkCmd, m_registry, graph);
+
 			// 5. Staged execution, recursing into any Subgraph node with this exact same
 			// treatment rather than the naive per-node loop Graph::Execute/Subgraph::Execute
 			// give it directly -- see RunSchedule.
@@ -418,11 +561,11 @@ namespace brassica::graph {
 		// resources that are actually live at the same time. Nothing exercises Subgraph-nested
 		// aliasing today, so this is a safe default rather than a regression -- revisit only if
 		// a real workload wants transient aliasing inside a Subgraph.
-		void ProvisionRecursive(Graph& graph, std::uint64_t frameIndex, bool enableAliasing) {
-			m_registry.Provision(graph.GetSchedule(), graph.Recipes(), frameIndex, enableAliasing);
+		void ProvisionRecursive(Graph& graph, const FrameContext& ctx, bool enableAliasing) {
+			m_registry.Provision(graph.GetSchedule(), graph.Recipes(), ctx.frameIndex, enableAliasing, graph.Nodes(), ctx);
 			for (std::size_t i = 0; i < graph.Recipes().size(); ++i) {
 				if (Graph* inner = graph.InnerGraphOfNode(i)) {
-					ProvisionRecursive(*inner, frameIndex, /*enableAliasing=*/false);
+					ProvisionRecursive(*inner, ctx, /*enableAliasing=*/false);
 				}
 			}
 		}

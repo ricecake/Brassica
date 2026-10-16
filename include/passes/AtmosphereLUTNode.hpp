@@ -10,7 +10,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -72,8 +74,6 @@ namespace brassica {
 	// tested (tests/test_atmosphere_lut.cpp) so it compiles and behaves correctly against the
 	// bindless model, ready for whoever wires it up next.
 	struct TransmittanceLUTNode: render::NodeRegistrar<TransmittanceLUTNode> {
-		using Resources = graph::Declares<graph::Create<TransmittanceLUT>>;
-
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
 		ComputeShader                shader;
 		AtmosphereRegenerationState  localThrottle{};
@@ -89,25 +89,18 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&shader);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<TransmittanceLUT>();
+			}
 		}
 
 		void Destroy(vk::Device device) { shader.Destroy(device); }
 
 		void SetFrameParams(const render::NodeFrameParams& p) { atmosphere = p.atmosphere; }
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{
-				.domain = graph::ExecutionDomain::Compute,
-				.isActive = throttle->ShouldRegenerate(atmosphere)
-			};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute).Active(throttle->ShouldRegenerate(atmosphere));
+			r.Create<TransmittanceLUT>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -162,8 +155,6 @@ namespace brassica {
 	BRASSICA_REGISTER_NODE(TransmittanceLUTNode);
 
 	struct MultiScatteringLUTNode: render::NodeRegistrar<MultiScatteringLUTNode> {
-		using Resources = graph::Declares<graph::Read<TransmittanceLUT>, graph::Create<MultiScatteringLUT>>;
-
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
 		ComputeShader                shader;
 		AtmosphereRegenerationState  localThrottle{};
@@ -179,32 +170,19 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&shader);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<MultiScatteringLUT>();
+			}
 		}
 
 		void Destroy(vk::Device device) { shader.Destroy(device); }
 
 		void SetFrameParams(const render::NodeFrameParams& p) { atmosphere = p.atmosphere; }
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{
-				.domain = graph::ExecutionDomain::Compute,
-				.isActive = throttle->ShouldRegenerate(atmosphere)
-			};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<MultiScatteringLUT>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ComputeStorageImageDesc(32, 32, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute).Active(throttle->ShouldRegenerate(atmosphere));
+			r.Read<TransmittanceLUT>();
+			r.Create<MultiScatteringLUT>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -260,9 +238,6 @@ namespace brassica {
 	BRASSICA_REGISTER_NODE(MultiScatteringLUTNode);
 
 	struct SkyViewLUTNode: render::NodeRegistrar<SkyViewLUTNode> {
-		using Resources =
-			graph::Declares<graph::Read<TransmittanceLUT>, graph::Read<MultiScatteringLUT>, graph::Create<SkyViewLUT>>;
-
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            shader;
 		SkyViewPushConstants     push{};
@@ -275,6 +250,9 @@ namespace brassica {
 			}
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&shader);
+			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<SkyViewLUT>();
 			}
 		}
 
@@ -290,30 +268,11 @@ namespace brassica {
 			push.moonRadiance = p.moonRadiance;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = true};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<MultiScatteringLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(32, 32, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute).Active(true);
+			r.Read<TransmittanceLUT>();
+			r.Read<MultiScatteringLUT>();
+			r.Create<SkyViewLUT>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

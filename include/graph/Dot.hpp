@@ -120,7 +120,11 @@ namespace brassica::graph {
 			case Phase::Early:
 				return "Early";
 			case Phase::Default:
-				return "Default / GBuffer";
+				// S4: most nodes have no kPhase at all now (ordered by resource edges/relations
+				// instead), and a node with no kPhase reports this same default -- so this
+				// cluster is no longer "the GBuffer phase," just "everything with no declared
+				// phase," which by now is most of the graph.
+				return "Default (no declared phase)";
 			case Phase::Late:
 				return "Late / UnderwaterStructuralTranslucentRender";
 			}

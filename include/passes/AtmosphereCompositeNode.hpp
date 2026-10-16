@@ -7,7 +7,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -21,26 +23,23 @@ namespace brassica {
 
 	class ShaderWatcher;
 
+	// Forward-declared only: Before<VolumetricRenderNode>() below needs just the type's name
+	// (TypeName<T>(), ResourceKey.hpp), never a complete type -- see
+	// ClusterLightAssignmentNode.hpp's identical reasoning.
+	struct VolumetricRenderNode;
+
 	// Fogs already-shaded scene geometry with real aerial perspective / underwater extinction --
 	// distinct from SkyBackgroundNode, which only paints the empty-pixel backdrop (this node was
 	// briefly, and incorrectly, named AtmosphereCompositeNode itself; see SkyBackgroundNode.hpp).
-	// Runs at SubPhase::Atmosphere (900): after DeferredNode so it fogs real shaded radiance, and
-	// before WaterNode (1200) -- a submerged camera looking at distant terrain needs no water mesh
-	// geometry at all, just the mathematical water-level plane (shaders/atmosphere/
+	// S4: no kPhase -- runs after DeferredNode (Create-before-accessor on its sole Create<HdrColor>)
+	// and before WaterNode (the explicit Before<VolumetricRenderNode>()/VolumetricRenderNode's own
+	// Before<WaterNode>() chain below) -- a submerged camera looking at distant terrain needs no
+	// water mesh geometry at all, just the mathematical water-level plane (shaders/atmosphere/
 	// aerial_perspective.glsl's evaluateAtmosphere), so running before water costs nothing. Known
 	// gap, not fixed here: a distant water *surface* itself isn't fogged by this pass since it
 	// draws afterward -- water.frag calling evaluateAtmosphere on its own distToCamWater is the
 	// documented follow-up.
 	struct AtmosphereCompositeNode: render::NodeRegistrar<AtmosphereCompositeNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<TransmittanceLUT>,
-			graph::Read<MultiScatteringLUT>,
-			graph::Read<SkyViewLUT>,
-			graph::Modify<HdrColor>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
-
 		// No depth state: GBufferPosition is full-precision camera-relative world position
 		// (TerrainNode.hpp), so composite.frag never reconstructs position from a depth buffer and
 		// never binds one. enableShadingRate=false for WaterNode's reason: a translucent-looking
@@ -66,6 +65,9 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<HdrColor>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -86,37 +88,19 @@ namespace brassica {
 			push.multiScatScale = p.multiScatScale;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<MultiScatteringLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(32, 32, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			return r;
+		// No Read<GBufferNormal/Material/Depth>() -- the removed Resources claimed the whole
+		// GBuffer<Read> group, but Execute below only ever indexes Position and Albedo (lesson
+		// #2's own documented example of this exact over-claim). Before<VolumetricRenderNode>()
+		// reproduces the schedule order S0 recorded for these two HdrColor writers.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Read<GBufferPosition>();
+			r.Read<GBufferAlbedo>();
+			r.Read<TransmittanceLUT>();
+			r.Read<MultiScatteringLUT>();
+			r.Read<SkyViewLUT>();
+			r.Modify<HdrColor>();
+			r.Before<VolumetricRenderNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

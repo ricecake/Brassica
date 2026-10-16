@@ -10,7 +10,9 @@
 #include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -23,6 +25,11 @@
 namespace brassica {
 
 	class ShaderWatcher;
+
+	// Forward-declared only: After<VolumetricRenderNode>()/Before<CirrusNode>() below need just
+	// the type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
+	struct VolumetricRenderNode;
+	struct CirrusNode;
 
 	struct WaterPushConstants {
 		glm::uvec4 gridParams{
@@ -54,22 +61,11 @@ namespace brassica {
 	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
 	// so this is what actually proves the blend-state plumbing works for something real.
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<SkyViewLUT>,
-			graph::Modify<HdrColor>>;
-
-		// Was graph::Phase::Late (1000) -- the exact same numeric value ParticleSystemNode's outer
-		// wrapper also declared, which is what let the whole particle system (including the two
-		// render nodes, despite their own carefully-chosen SubPhase::UnderwaterParticleRender/
-		// ParticleRender) schedule as one same-phase peer of this node instead of strictly
-		// interleaved with it. This is the named phase RenderPhases.hpp already reserves
-		// specifically for this node's role; adopting it is half of the real fix (the other half is
-		// promoting the two particle render nodes out of their Subgraph so their own phases reach
-		// the outer scheduler at all -- see ParticleSystemNode.hpp).
-		static constexpr graph::Phase kPhase = SubPhase::WaterRender;
-
+		// S4: no kPhase -- After<VolumetricRenderNode>()/Before<CirrusNode>() (below) place it in
+		// the HdrColor writer chain as real edges instead. (The old SubPhase::WaterRender's own
+		// history -- fixing a prior collision with ParticleSystemNode's Phase::Late -- is moot now
+		// that ordering doesn't come from a phase number at all.)
+		//
 		// enableShadingRate=false is a real design choice, not just test convenience: this
 		// fragment shader is a couple of texture reads and arithmetic, not the kind of expensive
 		// per-pixel work VRS exists to coarsen (Terrain's LOD shading, Deferred's ray-query
@@ -106,6 +102,9 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<HdrColor>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -126,23 +125,28 @@ namespace brassica {
 			push.waterLevel = p.waterLevel;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+		// Unlike AtmosphereCompositeNode/CirrusNode/CloudRenderNode/VolumetricRenderNode above,
+		// this one genuinely needs the whole GBuffer group: Position/Albedo/Normal/Material are
+		// all indexed in Execute, and Depth is bound as the real depth-test attachment
+		// (kPipelineState.depthTest=true) even though it's never indexed directly. All five are
+		// Read<>, not Modify<> -- despite depthTest=true, this node never writes depth, so it's
+		// not a writer-pairwise participant on any GBuffer key at all.
+		//
+		// After<VolumetricRenderNode>()/Before<CirrusNode>() (S4) close the two gaps in the
+		// HdrColor writer chain that previously relied on phase-int ordering alone -- see
+		// VolumetricRenderNode.hpp's identical comment.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Read<GBufferPosition>();
+			r.Read<GBufferAlbedo>();
+			r.Read<GBufferNormal>();
+			r.Read<GBufferMaterial>();
+			r.Read<GBufferDepth>();
+			r.Read<TerrainMinMaxTexture>();
+			r.Read<SkyViewLUT>();
+			r.Modify<HdrColor>();
+			r.After<VolumetricRenderNode>();
+			r.Before<CirrusNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

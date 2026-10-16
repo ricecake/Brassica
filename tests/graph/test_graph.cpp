@@ -4,6 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <algorithm>
 #include <cstddef>
+#include <map>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,6 +18,7 @@
 #include "graph/Frame.hpp"
 #include "graph/Graph.hpp"
 #include "graph/Node.hpp"
+#include "graph/RelationalCompiler.hpp"
 #include "graph/ResourceKey.hpp"
 #include "graph/TypeList.hpp"
 #include "graph/Validation.hpp"
@@ -29,6 +31,7 @@
 #include "lighting/ILightManager.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "ServiceLocator.hpp"
 #include "terrain/TerrainMapExporter.hpp"
@@ -337,6 +340,40 @@ namespace {
 		Frame<Import<Swapchain>, PreviousFrame<Temporal>, Inner, LightingPass, TonemapPass, NextFrame<Temporal>>;
 	static_assert(DotFrame::kRenderable);
 
+	// -- S2: SetupBuilder shim, builder-shaped vs. legacy-shaped node -----------------
+
+	struct BuilderProofTarget {};
+
+	struct LegacyProofProducer {
+		using Resources = Declares<Create<BuilderProofTarget>>;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Same contract as LegacyProofProducer above (Create<BuilderProofTarget>, Graphics domain),
+	// declared through SetupBuilder instead of Declares<>/a hand-built Recipe.
+	struct BuilderProofProducer {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<BuilderProofTarget>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct ProofConsumer {
+		using Resources = Declares<Read<BuilderProofTarget>>;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+
+		void Execute(NodeContext&) {}
+	};
+
+	static_assert(NodeLike<LegacyProofProducer> && !BuilderNode<LegacyProofProducer>);
+	static_assert(BuilderNode<BuilderProofProducer> && !NodeLike<BuilderProofProducer>);
+
 } // namespace
 
 TEST_CASE("NodeHandle erasure preserves the declared resource contract") {
@@ -350,6 +387,35 @@ TEST_CASE("NodeHandle erasure preserves the declared resource contract") {
 
 	Recipe recipe = handle.Setup(FrameContext{});
 	CHECK(recipe.domain == ExecutionDomain::Compute);
+}
+
+TEST_CASE("A builder-shaped node's Descriptor() reports the same contract as an equivalent "
+		  "legacy-shaped node's") {
+	NodeHandle legacy = NodeHandle::Make<LegacyProofProducer>();
+	NodeHandle builder = NodeHandle::Make<BuilderProofProducer>();
+
+	// Descriptor() on a builder node has nothing to report before Setup has run once -- unlike
+	// a legacy node, whose compile-time Resources means Descriptor() is always already correct.
+	NodeDescriptor beforeSetup = builder.Descriptor();
+	CHECK(beforeSetup.produces.empty());
+
+	FrameContext ctx{};
+	Recipe       legacyRecipe = legacy.Setup(ctx);
+	Recipe       builderRecipe = builder.Setup(ctx);
+
+	NodeDescriptor legacyDesc = legacy.Descriptor();
+	NodeDescriptor builderDesc = builder.Descriptor();
+
+	REQUIRE(builderDesc.produces.size() == legacyDesc.produces.size());
+	CHECK(builderDesc.produces[0] == legacyDesc.produces[0]);
+	CHECK(builderDesc.produces[0] == IdOf<BuilderProofTarget>());
+	CHECK(builderDesc.consumes.empty());
+	CHECK(builderDesc.phase == legacyDesc.phase);
+	CHECK(builderRecipe.domain == legacyRecipe.domain);
+	CHECK(builderRecipe.isActive == legacyRecipe.isActive);
+	REQUIRE(builderRecipe.realizations.size() == 1);
+	CHECK(builderRecipe.realizations[0].key == IdOf<BuilderProofTarget>());
+	CHECK(builderRecipe.realizations[0].access == AccessKind::Write);
 }
 
 TEST_CASE("ValidateRuntime reports the missing key by name") {
@@ -383,6 +449,49 @@ namespace {
 		return false;
 	}
 } // namespace
+
+TEST_CASE("A builder-shaped producer and an equivalent legacy-shaped producer, each paired with "
+		  "the same legacy consumer, compile into identical schedules") {
+	FrameContext ctx{};
+
+	Graph legacyGraph;
+	legacyGraph.Register<LegacyProofProducer>();
+	legacyGraph.Register<ProofConsumer>();
+	legacyGraph.Setup(ctx);
+	REQUIRE(legacyGraph.Compile().has_value());
+
+	Graph builderGraph;
+	builderGraph.Register<BuilderProofProducer>();
+	builderGraph.Register<ProofConsumer>();
+	builderGraph.Setup(ctx);
+	REQUIRE(builderGraph.Compile().has_value());
+
+	const Schedule& legacySchedule = legacyGraph.GetSchedule();
+	const Schedule& builderSchedule = builderGraph.GetSchedule();
+
+	REQUIRE(legacySchedule.stages.size() == builderSchedule.stages.size());
+	REQUIRE(legacySchedule.stages.size() == 2);
+	// Index 0 is the producer, 1 is ProofConsumer, in both graphs -- registration order.
+	CHECK(StageOf(legacySchedule, 0) == 0);
+	CHECK(StageOf(builderSchedule, 0) == 0);
+	CHECK(StageOf(legacySchedule, 1) == 1);
+	CHECK(StageOf(builderSchedule, 1) == 1);
+
+	// Same barrier shape at the stage boundary: one same-domain preBarrier for
+	// BuilderProofTarget, in both graphs.
+	CHECK(BarrierBetween(
+		legacySchedule.stages[1].preBarriers,
+		IdOf<BuilderProofTarget>(),
+		ExecutionDomain::Graphics,
+		ExecutionDomain::Graphics
+	));
+	CHECK(BarrierBetween(
+		builderSchedule.stages[1].preBarriers,
+		IdOf<BuilderProofTarget>(),
+		ExecutionDomain::Graphics,
+		ExecutionDomain::Graphics
+	));
+}
 
 TEST_CASE("Graph stages nodes by dependency, independent of registration order, with correct transfer barriers") {
 	Graph graph;
@@ -461,6 +570,50 @@ TEST_CASE("Graph stages nodes by dependency, independent of registration order, 
 	));
 }
 
+// S3 exit criterion: a shuffled-registration property test gives an identical schedule. "Identical"
+// here means the same name->stage-index mapping, not the same name->node-index mapping (registration
+// order still decides *index*, just never stage placement -- §C.5's "ties break by type name, never
+// registration index" is specifically about this).
+TEST_CASE("Registration order never changes which stage a node lands in") {
+	using Registrar = void (*)(Graph&);
+	std::vector<Registrar> registrars{
+		[](Graph& g) { g.Register<LightingPass>(); },
+		[](Graph& g) { g.Register<TonemapPass>(); },
+		[](Graph& g) { g.Register<GtaoPass>(); },
+		[](Graph& g) { g.Register<GBufferPass>(); },
+		[](Graph& g) { g.Register<Import<Swapchain>>(); },
+		[](Graph& g) { g.Register<PreviousFrame<Temporal>>(); },
+	};
+
+	auto stagesByName = [](std::vector<Registrar> order) {
+		Graph graph;
+		for (auto registrar : order) {
+			registrar(graph);
+		}
+		graph.Setup(FrameContext{});
+		REQUIRE(graph.Compile().has_value());
+
+		const Schedule& schedule = graph.GetSchedule();
+		std::map<std::string_view, std::ptrdiff_t> result;
+		for (std::size_t i = 0; i < graph.Nodes().size(); ++i) {
+			result[graph.Nodes()[i].Descriptor().name] = StageOf(schedule, i);
+		}
+		return result;
+	};
+
+	auto baseline = stagesByName(registrars);
+
+	std::vector<Registrar> reversed(registrars.rbegin(), registrars.rend());
+	CHECK(stagesByName(reversed) == baseline);
+
+	// A third, neither-forward-nor-reverse order -- a fixed permutation, not randomized (no
+	// value in flakiness here, just in not being either of the two "obvious" orders above).
+	std::vector<Registrar> shuffled{
+		registrars[3], registrars[0], registrars[5], registrars[1], registrars[4], registrars[2]
+	};
+	CHECK(stagesByName(shuffled) == baseline);
+}
+
 TEST_CASE("Two nodes plain-Modify the same key in different phases, ordered by phase with no version number") {
 	Graph graph;
 	graph.Register<WaterLikeNode>();
@@ -505,10 +658,15 @@ TEST_CASE("PreviousFrame and NextFrame bracket every other node's phase") {
 	REQUIRE(schedule.stages.size() == 3);
 }
 
-TEST_CASE(
-	"Compile() reports a phase violation when only a later-phase node produces what an earlier "
-	"phase needs"
-) {
+// S3: the dedicated "phase violation" error is gone (phase is a compat marker chain now, not a
+// hard partition) -- but this exact scenario still fails to compile, just via a structural G0
+// cycle instead of a special-cased check: LateProducer's Create-before-accessor edge ("the
+// creator precedes every accessor") points at EarlyReader, while the phase chain already points
+// the other way (EarlyReader's phase precedes LateProducer's) -- those two edges directly
+// contradict, which is a real cycle, not an artifact. Still names both nodes; no longer names the
+// key by name (a G0 cycle predates any resource-edge/key bookkeeping) -- see
+// RelationalCompiler.hpp's own comment on this exact tradeoff.
+TEST_CASE("Compile() reports a cycle when a later-phase node is the only producer an earlier-phase node reads") {
 	Graph graph;
 	graph.Register<EarlyReader>();
 	graph.Register<LateProducer>();
@@ -518,35 +676,73 @@ TEST_CASE(
 	REQUIRE(!result.has_value());
 	CHECK(result.error().message.find("EarlyReader") != std::string::npos);
 	CHECK(result.error().message.find("LateProducer") != std::string::npos);
-	CHECK(result.error().message.find("ViolationKey") != std::string::npos);
 }
 
-TEST_CASE("A later-phase plain reader lifts to the highest version an earlier phase produced") {
+// S3: version lifting is gone (FirstWriter/SecondWriter/LatePlainReader above are kept only for
+// Declaration.hpp's own type-level VersionedKey<K,N> static_asserts -- VersionedKey itself isn't
+// deleted until S6). The real replacement idiom for "two same-key writers in sequence, same
+// phase" is an explicit relation, exactly what the particle system's GBufferDepth v1/v2 chain
+// becomes in this same stage (§F) -- demonstrated fresh here with builder-shaped nodes instead of
+// reusing the version fixtures above, since there's no version number left to carry the order.
+namespace {
+
+	struct SeqKey {};
+
+	struct SeqSecondWriter;
+
+	struct SeqFirstWriter {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<SeqKey>();
+			r.Before<SeqSecondWriter>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct SeqSecondWriter {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<SeqKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct SeqLateReader {
+		static constexpr Phase kPhase = Phase::Late;
+		using Resources = Declares<Read<SeqKey>>;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("Two same-key writers in sequence order via an explicit relation, not a version number") {
 	Graph graph;
-	graph.Register<LatePlainReader>();
-	graph.Register<SecondWriter>();
-	graph.Register<Import<Swapchain>>();
-	graph.Register<FirstWriter>();
+	graph.Register<SeqLateReader>();
+	graph.Register<SeqSecondWriter>();
+	graph.Register<SeqFirstWriter>();
 
 	graph.Setup(FrameContext{});
-	REQUIRE(graph.Compile().has_value());
+	auto result = graph.Compile();
+	REQUIRE(result.has_value());
 
 	const auto& schedule = graph.GetSchedule();
-	CHECK(StageOf(schedule, 2) == 0);
-	CHECK(StageOf(schedule, 3) == 1);
-	CHECK(StageOf(schedule, 1) == 2);
-	CHECK(StageOf(schedule, 0) == 3);
-	REQUIRE(schedule.stages.size() == 4);
+	CHECK(StageOf(schedule, 2) < StageOf(schedule, 1));
+	CHECK(StageOf(schedule, 1) < StageOf(schedule, 0));
 
 	CHECK(BarrierBetween(
-		schedule.stages[3].preBarriers,
-		IdOf<VersionedKey<Swapchain, 2>>(),
+		schedule.stages[StageOf(schedule, 1)].preBarriers,
+		IdOf<SeqKey>(),
 		ExecutionDomain::Graphics,
 		ExecutionDomain::Graphics
 	));
-	CHECK_FALSE(BarrierBetween(
-		schedule.stages[3].preBarriers,
-		IdOf<Swapchain>(),
+	CHECK(BarrierBetween(
+		schedule.stages[StageOf(schedule, 0)].preBarriers,
+		IdOf<SeqKey>(),
 		ExecutionDomain::Graphics,
 		ExecutionDomain::Graphics
 	));
@@ -670,7 +866,7 @@ TEST_CASE("ToDot exports phase clusters and labels") {
 
 	CHECK(dot.find("cluster_phase_0") != std::string::npos);
 	CHECK(dot.find("cluster_phase_1000") != std::string::npos);
-	CHECK(dot.find("Phase 0 (Default / GBuffer)") != std::string::npos);
+	CHECK(dot.find("Phase 0 (Default (no declared phase))") != std::string::npos);
 	CHECK(dot.find("Phase 1000 (Late / UnderwaterStructuralTranslucentRender)") != std::string::npos);
 }
 
@@ -1296,4 +1492,588 @@ TEST_CASE("TerrainMapColorConfig elevation, slope, and water color tinting") {
 	CHECK(r > 180);
 	CHECK(g > 180);
 	CHECK(b > 180);
+}
+
+// -- Spike B: shadow relational compiler (design plan's §C) ----------------------------
+
+namespace {
+
+	std::size_t IndexOfNamed(std::span<const NodeHandle> nodes, std::string_view name) {
+		for (std::size_t i = 0; i < nodes.size(); ++i) {
+			if (nodes[i].Descriptor().name.find(name) != std::string_view::npos) {
+				return i;
+			}
+		}
+		FAIL("no node named ", name);
+		return static_cast<std::size_t>(-1);
+	}
+
+	std::ptrdiff_t RelStageOf(const RelationalResult& result, std::size_t nodeIndex) {
+		for (std::size_t s = 0; s < result.stages.size(); ++s) {
+			if (std::find(result.stages[s].begin(), result.stages[s].end(), nodeIndex) != result.stages[s].end()) {
+				return static_cast<std::ptrdiff_t>(s);
+			}
+		}
+		return -1;
+	}
+
+	RelationalResult CompileRelationalFromGraph(Graph& g, const FrameContext& ctx) {
+		g.Setup(ctx);
+		return CompileRelational(g.Nodes(), g.Recipes());
+	}
+
+} // namespace
+
+TEST_CASE("CompileRelational: independent nodes on different domains land in the same stage") {
+	Graph graph;
+	graph.Register<NodeP>();
+	graph.Register<NodeQ>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+	REQUIRE(result.stages.size() == 1);
+	CHECK(result.stages[0].size() == 2);
+}
+
+// S3: Compile() and CompileRelational are no longer two things to compare -- Compile() just is
+// CompileRelational (see Graph.hpp). The scenario this test used to compare against the phase
+// compiler is already covered directly by "Graph stages nodes by dependency..." above, on the
+// exact same fixture set; keeping both would just be the same assertion twice.
+
+namespace {
+
+	struct RelOrderKeyA {};
+
+	struct RelOrderKeyB {};
+
+	struct RelOrderNodeB;
+
+	// No resource edge to RelOrderNodeB at all (disjoint keys) -- the only thing that can order
+	// these two is the explicit Before<> relation itself, proving the relational compiler
+	// actually uses NodeRelation rather than falling back to phase/resource luck.
+	struct RelOrderNodeA {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<RelOrderKeyA>();
+			r.Before<RelOrderNodeB>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct RelOrderNodeB {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<RelOrderKeyB>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("CompileRelational orders two resource-disjoint nodes purely from an explicit Before<> relation") {
+	Graph graph;
+	graph.Register<RelOrderNodeA>();
+	graph.Register<RelOrderNodeB>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t a = IndexOfNamed(graph.Nodes(), "RelOrderNodeA");
+	std::size_t b = IndexOfNamed(graph.Nodes(), "RelOrderNodeB");
+	CHECK(RelStageOf(result, a) < RelStageOf(result, b));
+}
+
+namespace {
+
+	struct AmbiguousKey {};
+
+	struct AmbiguousWriterA {
+		using Resources = Declares<Modify<AmbiguousKey>>;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct AmbiguousWriterB {
+		using Resources = Declares<Modify<AmbiguousKey>>;
+
+		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("CompileRelational reports an ambiguity for two same-phase writers with no ordering relation") {
+	Graph graph;
+	graph.Register<AmbiguousWriterA>();
+	graph.Register<AmbiguousWriterB>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok); // an ambiguity is reported, not a hard compile failure
+	REQUIRE(result.ambiguities.size() == 1);
+	CHECK(result.ambiguities[0].key == IdOf<AmbiguousKey>());
+}
+
+namespace {
+
+	struct CycleRelNodeB;
+
+	struct CycleRelNodeA {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Before<CycleRelNodeB>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct CycleRelNodeB {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Before<CycleRelNodeA>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("CompileRelational reports a hard error when two explicit relations directly contradict") {
+	Graph graph;
+	graph.Register<CycleRelNodeA>();
+	graph.Register<CycleRelNodeB>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	CHECK_FALSE(result.ok);
+	CHECK(!result.error.empty());
+}
+
+namespace {
+
+	struct DroppedRelKey {};
+
+	struct NoSuchNode;
+
+	// Before<> names a type that's never registered in this graph -- must be dropped, not a hard
+	// error (§E: "A relation to an unregistered type is dropped, with a one-time warning").
+	struct DanglingRelNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<DroppedRelKey>();
+			r.Before<NoSuchNode>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("CompileRelational drops a relation naming an unregistered node type instead of failing") {
+	Graph graph;
+	graph.Register<DanglingRelNode>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	REQUIRE(result.stages.size() == 1);
+	CHECK(result.stages[0].size() == 1);
+}
+
+// -- S4: 6-phase keystone backbone (design plan's §D) ---------------------------------------
+
+namespace {
+
+	struct KeyGBufferOnly {};
+
+	struct KeyLightingOnly {};
+
+	struct GBufferPhaseNodeA {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<KeyGBufferOnly>();
+			r.In<brassica::phase::GBuffer>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct GBufferPhaseNodeB {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.In<brassica::phase::GBuffer>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct LightingPhaseNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<KeyLightingOnly>();
+			r.In<brassica::phase::Lighting>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("In<GBuffer>() orders before In<Lighting>() purely via the shared boundary marker") {
+	Graph graph;
+	graph.Register<LightingPhaseNode>();
+	graph.Register<GBufferPhaseNodeA>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t gbuffer = IndexOfNamed(graph.Nodes(), "GBufferPhaseNodeA");
+	std::size_t lighting = IndexOfNamed(graph.Nodes(), "LightingPhaseNode");
+	CHECK(RelStageOf(result, gbuffer) < RelStageOf(result, lighting));
+}
+
+TEST_CASE("Two nodes in the same phase with nothing else ordering them land in the same stage") {
+	Graph graph;
+	graph.Register<GBufferPhaseNodeA>();
+	graph.Register<GBufferPhaseNodeB>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+	REQUIRE(result.stages.size() == 1);
+	CHECK(result.stages[0].size() == 2);
+}
+
+namespace {
+
+	struct LightingKeystoneNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Keystone<brassica::phase::Lighting>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct ConsumerOfKeystoneNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.After<LightingKeystoneNode>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("A phase's keystone is a true sink: After<keystone>() lands after every other node in that phase too") {
+	Graph graph;
+	graph.Register<ConsumerOfKeystoneNode>();
+	graph.Register<LightingPhaseNode>();
+	graph.Register<LightingKeystoneNode>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t keystone = IndexOfNamed(graph.Nodes(), "LightingKeystoneNode");
+	std::size_t other = IndexOfNamed(graph.Nodes(), "LightingPhaseNode");
+	std::size_t after = IndexOfNamed(graph.Nodes(), "ConsumerOfKeystoneNode");
+
+	// The keystone itself only has to be after `other` (both In<Lighting>(), but the keystone is
+	// forced to be the phase's sink) -- not asserted directly here since that's an implementation
+	// detail of the routing, not the observable contract. What matters: ConsumerOfKeystoneNode
+	// -- which never says anything about phase::Lighting at all, only After<LightingKeystoneNode>
+	// -- still lands after `other`, which it has no relation to whatsoever.
+	CHECK(RelStageOf(result, other) < RelStageOf(result, keystone));
+	CHECK(RelStageOf(result, keystone) < RelStageOf(result, after));
+	CHECK(RelStageOf(result, other) < RelStageOf(result, after));
+}
+
+namespace {
+
+	struct SecondLightingKeystoneNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Keystone<brassica::phase::Lighting>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("Two nodes claiming the same phase's keystone is a hard error") {
+	Graph graph;
+	graph.Register<LightingKeystoneNode>();
+	graph.Register<SecondLightingKeystoneNode>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	CHECK_FALSE(result.ok);
+	CHECK(!result.error.empty());
+}
+
+// -- S5: Requires<A>/.Required() activity fixed point -----------------------------------
+
+namespace {
+
+	struct InactiveRequirement {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Active(false);
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct ActiveRequirement {
+		void Setup(SetupBuilder& r, const FrameContext&) { r.Domain(ExecutionDomain::Graphics); }
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct RequiresInactiveNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Requires<InactiveRequirement>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct RequiresActiveNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Requires<ActiveRequirement>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("Requires<A>() deactivates this node when A is inactive") {
+	Graph graph;
+	graph.Register<InactiveRequirement>();
+	graph.Register<RequiresInactiveNode>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t dependent = IndexOfNamed(graph.Nodes(), "RequiresInactiveNode");
+	REQUIRE(dependent < result.activity.size());
+	CHECK_FALSE(result.activity[dependent]);
+	CHECK(RelStageOf(result, dependent) < 0);
+}
+
+TEST_CASE("Requires<A>() leaves this node active when A is active") {
+	Graph graph;
+	graph.Register<ActiveRequirement>();
+	graph.Register<RequiresActiveNode>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t dependent = IndexOfNamed(graph.Nodes(), "RequiresActiveNode");
+	REQUIRE(dependent < result.activity.size());
+	CHECK(result.activity[dependent]);
+	CHECK(RelStageOf(result, dependent) >= 0);
+}
+
+namespace {
+
+	struct RequiredKey {};
+
+	struct InactiveProducer {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Active(false);
+			r.Create<RequiredKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct RequiredReaderOfInactive {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<RequiredKey>().Required();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE(".Required() deactivates a reader when its only writer is inactive") {
+	Graph graph;
+	graph.Register<InactiveProducer>();
+	graph.Register<RequiredReaderOfInactive>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t reader = IndexOfNamed(graph.Nodes(), "RequiredReaderOfInactive");
+	REQUIRE(reader < result.activity.size());
+	CHECK_FALSE(result.activity[reader]);
+}
+
+namespace {
+
+	struct LateWriterKey {};
+
+	struct LateWriter;
+
+	// Before<LateWriter>() here is deliberately NOT a real data dependency -- it's standing in
+	// for any case where something else orders a .Required() reader before its key's only
+	// writer (e.g. an unrelated explicit relation, or a phase/relation mistake). The point is
+	// that .Required() cares about schedule order, not intent: a writer that only runs *after*
+	// this read cannot be what fed it this frame, so this read sees nothing active, regardless
+	// of why.
+	struct EarlyRequiredReader {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<LateWriterKey>().Required();
+			r.Before<LateWriter>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct LateWriter {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<LateWriterKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE(".Required() deactivates a reader when its only writer is ordered after it rather than before") {
+	Graph graph;
+	graph.Register<EarlyRequiredReader>();
+	graph.Register<LateWriter>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t reader = IndexOfNamed(graph.Nodes(), "EarlyRequiredReader");
+	REQUIRE(reader < result.activity.size());
+	CHECK_FALSE(result.activity[reader]);
+}
+
+namespace {
+
+	struct ChainKey {};
+	struct ChainMiddleOutputKey {};
+
+	struct ChainRoot {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Active(false);
+			r.Create<ChainKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Depends on ChainKey's only producer, not on ChainRoot by name -- so this node only goes
+	// inactive via the .Required() fixed point's own cascade, not a direct Requires<>() edge.
+	struct ChainMiddle {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<ChainKey>().Required();
+			r.Create<ChainMiddleOutputKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct ChainLeaf {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<ChainMiddleOutputKey>().Required();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE(".Required() cascades: a node downstream of a deactivated .Required() node goes inactive too") {
+	Graph graph;
+	graph.Register<ChainRoot>();
+	graph.Register<ChainMiddle>();
+	graph.Register<ChainLeaf>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t middle = IndexOfNamed(graph.Nodes(), "ChainMiddle");
+	std::size_t leaf = IndexOfNamed(graph.Nodes(), "ChainLeaf");
+	REQUIRE(middle < result.activity.size());
+	REQUIRE(leaf < result.activity.size());
+	CHECK_FALSE(result.activity[middle]);
+	CHECK_FALSE(result.activity[leaf]);
+}
+
+namespace {
+
+	struct ZeroInitKey {};
+
+	struct ZeroInitWriter {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Active(false);
+			r.Create<ZeroInitKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Deliberately no .Required() -- this is the default-case contrast with the earlier
+	// .Required() tests: a plain Read of a key with no active writer flags for zero-init, but
+	// does NOT deactivate the reader itself (unlike .Required(), it has no opinion on whether
+	// this node should run at all).
+	struct ZeroInitReader {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<ZeroInitKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("A plain Read with no active writer preceding it is flagged for zero-init, without deactivating the reader") {
+	Graph graph;
+	graph.Register<ZeroInitWriter>();
+	graph.Register<ZeroInitReader>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t reader = IndexOfNamed(graph.Nodes(), "ZeroInitReader");
+	REQUIRE(reader < result.activity.size());
+	CHECK(result.activity[reader]);
+
+	const bool flagged =
+		std::any_of(result.zeroInitReads.begin(), result.zeroInitReads.end(), [&](const auto& pair) {
+			return pair.first == reader && pair.second == IdOf<ZeroInitKey>();
+		});
+	CHECK(flagged);
 }

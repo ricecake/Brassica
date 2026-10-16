@@ -9,7 +9,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -21,6 +23,11 @@
 namespace brassica {
 
 	class ShaderWatcher;
+
+	// Forward-declared only: Before<CloudRenderNode>()/After<WaterNode>() below need just the
+	// type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
+	struct CloudRenderNode;
+	struct WaterNode;
 
 	struct CirrusPushConstants {
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};
@@ -39,18 +46,10 @@ namespace brassica {
 	// Renders a thin, lower atmospheric cirrus cloud layer at ~10km altitude.
 	// Serves as a weather indicator and daytime skybox layer, blending over HdrColor
 	// with dual-sided visibility and camera proximity transparency fading.
-	// Runs at Phase 1250, immediately after WaterNode (Phase 1200), so water surfaces
+	// S4: no kPhase -- After<WaterNode>()/Before<CloudRenderNode>() (below) place it in the
+	// HdrColor writer chain as real edges instead, immediately after WaterNode so water surfaces
 	// do not cover the cirrus cloud layer.
 	struct CirrusNode: render::NodeRegistrar<CirrusNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<TransmittanceLUT>,
-			graph::Read<SkyViewLUT>,
-			graph::Read<TerrainWeatherBiomeTexture>,
-			graph::Modify<HdrColor>>;
-
-		static constexpr graph::Phase kPhase = graph::Phase(1250);
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.enableShadingRate = false,
@@ -71,6 +70,9 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<HdrColor>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -89,30 +91,23 @@ namespace brassica {
 			push.worldScale = p.worldScale;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			return r;
+		// No Read<GBufferNormal/Material/Depth>() -- same lesson #2 over-claim as
+		// AtmosphereCompositeNode.hpp's identical fix. Read<TerrainWeatherBiomeTexture>()
+		// restored (S4): catalog-converted since batch 5, so the lesson #10 hazard that
+		// justified omitting it is gone. Before<CloudRenderNode>() reproduces the schedule
+		// order S0 recorded (Cirrus before Cloud) for these two same-phase HdrColor writers.
+		// After<WaterNode>() (S4) is the other half of WaterNode's new Before<CirrusNode>() --
+		// see VolumetricRenderNode.hpp's identical comment on why this chain needs real edges.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Read<GBufferPosition>();
+			r.Read<GBufferAlbedo>();
+			r.Read<TransmittanceLUT>();
+			r.Read<SkyViewLUT>();
+			r.Read<TerrainWeatherBiomeTexture>();
+			r.Modify<HdrColor>();
+			r.Before<CloudRenderNode>();
+			r.After<WaterNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

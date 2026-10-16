@@ -9,9 +9,12 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "passes/TerrainBiomeNode.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -37,15 +40,6 @@ namespace brassica {
 	// Layer 4: Ground level / totals (0m)
 	// Stores max extinction, average extinction, optical depth, and transmittance.
 	struct CloudShadowGenNode: render::NodeRegistrar<CloudShadowGenNode> {
-		using Resources = graph::Declares<
-			graph::Read<CloudVolumeCascade0>,
-			graph::Read<CloudVolumeCascade1>,
-			graph::Read<CloudVolumeCascade2>,
-			graph::Read<TerrainWeatherBiomeTexture>,
-			graph::Create<CloudShadowMap>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::LightPreparation;
-
 		render::PipelineLibrary*    pipelineLibrary = nullptr;
 		ComputeShader               genShader;
 		CloudShadowGenPushConstants push{};
@@ -60,6 +54,9 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<CloudShadowMap>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) { watcher.RegisterShader(&genShader); }
@@ -71,46 +68,17 @@ namespace brassica {
 			cameraPos = p.cameraPosition;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			(void)ctx;
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.reserve(5);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudShadowMap>(),
-					.access = graph::AccessKind::Write,
-					.desc = CloudShadowMapDesc(1024, 1024),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade0>(),
-					.access = graph::AccessKind::Read,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade1>(),
-					.access = graph::AccessKind::Read,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade2>(),
-					.access = graph::AccessKind::Read,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(2048, 2048, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+		// S4: no kPhase -- Read<TerrainWeatherBiomeTexture>() restored (catalog-converted since
+		// batch 5) orders it after TerrainBiomeNode's sole Modify, and Read<CloudVolumeCascade*>()
+		// orders it after CloudVolumeGenNode's sole Create of each, both via ordinary resource
+		// edges, so the SubPhase::LightPreparation placement was redundant.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Create<CloudShadowMap>();
+			r.Read<CloudVolumeCascade0>();
+			r.Read<CloudVolumeCascade1>();
+			r.Read<CloudVolumeCascade2>();
+			r.Read<TerrainWeatherBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

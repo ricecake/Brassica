@@ -9,7 +9,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -18,6 +20,10 @@
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
+
+	// Forward-declared only: After<CirrusNode>() below needs just the type's name -- see
+	// ClusterLightAssignmentNode.hpp's identical reasoning.
+	struct CirrusNode;
 
 	struct alignas(16) CloudRenderPushConstants {
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};
@@ -36,21 +42,9 @@ namespace brassica {
 
 	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
 	// Minimally populated graphics fragment pass for cloud volume sampling and composition.
+	// S4: no kPhase -- After<CirrusNode>() (below) places it in the HdrColor writer chain as a
+	// real edge instead.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<CloudVolumeCascade0>,
-			graph::Read<CloudVolumeCascade1>,
-			graph::Read<CloudVolumeCascade2>,
-			graph::Read<TransmittanceLUT>,
-			graph::Read<SkyViewLUT>,
-			graph::Read<TerrainWeatherBiomeTexture>,
-			graph::Read<CloudShadowMap>,
-			graph::Modify<HdrColor>>;
-
-		// static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
-		static constexpr graph::Phase kPhase = graph::Phase(1250);
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.enableShadingRate = false,
@@ -71,6 +65,9 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<HdrColor>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -88,60 +85,23 @@ namespace brassica {
 			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.reserve(4);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade0>(),
-					.access = graph::AccessKind::Read,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade1>(),
-					.access = graph::AccessKind::Read,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade2>(),
-					.access = graph::AccessKind::Read,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TransmittanceLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Read,
-					.desc = graph::ComputeStorageImageDesc(192, 108, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudShadowMap>(),
-					.access = graph::AccessKind::Read,
-					.desc = CloudShadowMapDesc(1024, 1024),
-				}
-			);
-
-			return r;
+		// No Read<GBufferNormal/Material/Depth>() -- same lesson #2 over-claim as
+		// AtmosphereCompositeNode.hpp's identical fix. Read<TerrainWeatherBiomeTexture>()
+		// restored (S4), same reasoning as CirrusNode.hpp. After<CirrusNode>() is the other
+		// half of Cirrus's Before<CloudRenderNode>() -- see its comment.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Read<GBufferPosition>();
+			r.Read<GBufferAlbedo>();
+			r.Read<CloudVolumeCascade0>();
+			r.Read<CloudVolumeCascade1>();
+			r.Read<CloudVolumeCascade2>();
+			r.Read<TransmittanceLUT>();
+			r.Read<SkyViewLUT>();
+			r.Read<CloudShadowMap>();
+			r.Read<TerrainWeatherBiomeTexture>();
+			r.Modify<HdrColor>();
+			r.After<CirrusNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

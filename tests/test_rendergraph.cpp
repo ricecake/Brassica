@@ -43,3 +43,41 @@ TEST_CASE("Real TerrainGenNode/SkyBackgroundNode/TerrainNode/DeferredNode compos
 
 	engine.Cleanup();
 }
+
+// S5 exit criterion (design plan's §E/S5): "the force-all-active compile runs in CI." Bypasses
+// Engine::Init() entirely -- same technique as every other real-node-set check in this plan
+// (EngineNodeRegistry::CreateAll()/RegisterAllInto()/Setup()/Compile() are pure CPU-side, no
+// device needed) -- so this runs unconditionally, not gated behind a device check like the test
+// above. ForceAllActive() overrides every node's own Setup()-decided activity to true, so this
+// exercises every real node and every real resource edge regardless of what any node's actual
+// runtime state (ServiceLocator managers, etc.) would otherwise decide this frame -- catching an
+// ambiguity or cycle that only a disabled-by-default feature would normally hide.
+TEST_CASE("Force-all-active compile of the real registered node set is acyclic and unambiguous") {
+	ServiceLocator locator;
+	ServiceLocator::SetInstance(&locator);
+
+	render::EngineNodeRegistry::Instance().CreateAll();
+
+	graph::Graph frameGraph;
+	frameGraph.Register<graph::Import<TerrainTLAS>>();
+	frameGraph.Register<graph::Import<Swapchain>>();
+	frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+	frameGraph.Register<graph::Import<graph::History<HiZTexture>>>();
+
+	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
+
+	graph::FrameContext ctx{.width = 1280, .height = 720};
+	frameGraph.Setup(ctx);
+	frameGraph.ForceAllActive();
+
+	auto compileResult = frameGraph.Compile();
+	if (!compileResult) {
+		MESSAGE(compileResult.error().message);
+	}
+	REQUIRE(compileResult.has_value());
+
+	const auto& schedule = frameGraph.GetSchedule();
+	CHECK(!schedule.stages.empty());
+
+	ServiceLocator::SetInstance(nullptr);
+}

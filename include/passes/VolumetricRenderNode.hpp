@@ -10,7 +10,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -19,6 +21,11 @@
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
+
+	// Forward-declared only: After<AtmosphereCompositeNode>()/Before<WaterNode>() below need
+	// just the type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
+	struct AtmosphereCompositeNode;
+	struct WaterNode;
 
 	struct alignas(16) VolumetricRenderPushConstants {
 		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
@@ -34,20 +41,9 @@ namespace brassica {
 	};
 
 	// Composites froxel volumetric scattering and extinction onto HdrColor.
-	// Operates in SubPhase::Atmosphere (Phase 900).
+	// S4: no kPhase -- After<AtmosphereCompositeNode>()/Before<WaterNode>() (below) place it in
+	// the HdrColor writer chain as real edges instead.
 	struct VolumetricRenderNode: render::NodeRegistrar<VolumetricRenderNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<VolumetricCascade0Scattering>,
-			graph::Read<VolumetricCascade0Extinction>,
-			graph::Read<VolumetricCascade1Scattering>,
-			graph::Read<VolumetricCascade1Extinction>,
-			graph::Read<VolumetricCascade2Scattering>,
-			graph::Read<VolumetricCascade2Extinction>,
-			graph::Modify<HdrColor>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.enableShadingRate = false,
@@ -68,6 +64,9 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<HdrColor>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -87,61 +86,30 @@ namespace brassica {
 			push.fovAspect = glm::vec4(std::tan(p.fov * 0.5f), p.aspectRatio, 0.0f, 0.0f);
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.reserve(8);
-
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade0Scattering>(),
-					.access = graph::AccessKind::Read,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade0Extinction>(),
-					.access = graph::AccessKind::Read,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade1Scattering>(),
-					.access = graph::AccessKind::Read,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade1Extinction>(),
-					.access = graph::AccessKind::Read,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade2Scattering>(),
-					.access = graph::AccessKind::Read,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<VolumetricCascade2Extinction>(),
-					.access = graph::AccessKind::Read,
-					.desc = VolumetricFroxelDesc(),
-				}
-			);
-
-			return r;
+		// No Read<GBufferNormal/Albedo/Material>() -- Execute below only indexes Position and
+		// Depth; the removed Resources claimed the whole GBuffer<Read> group (another lesson #2
+		// over-claim, same shape as AtmosphereCompositeNode.hpp's). After<AtmosphereCompositeNode>()
+		// is the other half of that node's Before<VolumetricRenderNode>() -- see its comment.
+		// Before<WaterNode>() (S4) is the other half of WaterNode's new After<VolumetricRenderNode>()
+		// -- these five HdrColor writers (Deferred/Atmosphere/Volumetric/Water/Cirrus/CloudRender)
+		// previously relied entirely on phase-int ordering for every pair except
+		// Atmosphere<->Volumetric and Cirrus<->CloudRender; this closes the Volumetric<->Water gap
+		// so the real order (S0's recorded schedule: Atmosphere, Volumetric, Water, Cirrus,
+		// CloudRender) is a real edge, not an accident of phase numbers, ahead of removing kPhase
+		// from this whole cluster.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Read<GBufferPosition>();
+			r.Read<GBufferDepth>();
+			r.Read<VolumetricCascade0Scattering>();
+			r.Read<VolumetricCascade0Extinction>();
+			r.Read<VolumetricCascade1Scattering>();
+			r.Read<VolumetricCascade1Extinction>();
+			r.Read<VolumetricCascade2Scattering>();
+			r.Read<VolumetricCascade2Extinction>();
+			r.Modify<HdrColor>();
+			r.After<AtmosphereCompositeNode>();
+			r.Before<WaterNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

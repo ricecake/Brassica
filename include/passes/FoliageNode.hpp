@@ -10,7 +10,9 @@
 #include "foliage/IFoliageManager.hpp"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -59,18 +61,10 @@ namespace brassica {
 
 	static_assert(sizeof(FoliagePushConstants) == 116, "FoliagePushConstants size must be 116 bytes");
 
+	// S4: no kPhase -- see EntityNode.hpp's identical reasoning (TerrainNode's Create-before-
+	// accessor orders this node after it, and every reader of the shared GBuffer keys gets a
+	// real default edge from this node's writes regardless of phase).
 	struct FoliageNode: render::NodeRegistrar<FoliageNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::ModifyKey>,
-			graph::Read<graph::History<HiZTexture>>,
-			graph::Read<TerrainClipmapTexture>,
-			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainWeatherBiomeTexture>,
-			graph::Read<FoliageBiomeTableTexture>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::GBuffer;
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
@@ -152,44 +146,36 @@ namespace brassica {
 			}
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			return graph::Recipe{
-				.domain = graph::ExecutionDomain::Graphics,
-				.isActive = enabled,
-				.realizations = {
-					graph::ResourceRealization{
-						.key = graph::IdOf<GBufferPosition>(),
-						.access = graph::AccessKind::ReadWrite,
-						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
-					},
-					graph::ResourceRealization{
-						.key = graph::IdOf<GBufferNormal>(),
-						.access = graph::AccessKind::ReadWrite,
-						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-					},
-					graph::ResourceRealization{
-						.key = graph::IdOf<GBufferAlbedo>(),
-						.access = graph::AccessKind::ReadWrite,
-						.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-					},
-					graph::ResourceRealization{
-						.key = graph::IdOf<GBufferDepth>(),
-						.access = graph::AccessKind::ReadWrite,
-						.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-					},
-					// A History<K> realization has no producer within this frame's own schedule --
-					// PhysicalRegistry::ProvisionTemporalPairs only forms the ping-ponged pair (and
-					// assigns its bindless index) from a *reader's* own realization, since
-					// PreviousFrame/Import nodes declare the key but push no realization of their
-					// own. Without this, hizIndex above always resolves to the bindless fallback (0),
-					// silently disabling the whole HiZ occlusion path in foliage.task.
-					graph::ResourceRealization{
-						.key = graph::IdOf<graph::History<HiZTexture>>(),
-						.access = graph::AccessKind::Read,
-						.desc = HiZTextureDesc(ctx.width, ctx.height),
-					}
-				}
-			};
+		// No Modify<GBufferMaterial>() -- the attachment-count drift this fixes: the removed
+		// Resources claimed the whole GBuffer<ModifyKey> group (all 5 keys) at compile time, but
+		// this node's own realizations (and its pipeline's colorFormats below) only ever covered
+		// 4 -- a real lesson #2 over-claim, now impossible to reintroduce by accident, since
+		// there's no group alias forcing all 5 and every access here is hand-written to match
+		// what Execute (and the pipeline request) actually does.
+		//
+		// ReadPrevious<HiZTexture>() replaces the old hand-rolled History<HiZTexture> realization
+		// (HiZTextureDesc(ctx.width, ctx.height)) now that HiZTexture is catalog-converted (S1) --
+		// the catalog is the real fix for lesson #9's "reader must get the desc right" trap, this
+		// node was just the first one it was found on. Read<TerrainClipmapTexture/MinMaxTexture/
+		// BiomeTexture/WeatherBiomeTexture>() are all safe now (the last one restored in S4 --
+		// catalog-converted since batch 5, just never re-added then). Read<
+		// FoliageBiomeTableTexture>() stays omitted -- not catalog-converted, and its producer
+		// (a host-write node) schedules before this one, so an empty-desc realization here would
+		// win via lesson #10 (see GTAONode.hpp's identical reasoning). AnyOrder() on all four GBuffer
+		// keys here, matching EntityNode's own identical reasoning (see its Setup()'s comment) --
+		// both nodes Modify these same four keys with nothing else ordering them, which the
+		// relational compiler (S3) treats as a hard ambiguity error unless both sides opt in.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics).Active(enabled);
+			r.Modify<GBufferPosition>().AnyOrder();
+			r.Modify<GBufferNormal>().AnyOrder();
+			r.Modify<GBufferAlbedo>().AnyOrder();
+			r.Modify<GBufferDepth>().AnyOrder();
+			r.ReadPrevious<HiZTexture>();
+			r.Read<TerrainClipmapTexture>();
+			r.Read<TerrainMinMaxTexture>();
+			r.Read<TerrainBiomeTexture>();
+			r.Read<TerrainWeatherBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

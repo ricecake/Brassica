@@ -10,7 +10,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -57,11 +59,6 @@ namespace brassica {
 	// covering roughly 20km, 80km, and 320km of range respectively with a 15km vertical span.
 	// Triggers updates as the camera moves similarly to the terrain clipmap generator.
 	struct CloudVolumeGenNode: render::NodeRegistrar<CloudVolumeGenNode> {
-		using Resources = graph::Declares<
-			graph::Create<CloudVolumeCascade0>,
-			graph::Create<CloudVolumeCascade1>,
-			graph::Create<CloudVolumeCascade2>>;
-
 		render::PipelineLibrary*    pipelineLibrary = nullptr;
 		ComputeShader               genShader;
 		CloudVolumeGenPushConstants push{};
@@ -82,6 +79,12 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				auto& catalog = services.physicalRegistry->Catalog();
+				catalog.Get<CloudVolumeCascade0>();
+				catalog.Get<CloudVolumeCascade1>();
+				catalog.Get<CloudVolumeCascade2>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) { watcher.RegisterShader(&genShader); }
@@ -95,35 +98,11 @@ namespace brassica {
 			forceRegeneration = p.forceRegeneration;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			(void)ctx;
-			graph::Recipe r{
-				.domain = graph::ExecutionDomain::Compute,
-				.isActive = true,
-			};
-			r.realizations.reserve(3);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade0>(),
-					.access = graph::AccessKind::Write,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade1>(),
-					.access = graph::AccessKind::Write,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<CloudVolumeCascade2>(),
-					.access = graph::AccessKind::Write,
-					.desc = CloudVolumeDesc(),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute).Active(true);
+			r.Create<CloudVolumeCascade0>();
+			r.Create<CloudVolumeCascade1>();
+			r.Create<CloudVolumeCascade2>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

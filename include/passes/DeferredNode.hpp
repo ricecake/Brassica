@@ -10,8 +10,11 @@
 #include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "lighting/ILightManager.hpp"
+#include "passes/RenderPhases.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -50,22 +53,6 @@ namespace brassica {
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Read>,
-			graph::Read<AtmosphereRadiance>,
-			graph::Read<ClusteredLighting>,
-			graph::Read<TerrainClipmapTexture>,
-			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainWeatherBiomeTexture>,
-			graph::Read<SkyViewLUT>,
-			graph::Read<GTAOTexture>,
-			graph::Read<TerrainTLAS>,
-			graph::Read<CloudShadowMap>,
-			graph::Create<HdrColor>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::DeferredShading;
-
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 		};
@@ -87,6 +74,9 @@ namespace brassica {
 			}
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
+			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<HdrColor>();
 			}
 		}
 
@@ -110,16 +100,44 @@ namespace brassica {
 			}
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+		// Reads every GBuffer key (genuinely, unlike AtmosphereCompositeNode/CirrusNode/
+		// CloudRenderNode/VolumetricRenderNode below -- this is the one real exception lesson
+		// #2's writeup calls out). No Read<AtmosphereRadiance>() or Read<TerrainTLAS>(): neither
+		// is catalog-converted, and AtmosphereRadiance's producer (SkyBackgroundNode) schedules
+		// after DeferredShading anyway (there's no real edge to restore). This node's own
+		// Resources never declared TerrainTLAS as anything but a Read either, so dropping it
+		// costs nothing today; see TerrainGenNode.hpp's SetupBuilder::AccessHandle::Desc comment
+		// for why an AccelerationStructure-kind key needs that escape hatch on *every* toucher,
+		// not just its producer, if it's ever read through the builder instead of omitted.
+		// Read<TerrainWeatherBiomeTexture>() restored (S4): catalog-converted since batch 5, so
+		// the lesson #10 hazard that justified omitting it is gone -- this was simply never
+		// re-added when that batch landed, found and fixed empirically while migrating this
+		// node's phase.
+		// S4: DeferredNode is the Lighting phase's designated keystone (design plan's §D table) --
+		// everything it reads (GTAO/ClusterLight/CloudShadow/SkyView/terrain/GBuffer) already
+		// gives it a real Create-before-accessor edge from each producer, and it's the sole
+		// Create<> of HdrColor, which already orders it before every HdrColor accessor
+		// downstream (Composite phase and beyond) -- so Keystone<Lighting>() changes nothing
+		// about *this* node's own schedule position today. What it does is give any future node
+		// that needs "after the whole Lighting phase, whatever that ends up including" a single,
+		// real name to say After<DeferredNode>() against, instead of enumerating producers.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Keystone<brassica::phase::Lighting>();
+			r.Read<GBufferPosition>();
+			r.Read<GBufferNormal>();
+			r.Read<GBufferAlbedo>();
+			r.Read<GBufferMaterial>();
+			r.Read<GBufferDepth>();
+			r.Read<ClusteredLighting>();
+			r.Read<TerrainClipmapTexture>();
+			r.Read<TerrainMinMaxTexture>();
+			r.Read<TerrainBiomeTexture>();
+			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<SkyViewLUT>();
+			r.Read<GTAOTexture>();
+			r.Read<CloudShadowMap>();
+			r.Create<HdrColor>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

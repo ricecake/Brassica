@@ -7,7 +7,9 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "lighting/Light.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -17,14 +19,13 @@
 
 namespace brassica {
 
-	struct ClusterLightAssignmentNode: render::NodeRegistrar<ClusterLightAssignmentNode> {
-		// No kPhase -- runs at Phase::Default, and relies on that being later than
-		// SubPhase::Prepare (where ParticleBehaviorNode's firefly particles write real dynamic
-		// lights into the global light buffer) purely through phase ordering, with no declared
-		// graph edge between the two. If particle nodes are ever moved off Prepare, this node
-		// needs an explicit dependency added, or fireflies silently stop lighting anything.
-		using Resources = graph::Declares<graph::Create<ClusteredLighting>>;
+	// Forward-declared only: After<ParticleBehaviorNode>() below needs just the type's name
+	// (TypeName<T>(), ResourceKey.hpp), never a complete type -- including the real definition
+	// (passes/ParticleSystemNode.hpp) would pull in the whole particle subsystem for a node that
+	// otherwise has nothing to do with it.
+	struct ParticleBehaviorNode;
 
+	struct ClusterLightAssignmentNode: render::NodeRegistrar<ClusterLightAssignmentNode> {
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
 
@@ -37,22 +38,27 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<ClusteredLighting>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) { watcher.RegisterShader(&compShader); }
 
 		void Destroy(vk::Device device) { compShader.Destroy(device); }
 
-		graph::Recipe Setup(const graph::FrameContext& /*ctx*/) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<ClusteredLighting>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::StorageBufferDesc(TOTAL_CLUSTERS * sizeof(ClusterGPU)),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Create<ClusteredLighting>();
+			// ParticleBehaviorNode's firefly particles write real dynamic lights into uLights/
+			// uLightCount (shaders/particle_behavior.comp, set 0 binding 2 -- the always-bound
+			// frame set, not a graph-tracked resource, so there's no key to Read<> here) before
+			// this shader reads them. Not yet enforced -- relations are inert until S3's
+			// scheduler lands (SetupBuilder.hpp) -- but this makes the real dependency explicit
+			// instead of leaving it to an undeclared phase-ordering assumption. If particle
+			// nodes are ever moved off Prepare, this is the declaration that needs to start
+			// doing real work, not a comment to go find.
+			r.After<ParticleBehaviorNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

@@ -49,8 +49,6 @@ TEST_CASE("FoliageManager state and global properties") {
 }
 
 TEST_CASE("FoliageNode registration and push constants sync") {
-	CHECK(brassica::FoliageNode::kPhase == brassica::SubPhase::GBuffer);
-
 	brassica::ServiceLocator locator;
 	brassica::ServiceLocator::SetInstance(&locator);
 

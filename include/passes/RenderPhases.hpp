@@ -16,6 +16,77 @@
 // spaced away from the existing bands) here.
 
 namespace brassica {
+
+	// S4's 6-phase keystone backbone (design plan's §D) -- the replacement for the SubPhase int
+	// bands below. SetupBuilder::In<P>() orders a node after P::Begin and before P::End. Most
+	// nodes need none of this at all, because their real resource edges (or an explicit
+	// relation) already order them correctly; a phase is for the nodes that genuinely have
+	// nothing else pinning them down. A phase's keystone (SetupBuilder::Keystone<P>(), at most
+	// one per phase) is the one real node everything downstream can name directly
+	// (After<DeferredNode>()) instead of naming the marker.
+	//
+	// The 6 phases chain into each other with no explicit edge of their own, and
+	// RelationalCompiler.hpp needs zero built-in knowledge of "phase" as a concept to make that
+	// true: each phase's End *is* (type alias, same TypeName(), same marker identity) the next
+	// phase's Begin. CompileRelational already auto-creates a virtual marker node the first time
+	// any relation names it and resolves every later reference to the same one -- so a GBuffer
+	// node's Before<GBuffer::End>() and a Lighting node's After<Lighting::Begin>() land on the
+	// exact same marker without this header, or the generic compiler, ever stating "GBuffer
+	// precedes Lighting" anywhere. Only 7 distinct marker identities exist for all 6 phases.
+	//
+	// Absorbs the 17 SubPhase bands below as: Prepare -> Prepare; GBuffer/Default -> GBuffer;
+	// LightPreparation/GIComput/DeferredShading -> Lighting (keystone DeferredNode);
+	// Reflection/Atmosphere/Underwater*/Water/Translucent/Particle -> Composite;
+	// Exposure/BloomAndOptics/ToneMapping -> ToneMap (keystone TonemapNode);
+	// PostProcessing/HudOverlay/MenuOverlay -> Overlay.
+	namespace phase {
+		namespace boundary {
+			struct Start {};
+
+			struct PrepareGBuffer {};
+
+			struct GBufferLighting {};
+
+			struct LightingComposite {};
+
+			struct CompositeToneMap {};
+
+			struct ToneMapOverlay {};
+
+			struct End {};
+		} // namespace boundary
+
+		struct Prepare {
+			using Begin = boundary::Start;
+			using End = boundary::PrepareGBuffer;
+		};
+
+		struct GBuffer {
+			using Begin = boundary::PrepareGBuffer;
+			using End = boundary::GBufferLighting;
+		};
+
+		struct Lighting {
+			using Begin = boundary::GBufferLighting;
+			using End = boundary::LightingComposite;
+		};
+
+		struct Composite {
+			using Begin = boundary::LightingComposite;
+			using End = boundary::CompositeToneMap;
+		};
+
+		struct ToneMap {
+			using Begin = boundary::CompositeToneMap;
+			using End = boundary::ToneMapOverlay;
+		};
+
+		struct Overlay {
+			using Begin = boundary::ToneMapOverlay;
+			using End = boundary::End;
+		};
+	} // namespace phase
+
 	namespace SubPhase {
 		inline constexpr graph::Phase Prepare = graph::Phase(-500);
 		inline constexpr graph::Phase GBuffer = graph::Phase(0);

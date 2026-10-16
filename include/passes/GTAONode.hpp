@@ -8,6 +8,8 @@
 
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "lighting/ILightManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
@@ -30,14 +32,6 @@ namespace brassica {
 	};
 
 	struct GTAONode: render::NodeRegistrar<GTAONode> {
-		using Resources = graph::Declares<
-			graph::Read<GBufferPosition>,
-			graph::Read<GBufferNormal>,
-			graph::Read<GBufferDepth>,
-			graph::Create<GTAOTexture>>;
-
-		static constexpr graph::Phase kPhase = SubPhase::GIComput;
-
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            gtaoShader;
 		GTAOPushConstants        push{};
@@ -63,23 +57,27 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				services.shaderWatcher->RegisterShader(&gtaoShader);
 			}
+			if (services.physicalRegistry) {
+				services.physicalRegistry->Catalog().Get<GTAOTexture>();
+			}
 		}
 
 		void Destroy(vk::Device device) { gtaoShader.Destroy(device); }
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
+		// S4: no kPhase -- Read<GBufferPosition/Normal/Depth>() restored now that those keys are
+		// catalog-converted (batch 2), so the lesson #10 hazard that justified omitting them
+		// (and the GIComput phase that worked around it) is gone. The real ordering constraint
+		// ("after whichever GBuffer writers actually ran this frame") now comes from these reads
+		// as ordinary resource edges instead of a phase number.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
 			width = ctx.width;
 			height = ctx.height;
 
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute, .isActive = enabled};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GTAOTexture>(),
-					.access = graph::AccessKind::Write,
-					.desc = GTAOTextureDesc(width, height),
-				}
-			);
-			return r;
+			r.Domain(graph::ExecutionDomain::Compute).Active(enabled);
+			r.Read<GBufferPosition>();
+			r.Read<GBufferNormal>();
+			r.Read<GBufferDepth>();
+			r.Create<GTAOTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

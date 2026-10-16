@@ -10,7 +10,9 @@
 #include "constants.h"
 #include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -57,13 +59,6 @@ namespace brassica {
 	// taskShader/meshShader/fragShader point at Engine-owned, persistent state, and
 	// ResolveCached makes re-resolving the same request every frame a cache hit.
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
-		using Resources = graph::Declares<
-			GBuffer<graph::Create>,
-			graph::Read<TerrainClipmapTexture>,
-			graph::Read<TerrainMinMaxTexture>,
-			graph::Read<TerrainBiomeTexture>,
-			graph::Read<TerrainWeatherBiomeTexture>>;
-
 		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
 		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
 		// VRS-ignoring behavior -- the old hand-rolled pipeline never chained the VRS pNext at
@@ -97,6 +92,14 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
+			if (services.physicalRegistry) {
+				auto& catalog = services.physicalRegistry->Catalog();
+				catalog.Get<GBufferPosition>();
+				catalog.Get<GBufferNormal>();
+				catalog.Get<GBufferAlbedo>();
+				catalog.Get<GBufferMaterial>();
+				catalog.Get<GBufferDepth>();
+			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
@@ -116,53 +119,24 @@ namespace brassica {
 			push.waterLevel = p.waterLevel;
 		}
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			// clearColor = {0,0,0,0}, not the default opaque black: deferred.frag reads
-			// albedo.a < 0.01 as "no terrain rendered at this pixel, show the gradient
-			// background instead" (see ResourceRealization::clearColor's comment,
-			// Execution.hpp). Applied to all three color targets, matching the pre-migration
-			// TerrainPass exactly, even though only albedo's alpha is actually read.
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferPosition>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
-					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferNormal>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferAlbedo>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferMaterial>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
-					.clearColor = {0.0f, 0.0f, 0.0f, 0.0f},
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			return r;
+		// clearColor = {0,0,0,0}, not the default opaque black: deferred.frag reads
+		// albedo.a < 0.01 as "no terrain rendered at this pixel, show the gradient background
+		// instead" (see ResourceRealization::clearColor's comment, Execution.hpp). Applied to
+		// all four color targets, matching this node's pre-conversion Recipe exactly, even
+		// though only albedo's alpha is actually read. Read<TerrainClipmapTexture/MinMaxTexture/
+		// BiomeTexture/WeatherBiomeTexture>() are all safe now (the last one restored in S4 --
+		// catalog-converted since batch 5, just never re-added then).
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Create<GBufferPosition>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferNormal>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferAlbedo>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferMaterial>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferDepth>();
+			r.Read<TerrainClipmapTexture>();
+			r.Read<TerrainMinMaxTexture>();
+			r.Read<TerrainBiomeTexture>();
+			r.Read<TerrainWeatherBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

@@ -199,45 +199,6 @@ TEST_CASE("Underwater and AboveWater particle render nodes schedule before and a
 	CHECK(waterStage < aboveWaterStage);
 }
 
-TEST_CASE("ParticleSystemNode executes in SubPhase::Prepare before DeferredNode in Phase::Default") {
-	graph::Graph graph;
-	graph.Register<DeferredShadingProducer>();
-	graph.Register<PrepTerrainProducer>();
-	graph.Register<graph::Import<ParticleTypeBuffer>>();
-
-	ParticleSystemNode particleNode;
-	graph.RegisterRef(particleNode);
-
-	graph::FrameContext ctx{.width = 256, .height = 256};
-	graph.Setup(ctx);
-
-	auto result = graph.Compile();
-	if (!result) {
-		MESSAGE(result.error().message);
-	}
-	REQUIRE(result.has_value());
-
-	const auto& schedule = graph.GetSchedule();
-	REQUIRE(schedule.stages.size() >= 2);
-
-	std::size_t deferredStage = 0;
-	std::size_t particleStage = 0;
-
-	const auto& nodes = graph.Nodes();
-	for (std::size_t s = 0; s < schedule.stages.size(); ++s) {
-		for (std::size_t nodeIdx : schedule.stages[s].nodes) {
-			if (nodes[nodeIdx].Descriptor().name.find("DeferredShadingProducer") != std::string_view::npos) {
-				deferredStage = s;
-			}
-			if (nodes[nodeIdx].Descriptor().name.find("ParticleSystemNode") != std::string_view::npos) {
-				particleStage = s;
-			}
-		}
-	}
-
-	CHECK(particleStage < deferredStage);
-}
-
 TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
@@ -268,19 +229,6 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
-		for (uint32_t i = 0; i < 8; ++i) {
-			bindings[i]
-				.setBinding(i)
-				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-				.setDescriptorCount(1)
-				.setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
-		}
-
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(bindings);
-		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
-
 		DispatchLoaderDynamic dls;
 		dls.init(device.GetInstance(), vkDevice);
 		dls.vkCmdDrawMeshTasksEXT = nullptr;
@@ -293,19 +241,17 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 			.swapchainFormat = vk::Format::eR8G8B8A8Srgb,
 		};
 
-		detail::ParticleDescriptorCache sharedDescriptorCache{};
-
 		ParticleResetNode resetNode;
-		resetNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
+		resetNode.Init(services);
 
 		ParticleLivenessNode livenessNode;
-		livenessNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
+		livenessNode.Init(services);
 
 		ParticleGridBuildNode gridBuildNode;
-		gridBuildNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
+		gridBuildNode.Init(services);
 
 		ParticleBehaviorNode behaviorNode;
-		behaviorNode.Init(services, particleSetLayout, nullptr, sharedDescriptorCache);
+		behaviorNode.Init(services);
 
 		UnderwaterParticleRenderNode underwaterRenderNode;
 		underwaterRenderNode.Init(services);
@@ -322,7 +268,6 @@ TEST_CASE("ParticleSystemNode shader and pass initialization validation") {
 
 		Shader::ClearConstants();
 
-		vkDevice.destroyDescriptorSetLayout(particleSetLayout);
 		vkDevice.destroyCommandPool(pool);
 	}
 }
@@ -357,31 +302,6 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
-		for (uint32_t i = 0; i < 8; ++i) {
-			bindings[i]
-				.setBinding(i)
-				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-				.setDescriptorCount(1)
-				.setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
-		}
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(bindings);
-		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
-
-		std::array<vk::DescriptorPoolSize, 1> particlePoolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 8}
-		};
-		vk::DescriptorPoolCreateInfo particlePoolInfo{};
-		particlePoolInfo.setPoolSizes(particlePoolSizes);
-		particlePoolInfo.setMaxSets(1);
-		vk::DescriptorPool particlePool = vkDevice.createDescriptorPool(particlePoolInfo);
-
-		vk::DescriptorSetAllocateInfo particleSetAllocInfo{};
-		particleSetAllocInfo.setDescriptorPool(particlePool);
-		particleSetAllocInfo.setSetLayouts(particleSetLayout);
-		vk::DescriptorSet particleSet = vkDevice.allocateDescriptorSets(particleSetAllocInfo).front();
-
 		DispatchLoaderDynamic dls;
 		dls.init(device.GetInstance(), vkDevice);
 
@@ -400,11 +320,10 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		ParticleLivenessNode   livenessNode;
 		ParticleGridBuildNode  gridBuildNode;
 		ParticleBehaviorNode   behaviorNode;
-		detail::ParticleDescriptorCache sharedDescriptorCache{};
-		resetNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
-		livenessNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
-		gridBuildNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
-		behaviorNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+		resetNode.Init(services);
+		livenessNode.Init(services);
+		gridBuildNode.Init(services);
+		behaviorNode.Init(services);
 
 		graph::Graph g;
 		g.RegisterRef(seedParticleNode);
@@ -654,9 +573,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 
 		Shader::ClearConstants();
 		vkDevice.destroySampler(sampler);
-		vkDevice.destroyDescriptorPool(particlePool);
 		vkDevice.destroyDescriptorPool(globalPool);
-		vkDevice.destroyDescriptorSetLayout(particleSetLayout);
 		vkDevice.destroyDescriptorSetLayout(globalLayout);
 		if (frameUboBuffer && frameUboAllocation) {
 			vmaDestroyBuffer(device.GetAllocator(), frameUboBuffer, frameUboAllocation);
@@ -703,31 +620,6 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
-		for (uint32_t i = 0; i < 8; ++i) {
-			bindings[i]
-				.setBinding(i)
-				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-				.setDescriptorCount(1)
-				.setStageFlags(vk::ShaderStageFlagBits::eCompute | vk::ShaderStageFlagBits::eMeshEXT);
-		}
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-		layoutInfo.setBindings(bindings);
-		vk::DescriptorSetLayout particleSetLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
-
-		std::array<vk::DescriptorPoolSize, 1> particlePoolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 8}
-		};
-		vk::DescriptorPoolCreateInfo particlePoolInfo{};
-		particlePoolInfo.setPoolSizes(particlePoolSizes);
-		particlePoolInfo.setMaxSets(1);
-		vk::DescriptorPool particlePool = vkDevice.createDescriptorPool(particlePoolInfo);
-
-		vk::DescriptorSetAllocateInfo particleSetAllocInfo{};
-		particleSetAllocInfo.setDescriptorPool(particlePool);
-		particleSetAllocInfo.setSetLayouts(particleSetLayout);
-		vk::DescriptorSet particleSet = vkDevice.allocateDescriptorSets(particleSetAllocInfo).front();
-
 		DispatchLoaderDynamic dls;
 		dls.init(device.GetInstance(), vkDevice);
 
@@ -751,10 +643,9 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		ParticleResetNode      resetNode;
 		ParticleLivenessNode   livenessNode;
 		ParticleGridBuildNode  gridBuildNode;
-		detail::ParticleDescriptorCache sharedDescriptorCache{};
-		resetNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
-		livenessNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
-		gridBuildNode.Init(services, particleSetLayout, particleSet, sharedDescriptorCache);
+		resetNode.Init(services);
+		livenessNode.Init(services);
+		gridBuildNode.Init(services);
 		livenessNode.maxParticles = 2;
 		gridBuildNode.maxParticles = 2;
 		livenessNode.waterLevel = 0.0f;
@@ -1020,9 +911,7 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 
 		Shader::ClearConstants();
 		vkDevice.destroySampler(sampler);
-		vkDevice.destroyDescriptorPool(particlePool);
 		vkDevice.destroyDescriptorPool(globalPool);
-		vkDevice.destroyDescriptorSetLayout(particleSetLayout);
 		vkDevice.destroyDescriptorSetLayout(globalLayout);
 		if (frameUboBuffer && frameUboAllocation) {
 			vmaDestroyBuffer(device.GetAllocator(), frameUboBuffer, frameUboAllocation);

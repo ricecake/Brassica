@@ -56,13 +56,19 @@ namespace {
 	struct PassB {
 		using Resources = Declares<Read<TestColorTarget>, Create<TestBufferTarget>>;
 
-		Recipe Setup(const FrameContext&) {
+		// width/height must match PassA's own Create<TestColorTarget> (ctx-based, not a
+		// hardcoded 1920x1080 unrelated to this test's real 256x256 FrameContext): PhysicalExecutionBackend::
+		// DeriveAttachments now sizes a node's render area from the real provisioned texture
+		// (PhysicalExecutionBackend.hpp), not this realization's own desc, so a genuine
+		// cross-node size mismatch here surfaces as a real color/depth attachment-size
+		// validation error instead of staying silently masked.
+		Recipe Setup(const FrameContext& ctx) {
 			Recipe r{.domain = ExecutionDomain::Compute};
 			r.realizations.push_back(
 				ResourceRealization{
 					.key = IdOf<TestColorTarget>(),
 					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(1920, 1080, vk::Format::eR8G8B8A8Srgb),
+					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
 				}
 			);
 			r.realizations.push_back(
@@ -168,6 +174,85 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
+	// Catalog fixtures (ResourceCatalog.hpp, the S1 resource-type-ownership mechanism). Each
+	// writer/reader below deliberately pushes an empty/wrong .desc for its own realization --
+	// the whole point of these fixtures is proving Provision() uses the TYPE's own Desc()
+	// instead, not whatever a node happens to hand-roll.
+	struct TestCatalogMask {
+		std::uint32_t dim = 64; // what an owning system would publish via catalog.Get<K>().dim = ...
+
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const {
+			return ColorAttachmentDesc(dim, dim, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
+
+	struct CatalogWriter {
+		using Resources = Declares<Modify<TestCatalogMask>>;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestCatalogMask>(),
+					.access = AccessKind::ReadWrite,
+					.desc = {}, // deliberately wrong/empty -- the catalog's Desc() must win
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct TestCatalogTemporalMask {
+		std::uint32_t dim = 96;
+
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const {
+			return ColorAttachmentDesc(dim, dim, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
+
+	using CatalogTemporalTypeList = TypeList<TestCatalogTemporalMask>;
+
+	struct CatalogTemporalWriter {
+		using Resources = Declares<Modify<TestCatalogTemporalMask>>;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<TestCatalogTemporalMask>(),
+					.access = AccessKind::ReadWrite,
+					.desc = {},
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Reads History<TestCatalogTemporalMask> but pushes a deliberately empty .desc for it --
+	// lesson #9 required this exact realization to supply the real desc; a converted key no
+	// longer needs the reader to get anything right at all.
+	struct CatalogTemporalReader {
+		using Resources = Declares<Read<History<TestCatalogTemporalMask>>>;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Graphics};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<History<TestCatalogTemporalMask>>(),
+					.access = AccessKind::Read,
+					.desc = {},
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
 	struct TestVersionedTarget {};
 
 	// Modify<K, 1>'s single realization carries ReadWrite access on the *produced* version --
@@ -194,6 +279,17 @@ namespace {
 
 	struct SecondVersionWriter {
 		using Resources = Declares<Modify<TestVersionedTarget, 2>>;
+
+		// S3 deleted version lifting and self-modify chaining -- the mechanisms that used to
+		// order two same-phase ReadWrite writers of one base key by version number / registration
+		// index. Both writers here resolve to the same base (TestVersionedTarget) and are both
+		// ReadWrite, so neither is a Create-before-accessor "creator"; with nothing else ordering
+		// them, that's now a hard ambiguity error, not a scheduling nicety. A real builder node
+		// would use After<X>()/Before<X>(); this fixture is legacy-shaped (no SetupBuilder) and
+		// exists to test PhysicalResourceRegistry's version resolution, not graph scheduling, so
+		// the minimal fix is the same one the old phase-based Modify<Swapchain> chains already
+		// relied on: a later phase.
+		static constexpr Phase kPhase = Phase::Late;
 
 		Recipe Setup(const FrameContext& ctx) {
 			Recipe r{.domain = ExecutionDomain::Graphics};
@@ -831,6 +927,219 @@ TEST_CASE(
 	CHECK(device.GetValidationWarningCount() == 0);
 }
 
+namespace {
+
+	struct ZeroInitBufferKey {};
+
+	// Never active -- stands in for e.g. GTAONode disabled: declares the key (so
+	// ValidateRuntime's renderability check is satisfied) but never actually runs or writes it.
+	struct InactiveZeroInitProducer {
+		using Resources = Declares<Create<ZeroInitBufferKey>>;
+
+		Recipe Setup(const FrameContext&) {
+			return Recipe{
+				.domain = ExecutionDomain::Compute,
+				.isActive = false,
+				.realizations = {
+					ResourceRealization{
+						.key = IdOf<ZeroInitBufferKey>(),
+						.access = AccessKind::Write,
+						.desc = []() {
+							ResourceDesc desc = StorageBufferDesc(64);
+							desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
+							return desc;
+						}(),
+					},
+				},
+			};
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Plain Read, no Required() -- mirrors DeferredNode's Read<GTAOTexture>(): this node must
+	// keep running regardless of the producer's activity, it just needs defined (zero) content.
+	struct ActiveZeroInitReader {
+		using Resources = Declares<Read<ZeroInitBufferKey>>;
+
+		Recipe Setup(const FrameContext&) {
+			Recipe r{.domain = ExecutionDomain::Compute};
+			r.realizations.push_back(
+				ResourceRealization{
+					.key = IdOf<ZeroInitBufferKey>(),
+					.access = AccessKind::Read,
+					.desc = []() {
+						ResourceDesc desc = StorageBufferDesc(64);
+						desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
+						return desc;
+					}(),
+				}
+			);
+			return r;
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+// Closes a real design bug found while writing this test (not caused by this test, caught before
+// it ever shipped): ZeroInitializeInactiveReads (PhysicalExecutionBackend.hpp, §E/S5) must NOT
+// gate on PhysicalBuffer::HasDefinedContents() the way the pre-existing isHistory mechanism does
+// -- that flag suits a true one-time "has this slot ever been written" question, but
+// Graph::ZeroInitReads() is recomputed fresh every Compile() from this frame's actual activity,
+// which can toggle. A sticky-flag gate would clear once, then skip forever even after a later
+// frame leaves real (non-zero) data behind -- exactly the sequence this test drives: clear,
+// inject real-looking non-zero data (standing in for "the producer was active for one frame"),
+// then confirm a later frame with the producer inactive again still re-clears.
+TEST_CASE(
+	"ZeroInitializeInactiveReads clears a buffer with no active writer every frame, even after "
+	"non-zero data was written in between"
+) {
+	brassica::testing::MinimalDevice device;
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
+		);
+		auto allocCmd = [&]() {
+			return vkDevice
+				.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+		};
+		auto submitAndWait = [&](vk::CommandBuffer vkCmd) {
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			device.GetQueue().submit(submitInfo);
+			device.GetQueue().waitIdle();
+		};
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		PhysicalExecutionBackend backend(registry);
+
+		Graph graph;
+		graph.Register<InactiveZeroInitProducer>();
+		graph.Register<ActiveZeroInitReader>();
+
+		FrameContext ctx{.width = 64, .height = 64};
+
+		// Frame 1: provisions the buffer and zero-inits it.
+		{
+			vk::CommandBuffer vkCmd = allocCmd();
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
+			vkCmd.end();
+			submitAndWait(vkCmd);
+		}
+
+		auto buf = registry.GetBuffer<ZeroInitBufferKey>();
+		REQUIRE(buf != nullptr);
+
+		// Inject non-zero data directly, standing in for "a real writer ran this one frame" --
+		// uses the buffer's own tracked last stage/access as the barrier source, same contract
+		// ClearBufferToZero itself relies on, then updates that tracked state to match.
+		{
+			vk::CommandBuffer vkCmd = allocCmd();
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			vk::BufferMemoryBarrier2 toTransferDst{
+				buf->GetLastStage() ? buf->GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
+				buf->GetLastAccess(),
+				vk::PipelineStageFlagBits2::eAllTransfer,
+				vk::AccessFlagBits2::eTransferWrite,
+				VK_QUEUE_FAMILY_IGNORED,
+				VK_QUEUE_FAMILY_IGNORED,
+				buf->GetBuffer(),
+				0,
+				VK_WHOLE_SIZE,
+			};
+			vk::DependencyInfo dep{};
+			dep.setBufferMemoryBarriers(toTransferDst);
+			vkCmd.pipelineBarrier2(dep);
+			vkCmd.fillBuffer(buf->GetBuffer(), 0, VK_WHOLE_SIZE, 0xFFFFFFFFu);
+			vkCmd.end();
+			submitAndWait(vkCmd);
+			buf->SetLastStageAccess(vk::PipelineStageFlagBits2::eAllTransfer, vk::AccessFlagBits2::eTransferWrite);
+		}
+
+		// Frame 2: the producer is still inactive -- must re-clear, not skip because some sticky
+		// "already defined" flag says otherwise.
+		{
+			vk::CommandBuffer vkCmd = allocCmd();
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
+			vkCmd.end();
+			submitAndWait(vkCmd);
+		}
+
+		// Readback: copy to a host-visible buffer and confirm it's all zero.
+		VkBufferCreateInfo readbackInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		readbackInfo.size = 64;
+		readbackInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+		VmaAllocationCreateInfo readbackAllocCreateInfo{};
+		readbackAllocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		readbackAllocCreateInfo.flags =
+			VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VkBuffer          readbackBuffer = VK_NULL_HANDLE;
+		VmaAllocation     readbackAllocation = nullptr;
+		VmaAllocationInfo readbackAllocInfo{};
+		vmaCreateBuffer(
+			device.GetAllocator(),
+			&readbackInfo,
+			&readbackAllocCreateInfo,
+			&readbackBuffer,
+			&readbackAllocation,
+			&readbackAllocInfo
+		);
+
+		{
+			vk::CommandBuffer vkCmd = allocCmd();
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			vk::BufferMemoryBarrier2 toTransferSrc{
+				buf->GetLastStage() ? buf->GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
+				buf->GetLastAccess(),
+				vk::PipelineStageFlagBits2::eAllTransfer,
+				vk::AccessFlagBits2::eTransferRead,
+				VK_QUEUE_FAMILY_IGNORED,
+				VK_QUEUE_FAMILY_IGNORED,
+				buf->GetBuffer(),
+				0,
+				VK_WHOLE_SIZE,
+			};
+			vk::DependencyInfo dep{};
+			dep.setBufferMemoryBarriers(toTransferSrc);
+			vkCmd.pipelineBarrier2(dep);
+			vkCmd.copyBuffer(buf->GetBuffer(), vk::Buffer(readbackBuffer), vk::BufferCopy{0, 0, 64});
+			vkCmd.end();
+			submitAndWait(vkCmd);
+		}
+
+		vmaInvalidateAllocation(device.GetAllocator(), readbackAllocation, 0, 64);
+		const auto* bytes = static_cast<const std::uint8_t*>(readbackAllocInfo.pMappedData);
+		bool        allZero = true;
+		for (std::size_t i = 0; i < 64; ++i) {
+			if (bytes[i] != 0) {
+				allZero = false;
+				break;
+			}
+		}
+		CHECK(allZero);
+
+		vmaDestroyBuffer(device.GetAllocator(), readbackBuffer, readbackAllocation);
+		vkDevice.destroyCommandPool(pool);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
 // Subgraph is not in production use yet, but real multipass post-processing work is planned
 // around it, so its execution path needs the same real-hardware coverage as everything else in
 // this file rather than staying verified by structure/Dot tests alone (test_graph.cpp) -- those
@@ -1142,6 +1451,163 @@ TEST_CASE("History<K> pair is recreated, not silently stuck at the old size, whe
 		auto baseFrame3 = registry.GetTexture<TestTemporalMask>();
 		CHECK(baseFrame3 == historyFrame2);
 		CHECK(baseFrame3->GetDesc().width == 128);
+
+		vkDevice.destroyCommandPool(pool);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+// S1 of the resource-type-ownership redesign: a converted key's own Desc() (ResourceCatalog)
+// becomes the one true source for its History<K> pair, replacing lesson #9's requirement that
+// the reader itself compute and push a correct desc.
+TEST_CASE(
+	"History<K> pair takes its desc from the catalog-registered type's own Desc(), even though "
+	"the reader's own realization desc is empty"
+) {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				device.GetQueueFamily(),
+			}
+		);
+		vk::CommandBuffer vkCmd = vkDevice
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		registry.Catalog().Get<TestCatalogTemporalMask>(); // register the type's Desc()
+		PhysicalExecutionBackend backend(registry);
+
+		auto runFrame = [&](std::uint64_t frameIndex) {
+			Graph g;
+			g.Register<PreviousFrame<CatalogTemporalTypeList>>();
+			g.Register<CatalogTemporalWriter>();
+			g.Register<CatalogTemporalReader>();
+
+			FrameContext ctx{.width = 64, .height = 64, .frameIndex = frameIndex};
+
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(g, ctx, cmd, false));
+			vkCmd.end();
+
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			device.GetQueue().submit(submitInfo);
+			device.GetQueue().waitIdle();
+		};
+
+		runFrame(0);
+		auto base = registry.GetTexture<TestCatalogTemporalMask>();
+		auto hist = registry.GetTexture<History<TestCatalogTemporalMask>>();
+		REQUIRE(base != nullptr);
+		REQUIRE(hist != nullptr);
+		// 96, the catalog instance's dim -- not 0, which is what the reader's own empty
+		// realization desc would have produced had it won instead.
+		CHECK(base->GetDesc().width == 96);
+		CHECK(hist->GetDesc().width == 96);
+		CHECK(base != hist);
+
+		vkDevice.destroyCommandPool(pool);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+// S0 (deferred texture retire) + S1 (catalog-driven desc) together: changing a converted key's
+// published config -- not its realization, CatalogWriter's own .desc never mentions either size
+// -- reprovisions it exactly like a resize would, and the old texture is RETIRED, not
+// immediately destroyed. Mirrors the Mapped-ring-buffer retire test's use_count() shape above
+// (ProvisionBuffer/RetireBuffer), now proven for ProvisionTexture/RetireTexture too.
+TEST_CASE(
+	"A catalog-registered key's config change reprovisions, retiring (not immediately "
+	"destroying) the old texture"
+) {
+	brassica::testing::MinimalDevice device;
+
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{
+				vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+				device.GetQueueFamily(),
+			}
+		);
+		vk::CommandBuffer vkCmd = vkDevice
+									  .allocateCommandBuffers(
+										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
+									  )
+									  .front();
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		TestCatalogMask&          config = registry.Catalog().Get<TestCatalogMask>();
+		PhysicalExecutionBackend  backend(registry);
+
+		auto runFrame = [&](std::uint64_t frameIndex) {
+			Graph g;
+			g.Register<CatalogWriter>();
+
+			FrameContext ctx{.width = 64, .height = 64, .frameIndex = frameIndex};
+
+			vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+			CHECK_NOTHROW(backend.Execute(g, ctx, cmd, false));
+			vkCmd.end();
+
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(vkCmd);
+			device.GetQueue().submit(submitInfo);
+			device.GetQueue().waitIdle();
+		};
+
+		runFrame(0);
+		auto oldTex = registry.GetTexture<TestCatalogMask>();
+		REQUIRE(oldTex != nullptr);
+		CHECK(oldTex->GetDesc().width == 64);
+
+		config.dim = 128;
+
+		runFrame(1);
+		auto newTex = registry.GetTexture<TestCatalogMask>();
+		REQUIRE(newTex != nullptr);
+		CHECK(newTex != oldTex);
+		CHECK(newTex->GetDesc().width == 128);
+		CHECK(oldTex->GetDesc().width == 64); // our own copy is untouched, not reused in place
+
+		// Not freed immediately: RetireTexture schedules the drop for frameIndex + FRAME_OVERLAP
+		// (lesson #7's fix, S0) -- the registry's own retiring list must still be holding a
+		// reference alongside ours, every frame up to and including the one right before the
+		// sweep.
+		for (std::uint64_t f = 2; f < 1 + brassica::FRAME_OVERLAP; ++f) {
+			runFrame(f);
+			CHECK(oldTex.use_count() >= 2);
+		}
+
+		// This is exactly when ProcessTextureRetirements sweeps it -- proves the queue drains
+		// rather than holding replaced textures forever.
+		runFrame(1 + brassica::FRAME_OVERLAP);
+		CHECK(oldTex.use_count() == 1);
 
 		vkDevice.destroyCommandPool(pool);
 	}

@@ -2,6 +2,7 @@
 #include "doctest/doctest.h"
 
 #include "graph/Graph.hpp"
+#include "graph/SetupBuilder.hpp"
 #include "passes/TerrainBiomeNode.hpp"
 #include "render/NodeLifecycle.hpp"
 
@@ -15,11 +16,12 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	node.SetFrameParams(params);
 
 	graph::FrameContext ctx{.width = 4096, .height = 4096};
-	graph::Recipe recipe = node.Setup(ctx);
+	graph::SetupBuilder builder;
+	node.Setup(builder, ctx);
 
-	CHECK(recipe.isActive == true);
-	CHECK(recipe.domain == graph::ExecutionDomain::Compute);
-	CHECK(recipe.realizations.size() == 7);
+	CHECK(builder.Active() == true);
+	CHECK(builder.Domain() == graph::ExecutionDomain::Compute);
+	CHECK(builder.Realizations().size() == 7);
 
 	bool foundWeatherBiome = false;
 	bool foundPingPong = false;
@@ -29,41 +31,28 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	bool foundBiomeMapA = false;
 	bool foundBiomeMapB = false;
 
-	for (const auto& real : recipe.realizations) {
+	for (const auto& real : builder.Realizations()) {
+		CHECK(real.access == graph::AccessKind::ReadWrite);
 		if (real.key == graph::IdOf<TerrainWeatherBiomeTexture>()) {
 			foundWeatherBiome = true;
-			CHECK(real.desc.width == constants::Weather::kCoverageTextureDim);
-			CHECK(real.desc.height == constants::Weather::kCoverageTextureDim);
 		}
 		if (real.key == graph::IdOf<TerrainWeatherPingPongTexture>()) {
 			foundPingPong = true;
-			CHECK(real.desc.width == constants::Weather::kSimTextureDim);
-			CHECK(real.desc.height == constants::Weather::kSimTextureDim);
 		}
 		if (real.key == graph::IdOf<TerrainWeatherMapATexture>()) {
 			foundWeatherMapA = true;
-			CHECK(real.desc.width == constants::Weather::kCoverageTextureDim);
-			CHECK(real.desc.height == constants::Weather::kCoverageTextureDim);
 		}
 		if (real.key == graph::IdOf<TerrainWeatherMapBTexture>()) {
 			foundWeatherMapB = true;
-			CHECK(real.desc.width == constants::Weather::kCoverageTextureDim);
-			CHECK(real.desc.height == constants::Weather::kCoverageTextureDim);
 		}
 		if (real.key == graph::IdOf<TerrainBiomeMainTexture>()) {
 			foundBiome = true;
-			CHECK(real.desc.width == constants::Weather::kBiomeTextureDim);
-			CHECK(real.desc.height == constants::Weather::kBiomeTextureDim);
 		}
 		if (real.key == graph::IdOf<TerrainBiomeMapATexture>()) {
 			foundBiomeMapA = true;
-			CHECK(real.desc.width == constants::Weather::kBiomeTextureDim);
-			CHECK(real.desc.height == constants::Weather::kBiomeTextureDim);
 		}
 		if (real.key == graph::IdOf<TerrainBiomeMapBTexture>()) {
 			foundBiomeMapB = true;
-			CHECK(real.desc.width == constants::Weather::kBiomeTextureDim);
-			CHECK(real.desc.height == constants::Weather::kBiomeTextureDim);
 		}
 	}
 
@@ -74,4 +63,14 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	CHECK(foundBiome);
 	CHECK(foundBiomeMapA);
 	CHECK(foundBiomeMapB);
+
+	// Dims now come from each key's own catalog Desc() (ResourceKeys.hpp), not the realization --
+	// a builder node's realization carries an empty desc by design (see SetupBuilder.hpp).
+	CHECK(TerrainWeatherBiomeTexture{}.Desc(ctx).width == constants::Weather::kCoverageTextureDim);
+	CHECK(TerrainWeatherPingPongTexture{}.Desc(ctx).width == constants::Weather::kSimTextureDim);
+	CHECK(TerrainWeatherMapATexture{}.Desc(ctx).width == constants::Weather::kCoverageTextureDim);
+	CHECK(TerrainWeatherMapBTexture{}.Desc(ctx).width == constants::Weather::kCoverageTextureDim);
+	CHECK(TerrainBiomeMainTexture{}.Desc(ctx).width == constants::Weather::kBiomeTextureDim);
+	CHECK(TerrainBiomeMapATexture{}.Desc(ctx).width == constants::Weather::kBiomeTextureDim);
+	CHECK(TerrainBiomeMapBTexture{}.Desc(ctx).width == constants::Weather::kBiomeTextureDim);
 }
