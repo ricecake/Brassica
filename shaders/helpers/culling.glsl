@@ -122,6 +122,11 @@ bool isAABBOccludedByHiZ(vec3 relMinB, vec3 relMaxB, mat4 viewProjRel, uint hizI
 		return false;
 	}
 
+	// Expand screen space bounds slightly to account for subpixel rasterization & texel alignment
+	vec2 pixelSlack = 1.5 / vec2(hizTexSize);
+	minUV = clamp(minUV - pixelSlack, vec2(0.0), vec2(1.0));
+	maxUV = clamp(maxUV + pixelSlack, vec2(0.0), vec2(1.0));
+
 	vec2 sizeInPixels = (maxUV - minUV) * vec2(hizTexSize);
 	float maxDim = max(sizeInPixels.x, sizeInPixels.y);
 	float mipLevel = ceil(log2(max(maxDim, 1.0)));
@@ -160,11 +165,12 @@ bool isAABBOccludedByHiZ(vec3 relMinB, vec3 relMaxB, mat4 viewProjRel, uint hizI
 	// conservative upper bound every pixel in the region is guaranteed to be at or in front of.
 	float maxSceneDepth = max(max(d00.y, d10.y), max(d01.y, d11.y));
 
-	if (maxSceneDepth >= 1.0) {
+	if (maxSceneDepth >= 0.9999) {
 		return false; // region touches the far plane/background -- can't claim full occlusion
 	}
 
-	const float depthSlack = 0.0005;
+	// Conservative depth slack prevents tile flickering near silhouette edges during camera motion
+	const float depthSlack = 0.0015;
 	return (maxSceneDepth + depthSlack) < aabbMinDepth;
 }
 
