@@ -254,9 +254,15 @@ void main() {
 		metallic = mix(metallic, 0.02, rockWeight);
 	}
 
+	float localWaterLevel = params.waterLevel;
+	if (params.biomeIndex > 0u) {
+		float bWL = sampleTerrainBiome(params.biomeIndex, absWorldPos.xz, lodLevel, params.gridParams.w).a;
+		localWaterLevel = max(localWaterLevel, bWL);
+	}
+
 	float sandWeight = 0.0;
 	if (normal.y > 0.4) {
-		float distToWater = abs(height - params.waterLevel);
+		float distToWater = abs(height - localWaterLevel);
 		if (distToWater < 5.0) {
 			float shoreFactor = (1.0 - smoothstep(0.0, 5.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
 			sandWeight = shoreFactor * 0.8;
@@ -266,8 +272,8 @@ void main() {
 		}
 	}
 
-	if (height < params.waterLevel) {
-		float depth = params.waterLevel - height;
+	if (height < localWaterLevel) {
+		float depth = localWaterLevel - height;
 		vec3 wetSand = vec3(0.65, 0.60, 0.45);
 		vec3 shallowReef = vec3(0.35, 0.60, 0.50);
 		vec3 deepOceanBed = vec3(0.12, 0.16, 0.20);

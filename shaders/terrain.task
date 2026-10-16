@@ -99,14 +99,21 @@ void main() {
 
 		visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(100.0, 300.0, 100.0), -200.0);
 
+		float localWaterLevel = params.waterLevel;
+		if (params.biomeIndex > 0u) {
+			vec2 centerXZ = cameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5 + vec2(0.5)) * meshletSize;
+			float bWL = sampleTerrainBiome(params.biomeIndex, centerXZ, lodLevel, params.gridParams.w).a;
+			localWaterLevel = max(localWaterLevel, bWL);
+		}
+
 		// Gentle horizon cull: skip it for the near/low-LOD tiles above, whose Y bounds were
 		// just artificially widened to a fixed [-1000,3000] band -- feeding that fabricated
 		// height into the horizon test would produce a meaningless result.
 		if (visible && !skipHorizonCull) {
 			vec2  closestXZ = clamp(vec2(0.0), relMinB.xz, relMaxB.xz);
 			float tileDist = length(closestXZ);
-			float camAltitude = uCameraPosition.y - params.waterLevel;
-			float tileMaxYAboveRef = (relMaxB.y + uCameraPosition.y) - params.waterLevel;
+			float camAltitude = uCameraPosition.y - localWaterLevel;
+			float tileMaxYAboveRef = (relMaxB.y + uCameraPosition.y) - localWaterLevel;
 			float slack = meshletSize * 4.0 + 500.0;
 			if (isBeyondHorizon(tileDist, tileMaxYAboveRef, camAltitude, slack)) {
 				visible = false;
@@ -135,7 +142,7 @@ void main() {
 				params.minMaxIndex,
 				params.gridParams.w,
 				params.gridParams.x,
-				params.waterLevel
+				localWaterLevel
 			);
 			vec3 worldMinB = relMinB + uCameraPosition.xyz;
 			vec3 worldMaxB = relMaxB + uCameraPosition.xyz;

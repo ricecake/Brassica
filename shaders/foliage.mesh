@@ -1085,7 +1085,13 @@ void main() {
 		return;
 	}
 
-	bool isUnderwater = (terrainHeight < params.waterLevel - 0.2);
+	float localWaterLevel = params.waterLevel;
+	if (params.biomeIndex > 0u) {
+		float bWL = sampleTerrainBiome(params.biomeIndex, clumpCenterWorld, sampleLOD, params.gridParams.w).a;
+		localWaterLevel = max(localWaterLevel, bWL);
+	}
+
+	bool isUnderwater = (terrainHeight < localWaterLevel - 0.2);
 
 	vec4  weatherSample = sampleTerrainWeatherBiome(
 		params.weatherBiomeIndex, vec3(clumpCenterWorld.x, terrainHeight, clumpCenterWorld.y)
