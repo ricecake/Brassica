@@ -56,7 +56,35 @@ endif()
 add_compile_definitions(EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
 
 # 2. Dependency Discovery
-find_package(Vulkan REQUIRED)
+find_package(Vulkan)
+if(NOT Vulkan_FOUND OR NOT Vulkan_INCLUDE_DIR OR NOT EXISTS "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.h")
+    include(FetchContent)
+    FetchContent_Declare(
+        vulkan_headers
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG v1.3.280
+    )
+    FetchContent_GetProperties(vulkan_headers)
+    if(NOT vulkan_headers_POPULATED)
+        FetchContent_Populate(vulkan_headers)
+    endif()
+    set(Vulkan_INCLUDE_DIR "${vulkan_headers_SOURCE_DIR}/include")
+    include_directories(SYSTEM "${Vulkan_INCLUDE_DIR}")
+endif()
+
+if(NOT TARGET Vulkan::Vulkan)
+    add_library(Vulkan::Vulkan UNKNOWN IMPORTED)
+    find_library(VULKAN_LIB NAMES vulkan vulkan-1 libvulkan.so.1 PATHS /usr/lib/x86_64-linux-gnu /usr/lib /usr/local/lib)
+    if(VULKAN_LIB)
+        set_target_properties(Vulkan::Vulkan PROPERTIES IMPORTED_LOCATION "${VULKAN_LIB}")
+    endif()
+    set_target_properties(Vulkan::Vulkan PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${Vulkan_INCLUDE_DIR}")
+endif()
+
+if(NOT Vulkan_FOUND AND NOT TARGET Vulkan::Vulkan)
+    find_package(Vulkan REQUIRED)
+endif()
+message(STATUS "Vulkan_INCLUDE_DIR: ${Vulkan_INCLUDE_DIR}")
 find_package(Threads REQUIRED)
 find_package(Eigen3 QUIET)
 if(NOT EIGEN3_FOUND)
@@ -163,13 +191,19 @@ add_library(imgui STATIC
     ${IMGUIZMO_SOURCES}
 )
 
+target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE)
+
 target_include_directories(imgui PUBLIC
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${IMGUIZMO_DIR}
     ${IMGUIZMO_DIR}/src
+    ${Vulkan_INCLUDE_DIR}
 )
 target_link_libraries(imgui PUBLIC glfw Vulkan::Vulkan)
+if(TARGET Vulkan::Headers)
+    target_link_libraries(imgui PUBLIC Vulkan::Headers)
+endif()
 
 # 4. Engine Library
 file(GLOB_RECURSE LIB_SOURCES "src/*.cpp")

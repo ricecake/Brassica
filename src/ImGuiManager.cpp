@@ -6,15 +6,19 @@
 
 #include "spdlog/spdlog.h"
 
+#include "EngineConstants.hpp"
 #include "GLFW/glfw3.h"
+#include "ServiceLocator.hpp"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
+#include "lighting/ILightManager.hpp"
 #include "ui/FoliageWidget.hpp"
 #include "ui/LightingWidget.hpp"
 #include "ui/ManagerSettingsWidget.hpp"
 #include "ui/ParticleWidget.hpp"
 #include "ui/QuickSettingsWidget.hpp"
+#include <cstdio>
 
 namespace brassica {
 
@@ -223,9 +227,45 @@ namespace brassica {
 				float yawDeg = glm::degrees(camera.yaw);
 				float rollDeg = glm::degrees(camera.roll);
 
+				float utcHours = 12.0f;
+				if (ServiceLocator::Instance().Has<ILightManager>()) {
+					auto lightMgr = ServiceLocator::Instance().Get<ILightManager>();
+					if (lightMgr) {
+						utcHours = lightMgr->GetDayNightCycle().time;
+					}
+				}
+
+				constexpr float R = FAKE_PLANET_RADIUS;
+				float latDeg = std::clamp((camera.position.z / R) * (180.0f / glm::pi<float>()), -90.0f, 90.0f);
+				float lonDeg = (camera.position.x / R) * (180.0f / glm::pi<float>());
+				while (lonDeg > 180.0f) lonDeg -= 360.0f;
+				while (lonDeg < -180.0f) lonDeg += 360.0f;
+
+				float localHours = utcHours + (lonDeg / 15.0f);
+				while (localHours >= 24.0f) localHours -= 24.0f;
+				while (localHours < 0.0f) localHours += 24.0f;
+
+				auto formatTime = [](float totalHours) {
+					int h = static_cast<int>(totalHours) % 24;
+					if (h < 0) h += 24;
+					float remM = (totalHours - std::floor(totalHours)) * 60.0f;
+					int m = static_cast<int>(remM) % 60;
+					float remS = (remM - std::floor(remM)) * 60.0f;
+					int s = static_cast<int>(remS) % 60;
+					char buf[32];
+					std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
+					return std::string(buf);
+				};
+
+				std::string utcStr = formatTime(utcHours);
+				std::string localStr = formatTime(localHours);
+
 				ImGui::Text(
-					"Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | "
-					"%.1f FPS (%.2f ms)",
+					"UTC: %s | Local: %s | Lat: %.2f deg, Lon: %.2f deg | Location: (%.2f, %.2f, %.2f) | Speed: %.1f m/s | Rot: (P: %.1f deg, Y: %.1f deg, R: %.1f deg) | %.1f FPS (%.2f ms)",
+					utcStr.c_str(),
+					localStr.c_str(),
+					latDeg,
+					lonDeg,
 					camera.position.x,
 					camera.position.y,
 					camera.position.z,
