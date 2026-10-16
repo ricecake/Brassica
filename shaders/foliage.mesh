@@ -1087,7 +1087,7 @@ void main() {
 
 	float localWaterLevel = params.waterLevel;
 	if (params.weatherBiomeIndex > 0u) {
-		float bWL = sampleTerrainWeatherBiome(params.weatherBiomeIndex, absWorldPos).a;
+		float bWL = sampleTerrainWeatherBiome(params.weatherBiomeIndex, vec3(clumpCenterWorld.x, terrainHeight, clumpCenterWorld.y)).a;
 		localWaterLevel = max(localWaterLevel, bWL);
 	}
 
