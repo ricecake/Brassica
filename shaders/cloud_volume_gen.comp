@@ -91,31 +91,31 @@ void main() {
 		return;
 	}
 
-const uint NUM_CHUNKS = 16u;
-const uint FADE_FRAMES = 8u;
-const uint STAGGER_FRAMES = 4u; // Start next chunk halfway through current
+	const uint NUM_CHUNKS = 16u;
+	const uint FADE_FRAMES = 8u;
+	const uint STAGGER_FRAMES = 4u; // Start next chunk halfway through current
 
-// 15 staggers * 4 frames + 8 frames to finish the last one = 68 frames of activity
-const uint ACTIVE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
-const uint REST_FRAMES = 30u; // Adjust this to lengthen/shorten the static period
-const uint CYCLE_FRAMES = ACTIVE_FRAMES + REST_FRAMES; // e.g., 128 frames
+	// 15 staggers * 4 frames + 8 frames to finish the last one = 68 frames of activity
+	const uint ACTIVE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
+	const uint REST_FRAMES = 30u; // Adjust this to lengthen/shorten the static period
+	const uint CYCLE_FRAMES = ACTIVE_FRAMES + REST_FRAMES; // e.g., 128 frames
 
-// Current temporal state
-uint cycleFrame = uFrameIndex % CYCLE_FRAMES;
-uint globalPhase = uFrameIndex / CYCLE_FRAMES;
+	// Current temporal state
+	uint cycleFrame = uFrameIndex % CYCLE_FRAMES;
+	uint globalPhase = uFrameIndex / CYCLE_FRAMES;
 
-// uint mCode = bayer3D(vox);
-uint mCode = encodeMorton3D(vox);
-uint chunkId = ((mCode >> 19u) & 15u);
+	// uint mCode = bayer3D(vox);
+	uint mCode = encodeMorton3D(vox);
+	uint chunkId = ((mCode >> 19u) & 15u);
 
-// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
-uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
+	// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
+	uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
 
-// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
-// ditherStep = (encodeMorton3D(vox) & 7u) ^ ditherStep; // Equivalent to % 8
+	// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
+	// ditherStep = (encodeMorton3D(vox) & 7u) ^ ditherStep; // Equivalent to % 8
 
-// 3. Exact target frame for this specific voxel
-uint voxelUpdateFrame = (chunkId * STAGGER_FRAMES) + ditherStep;
+	// 3. Exact target frame for this specific voxel
+	uint voxelUpdateFrame = (chunkId * STAGGER_FRAMES) + ditherStep;
 
 
 
