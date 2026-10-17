@@ -98,6 +98,7 @@ namespace brassica {
 		std::vector<AnimationClip>                 m_animations;
 		std::unordered_map<std::string, std::size_t> m_animNameToIndex;
 
+		glm::mat4                                 m_rootAncestorMat{1.0f};
 		std::vector<ozz::math::Float4x4>          m_inverseBindPoses;
 
 		// Rest pose & Skinning data

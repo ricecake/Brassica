@@ -86,6 +86,31 @@ namespace brassica {
 				}
 			}
 
+			// Accumulate non-skin ancestor transforms above skin roots
+			m_rootAncestorMat = glm::mat4(1.0f);
+			if (!skin.joints.empty()) {
+				int currParent = nodeParents[skin.joints[0]];
+				while (currParent >= 0 && gltfNodeToSkinJointIndex[currParent] == -1) {
+					const auto& parentNode = asset.nodes[currParent];
+					glm::mat4 pMat(1.0f);
+					if (auto* trs = std::get_if<fastgltf::TRS>(&parentNode.transform)) {
+						glm::vec3 t(trs->translation[0], trs->translation[1], trs->translation[2]);
+						glm::quat r(trs->rotation[3], trs->rotation[0], trs->rotation[1], trs->rotation[2]);
+						glm::vec3 s(trs->scale[0], trs->scale[1], trs->scale[2]);
+						pMat = glm::translate(glm::mat4(1.0f), t) * glm::mat4_cast(r) * glm::scale(glm::mat4(1.0f), s);
+					} else if (auto* mat = std::get_if<fastgltf::math::fmat4x4>(&parentNode.transform)) {
+						for (int c = 0; c < 4; ++c) {
+							for (int r = 0; r < 4; ++r) {
+								pMat[c][r] = (*mat)[c][r];
+							}
+						}
+					}
+					m_rootAncestorMat = pMat * m_rootAncestorMat;
+					currParent = nodeParents[currParent];
+				}
+			}
+
+
 			auto getNodeLocalMatrix = [&](std::size_t nodeIdx) -> glm::mat4 {
 				const auto& node = asset.nodes[nodeIdx];
 				if (auto* trs = std::get_if<fastgltf::TRS>(&node.transform)) {
@@ -125,16 +150,7 @@ namespace brassica {
 
 				glm::mat4 localMat = getNodeLocalMatrix(nodeIdx);
 
-				if (isRoot) {
-					// Accumulate non-skin ancestor transforms up to scene root
-					glm::mat4 ancestorMat(1.0f);
-					int currParent = nodeParents[nodeIdx];
-					while (currParent >= 0 && gltfNodeToSkinJointIndex[currParent] == -1) {
-						ancestorMat = getNodeLocalMatrix(currParent) * ancestorMat;
-						currParent = nodeParents[currParent];
-					}
-					localMat = ancestorMat * localMat;
-				}
+				// Use node local matrix directly
 
 				glm::vec3 translation(localMat[3]);
 				glm::vec3 scale(
@@ -234,6 +250,7 @@ namespace brassica {
 				m_inverseBindPoses[i] = ozz::math::Invert(restModel[i]);
 			}
 		}
+
 
 		// 2. Process Animations
 		m_animations.clear();
@@ -549,6 +566,7 @@ namespace brassica {
 
 		std::size_t numJoints = m_skeleton->num_joints();
 		inst.localTransforms.resize(m_skeleton->num_soa_joints());
+
 		inst.modelMatrices.resize(numJoints);
 		inst.skinningMatrices.resize(numJoints);
 		inst.skinnedPositions = m_restPositions;
@@ -607,11 +625,20 @@ namespace brassica {
 		ltmJob.output = ozz::make_span(instance.modelMatrices);
 		ltmJob.Run();
 
-		// 3. Compute skinning matrices = model_matrix * inverse_bind_pose
+		// 3. Compute skinning matrices = (rootAncestor * model_matrix) * inverse_bind_pose
 		std::size_t numJoints = m_skeleton->num_joints();
-		for (std::size_t i = 0; i < numJoints; ++i) {
-			instance.skinningMatrices[i] = instance.modelMatrices[i] * m_inverseBindPoses[i];
+		ozz::math::Float4x4 ozzAncestor;
+		for (int c = 0; c < 4; ++c) {
+			ozzAncestor.cols[c] = ozz::math::simd_float4::Load(
+				m_rootAncestorMat[c][0], m_rootAncestorMat[c][1], m_rootAncestorMat[c][2], m_rootAncestorMat[c][3]
+			);
 		}
+
+		for (std::size_t i = 0; i < numJoints; ++i) {
+			ozz::math::Float4x4 globalJointMat = ozzAncestor * instance.modelMatrices[i];
+			instance.skinningMatrices[i] = globalJointMat * m_inverseBindPoses[i];
+		}
+
 
 		// 4. Skinning Job
 		if (!m_restPositions.empty()) {
