@@ -335,7 +335,7 @@ namespace brassica {
 			entt::entity entity = RegisterEntity(engine, transform, renderComp);
 			cowData.entity = entity;
 
-			m_cows.push_back(cowData);
+			m_cows.push_back(std::move(cowData));
 		}
 
 		std::unique_ptr<OzzModel>    m_cowModel;
