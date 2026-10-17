@@ -248,10 +248,10 @@ TEST_CASE("EntityPrepareNode space entity transformation logic") {
 	REQUIRE(spaceInst != nullptr);
 
 	// Ground entity check
-	CHECK(groundInst->positionAndScale.x == 0.0f);
-	CHECK(groundInst->positionAndScale.y == 10.0f);
-	CHECK(groundInst->positionAndScale.z == 0.0f);
-	CHECK(groundInst->positionAndScale.w == 1.0f);
+	CHECK(groundInst->positionAndScale.x == doctest::Approx(0.0f));
+	CHECK(groundInst->positionAndScale.y == doctest::Approx(10.0f));
+	CHECK(groundInst->positionAndScale.z == doctest::Approx(0.0f));
+	CHECK(groundInst->positionAndScale.w == doctest::Approx(1.0f));
 
 	// Space entity check
 	glm::vec3 spacePos(spaceInst->positionAndScale.x, spaceInst->positionAndScale.y, spaceInst->positionAndScale.z);
@@ -262,9 +262,9 @@ TEST_CASE("EntityPrepareNode space entity transformation logic") {
 	// Check that space object is placed outside ISS relative orbit (400,000m)
 	CHECK(altitudeAboveSurface >= 400000.0f);
 	// Check that scale is appropriate for distance visibility (25,000m)
-	CHECK(spaceInst->positionAndScale.w == 25000.0f);
+	CHECK(spaceInst->positionAndScale.w == doctest::Approx(25000.0f));
 	// Check emissivity (w) is set to 1.0 for self-illumination when in shadow / facing away from sun
-	CHECK(spaceInst->material.w == 1.0f);
+	CHECK(spaceInst->material.w == doctest::Approx(1.0f));
 }
 
 TEST_CASE("EntityPrepareNode and EntityNode execute in frame graph") {
