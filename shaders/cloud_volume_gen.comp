@@ -17,6 +17,74 @@ layout(push_constant) uniform CloudVolumeGenPushConstants {
 	float cadencePhase;         // Seed/phase derived from update cadence
 } push;
 
+
+vec3 hash33(vec3 p) {
+	p = fract(p * vec3(443.897, 441.423, 437.195));
+	p += dot(p, p.yxz + 19.19);
+	return fract((p.xxy + p.yxx) * p.zyx);
+}
+
+float hash13Tile(in vec3 pos, in vec3 period) {
+	if (period.x > 0.0) pos = mod(pos, period);
+    pos  = fract(pos * vec3(.1031, .1030, .0973));
+    pos += dot(pos, pos.zyx + 31.32);
+    return fract((pos.x + pos.y) * pos.z);
+}
+
+float alligator(vec3 position, float gridsize, vec3 seed, bool tiling) {
+
+    // Only int gridsize if it needs to tile
+    if (tiling) gridsize = round(gridsize);
+    gridsize = max(1.0, gridsize);
+
+    position *= gridsize;
+    position += hash33(vec3(seed)); // offset so FBM grids do not align
+
+    vec3 id = floor(position);
+    vec3 grid = position - id; // fract(position)
+
+    float densest = 0.0;
+    float secondDensest = 0.0;
+
+    // Search the current cell and its neighbors (3x3x3)
+    for (int x = -1; x <= 1; ++x)
+    for (int y = -1; y <= 1; ++y)
+    for (int z = -1; z <= 1; ++z) {
+
+        vec3 offset = vec3(x, y, z);
+        vec3 cell = id + offset;
+
+        // Wrap cell coordinates to make the noise tile over [0,1]
+        if (tiling) cell = mod(cell, gridsize);
+
+         // Offset the hash input to avoid hashing zero coordinates
+        cell += vec3(seed);
+
+        // Get random center of the Cell
+        vec3 center = hash33(cell) + offset;
+
+        float dist = distance(grid, center);
+
+        // 'if(dist < 1.0)' doesn't have any effect and doesn't improve
+        // performance. See: https://www.shadertoy.com/view/MflGWM
+
+        // Get random density scaled by the distance to the random point
+        float density = hash13Tile(cell, vec3(gridsize)) * smoothstep(0, 1, 1.0 - dist);
+
+        // Keep track of the two largest density values
+        if (densest < density) {
+            secondDensest = densest;
+            densest = density;
+
+        } else if (secondDensest < density) {
+            secondDensest = density;
+        }
+    }
+    // The alligator noise is the difference between the two largest densities
+    return densest - secondDensest;
+}
+
+
 void main() {
 	uvec3 vox = gl_GlobalInvocationID;
 	if (vox.x >= 256 || vox.y >= 256 || vox.z >= 256) {
@@ -25,11 +93,14 @@ void main() {
 	// 1D index for stochastic scattering
 	// uint linearIdx = vox.x + vox.y * 256 + vox.z * 256 * 256;
 	uint linearIdx = encodeMorton3D(vox);
+	// uint linearIdx = bayer3D(vox);
 
 	// Update roughly 1/64th of the volume per frame using prime-number striding
 	// to prevent visible rolling-wave update artifacts.
 	// uint phaseOffset =  (1 * uFrameIndex * 7919u) % 67u;
-	uint phaseOffset =  ( uFrameIndex ) % 67u;
+	const uint cadence = 511u;
+	uint phaseOffset =  ( uFrameIndex ) % cadence;
+	float phaseCadence = int(uFrameIndex / cadence);
 
 	vec3 rawDelta = uCameraPosition.xyz - uPreviousCameraPosition.xyz;
 
@@ -54,7 +125,7 @@ void main() {
 		if (gridDelta.y > 0 && vox.z >= 256 - gridDelta.y) needsUpdate = true;
 		if (gridDelta.y < 0 && vox.z < -gridDelta.y) needsUpdate = true;
 
-		if ((linearIdx % 67u) == phaseOffset) needsUpdate = true;
+		if ((linearIdx % cadence) == phaseOffset) needsUpdate = true;
 
 		if (!needsUpdate) continue;
 
@@ -96,16 +167,17 @@ void main() {
 			float fade = clamp((wavelength - 2.0 * voxelSize) / (2.0 * voxelSize), 0.0, 1.0);
 			if (fade <= 0.0) break;
 
-			float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), push.cadencePhase);
+			float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), phaseCadence);
+			// float n = alligator(worldPos * vec3(frequency, frequency, frequency), 256.0, vec3(phaseCadence), true);
 
 			density += n * amplitude * fade;
-			maxAmplitude += amplitude * fade;
+			maxAmplitude += amplitude*amplitude * fade;
 
 			frequency *= 1.87;
 			amplitude *= 0.43; // Or use an exposed roughness parameter
 		}
 
-		density = max(0.0, density / maxAmplitude);
+		density = max(0.0, density / sqrt(maxAmplitude));
 
 		// // Shape the final density using global height bounds
 		// density *= smoothstep(0.1, 0.15, voxelNorm.y) * (1.0 - smoothstep(0.85, 1.0, voxelNorm.y));
@@ -113,7 +185,7 @@ void main() {
         float voxelNormY = float(vox.y) / 256.0;
         density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
 
-		density *= smoothstep(0.15, 0.85, density);
+		density *= smoothstep(0.05, 0.5, density);
 
         imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], localVox, vec4(density, 0.0, 0.0, 1.0));
 	}

@@ -882,3 +882,28 @@ HierarchicalWorleyData2D hierarchicalWorleyTiled(in vec2 p, in float period) {
 
     return HierarchicalWorleyData2D(sqrt(f1_dist), sqrt(f2_dist), f1_pos, f2_pos, f1_level, f2_level, f1_id, f2_id, p);
 }
+
+// // Expands a 10-bit integer into 30 bits by inserting 2 zeros after each bit.
+// // Max supported input value is 1023, yielding up to a 1024x1024x1024 matrix.
+// uint expandBits3D(uint v) {
+//     v &= 0x000003FFu;
+//     v = (v ^ (v << 16)) & 0xFF0000FFu;
+//     v = (v ^ (v <<  8)) & 0x0300F00Fu;
+//     v = (v ^ (v <<  4)) & 0x030C30C3u;
+//     v = (v ^ (v <<  2)) & 0x09249249u;
+//     return v;
+// }
+
+// Generates a 3D Bayer value in [0, 1) directly from coordinates
+uint bayer3D(uvec3 pos) {
+    // Interleave the bits of x, y, z to form the 3D Morton code
+    uint morton = (expandBits3D(pos.z) << 2) |
+                  (expandBits3D(pos.y) << 1) |
+                   expandBits3D(pos.x);
+
+    // Reverse all 32 bits
+    uint reversed = bitfieldReverse(morton);
+	return reversed;
+    // // Normalize to [0, 1) by dividing by 2^32
+    // return float(reversed) * 2.3283064365386963e-10;
+}
