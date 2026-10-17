@@ -257,6 +257,30 @@ float evaluate_terrain_analytical(
     out float out_water_level,
     out float out_ridge_map
 ) {
+    // 0. Apply polar and seam world coordinate wrapping
+    float Z_max = 0.5 * PI * FAKE_PLANET_RADIUS;
+    float X_max = PI * FAKE_PLANET_RADIUS;
+
+    // East / West seam wrapping (X axis)
+    p_local.x = mod(p_local.x + X_max, 2.0 * X_max);
+    if (p_local.x < 0.0) p_local.x += 2.0 * X_max;
+    p_local.x -= X_max;
+
+    // North / South polar wrapping (Z axis past poles)
+    bool poleFlipped = false;
+    float periodZ = 4.0 * Z_max;
+    p_local.z = mod(p_local.z + 2.0 * Z_max, periodZ);
+    if (p_local.z < 0.0) p_local.z += periodZ;
+    p_local.z -= 2.0 * Z_max;
+
+    if (p_local.z > Z_max) {
+        p_local.z = 2.0 * Z_max - p_local.z;
+        poleFlipped = true;
+    } else if (p_local.z < -Z_max) {
+        p_local.z = -2.0 * Z_max - p_local.z;
+        poleFlipped = true;
+    }
+
     mat3 J_tectonicWarp;
     vec3 tectonicWarp = cross_noise_fbm(16*p_local / FAKE_PLANET_RADIUS, 6, 0.0, J_tectonicWarp);
     vec3 p_tectonic = p_local + 20000.0 * tectonicWarp;
@@ -486,7 +510,7 @@ float evaluate_terrain_analytical(
 
     true_height += erosionDelta.x;
     vec2 newSlope = heightAndSlope.yz + erosionDelta.yz;
-    out_normal = normalize(vec3(-newSlope.x, 1.0, -newSlope.y));
+    out_normal = normalize(vec3(-newSlope.x, 1.0, poleFlipped ? newSlope.y : -newSlope.y));
     out_ridge_map = max(massive_ridge, ridgeMapVal);
 
     // Calculate water level in normalized height space
