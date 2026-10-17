@@ -127,10 +127,10 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			bool shouldRun = (frameCount++ % 3 == 0) || hasUpdate || forceRegeneration;
-			if (!shouldRun) {
-				return;
-			}
+			// bool shouldRun = (frameCount++ % 3 == 0) || hasUpdate || forceRegeneration;
+			// if (!shouldRun) {
+			// 	return;
+			// }
 
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
