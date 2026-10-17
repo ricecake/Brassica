@@ -11,6 +11,7 @@
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
+#include "EngineConstants.hpp"
 #include "types/EntityRenderComponent.hpp"
 #include "types/TransformComponent.hpp"
 #include "VulkanCompat.hpp"
@@ -125,7 +126,27 @@ namespace brassica {
 				auto&       renderComp = view.get<EntityRenderComponent>(entity);
 
 				EntityInstanceData inst{};
-				inst.positionAndScale = glm::vec4(transform.position, transform.scale.x);
+				if (renderComp.isSpaceEntity) {
+					// Position in space outside ISS orbit (~400,000m ISS altitude, placed at 500,000m)
+					constexpr float kSpaceAltitude = 500000.0f; // 500 km altitude above surface
+					glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
+					glm::vec3 groundPos = transform.position;
+					glm::vec3 radialDir = groundPos - planetCenter;
+					if (glm::length(radialDir) < 1.0f) {
+						radialDir = glm::vec3(0.0f, 1.0f, 0.0f);
+					} else {
+						radialDir = glm::normalize(radialDir);
+					}
+					glm::vec3 spacePos = planetCenter + radialDir * (FAKE_PLANET_RADIUS + kSpaceAltitude);
+					constexpr float kSpaceScale = 25000.0f; // Scaled large for distance visibility
+
+					inst.positionAndScale = glm::vec4(spacePos, kSpaceScale);
+					inst.material = renderComp.material;
+					inst.material.w = 1.0f; // Full emissivity so it remains clearly visible when in shadow
+				} else {
+					inst.positionAndScale = glm::vec4(transform.position, transform.scale.x);
+					inst.material = renderComp.material;
+				}
 				inst.color = renderComp.color;
 				inst.params = glm::uvec4(
 					static_cast<std::uint32_t>(renderComp.meshType),
@@ -133,7 +154,6 @@ namespace brassica {
 					renderComp.meshParams.y,
 					renderComp.meshParams.z
 				);
-				inst.material = renderComp.material;
 				inst.rotation = glm::vec4(transform.rotation, 0.0f);
 
 				entries.push_back(Entry{entity, inst});

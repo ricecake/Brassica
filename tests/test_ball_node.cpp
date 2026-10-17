@@ -204,6 +204,69 @@ TEST_CASE("EntityNode shader compilation") {
 	Shader::ClearConstants();
 }
 
+TEST_CASE("EntityPrepareNode space entity transformation logic") {
+	entt::registry registry;
+
+	// Create ground entity
+	entt::entity eGround = registry.create();
+	TransformComponent transformGround{};
+	transformGround.position = glm::vec3(0.0f, 10.0f, 0.0f);
+	transformGround.scale = glm::vec3(1.0f);
+	EntityRenderComponent renderGround{};
+	renderGround.isSpaceEntity = false;
+	registry.emplace<TransformComponent>(eGround, transformGround);
+	registry.emplace<EntityRenderComponent>(eGround, renderGround);
+
+	// Create space entity
+	entt::entity eSpace = registry.create();
+	TransformComponent transformSpace{};
+	transformSpace.position = glm::vec3(0.0f, 0.0f, 0.0f); // Ground location
+	transformSpace.scale = glm::vec3(2.0f);
+	EntityRenderComponent renderSpace{};
+	renderSpace.isSpaceEntity = true;
+	renderSpace.material = glm::vec4(0.5f, 0.2f, 0.0f, 0.0f); // Zero emissivity initially
+	registry.emplace<TransformComponent>(eSpace, transformSpace);
+	registry.emplace<EntityRenderComponent>(eSpace, renderSpace);
+
+	EntityPrepareNode prepNode;
+	prepNode.CollectAndBatchEntities(registry);
+
+	REQUIRE(prepNode.m_batchedInstances.size() == 2);
+
+	const EntityInstanceData* groundInst = nullptr;
+	const EntityInstanceData* spaceInst = nullptr;
+
+	for (const auto& inst : prepNode.m_batchedInstances) {
+		if (inst.positionAndScale.w == 25000.0f) {
+			spaceInst = &inst;
+		} else {
+			groundInst = &inst;
+		}
+	}
+
+	REQUIRE(groundInst != nullptr);
+	REQUIRE(spaceInst != nullptr);
+
+	// Ground entity check
+	CHECK(groundInst->positionAndScale.x == 0.0f);
+	CHECK(groundInst->positionAndScale.y == 10.0f);
+	CHECK(groundInst->positionAndScale.z == 0.0f);
+	CHECK(groundInst->positionAndScale.w == 1.0f);
+
+	// Space entity check
+	glm::vec3 spacePos(spaceInst->positionAndScale.x, spaceInst->positionAndScale.y, spaceInst->positionAndScale.z);
+	glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
+	float distFromPlanetCenter = glm::length(spacePos - planetCenter);
+	float altitudeAboveSurface = distFromPlanetCenter - FAKE_PLANET_RADIUS;
+
+	// Check that space object is placed outside ISS relative orbit (400,000m)
+	CHECK(altitudeAboveSurface >= 400000.0f);
+	// Check that scale is appropriate for distance visibility (25,000m)
+	CHECK(spaceInst->positionAndScale.w == 25000.0f);
+	// Check emissivity (w) is set to 1.0 for self-illumination when in shadow / facing away from sun
+	CHECK(spaceInst->material.w == 1.0f);
+}
+
 TEST_CASE("EntityPrepareNode and EntityNode execute in frame graph") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {

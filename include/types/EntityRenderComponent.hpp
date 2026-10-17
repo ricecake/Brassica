@@ -26,6 +26,7 @@ namespace brassica {
 		glm::vec4      color{0.0f, 0.4f, 1.0f, 1.0f};
 		glm::uvec4     meshParams{8, 12, 0, 0};          // x = rings/vertexCount, y = pointsPerRing/triangleCount
 		glm::vec4      material{0.0f, 0.5f, 0.0f, 0.0f}; // metallic, roughness, glint, emissivity
+		bool           isSpaceEntity{false};             // Very large in space, visible outside ISS orbit
 
 		std::uint32_t version{1};
 		std::uint32_t gpuVersion{0};
