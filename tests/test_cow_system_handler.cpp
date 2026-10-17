@@ -44,4 +44,27 @@ TEST_CASE("OzzModel loads cow.glb and animates motions via OzzModelInstance") {
 	CHECK(inst2.playbackTime == 0.3f);
 	CHECK(inst1.currentAnimIndex == static_cast<std::size_t>(walkIdx));
 	CHECK(inst2.currentAnimIndex == static_cast<std::size_t>(gallopIdx));
+
+	// Verify that vertex positions animate over time and differ between walk and gallop
+	std::vector<glm::vec3> walkPos0 = inst1.skinnedPositions;
+	model.UpdateInstance(inst1, 0.5f, static_cast<std::size_t>(walkIdx));
+	std::vector<glm::vec3> walkPos1 = inst1.skinnedPositions;
+
+	bool vertexMovedOverTime = false;
+	for (std::size_t i = 0; i < vertexCount; ++i) {
+		if (glm::distance(walkPos0[i], walkPos1[i]) > 0.001f) {
+			vertexMovedOverTime = true;
+			break;
+		}
+	}
+	CHECK(vertexMovedOverTime);
+
+	bool walkVsGallopDiffers = false;
+	for (std::size_t i = 0; i < vertexCount; ++i) {
+		if (glm::distance(inst1.skinnedPositions[i], inst2.skinnedPositions[i]) > 0.001f) {
+			walkVsGallopDiffers = true;
+			break;
+		}
+	}
+	CHECK(walkVsGallopDiffers);
 }

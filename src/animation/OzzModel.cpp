@@ -554,6 +554,7 @@ namespace brassica {
 		inst.skinnedPositions = m_restPositions;
 		inst.skinnedNormals = m_restNormals;
 		inst.skinnedVertices = m_restVertices;
+		inst.samplingContext = std::make_unique<ozz::animation::SamplingJob::Context>(static_cast<int>(numJoints));
 
 		return inst;
 	}
@@ -587,10 +588,15 @@ namespace brassica {
 			instance.playbackTime = std::fmod(instance.playbackTime, clip.duration);
 		}
 
+		if (!instance.samplingContext) {
+			instance.samplingContext = std::make_unique<ozz::animation::SamplingJob::Context>(static_cast<int>(m_skeleton->num_joints()));
+		}
+
 		// 1. Sampling Job
 		ozz::animation::SamplingJob samplingJob;
 		samplingJob.animation = clip.animation.get();
 		samplingJob.ratio = clip.duration > 0.0f ? (instance.playbackTime / clip.duration) : 0.0f;
+		samplingJob.context = instance.samplingContext.get();
 		samplingJob.output = ozz::make_span(instance.localTransforms);
 		samplingJob.Run();
 

@@ -56,6 +56,8 @@ namespace brassica {
 		std::vector<glm::vec3>   skinnedPositions;
 		std::vector<glm::vec3>   skinnedNormals;
 		std::vector<ModelVertex> skinnedVertices;
+
+		std::unique_ptr<ozz::animation::SamplingJob::Context> samplingContext;
 	};
 
 	class OzzModel {
