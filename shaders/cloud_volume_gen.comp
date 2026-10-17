@@ -90,19 +90,6 @@ void main() {
 	if (vox.x >= 256 || vox.y >= 256 || vox.z >= 256) {
 		return;
 	}
-	// 1D index for stochastic scattering
-	// uint linearIdx = vox.x + vox.y * 256 + vox.z * 256 * 256;
-	uint linearIdx = encodeMorton3D(vox);
-	// uint linearIdx = bayer3D(vox);
-
-	// Update roughly 1/64th of the volume per frame using prime-number striding
-	// to prevent visible rolling-wave update artifacts.
-	// uint phaseOffset =  (1 * uFrameIndex * 7919u) % 67u;
-	const uint cadence = 511u;
-	uint phaseOffset =  ( uFrameIndex ) % cadence;
-	float phaseCadence = int(uFrameIndex / cadence);
-
-
 
 const uint NUM_CHUNKS = 16u;
 const uint FADE_FRAMES = 8u;
@@ -110,23 +97,22 @@ const uint STAGGER_FRAMES = 4u; // Start next chunk halfway through current
 
 // 15 staggers * 4 frames + 8 frames to finish the last one = 68 frames of activity
 const uint ACTIVE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
-const uint REST_FRAMES = 10u; // Adjust this to lengthen/shorten the static period
+const uint REST_FRAMES = 300u; // Adjust this to lengthen/shorten the static period
 const uint CYCLE_FRAMES = ACTIVE_FRAMES + REST_FRAMES; // e.g., 128 frames
 
 // Current temporal state
 uint cycleFrame = uFrameIndex % CYCLE_FRAMES;
 uint globalPhase = uFrameIndex / CYCLE_FRAMES;
 
-// 1. Macroscopic Grouping: Which 1/16th chunk does this voxel belong to?
-// Extracting the top 4 bits of the Morton code perfectly subdivides
-// the 3D volume into 16 spatially contiguous macro-blocks.
-// (Assuming a 128^3 volume -> 21-bit Morton. Adjust the shift based on volume dimensions)
-uint mCode = bayer3D(vox);
-uint chunkId = (mCode >> 20u) & 7u;
+// uint mCode = bayer3D(vox);
+uint mCode = encodeMorton3D(vox);
+uint chunkId = ((mCode >> 19u) & 15u);
 
-// 2. Microscopic Dither: Which of the 8 frames does this voxel update on?
-// Bayer is superior here to avoid structural wiping artifacts during the fade.
-uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
+uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
+// uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
+
+// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
+// ditherStep = (encodeMorton3D(vox) & 7u) ^ ditherStep; // Equivalent to % 8
 
 // 3. Exact target frame for this specific voxel
 uint voxelUpdateFrame = (chunkId * STAGGER_FRAMES) + ditherStep;
@@ -192,9 +178,10 @@ uint voxelUpdateFrame = (chunkId * STAGGER_FRAMES) + ditherStep;
 		float frequency = 1.0 / 32000.0; // Base shape frequency (100km)
 		float amplitude = 1.0;
 		float maxAmplitude = 0.0;
+		float gridSize = 8.0;
 
-		for (int i = 0; i < 3; i++) {
-			float wavelength = 1.0 / frequency;
+		for (int i = 0; i < 4; i++) {
+			float wavelength = 1.0 / (gridSize*frequency);
 
 			// Nyquist clamp: Stop accumulating detail if the noise feature is smaller than 2 voxels.
 			// We fade it out smoothly to guarantee that Cascade 0 and Cascade 1 match perfectly at their boundary.
@@ -202,12 +189,13 @@ uint voxelUpdateFrame = (chunkId * STAGGER_FRAMES) + ditherStep;
 			if (fade <= 0.0) break;
 
 			// float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), globalPhase);
-			float n = alligator(worldPos * vec3(frequency, frequency, frequency), 256.0, vec3(globalPhase), true);
+			float n = alligator(worldPos * vec3(frequency, frequency, frequency), gridSize, vec3(globalPhase), true);
 
 			density += n * amplitude * fade;
 			maxAmplitude += amplitude*amplitude * fade;
 
 			frequency *= 1.87;
+			gridSize *= 2.0;
 			amplitude *= 0.43; // Or use an exposed roughness parameter
 		}
 
@@ -216,10 +204,9 @@ uint voxelUpdateFrame = (chunkId * STAGGER_FRAMES) + ditherStep;
 		// // Shape the final density using global height bounds
 		// density *= smoothstep(0.1, 0.15, voxelNorm.y) * (1.0 - smoothstep(0.85, 1.0, voxelNorm.y));
 
-        float voxelNormY = float(vox.y) / 256.0;
-        density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
-
-		density *= smoothstep(0.05, 0.5, density);
+        // float voxelNormY = float(vox.y) / 256.0;
+        // density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
+		// density *= smoothstep(0.05, 0.5, density);
 
         imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], localVox, vec4(density, 0.0, 0.0, 1.0));
 	}
