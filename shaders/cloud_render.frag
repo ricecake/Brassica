@@ -342,7 +342,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 			float baseDensity = sampleCloudCascades(p_cloud, distFromCam);
 
 			float density = 1.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
-			density = remapClamp(baseDensity, weatherCoverage, 1.0, 0, 10);
+			density = remapClamp(baseDensity, 1.0-weatherCoverage, 1, 0, 20);
 
 			if (density > 0.0) {
 				float extinction = max(0.0, density * (0.005 + 0.02 * weatherMoisture));
