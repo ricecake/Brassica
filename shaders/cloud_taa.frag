@@ -36,8 +36,9 @@ vec3 YCoCgToRGB(vec3 ycocg) {
 
 void main() {
 	ivec2 pixel = ivec2(gl_FragCoord.xy);
-	uint subIndex = uint(pixel.x % 4) + uint(pixel.y % 4) * 4u;
-	bool isFreshThisFrame = (subIndex == (push.frameIndex % 16u));
+	uint f = push.frameIndex % 16u;
+	ivec2 subOffset = ivec2(int(f % 4u), int(f / 4u));
+	bool isFreshThisFrame = (ivec2(pixel.x % 4, pixel.y % 4) == subOffset);
 
 	vec4 currCloud = SAMPLE_NEAREST(push.cloudRenderIndex, inUV);
 	float currDepth = SAMPLE_NEAREST(push.cloudDepthIndex, inUV).r;
@@ -72,7 +73,6 @@ void main() {
 	vec4 blendedCloud;
 
 	if (isFreshThisFrame) {
-		// 3x3 Neighborhood YCoCg color clamping against local fresh samples for anti-ghosting
 		ivec2 texSize = textureSize(sampler2D(uTextures2D[nonuniformEXT(push.cloudRenderIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), 0);
 		vec2 texelSize = 1.0 / vec2(texSize);
 
@@ -123,7 +123,7 @@ void main() {
 	outHistoryColor = blendedCloud;
 	outHistoryMoments = vec4(firstMoment, secondMoment, temporalVariance, validHistory ? (historyMoments.a + 1.0) : 1.0);
 
-	// Composite anti-aliased clouds onto full-resolution HdrColor
+	// Composite anti-aliased cloud onto HDR color
 	vec3 compositedRgb = currHdr * blendedCloud.a + blendedCloud.rgb;
 	outCompositedHdr = vec4(compositedRgb, 1.0);
 }

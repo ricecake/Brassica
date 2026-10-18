@@ -41,7 +41,7 @@ namespace brassica {
 		std::uint32_t fullHeight{0};
 	};
 
-	// Compute pass that evaluates 1/16th of threads each frame into full-resolution storage images for low-res raymarching.
+	// Compute pass dispatching 1/16th total threads for high warp occupancy, mapping each thread to interleaved full-res pixels.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
@@ -212,8 +212,10 @@ namespace brassica {
 				&push
 			);
 
-			std::uint32_t groupX = (ctx.width + 7) / 8;
-			std::uint32_t groupY = (ctx.height + 7) / 8;
+			std::uint32_t lowWidth = (ctx.width + 3) / 4;
+			std::uint32_t lowHeight = (ctx.height + 3) / 4;
+			std::uint32_t groupX = (lowWidth + 7) / 8;
+			std::uint32_t groupY = (lowHeight + 7) / 8;
 			vkCmd.dispatch(groupX, groupY, 1);
 		}
 	};

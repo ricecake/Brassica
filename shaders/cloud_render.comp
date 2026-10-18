@@ -213,15 +213,12 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 }
 
 void main() {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (pixel.x >= int(push.fullWidth) || pixel.y >= int(push.fullHeight)) return;
+	uvec2 lowPixel = gl_GlobalInvocationID.xy;
+	uint f = push.frameIndex % 16u;
+	uvec2 subOffset = uvec2(f % 4u, f / 4u);
+	ivec2 pixel = ivec2(lowPixel * 4u + subOffset);
 
-	// Interleaved 1/16th thread scheduling: each thread checks whether it is active on this frame
-	uint subIndex = uint(pixel.x % 4) + uint(pixel.y % 4) * 4u;
-	if (subIndex != (push.frameIndex % 16u)) {
-		// Inactive threads skip raymarching to keep compute cost low (1/16th evaluated per frame)
-		return;
-	}
+	if (pixel.x >= int(push.fullWidth) || pixel.y >= int(push.fullHeight)) return;
 
 	vec2 inUV = (vec2(pixel) + 0.5) / vec2(float(push.fullWidth), float(push.fullHeight));
 
