@@ -97,7 +97,7 @@ void main() {
 
 	// 15 staggers * 4 frames + 8 frames to finish the last one = 68 frames of activity
 	const uint ACTIVE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
-	const uint REST_FRAMES = 30u; // Adjust this to lengthen/shorten the static period
+	const uint REST_FRAMES = 300u; // Adjust this to lengthen/shorten the static period
 	const uint CYCLE_FRAMES = ACTIVE_FRAMES + REST_FRAMES; // e.g., 128 frames
 
 	// Current temporal state
@@ -148,6 +148,7 @@ void main() {
 		}
 
 		if (!needsUpdate) continue;
+		// continue;
 
 		float vSpan = push.cascadeExtents.w; // 15000m
 		float baseAlt = 5000.0;             // 1km in the air

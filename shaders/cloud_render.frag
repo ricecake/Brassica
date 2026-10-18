@@ -304,6 +304,16 @@ float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
 	}
 }
 
+vec3 get_curl(mat3 J) {
+    // Curl = ( dFz/dy - dFy/dz,  dFx/dz - dFz/dx,  dFy/dx - dFx/dy )
+    // In GLSL: J[col][row] -> J[1][2] is dFz/dy
+    return vec3(
+        J[1][2] - J[2][1],
+        J[2][0] - J[0][2],
+        J[0][1] - J[1][0]
+    );
+}
+
 // Change signature to return vec4
 vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
 	float stepSize = 50.0;
@@ -339,10 +349,16 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 		float weatherMoisture = weatherSample.b;
 
 		if (weatherCoverage > 0.01) {
-			float baseDensity = sampleCloudCascades(p_cloud, distFromCam);
-
+			float progress = 1.0-smoothstep(t_start, 1.25*t_end, t);
+			mat3 grad;
+			vec3 crNoise = cross_noise_fbm(p_cloud/75, 4, uTime*0.5, grad);
+			vec3 cross_curl = get_curl(grad);
+			float baseDensity = weatherCoverage * sampleCloudCascades(p_cloud+100*progress*crNoise, distFromCam);
 			float density = 1.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
-			density = remapClamp(baseDensity, 1.0-weatherCoverage, 1, 0, 20);
+
+			float dtNoise = dot_noise_fbm((p_cloud+25*progress*cross_curl)/750, 4, 0.05*uTime);
+			density = remapClamp(baseDensity, abs(dtNoise/4.0), 1, 0.0, 1);
+			density = 2*smoothstep(0.15, 0.85, density);
 
 			if (density > 0.0) {
 				float extinction = max(0.0, density * (0.005 + 0.02 * weatherMoisture));
