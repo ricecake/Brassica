@@ -482,7 +482,7 @@ float evaluate_terrain_analytical(
     float erosion_detail = mix(1.2, 1.8, clamp01(collision_intensity + canyon_mask));
 
     float erosion_scale = mix(0.12, 0.22, fault_mask);
-    vec4 erosion_rounding = vec4(mix(1.0, 3.0, t_macro), mix(0.5, 0.0, t_macro), 0.1, 2.0);
+    vec4 erosion_rounding = vec4(mix(5.0, 10.0, t_macro), mix(0.25, 0.0, t_macro), 0.1, 2.0);
 
     float ridgeMapVal = 0.0;
     float substrateVal = 0.0;
@@ -492,17 +492,17 @@ float evaluate_terrain_analytical(
         p_local.xz,
         heightAndSlope,
         erosionFadeTarget,
-        erosion_strength,
-        erosion_gully_weight,
-        erosion_detail,
+        10*erosion_strength,
+        5*erosion_gully_weight,
+        10.0*erosion_detail,
         erosion_rounding,                                  // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
-        vec4(1.25, 1.25, 2.8, 1.5),                        // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
+        vec4(1.25, 1.25, 5.8, 1.5),                        // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
         normalize(vec2(dot(vel, dP_dx), dot(vel, dP_dz))), // assumedSlope
-        erosion_scale,
+        30*erosion_scale,
         5,                                                 // octaves
         2.3,                                               // lacunarity
         0.52,                                              // gain
-        1.70,                                              // cellScale
+        50.0,                                              // cellScale
         0.5,                                               // normalization
         ridgeMapVal,
         substrateVal,
