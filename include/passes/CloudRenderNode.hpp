@@ -36,7 +36,7 @@ namespace brassica {
 		std::uint32_t fullHeight{0};
 	};
 
-	// Reads the 3 cloud volume cascade textures and renders cloud energy, depth, and velocity to 1/16th resolution intermediate targets.
+	// Reads the 3 cloud volume cascade textures and renders interleaved 1/16th pixel raymarching samples to intermediate targets.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
@@ -93,28 +93,26 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.reserve(9);
-			std::uint32_t quarterWidth = (ctx.width + 3) / 4;
-			std::uint32_t quarterHeight = (ctx.height + 3) / 4;
 
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudRenderTexture>(),
 					.access = graph::AccessKind::Write,
-					.desc = CloudRenderTextureDesc(quarterWidth, quarterHeight),
+					.desc = CloudRenderTextureDesc(ctx.width, ctx.height),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudDepthTexture>(),
 					.access = graph::AccessKind::Write,
-					.desc = CloudDepthTextureDesc(quarterWidth, quarterHeight),
+					.desc = CloudDepthTextureDesc(ctx.width, ctx.height),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudVelocityTexture>(),
 					.access = graph::AccessKind::Write,
-					.desc = CloudVelocityTextureDesc(quarterWidth, quarterHeight),
+					.desc = CloudVelocityTextureDesc(ctx.width, ctx.height),
 				}
 			);
 			r.realizations.push_back(
@@ -213,7 +211,7 @@ namespace brassica {
 				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
 			}
 
-			vk::Extent2D extent{(ctx.width + 3) / 4, (ctx.height + 3) / 4};
+			vk::Extent2D extent{ctx.width, ctx.height};
 			vk::Viewport
 				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 			vkCmd.setViewport(0, viewport);

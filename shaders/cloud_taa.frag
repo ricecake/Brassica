@@ -40,7 +40,7 @@ void main() {
 		historyMoments = SAMPLE_LINEAR(push.historyMomentsIndex, prevUV);
 	}
 
-	// 3x3 Neighborhood color clamping on intermediate render for anti-ghosting
+	// 3x3 Neighborhood color clamping on 1/4-resolution intermediate render for anti-ghosting
 	ivec2 texSize = textureSize(sampler2D(uTextures2D[nonuniformEXT(push.cloudRenderIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), 0);
 	vec2 texelSize = 1.0 / vec2(texSize);
 
@@ -72,7 +72,7 @@ void main() {
 	historyColor.rgb = clamp(historyColor.rgb, clampMin, clampMax);
 	historyColor.a = clamp(historyColor.a, minCloud.a, maxCloud.a);
 
-	// Estimate variance and adjust accumulation weight for 16-frame subpixel accumulation
+	// Estimate variance and adjust accumulation weight
 	float lumaCurr = dot(currCloud.rgb, vec3(0.2126, 0.7152, 0.0722));
 	float lumaHist = dot(historyColor.rgb, vec3(0.2126, 0.7152, 0.0722));
 	float variance = abs(lumaCurr - lumaHist);
