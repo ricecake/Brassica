@@ -255,7 +255,8 @@ float evaluate_terrain_analytical(
     TerrainConfig config,
     out vec3 out_normal,
     out float out_water_level,
-    out float out_ridge_map
+    out float out_ridge_map,
+    out float out_substrate
 ) {
     // 0. Apply polar and seam world coordinate wrapping
     float Z_max = 0.5 * PI * FAKE_PLANET_RADIUS;
@@ -512,6 +513,7 @@ float evaluate_terrain_analytical(
     vec2 newSlope = heightAndSlope.yz + erosionDelta.yz;
     out_normal = normalize(vec3(-newSlope.x, 1.0, poleFlipped ? newSlope.y : -newSlope.y));
     out_ridge_map = max(massive_ridge, ridgeMapVal);
+    out_substrate = substrateVal;
 
     // Calculate water level in normalized height space
     float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
@@ -535,6 +537,20 @@ float evaluate_terrain_analytical(
     return true_height;
 }
 
+// Overload for callers requesting out_ridge_map
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal,
+    out float out_water_level,
+    out float out_ridge_map
+) {
+    float dummySubstrate;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, out_ridge_map, dummySubstrate);
+}
+
 // Overload for callers requesting out_water_level
 float evaluate_terrain_analytical(
     vec3 p_local,
@@ -545,7 +561,8 @@ float evaluate_terrain_analytical(
     out float out_water_level
 ) {
     float dummyRidgeMap;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, dummyRidgeMap);
+    float dummySubstrate;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, dummyRidgeMap, dummySubstrate);
 }
 
 // Overload for callers requesting only out_normal
@@ -558,5 +575,6 @@ float evaluate_terrain_analytical(
 ) {
     float dummyWaterLevel;
     float dummyRidgeMap;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummyWaterLevel, dummyRidgeMap);
+    float dummySubstrate;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummyWaterLevel, dummyRidgeMap, dummySubstrate);
 }

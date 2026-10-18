@@ -117,7 +117,7 @@ void main() {
 		params.gridParams.w
 	);
 	float height = texSample.r;
-	vec3 normal = texSample.gba;
+	vec3 normal = octahedralUVToDirection(texSample.ba);
 
 	if (alpha > 0.0) {
 		vec4 texNext = sampleTerrainClipmap(
@@ -127,9 +127,8 @@ void main() {
 			params.gridParams.w
 		);
 		height = mix(height, texNext.r, alpha);
-		if (length(texNext.gba) >= 0.1) {
-			normal = normalize(mix(normal, texNext.gba, alpha));
-		}
+		vec3 normalNext = octahedralUVToDirection(texNext.ba);
+		normal = normalize(mix(normal, normalNext, alpha));
 	}
 
 	uint lodDiff = morphLOD - lodLevel;
