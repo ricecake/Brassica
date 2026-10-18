@@ -25,7 +25,6 @@ namespace brassica {
 		alignas(16) glm::uvec4 cascadeSampledIdx{0};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
-		std::uint32_t hdrColorIndex{0};
 		std::uint32_t transmittanceIndex{0};
 
 		std::uint32_t skyViewIndex{0};
@@ -34,8 +33,7 @@ namespace brassica {
 		float         cirrusOpacity{0.0125f};
 	};
 
-	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
-	// Minimally populated graphics fragment pass for cloud volume sampling and composition.
+	// Reads the 3 cloud volume cascade textures and renders cloud energy, depth, and velocity to intermediate targets.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
@@ -46,9 +44,10 @@ namespace brassica {
 			graph::Read<SkyViewLUT>,
 			graph::Read<TerrainWeatherBiomeTexture>,
 			graph::Read<CloudShadowMap>,
-			graph::Modify<HdrColor>>;
+			graph::Create<CloudRenderTexture>,
+			graph::Create<CloudDepthTexture>,
+			graph::Create<CloudVelocityTexture>>;
 
-		// static constexpr graph::Phase kPhase = SubPhase::Atmosphere;
 		static constexpr graph::Phase kPhase = graph::Phase(1250);
 
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -90,12 +89,26 @@ namespace brassica {
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.reserve(4);
+			r.realizations.reserve(9);
 			r.realizations.push_back(
 				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::ReadWrite,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
+					.key = graph::IdOf<CloudRenderTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = CloudRenderTextureDesc(ctx.width, ctx.height),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<CloudDepthTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = CloudDepthTextureDesc(ctx.width, ctx.height),
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<CloudVelocityTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = CloudVelocityTextureDesc(ctx.width, ctx.height),
 				}
 			);
 			r.realizations.push_back(
@@ -150,14 +163,17 @@ namespace brassica {
 			push.cascadeSampledIdx.z = ctx.Index<CloudVolumeCascade2>();
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
-			push.hdrColorIndex = ctx.Index<HdrColor>();
 			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
 
 			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
-			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
+			std::array<vk::Format, 3>              colorFormats{
+				vk::Format::eR16G16B16A16Sfloat,
+				vk::Format::eR32Sfloat,
+				vk::Format::eR16G16Sfloat
+			};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
