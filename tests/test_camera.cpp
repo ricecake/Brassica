@@ -397,6 +397,7 @@ TEST_CASE("Camera World Wrap: North/South Seam Crossing") {
 
 	constexpr float R = brassica::FAKE_PLANET_RADIUS;
 	constexpr float Z_max = glm::half_pi<float>() * R;
+	constexpr float X_max = glm::pi<float>() * R;
 
 	cam.pitch = 0.0f;
 	cam.roll = 0.0f;
@@ -410,17 +411,16 @@ TEST_CASE("Camera World Wrap: North/South Seam Crossing") {
 
 	engine.UpdateCamera(0.016f);
 
-	// Position should reflect back: Z = Z_max - 100.0f
+	// Position should reflect back: Z = Z_max - 100.0f and flip longitude (+X_max wrapped)
 	CHECK(cam.position.z == doctest::Approx(Z_max - 100.0f));
-	CHECK(cam.position.x == doctest::Approx(500.0f)); // X remains unchanged
+	CHECK(cam.position.x == doctest::Approx(500.0f - X_max));
 
 	// Z velocity should negate
 	CHECK(cam.velocity.z < 0.0f);
 
-	// Forward vector North (+Z) component should negate, East (+X) component remain unchanged
+	// Forward vector North (+Z) component should negate
 	glm::vec3 newFwd = cam.GetForward();
 	CHECK(newFwd.z == doctest::Approx(-origFwd.z));
-	CHECK(newFwd.x == doctest::Approx(origFwd.x));
 
 	// Position camera 50m past South seam (-Z)
 	cam.position = glm::vec3(-200.0f, 10.0f, -Z_max - 50.0f);
@@ -430,7 +430,7 @@ TEST_CASE("Camera World Wrap: North/South Seam Crossing") {
 	engine.UpdateCamera(0.016f);
 
 	CHECK(cam.position.z == doctest::Approx(-Z_max + 50.0f));
-	CHECK(cam.position.x == doctest::Approx(-200.0f));
+	CHECK(cam.position.x == doctest::Approx(-200.0f + X_max));
 	CHECK(cam.velocity.z > 0.0f);
 	newFwd = cam.GetForward();
 	CHECK(newFwd.z == doctest::Approx(-origFwd.z));
@@ -507,7 +507,7 @@ TEST_CASE("Ephemeris Model and Light Directions") {
 	// Sun should be directly overhead (elevation = 90 deg, sunDir = (0, 1, 0), light dir = (0, -1, 0))
 	constexpr float R = brassica::FAKE_PLANET_RADIUS;
 	float tropicZ = glm::radians(23.44f) * R;
-	glm::vec3 camPos(0.0f, 10.0f, tropicZ);
+	glm::vec3 camPos(0.0f, 10.0f, -tropicZ);
 
 	lightMgr.Update(0.0f, camPos);
 

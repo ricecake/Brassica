@@ -42,6 +42,93 @@ namespace brassica {
 		};
 	}
 
+	struct CloudRenderTexture {};
+
+	inline graph::ResourceDesc CloudRenderTextureDesc(std::uint32_t width, std::uint32_t height) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment |
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
+	struct CloudDepthTexture {};
+
+	inline graph::ResourceDesc CloudDepthTextureDesc(std::uint32_t width, std::uint32_t height) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment |
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
+	struct CloudVelocityTexture {};
+
+	inline graph::ResourceDesc CloudVelocityTextureDesc(std::uint32_t width, std::uint32_t height) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment |
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
+	struct CloudHistoryTexture {};
+
+	inline graph::ResourceDesc CloudHistoryTextureDesc(std::uint32_t width, std::uint32_t height) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment |
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |
+				vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
+	struct CloudHistoryMomentsTexture {};
+
+	inline graph::ResourceDesc CloudHistoryMomentsTextureDesc(std::uint32_t width, std::uint32_t height) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment |
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |
+				vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
 	struct CloudShadowMap {};
 
 	inline graph::ResourceDesc CloudShadowMapDesc(std::uint32_t width = 1024, std::uint32_t height = 1024) {
