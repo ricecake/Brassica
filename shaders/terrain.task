@@ -150,7 +150,7 @@ void main() {
 		if (visible) {
 			// 1. Sample Variance
 			vec2 centerXZ = uCameraPosition.xz + relMinB.xz + (meshletSize * 0.5);
-			float variance = sampleTerrainBiome(params.biomeIndex, centerXZ, lodLevel, params.gridParams.w).g;
+			float variance = sampleTerrainClipmap(params.clipmapIndex, centerXZ, lodLevel, params.gridParams.w).g;
 
 			// 2. Calculate Screen-Space Error (SSE)
 			float nodeSpacing = meshletSize / 10.0;

@@ -22,7 +22,7 @@ vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
     return (texelCoord + 0.5) / dim;
 }
 
-// Sample terrain height (r) and normal (gba) from clipmap
+// Sample terrain clipmap (r = height, g = variance, ba = octahedral encoded normal)
 vec4 sampleTerrainClipmap(
 	uint  clipmapIndex,
 	vec2  worldXZ,
@@ -44,7 +44,7 @@ vec2 sampleTerrainMinMax(
 	return SAMPLE_ARRAY_WRAP(minMaxIndex, vec3(uv, float(level))).rg;
 }
 
-// Sample terrain biome map (r = biome weight/type, g = terrain variance for LOD adjustments, b = detail, a = moisture)
+// Sample terrain biome map (r = biome, g = water level, b = erosion ridge map, a = substrate map)
 vec4 sampleTerrainBiome(
 	uint  biomeIndex,
 	vec2  worldXZ,
