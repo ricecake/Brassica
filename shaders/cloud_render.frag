@@ -15,6 +15,14 @@ layout(location = 0) out vec4 outCloudColor; // rgb = lightEnergy, a = cloudTran
 layout(location = 1) out float outDepth;     // ray depth / distance in meters
 layout(location = 2) out vec2 outVelocity;   // motion vector (screen space UV delta)
 
+// 4x4 subpixel grid offsets (16 frames)
+const vec2 subpixelGrid[16] = vec2[16](
+	vec2(-0.375, -0.375), vec2( 0.125, -0.375), vec2(-0.125,  0.125), vec2( 0.375,  0.125),
+	vec2( 0.375, -0.375), vec2(-0.125, -0.375), vec2( 0.125,  0.125), vec2(-0.375,  0.125),
+	vec2(-0.375,  0.375), vec2( 0.125,  0.375), vec2(-0.125, -0.125), vec2( 0.375, -0.125),
+	vec2( 0.375,  0.375), vec2(-0.125,  0.375), vec2( 0.125, -0.125), vec2(-0.375, -0.125)
+);
+
 layout(push_constant) uniform CloudRenderPushConstants {
 	vec4  sunDir;
 	vec4  sunRadianceAndSkyExp; // xyz = sunRadiance, w = skyExposure
@@ -26,6 +34,9 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	uint  weatherBiomeIndex;
 	uint  cloudShadowIndex;
 	float cirrusOpacity;
+	uint  frameIndex;
+	uint  fullWidth;
+	uint  fullHeight;
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
@@ -90,7 +101,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 	float t = t_start;
 
 	vec2 fragCoord = gl_FragCoord.xy;
-	float jitter = InterleavedGradientNoise(fragCoord, int(uFrameIndex));
+	float jitter = InterleavedGradientNoise(fragCoord, int(push.frameIndex));
 	t += stepSize * jitter;
 
 	float cloudTransmittance = 1.0;
@@ -209,8 +220,12 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 }
 
 void main() {
-	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, inUV);
-	vec3 relPos = SAMPLE_NEAREST(push.gPositionIndex, inUV).rgb;
+	vec2 subpixelJitter = subpixelGrid[push.frameIndex % 16u];
+	vec2 invScreen = (push.fullWidth > 0u && push.fullHeight > 0u) ? (1.0 / vec2(float(push.fullWidth), float(push.fullHeight))) : vec2(0.0);
+	vec2 jitteredUV = inUV + subpixelJitter * invScreen;
+
+	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, jitteredUV);
+	vec3 relPos = SAMPLE_NEAREST(push.gPositionIndex, jitteredUV).rgb;
 
 	float worldScale = 1.0;
 	float waterLevelKM = u_waterLevel / 1000.0;
@@ -227,7 +242,7 @@ void main() {
 	bool  hasSurface = albedo.a >= 0.01;
 	float surfaceDist = hasSurface ? length(relPos) : 1e9;
 
-	vec2 clipCoord = inUV * 2.0 - 1.0;
+	vec2 clipCoord = jitteredUV * 2.0 - 1.0;
 	vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
 	vec3 viewDir = viewRay4.xyz / viewRay4.w;
 	vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
@@ -269,7 +284,7 @@ void main() {
 		vec4 prevClip = uPreviousViewProjMatrix * vec4(cloudWorldPos, 1.0);
 		if (prevClip.w > 0.001) {
 			vec2 prevUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
-			velocity = inUV - prevUV;
+			velocity = jitteredUV - prevUV;
 		}
 	}
 

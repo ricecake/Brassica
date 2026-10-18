@@ -27,11 +27,12 @@ namespace brassica {
 		std::uint32_t historyMomentsIndex{0};
 		std::uint32_t hdrColorIndex{0};
 		std::uint32_t frameIndex{0};
-		float         blendAlpha{0.1f};
+		float         blendAlpha{0.0625f};
 	};
 
-	// Volumetric TAA pass for cloud rendering. Performs temporal reprojection, neighborhood clamping,
-	// temporal moment tracking for variance estimation, and composites anti-aliased clouds into HdrColor.
+	// Volumetric TAA pass for cloud rendering. Reconstructs full-resolution clouds from 1/16th resolution
+	// intermediate targets using temporal reprojection, 3x3 neighborhood clamping, variance-based moment tracking,
+	// and composites anti-aliased clouds into HdrColor.
 	struct CloudTaaNode: render::NodeRegistrar<CloudTaaNode> {
 		using Resources = graph::Declares<
 			graph::Read<CloudRenderTexture>,
@@ -82,6 +83,9 @@ namespace brassica {
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
 			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
 			r.realizations.reserve(8);
+			std::uint32_t quarterWidth = (ctx.width + 3) / 4;
+			std::uint32_t quarterHeight = (ctx.height + 3) / 4;
+
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudHistoryTexture>(),
@@ -107,21 +111,21 @@ namespace brassica {
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudRenderTexture>(),
 					.access = graph::AccessKind::Read,
-					.desc = CloudRenderTextureDesc(ctx.width, ctx.height),
+					.desc = CloudRenderTextureDesc(quarterWidth, quarterHeight),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudDepthTexture>(),
 					.access = graph::AccessKind::Read,
-					.desc = CloudDepthTextureDesc(ctx.width, ctx.height),
+					.desc = CloudDepthTextureDesc(quarterWidth, quarterHeight),
 				}
 			);
 			r.realizations.push_back(
 				graph::ResourceRealization{
 					.key = graph::IdOf<CloudVelocityTexture>(),
 					.access = graph::AccessKind::Read,
-					.desc = CloudVelocityTextureDesc(ctx.width, ctx.height),
+					.desc = CloudVelocityTextureDesc(quarterWidth, quarterHeight),
 				}
 			);
 			r.realizations.push_back(

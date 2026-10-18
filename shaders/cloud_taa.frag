@@ -21,9 +21,9 @@ layout(push_constant) uniform CloudTaaPushConstants {
 } push;
 
 void main() {
-	vec4 currCloud = SAMPLE_NEAREST(push.cloudRenderIndex, inUV);
-	float currDepth = SAMPLE_NEAREST(push.cloudDepthIndex, inUV).r;
-	vec2 velocity = SAMPLE_NEAREST(push.cloudVelocityIndex, inUV).rg;
+	vec4 currCloud = SAMPLE_LINEAR(push.cloudRenderIndex, inUV);
+	float currDepth = SAMPLE_LINEAR(push.cloudDepthIndex, inUV).r;
+	vec2 velocity = SAMPLE_LINEAR(push.cloudVelocityIndex, inUV).rg;
 	vec3 currHdr = SAMPLE_NEAREST(push.hdrColorIndex, inUV).rgb;
 
 	vec2 prevUV = inUV - velocity;
@@ -40,8 +40,8 @@ void main() {
 		historyMoments = SAMPLE_LINEAR(push.historyMomentsIndex, prevUV);
 	}
 
-	// 3x3 Neighborhood color clamping for anti-ghosting
-	ivec2 texSize = textureSize(sampler2D(uTextures2D[nonuniformEXT(push.cloudRenderIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), 0);
+	// 3x3 Neighborhood color clamping on intermediate render for anti-ghosting
+	ivec2 texSize = textureSize(sampler2D(uTextures2D[nonuniformEXT(push.cloudRenderIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), 0);
 	vec2 texelSize = 1.0 / vec2(texSize);
 
 	vec4 minCloud = currCloud;
@@ -52,7 +52,7 @@ void main() {
 	for (int y = -1; y <= 1; ++y) {
 		for (int x = -1; x <= 1; ++x) {
 			vec2 sampleUV = inUV + vec2(x, y) * texelSize;
-			vec4 sampleColor = SAMPLE_NEAREST(push.cloudRenderIndex, sampleUV);
+			vec4 sampleColor = SAMPLE_LINEAR(push.cloudRenderIndex, sampleUV);
 			minCloud = min(minCloud, sampleColor);
 			maxCloud = max(maxCloud, sampleColor);
 			m1 += sampleColor.rgb;
@@ -65,25 +65,27 @@ void main() {
 	vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
 
 	// Clamp history color to 3x3 mean/stddev box
-	float gamma = 1.25;
+	float gamma = 1.5;
 	vec3 clampMin = m1 - gamma * sigma;
 	vec3 clampMax = m1 + gamma * sigma;
 
 	historyColor.rgb = clamp(historyColor.rgb, clampMin, clampMax);
 	historyColor.a = clamp(historyColor.a, minCloud.a, maxCloud.a);
 
-	// Estimate variance and adjust accumulation weight
+	// Estimate variance and adjust accumulation weight for 16-frame subpixel accumulation
 	float lumaCurr = dot(currCloud.rgb, vec3(0.2126, 0.7152, 0.0722));
 	float lumaHist = dot(historyColor.rgb, vec3(0.2126, 0.7152, 0.0722));
 	float variance = abs(lumaCurr - lumaHist);
 
-	float alpha = validHistory ? mix(push.blendAlpha, 0.8, smoothstep(0.05, 0.3, variance)) : 1.0;
+	// Target ~1/16 accumulation rate (0.0625) over 16 frames when stable
+	float targetAlpha = (push.blendAlpha > 0.0) ? push.blendAlpha : 0.0625;
+	float alpha = validHistory ? mix(targetAlpha, 0.5, smoothstep(0.05, 0.3, variance)) : 1.0;
 
 	vec4 blendedCloud = mix(historyColor, currCloud, alpha);
 
 	// Update temporal moments
-	float firstMoment = mix(historyMoments.r, lumaCurr, 0.1);
-	float secondMoment = mix(historyMoments.g, lumaCurr * lumaCurr, 0.1);
+	float firstMoment = mix(historyMoments.r, lumaCurr, 0.0625);
+	float secondMoment = mix(historyMoments.g, lumaCurr * lumaCurr, 0.0625);
 	float temporalVariance = max(0.0, secondMoment - firstMoment * firstMoment);
 
 	outHistoryColor = blendedCloud;
