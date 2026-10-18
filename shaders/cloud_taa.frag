@@ -20,11 +20,45 @@ layout(push_constant) uniform CloudTaaPushConstants {
 	float blendAlpha;
 } push;
 
+vec3 RGBToYCoCg(vec3 rgb) {
+	float y  = dot(rgb, vec3(0.25, 0.5, 0.25));
+	float co = dot(rgb, vec3(0.5, 0.0, -0.5));
+	float cg = dot(rgb, vec3(-0.25, 0.5, -0.25));
+	return vec3(y, co, cg);
+}
+
+vec3 YCoCgToRGB(vec3 ycocg) {
+	float r = ycocg.x + ycocg.y - ycocg.z;
+	float g = ycocg.x + ycocg.z;
+	float b = ycocg.x - ycocg.y - ycocg.z;
+	return vec3(r, g, b);
+}
+
 void main() {
-	vec4 currCloud = SAMPLE_LINEAR(push.cloudRenderIndex, inUV);
-	float currDepth = SAMPLE_LINEAR(push.cloudDepthIndex, inUV).r;
-	vec2 velocity = SAMPLE_LINEAR(push.cloudVelocityIndex, inUV).rg;
+	ivec2 pixel = ivec2(gl_FragCoord.xy);
+	uint subIndex = uint(pixel.x % 4) + uint(pixel.y % 4) * 4u;
+	bool isFreshThisFrame = (subIndex == (push.frameIndex % 16u));
+
+	vec4 currCloud = SAMPLE_NEAREST(push.cloudRenderIndex, inUV);
+	float currDepth = SAMPLE_NEAREST(push.cloudDepthIndex, inUV).r;
 	vec3 currHdr = SAMPLE_NEAREST(push.hdrColorIndex, inUV).rgb;
+
+	vec2 velocity = vec2(0.0);
+	if (isFreshThisFrame && currDepth < 1e8) {
+		velocity = SAMPLE_NEAREST(push.cloudVelocityIndex, inUV).rg;
+	} else {
+		vec2 clipCoord = inUV * 2.0 - 1.0;
+		vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
+		vec3 viewDir = viewRay4.xyz / viewRay4.w;
+		vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
+		float depth = 5000.0;
+		vec3 cloudWorldPos = uCameraPosition.xyz + worldRay * depth;
+		vec4 prevClip = uPreviousViewProjMatrix * vec4(cloudWorldPos, 1.0);
+		if (prevClip.w > 0.001) {
+			vec2 prevUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+			velocity = inUV - prevUV;
+		}
+	}
 
 	vec2 prevUV = inUV - velocity;
 
@@ -32,58 +66,56 @@ void main() {
 	bool validHistory = (push.frameIndex > 0) &&
 	                    (prevUV.x >= 0.0 && prevUV.x <= 1.0 && prevUV.y >= 0.0 && prevUV.y <= 1.0);
 
-	vec4 historyColor = currCloud;
-	vec4 historyMoments = vec4(currCloud.rgb, dot(currCloud.rgb, currCloud.rgb));
+	vec4 historyColor = validHistory ? SAMPLE_LINEAR(push.historyColorIndex, prevUV) : (isFreshThisFrame ? currCloud : vec4(0.0, 0.0, 0.0, 1.0));
+	vec4 historyMoments = validHistory ? SAMPLE_LINEAR(push.historyMomentsIndex, prevUV) : vec4(currCloud.rgb, dot(currCloud.rgb, currCloud.rgb));
 
-	if (validHistory) {
-		historyColor = SAMPLE_LINEAR(push.historyColorIndex, prevUV);
-		historyMoments = SAMPLE_LINEAR(push.historyMomentsIndex, prevUV);
-	}
+	vec4 blendedCloud;
 
-	// 3x3 Neighborhood color clamping on 1/4-resolution intermediate render for anti-ghosting
-	ivec2 texSize = textureSize(sampler2D(uTextures2D[nonuniformEXT(push.cloudRenderIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), 0);
-	vec2 texelSize = 1.0 / vec2(texSize);
+	if (isFreshThisFrame) {
+		// 3x3 Neighborhood YCoCg color clamping against local fresh samples for anti-ghosting
+		ivec2 texSize = textureSize(sampler2D(uTextures2D[nonuniformEXT(push.cloudRenderIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), 0);
+		vec2 texelSize = 1.0 / vec2(texSize);
 
-	vec4 minCloud = currCloud;
-	vec4 maxCloud = currCloud;
-	vec3 m1 = vec3(0.0);
-	vec3 m2 = vec3(0.0);
+		vec3 m1 = vec3(0.0);
+		vec3 m2 = vec3(0.0);
+		float minAlpha = currCloud.a;
+		float maxAlpha = currCloud.a;
 
-	for (int y = -1; y <= 1; ++y) {
-		for (int x = -1; x <= 1; ++x) {
-			vec2 sampleUV = inUV + vec2(x, y) * texelSize;
-			vec4 sampleColor = SAMPLE_LINEAR(push.cloudRenderIndex, sampleUV);
-			minCloud = min(minCloud, sampleColor);
-			maxCloud = max(maxCloud, sampleColor);
-			m1 += sampleColor.rgb;
-			m2 += sampleColor.rgb * sampleColor.rgb;
+		for (int y = -1; y <= 1; ++y) {
+			for (int x = -1; x <= 1; ++x) {
+				vec2 sampleUV = inUV + vec2(x, y) * texelSize * 4.0;
+				vec4 sampleColor = SAMPLE_NEAREST(push.cloudRenderIndex, sampleUV);
+				vec3 ycocg = RGBToYCoCg(sampleColor.rgb);
+				m1 += ycocg;
+				m2 += ycocg * ycocg;
+				minAlpha = min(minAlpha, sampleColor.a);
+				maxAlpha = max(maxAlpha, sampleColor.a);
+			}
 		}
+
+		m1 /= 9.0;
+		m2 /= 9.0;
+		vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
+
+		float gamma = 1.5;
+		vec3 clampMin = m1 - gamma * sigma;
+		vec3 clampMax = m1 + gamma * sigma;
+
+		vec3 histYCoCg = RGBToYCoCg(historyColor.rgb);
+		histYCoCg = clamp(histYCoCg, clampMin, clampMax);
+
+		historyColor.rgb = YCoCgToRGB(histYCoCg);
+		historyColor.a = clamp(historyColor.a, minAlpha, maxAlpha);
+
+		float alpha = validHistory ? 0.15 : 1.0;
+		blendedCloud = mix(historyColor, currCloud, alpha);
+	} else {
+		// Propagate reprojected history smoothly without raymarching on unrendered threads
+		blendedCloud = historyColor;
 	}
-
-	m1 /= 9.0;
-	m2 /= 9.0;
-	vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
-
-	// Clamp history color to 3x3 mean/stddev box
-	float gamma = 1.5;
-	vec3 clampMin = m1 - gamma * sigma;
-	vec3 clampMax = m1 + gamma * sigma;
-
-	historyColor.rgb = clamp(historyColor.rgb, clampMin, clampMax);
-	historyColor.a = clamp(historyColor.a, minCloud.a, maxCloud.a);
-
-	// Estimate variance and adjust accumulation weight
-	float lumaCurr = dot(currCloud.rgb, vec3(0.2126, 0.7152, 0.0722));
-	float lumaHist = dot(historyColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-	float variance = abs(lumaCurr - lumaHist);
-
-	// Target ~1/16 accumulation rate (0.0625) over 16 frames when stable
-	float targetAlpha = (push.blendAlpha > 0.0) ? push.blendAlpha : 0.0625;
-	float alpha = validHistory ? mix(targetAlpha, 0.5, smoothstep(0.05, 0.3, variance)) : 1.0;
-
-	vec4 blendedCloud = mix(historyColor, currCloud, alpha);
 
 	// Update temporal moments
+	float lumaCurr = dot(blendedCloud.rgb, vec3(0.2126, 0.7152, 0.0722));
 	float firstMoment = mix(historyMoments.r, lumaCurr, 0.0625);
 	float secondMoment = mix(historyMoments.g, lumaCurr * lumaCurr, 0.0625);
 	float temporalVariance = max(0.0, secondMoment - firstMoment * firstMoment);
@@ -91,7 +123,7 @@ void main() {
 	outHistoryColor = blendedCloud;
 	outHistoryMoments = vec4(firstMoment, secondMoment, temporalVariance, validHistory ? (historyMoments.a + 1.0) : 1.0);
 
-	// Composite anti-aliased cloud onto HDR color
+	// Composite anti-aliased clouds onto full-resolution HdrColor
 	vec3 compositedRgb = currHdr * blendedCloud.a + blendedCloud.rgb;
 	outCompositedHdr = vec4(compositedRgb, 1.0);
 }

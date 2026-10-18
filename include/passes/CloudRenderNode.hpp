@@ -31,12 +31,17 @@ namespace brassica {
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t cloudShadowIndex{0};
 		float         cirrusOpacity{0.0125f};
+
+		std::uint32_t outPackedColorStorageIdx{0};
+		std::uint32_t outPackedDepthStorageIdx{0};
+		std::uint32_t outPackedVelocityStorageIdx{0};
 		std::uint32_t frameIndex{0};
+
 		std::uint32_t fullWidth{0};
 		std::uint32_t fullHeight{0};
 	};
 
-	// Reads the 3 cloud volume cascade textures and renders interleaved 1/16th pixel raymarching samples to intermediate targets.
+	// Compute pass that evaluates 1/16th of threads each frame into full-resolution storage images for low-res raymarching.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
 		using Resources = graph::Declares<
 			GBuffer<graph::Read>,
@@ -53,20 +58,13 @@ namespace brassica {
 
 		static constexpr graph::Phase kPhase = graph::Phase(1250);
 
-		static constexpr render::GraphicsPipelineState kPipelineState{
-			.cullMode = vk::CullModeFlagBits::eNone,
-			.enableShadingRate = false,
-		};
-
 		render::PipelineLibrary* pipelineLibrary = nullptr;
-		VertexShader             vertShader; // shaders/atmosphere/sky.vert
-		FragmentShader           fragShader; // shaders/cloud_render.frag
+		ComputeShader            compShader; // shaders/cloud_render.comp
 		CloudRenderPushConstants push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			if (!vertShader.CompileVertexFromFile(services.device, "shaders/atmosphere/sky.vert") ||
-			    !fragShader.CompileFragmentFromFile(services.device, "shaders/cloud_render.frag")) {
+			if (!compShader.CompileComputeFromFile(services.device, "shaders/cloud_render.comp")) {
 				spdlog::critical("CloudRenderNode shader compilation failed.");
 				throw std::runtime_error("CloudRenderNode shader compilation failed.");
 			}
@@ -76,13 +74,11 @@ namespace brassica {
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-			watcher.RegisterShader(&vertShader);
-			watcher.RegisterShader(&fragShader);
+			watcher.RegisterShader(&compShader);
 		}
 
 		void Destroy(vk::Device device) {
-			vertShader.Destroy(device);
-			fragShader.Destroy(device);
+			compShader.Destroy(device);
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
@@ -91,7 +87,7 @@ namespace brassica {
 		}
 
 		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
 			r.realizations.reserve(9);
 
 			r.realizations.push_back(
@@ -171,28 +167,25 @@ namespace brassica {
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
+
+			push.outPackedColorStorageIdx = ctx.StorageIndex<CloudRenderTexture>();
+			push.outPackedDepthStorageIdx = ctx.StorageIndex<CloudDepthTexture>();
+			push.outPackedVelocityStorageIdx = ctx.StorageIndex<CloudVelocityTexture>();
 			push.frameIndex = static_cast<std::uint32_t>(ctx.frameIndex);
 			push.fullWidth = ctx.width;
 			push.fullHeight = ctx.height;
 
-			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
-			std::array<vk::Format, 3>              colorFormats{
-				vk::Format::eR16G16B16A16Sfloat,
-				vk::Format::eR32Sfloat,
-				vk::Format::eR16G16Sfloat
-			};
+			std::array<ComputeShader*, 1>          stages{&compShader};
 			std::array<vk::DescriptorSetLayout, 2> setLayouts{
 				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
 				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
 			};
 			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(CloudRenderPushConstants)}
+				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudRenderPushConstants)}
 			};
 
-			render::GraphicsPipelineRequest request{
-				.stages = stages,
-				.state = kPipelineState,
-				.colorFormats = colorFormats,
+			render::ComputePipelineRequest request{
+				.shader = &compShader,
 				.setLayouts = setLayouts,
 				.pushConstantRanges = pushConstantRanges,
 			};
@@ -200,7 +193,7 @@ namespace brassica {
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
+				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
 			}
 
 			std::array<vk::DescriptorSet, 2> boundSets{
@@ -208,24 +201,20 @@ namespace brassica {
 				static_cast<VkDescriptorSet>(ctx.globalSet)
 			};
 			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
+				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
 			}
-
-			vk::Extent2D extent{ctx.width, ctx.height};
-			vk::Viewport
-				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-			vkCmd.setViewport(0, viewport);
-			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 
 			vkCmd.pushConstants(
 				resolved.layout,
-				vk::ShaderStageFlagBits::eFragment,
+				vk::ShaderStageFlagBits::eCompute,
 				0,
 				sizeof(CloudRenderPushConstants),
 				&push
 			);
 
-			vkCmd.draw(3, 1, 0, 0);
+			std::uint32_t groupX = (ctx.width + 7) / 8;
+			std::uint32_t groupY = (ctx.height + 7) / 8;
+			vkCmd.dispatch(groupX, groupY, 1);
 		}
 	};
 
