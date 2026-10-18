@@ -218,3 +218,58 @@ TEST_CASE("CloudRenderNode and CloudTaaNode execute with temporal history across
 
 	engine.Cleanup();
 }
+
+namespace {
+	struct FakePredefinedProducer {
+		using Resources = graph::Declares<
+			graph::Create<FoliageBiomeTableTexture>,
+			graph::Create<MaterialBuffer>>;
+
+		graph::Recipe Setup(const graph::FrameContext&) {
+			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<FoliageBiomeTableTexture>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::ResourceDesc{
+						.kind = graph::ResourceDesc::Kind::Image2D,
+						.width = 5,
+						.height = 10,
+						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+					},
+				}
+			);
+			r.realizations.push_back(
+				graph::ResourceRealization{
+					.key = graph::IdOf<MaterialBuffer>(),
+					.access = graph::AccessKind::Write,
+					.desc = graph::StorageBufferDesc(1024),
+				}
+			);
+			return r;
+		}
+
+		void Execute(graph::NodeContext&) {}
+	};
+} // namespace
+
+TEST_CASE("Full engine frameGraph with CloudTaaNode compiles without graph errors") {
+	graph::Graph frameGraph;
+	frameGraph.Register<graph::Import<TerrainTLAS>>();
+	frameGraph.Register<graph::Import<Swapchain>>();
+	frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+	frameGraph.Register<graph::Import<graph::History<HiZTexture>>>();
+	frameGraph.Register<graph::Import<graph::History<CloudHistoryTexture>>>();
+	frameGraph.Register<graph::Import<graph::History<CloudHistoryMomentsTexture>>>();
+	frameGraph.Register<FakePredefinedProducer>(FakePredefinedProducer{});
+	render::EngineNodeRegistry::Instance().CreateAll();
+	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
+
+	graph::FrameContext ctx{.width = 1280, .height = 720, .frameIndex = 0};
+	frameGraph.Setup(ctx);
+	auto compileRes = frameGraph.Compile();
+	if (!compileRes) {
+		MESSAGE("Compile error: ", compileRes.error().message);
+	}
+	CHECK(compileRes.has_value());
+}
