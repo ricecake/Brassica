@@ -46,13 +46,12 @@ void calculateLightContribution(
 		}
 	} else if (type == LIGHT_TYPE_DIRECTIONAL) {
 		light_dir = normalize(-light_dir_param);
-		float planetRadius = 600000.0;
-		vec3 planetCenter = vec3(0.0, -planetRadius, 0.0);
-		vec3 fragToCenter = planetCenter - frag_pos;
-		float distToCenter = length(fragToCenter);
-		vec3 surfaceNormal = -fragToCenter / max(0.001, distToCenter);
+
+		// NdotL calculation
+		vec3 surfaceNormal = vec3(0.0, 1.0, 0.0); // Or use actual terrain normal if available
 		float NdotL = dot(surfaceNormal, light_dir);
-		attenuation = smoothstep(-0.05, 0.05, NdotL);
+
+		attenuation = smoothstep(-0.02, 0.02, NdotL);
 	} else if (type == LIGHT_TYPE_SPOT) {
 		light_dir = normalize(light_pos - frag_pos);
 		float distance = length(light_pos - frag_pos);

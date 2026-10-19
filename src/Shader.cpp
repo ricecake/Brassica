@@ -102,8 +102,7 @@ namespace brassica {
 				for (const auto& prefix : fallbacks) {
 					std::string candidatePath = prefix + baseStr;
 
-					if (std::find(attemptedPaths.begin(), attemptedPaths.end(), candidatePath) ==
-					    attemptedPaths.end()) {
+					if (std::find(attemptedPaths.begin(), attemptedPaths.end(), candidatePath) == attemptedPaths.end()) {
 						attemptedPaths.push_back(candidatePath);
 					}
 
@@ -132,7 +131,8 @@ namespace brassica {
 
 		class CustomIncluder: public shaderc::CompileOptions::IncluderInterface {
 		public:
-			explicit CustomIncluder(std::set<std::string>& includedFiles): m_includedFiles(includedFiles) {}
+			explicit CustomIncluder(std::set<std::string>& includedFiles)
+				: m_includedFiles(includedFiles) {}
 
 			shaderc_include_result* GetInclude(
 				const char*          requested_source,
@@ -271,7 +271,7 @@ namespace brassica {
 						std::string includePath = line.substr(firstQuote + 1, lastQuote - firstQuote - 1);
 
 						std::vector<std::string> attemptedPaths;
-						std::string              fullPathStr = resolveIncludePath(p, includePath, attemptedPaths);
+						std::string fullPathStr = resolveIncludePath(p, includePath, attemptedPaths);
 
 						if (!fullPathStr.empty()) {
 							std::string includedSource = loadShaderSourceInternal(fullPathStr, includedFiles);
@@ -299,8 +299,7 @@ namespace brassica {
 								attemptedLog += "  - " + pathTried + "\n";
 							}
 							spdlog::error(
-								"Shader #include error: file '{}' not found (requested in '{}').\nSearch paths "
-								"tried:\n{}",
+								"Shader #include error: file '{}' not found (requested in '{}').\nSearch paths tried:\n{}",
 								includePath,
 								normalizedPath,
 								attemptedLog
@@ -389,6 +388,46 @@ namespace brassica {
 
 	void Shader::ClearConstants() {
 		GetReplacements().clear();
+	}
+
+	bool Shader::ResolveShader(const std::string& shaderPath, const std::string& outputPath) {
+		Shader shader;
+		if (!shader.LoadFromFile(shaderPath)) {
+			spdlog::error("Failed to load shader for resolution: {}", shaderPath);
+			return false;
+		}
+
+		namespace fs = std::filesystem;
+		fs::path inPath(shaderPath);
+		std::string filename = inPath.filename().string();
+		std::string resolvedFilename = "resolved_" + filename;
+
+		fs::path outPath(outputPath);
+		fs::path targetFilePath;
+		if (fs::is_directory(outPath) || outputPath.empty() || outputPath.back() == '/' ||
+			outputPath.back() == '\\' || outPath.extension().empty()) {
+			targetFilePath = outPath / resolvedFilename;
+		} else {
+			targetFilePath = outPath.parent_path() / ("resolved_" + outPath.filename().string());
+		}
+
+		try {
+			if (targetFilePath.has_parent_path()) {
+				fs::create_directories(targetFilePath.parent_path());
+			}
+			std::ofstream outFile(targetFilePath, std::ios::out | std::ios::binary);
+			if (!outFile.is_open()) {
+				spdlog::error("Failed to open output file for writing: {}", targetFilePath.string());
+				return false;
+			}
+			outFile << shader.GetSource();
+			outFile.close();
+			spdlog::info("Successfully resolved shader '{}' -> '{}'", shaderPath, targetFilePath.string());
+			return true;
+		} catch (const std::exception& e) {
+			spdlog::error("Exception writing resolved shader to {}: {}", targetFilePath.string(), e.what());
+			return false;
+		}
 	}
 
 	bool Shader::LoadFromFile(const std::string& filepath) {

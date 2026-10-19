@@ -5,6 +5,24 @@
 
 #include "spdlog/spdlog.h"
 
+namespace {
+	inline glm::vec2 octWrap(glm::vec2 v) {
+		return (glm::vec2(1.0f) - glm::abs(glm::vec2(v.y, v.x))) * glm::vec2(v.x >= 0.0f ? 1.0f : -1.0f, v.y >= 0.0f ? 1.0f : -1.0f);
+	}
+
+	inline glm::vec3 octahedralUVToDirection(glm::vec2 uv) {
+		glm::vec2 oct = uv * 2.0f - 1.0f;
+		glm::vec3 dir = glm::vec3(oct.x, 1.0f - std::abs(oct.x) - std::abs(oct.y), oct.y);
+		if (dir.y < 0.0f) {
+			glm::vec2 wrapped = octWrap(glm::vec2(dir.x, dir.z));
+			dir.x = wrapped.x;
+			dir.z = wrapped.y;
+		}
+		float len = glm::length(dir);
+		return len > 1e-6f ? dir / len : glm::vec3(0.0f, 1.0f, 0.0f);
+	}
+} // namespace
+
 namespace brassica {
 
 	void TerrainManager::Init(
@@ -274,7 +292,7 @@ namespace brassica {
 
 		if (cachedReadbackWidth == 1 && cachedReadbackHeight == 1) {
 			const glm::vec4& p = cachedReadbackData[0];
-			return glm::normalize(glm::vec3(p.y, p.z, p.w));
+			return octahedralUVToDirection(glm::vec2(p.z, p.w));
 		}
 
 		float ts = (cachedReadbackTexelSize > 1e-5f) ? cachedReadbackTexelSize : 0.5f;
@@ -300,7 +318,7 @@ namespace brassica {
 		float fz_clamped = std::clamp(fz, 0.0f, 1.0f);
 
 		uint32_t  w = cachedReadbackWidth;
-		auto      normalOf = [](const glm::vec4& p) { return glm::vec3(p.y, p.z, p.w); };
+		auto      normalOf = [](const glm::vec4& p) { return octahedralUVToDirection(glm::vec2(p.z, p.w)); };
 		glm::vec3 n00 = normalOf(cachedReadbackData[j0_clamped * w + i0_clamped]);
 		glm::vec3 n10 = normalOf(cachedReadbackData[j0_clamped * w + i1]);
 		glm::vec3 n01 = normalOf(cachedReadbackData[j1 * w + i0_clamped]);

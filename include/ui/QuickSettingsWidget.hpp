@@ -18,6 +18,7 @@ namespace brassica::ui {
 	private:
 		float m_timeOfDay{12.0f};
 		bool  m_timePaused{false};
+		bool  m_useLocalTime{false};
 		bool  m_enableMood{true};
 		bool  m_renderTerrain{true};
 		bool  m_enableVolumetricLighting{true};

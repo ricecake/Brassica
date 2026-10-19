@@ -12,6 +12,7 @@
 #include "lighting/ILightManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "ServiceLocator.hpp"
@@ -90,37 +91,14 @@ namespace brassica {
 			push.outGtaoIndex = ctx.StorageIndex<GTAOTexture>();
 			push.screenSize = glm::uvec2(width, height);
 
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(GTAOPushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &gtaoShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, gtaoShader, push);
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-			vkCmd
-				.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(GTAOPushConstants), &push);
-
-			std::uint32_t dispatchX = (width + 7) / 8;
-			std::uint32_t dispatchY = (height + 7) / 8;
+			std::uint32_t     dispatchX = (width + 7) / 8;
+			std::uint32_t     dispatchY = (height + 7) / 8;
 			vkCmd.dispatch(dispatchX, dispatchY, 1);
 		}
 	};

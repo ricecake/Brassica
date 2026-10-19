@@ -73,12 +73,13 @@ void main() {
 
 		if (params.minMaxIndex > 0u) {
 			vec2 centerXZ = cameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5 + vec2(0.5)) * meshletSize;
-			vec2 minMax = sampleTerrainMinMax(
-				params.minMaxIndex,
-				centerXZ,
-				lodLevel,
-				params.gridParams.w
-			);
+			// vec2 minMax = sampleTerrainMinMax(
+			// 	params.minMaxIndex,
+			// 	centerXZ,
+			// 	lodLevel,
+			// 	params.gridParams.w
+			// );
+			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, centerXZ, lodLevel, 5, params.gridParams.w);
 			relMinB.y = minMax.x - 100.0 - uCameraPosition.y;
 			relMaxB.y = minMax.y + 100.0 - uCameraPosition.y;
 		}
@@ -149,7 +150,7 @@ void main() {
 		if (visible) {
 			// 1. Sample Variance
 			vec2 centerXZ = uCameraPosition.xz + relMinB.xz + (meshletSize * 0.5);
-			float variance = sampleTerrainBiome(params.biomeIndex, centerXZ, lodLevel, params.gridParams.w).g;
+			float variance = sampleTerrainClipmap(params.clipmapIndex, centerXZ, lodLevel, params.gridParams.w).g;
 
 			// 2. Calculate Screen-Space Error (SSE)
 			float nodeSpacing = meshletSize / 10.0;

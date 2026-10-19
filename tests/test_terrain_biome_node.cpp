@@ -73,4 +73,8 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	CHECK(TerrainBiomeMainTexture{}.Desc(ctx).width == constants::Weather::kBiomeTextureDim);
 	CHECK(TerrainBiomeMapATexture{}.Desc(ctx).width == constants::Weather::kBiomeTextureDim);
 	CHECK(TerrainBiomeMapBTexture{}.Desc(ctx).width == constants::Weather::kBiomeTextureDim);
+
+	// Verify push constant structures for climate compute shaders
+	CHECK(sizeof(ClimateInitialPushConstants) == 16);
+	CHECK(sizeof(ClimateCAPushConstants) == 32);
 }

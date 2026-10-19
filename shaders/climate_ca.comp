@@ -1,0 +1,286 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "helpers/whittaker.glsl"
+#include "clustered_lighting.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform ClimateCAPushConstants {
+	uint inMapStorageIdx1;      // Input CA Map 1 (elevation, airMoisture, groundwater, vegetation)
+	uint inMapStorageIdx2;      // Input CA Map 2 (waterLevel, slope, substrate, aerosol)
+	uint outMapStorageIdx1;     // Output CA Map 1
+	uint outMapStorageIdx2;     // Output CA Map 2
+	uint weatherOutStorageIdx;  // Output weather coverage storage image
+	uint biomeOutStorageIdx;    // Output Whittaker biome storage image
+	uint textureDim;            // Texture grid dimension (e.g. 2048)
+	uint pad;
+} push;
+
+struct Cell1 {
+	float elevation;    // Static height (0.0 to 1.0)
+	float airMoisture;  // Moisture carried in the air
+	float groundwater;  // Pooled water in soil
+	float vegetation;   // Plant coverage (>0 alive, 0 absent, -1 dead, <-1 active dieoff/fire)
+};
+
+struct Cell2 {
+	float waterLevel;   // Geology groundwater table elevation
+	float slope;        // Directionless steepness [0, 1]
+	float substrate;    // Sediment / nutrient capacity [0, 1]
+	float aerosol;      // Non-water air particles (CCN / smoke)
+};
+
+// Climate tunable constants
+const float MAX_TEMP = 35.0;        // Celsius at Equator sea-level
+const float MIN_TEMP = -20.0;       // Celsius at Pole
+const float LAPSE_RATE = 25.0;      // Temp drop per 1.0 elevation unit
+const float CONDENSATION_RATE = 0.5;
+const float DIFFUSION_RATE = 0.1;   // How fast groundwater spreads
+const float BASE_EVAPORATION = 0.05;
+
+void main() {
+	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+	int dim = int(push.textureDim);
+	if (pos.x >= dim || pos.y >= dim) {
+		return;
+	}
+
+	vec4 me1Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx1)], pos);
+	vec4 me2Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx2)], pos);
+
+	Cell1 me1 = Cell1(me1Data.r, me1Data.g, me1Data.b, me1Data.a);
+	Cell2 me2 = Cell2(me2Data.r, me2Data.g, me2Data.b, me2Data.a);
+
+	Cell1 next1 = me1;
+	Cell2 next2 = me2;
+
+	// 1. LATITUDE & TEMPERATURE
+	float lat = (float(pos.y) / float(dim)) * 2.0 - 1.0;
+	vec3 lightDir = normalize(-uLights[0].direction);
+	float dayFactor = dot(lightDir, vec3(0, 1, 0));
+	float tempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(lat)) - (me1.elevation * LAPSE_RATE);
+
+	// 2. POSITIONAL WIND VECTOR
+	ivec2 windDir;
+	float absLat = abs(lat);
+	if (absLat < 0.33) {
+		windDir = ivec2(-1, int(sign(lat)) * -1);
+	} else if (absLat < 0.66) {
+		windDir = ivec2(1, int(sign(lat)) * 1);
+	} else {
+		windDir = ivec2(-1, 0);
+	}
+	vec3 wobble = clamp(cross_noise(vec3(pos.x, 0.0, pos.y) * 0.001, uTime * 0.01), 0.0, 1.0);
+	vec3 offsetDir = normalize(cross(vec3(windDir.x, 0.0, windDir.y), vec3(0, 1, 0)));
+	wobble = offsetDir * clamp(dot(wobble, offsetDir), 0.0, 1.0);
+	windDir += ivec2(wobble.x, wobble.y);
+	windDir = clamp(windDir, -1, 1);
+
+	// 3. ADVECTION, GROUND WATER LEVEL & CONDENSATION
+	ivec2 upwindPos = pos - windDir;
+	ivec2 wrappedUpwind = ivec2((upwindPos.x + dim) % dim, (upwindPos.y + dim) % dim);
+
+	vec4 upwind1Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx1)], wrappedUpwind);
+	float incomingAir = upwind1Data.g;
+
+	if (upwind1Data.r <= 0.02 || me1.elevation <= 0.02) {
+		incomingAir = max(incomingAir, 0.85);
+	}
+
+	// Evaporation boost from closeness of groundwater level to elevation (shallow water table)
+	// Provides high evaporation in warm areas without deducting from cell ground moisture (rain forest driver)
+	float waterCloseness = max(0.0, 1.0 - clamp(abs(me1.elevation - max(0.0, me2.waterLevel)) / 0.05, 0.0, 1.0));
+	float waterTableEvaporationBoost = 0.06 * waterCloseness * smoothstep(10.0, 35.0, tempC);
+	incomingAir = clamp(incomingAir + waterTableEvaporationBoost, 0.0, 1.0);
+
+	float elevationDelta = me1.elevation - upwind1Data.r;
+
+	// Aerosol CCN effect increases condensation / rain likelihood for a given air moisture
+	float ccnBoost = 1.0 + clamp(me2.aerosol, 0.0, 2.0) * 1.5;
+
+	float rain = 0.0;
+	if (elevationDelta > 0.0) {
+		rain = min(incomingAir, pow(elevationDelta, 1.5) * CONDENSATION_RATE * ccnBoost);
+	} else if (incomingAir > 0.6) {
+		// Convective condensation from high humidity & aerosol
+		rain = (incomingAir - 0.6) * 0.15 * ccnBoost;
+	}
+
+	next1.airMoisture = clamp((incomingAir - rain) + 0.01, 0.0, 1.0);
+
+	// 4. VEGETATION GROWTH, NUTRIENTS, SLOPE & FOREST FIRE DYNAMICS
+	float livingVeg = max(0.0, me1.vegetation);
+
+	// Dead vegetation (-1.0 to 0.0) provides nutrient boost like substrate, but does not slow aerosol
+	float deadVegNutrientBoost = (me1.vegetation < 0.0 && me1.vegetation >= -1.0) ? (-me1.vegetation * 0.5) : 0.0;
+	float totalNutrients = clamp(me2.substrate + deadVegNutrientBoost, 0.0, 1.0);
+
+	// Slope steepness penalty on growth & retention
+	float slopePenalty = 1.0 - smoothstep(0.2, 0.8, me2.slope);
+
+	float tempFitness = smoothstep(0.0, 15.0, tempC) * (1.0 - smoothstep(25.0, 35.0, tempC));
+	float waterFitness = smoothstep(0.05, 0.5, me1.groundwater);
+	float growthPotential = tempFitness * waterFitness * (0.4 + 0.6 * totalNutrients) * slopePenalty;
+
+	// Check 4-neighbors for active fire spread (fire severity < -1.0)
+	bool neighborOnFire = false;
+	ivec2 neighbors[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+
+	for (int i = 0; i < 4; i++) {
+		ivec2 nPos = ivec2((pos.x + neighbors[i].x + dim) % dim, (pos.y + neighbors[i].y + dim) % dim);
+		vec4 n1Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx1)], nPos);
+		if (n1Data.a < -1.0) {
+			neighborOnFire = true;
+		}
+	}
+
+	// Ignition check under high severity weather (high temp, low moisture)
+	float weatherSeverity = smoothstep(22.0, 35.0, tempC) * (1.0 - smoothstep(0.0, 0.15, me1.groundwater));
+	float ignitionNoise = dot_noise_fbm(vec3(pos.x, pos.y, uTime * 0.1) * 0.05, 2, 0.0);
+	bool ignited = (weatherSeverity > 0.6) && (ignitionNoise > 0.88) && (livingVeg > 0.1);
+
+	// Update vegetation / fire state
+	if (me1.vegetation < -1.0) {
+		// Active fire in progress
+		if (rain > 0.05) {
+			// Rain suppresses fire, leaving dead vegetation
+			next1.vegetation = -1.0;
+		} else {
+			// Fire burns down living tissue towards dead state (-1.0)
+			next1.vegetation = mix(me1.vegetation, -1.0, 0.1);
+			next1.groundwater = max(0.0, me1.groundwater - 0.08); // Fire consumes moisture
+		}
+	} else if (me1.vegetation >= 0.0) {
+		// Living or absent vegetation
+		if (neighborOnFire && rain <= 0.05) {
+			// Fire spreads from neighbor to living vegetation (not dead areas)
+			next1.vegetation = -1.5;
+		} else if (ignited) {
+			// Severe weather ignition
+			next1.vegetation = -1.5;
+		} else {
+			// Normal growth adaptation
+			next1.vegetation = clamp(mix(me1.vegetation, growthPotential, 0.02), 0.0, 1.0);
+		}
+	} else {
+		// Dead vegetation [-1.0, 0.0)
+		// Fire does not spread to dead areas. Slowly decompose dead vegetation towards 0.0
+		next1.vegetation = min(0.0, me1.vegetation + 0.005);
+	}
+
+	// 5. AEROSOL DYNAMICS
+	// Dust increases fastest in dry, barren areas with no living vegetation
+	float dustGen = (livingVeg <= 0.0) ? (0.025 * (1.0 - me1.groundwater)) : 0.0;
+	// Active fire produces large amounts of aerosol
+	float fireAerosol = (me1.vegetation < -1.0) ? 0.35 : 0.0;
+
+	next2.aerosol = max(0.0, me2.aerosol + dustGen + fireAerosol - rain * 0.4 - 0.005);
+
+	// 6. GROUNDWATER DIFFUSION & RETENTION
+	float retention = 1.0 - (livingVeg * 0.85); // Living vegetation retains groundwater
+	float soilEvaporation = BASE_EVAPORATION * retention;
+
+	float gwInflow = 0.0;
+	float gwOutflow = 0.0;
+
+	for (int i = 0; i < 4; i++) {
+		ivec2 nPos = ivec2((pos.x + neighbors[i].x + dim) % dim, (pos.y + neighbors[i].y + dim) % dim);
+		vec4 n1Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx1)], nPos);
+
+		float myH = me1.elevation + me1.groundwater;
+		float nH = n1Data.r + n1Data.b;
+
+		if (nH > myH) {
+			gwInflow += (nH - myH) * DIFFUSION_RATE;
+		} else {
+			gwOutflow += (myH - nH) * DIFFUSION_RATE;
+		}
+	}
+
+	gwOutflow = min(gwOutflow, me1.groundwater);
+	next1.groundwater = max(0.0, me1.groundwater + rain + (gwInflow - gwOutflow) - soilEvaporation);
+
+	// Write updated CA state to OutMap1 and OutMap2
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outMapStorageIdx1)],
+		pos,
+		vec4(next1.elevation, next1.airMoisture, next1.groundwater, next1.vegetation)
+	);
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outMapStorageIdx2)],
+		pos,
+		vec4(next2.waterLevel, next2.slope, next2.substrate, next2.aerosol)
+	);
+
+	// // Derive and write outputs for Weather and Biome maps
+	// // Weather map format expected by shaders (e.g., cloud_render, deferred, volumetric_froxel_gen):
+	// // r = Cloud Coverage, g = Weather Type, b = Moisture Content, a = Lightning Propensity
+	// float cloudCoverage = clamp(next.airMoisture * 0.8 + rain * 2.0, 0.0, 1.0);
+	// float weatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0); // 0.0 cold/low, 1.0 warm/convective
+	// float moistureContent = clamp(next.groundwater, 0.0, 1.0);
+	// float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC), 0.0, 1.0);
+
+	// imageStore(
+	// 	uImageStorageRGBA32F[nonuniformEXT(push.weatherOutStorageIdx)],
+	// 	pos,
+	// 	vec4(cloudCoverage, weatherType, moistureContent, lightningPropensity)
+	// );
+
+
+
+// -------------------------------------------------------------
+	// Derive and write outputs for Weather and Biome maps
+	// -------------------------------------------------------------
+
+	// 1. Calculate the stable macro-climate coverage probability
+	float baseCoverage = clamp(next1.airMoisture * 0.8 + rain * 2.0, 0.0, 1.0);
+
+	// 2. Create a continuous, blended wind velocity for visual flow
+	float hadleyWeight = 1.0 - smoothstep(0.25, 0.4, absLat);
+	float ferrelWeight = smoothstep(0.25, 0.4, absLat) * (1.0 - smoothstep(0.6, 0.7, absLat));
+	float polarWeight  = smoothstep(0.6, 0.7, absLat);
+
+	vec2 hadleyVec = vec2(-1.0, -sign(lat) * 0.5);
+	vec2 ferrelVec = vec2(1.0, sign(lat) * 0.5);
+	vec2 polarVec  = vec2(-1.0, 0.0);
+
+	vec2 visualWind = (hadleyVec * hadleyWeight) + (ferrelVec * ferrelWeight) + (polarVec * polarWeight);
+
+	// 3. Calculate flowing coordinates
+	vec2 flowPos = vec2(pos) - (visualWind * uTime * 0.05);
+
+	// 4. Sample a noise function
+	float cloudNoise = dot_noise_fbm(vec3(flowPos.x, 0.0, flowPos.y) * 0.01, 3, 0.05 * uTime);
+
+	// 5. Modulate base coverage
+	float cloudCoverage = clamp(baseCoverage * (cloudNoise * 1.5), 0.0, 1.0);
+
+	float weatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0);
+	float moistureContent = clamp(next1.groundwater, 0.0, 1.0);
+	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC), 0.0, 1.0);
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.weatherOutStorageIdx)],
+		pos,
+		vec4(cloudCoverage, weatherType, moistureContent, lightningPropensity)
+	);
+
+	// Biome map format expected by shaders (evaluateWhittakerBiome format):
+	float normTemp = clamp((tempC - MIN_TEMP) / (MAX_TEMP - MIN_TEMP), 0.0, 1.0);
+	float normMoisture = clamp(next1.groundwater, 0.0, 1.0);
+	float precipType = (normTemp < 0.25) ? 1.0 : ((normTemp < 0.35) ? 0.5 : 0.0);
+	WhittakerBiome wb = evaluateWhittakerBiome(normTemp, normMoisture, lightningPropensity, precipType);
+
+	// Biome map format stored in image:
+	// r = Normalized Biome Index (0..1), g = Roughness, b = Snow Cover, a = Moisture
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.biomeOutStorageIdx)],
+		pos,
+		vec4(clamp(wb.biomeIndex / 9.0, 0.0, 1.0), wb.roughness, wb.snowCover, normMoisture)
+	);
+}

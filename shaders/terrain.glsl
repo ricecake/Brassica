@@ -9,21 +9,20 @@
 
 // Toroidal UV mapping helper for terrain clipmap textures
 vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
-	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
-	float texelSize = baseTexelSize * getLODScale(float(level));
-	float dim = float((textureDim > 0u) ? textureDim : 1024u);
+    float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
+    float texelSize = baseTexelSize * getLODScale(float(level));
+    float dim = float((textureDim > 0u) ? textureDim : 1024u);
 
-	// Find the discrete world grid coordinate
-	vec2 worldGrid = floor(worldXZ / texelSize);
+    // Remove floor() to preserve continuous sub-texel precision
+    vec2 worldGrid = worldXZ / texelSize;
 
-	// Map directly to the wrapped texture coordinate.
-	// The dim * 0.5 shift maintains the camera-centered local window.
-	vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
+    vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
 
-	return texelCoord / dim;
+    // Add 0.5 to shift from texel corners to texel centers
+    return (texelCoord + 0.5) / dim;
 }
 
-// Sample terrain height (r) and normal (gba) from clipmap
+// Sample terrain clipmap (r = height, g = variance, ba = octahedral encoded normal)
 vec4 sampleTerrainClipmap(
 	uint  clipmapIndex,
 	vec2  worldXZ,
@@ -45,7 +44,7 @@ vec2 sampleTerrainMinMax(
 	return SAMPLE_ARRAY_WRAP(minMaxIndex, vec3(uv, float(level))).rg;
 }
 
-// Sample terrain biome map (r = biome weight/type, g = terrain variance for LOD adjustments, b = detail, a = moisture)
+// Sample terrain biome map (r = biome, g = water level, b = erosion ridge map, a = substrate map)
 vec4 sampleTerrainBiome(
 	uint  biomeIndex,
 	vec2  worldXZ,
@@ -518,11 +517,23 @@ float calculateTerrainSoftShadow(
 		// the update entirely when clearance is the sentinel lets only genuinely, confidently
 		// clear segments narrow the penumbra.
 		if (t1 > 0.2 && clearance >= 0.0) {
-			float evalT = max(t0, 0.2);
-			float stepPenumbra = clamp(kPenumbra * clearance / evalT, 0.0, 1.0);
-			softShadow = min(softShadow, stepPenumbra);
-			if (softShadow <= 0.0) {
-				return 0.0;
+			// Evaluate continuous position at the center of the step
+			float evalT = (t0 + t1) * 0.5;
+			vec3 p = origin + d * evalT;
+
+			// Sample the finest min-max bounds (mip 0) directly under the ray
+			// to avoid blocky bounding box artifacts
+			vec2 exactMinMax = sampleTerrainMinMaxMip(ctx.minMaxIndex, p.xz, L, 0u, ctx.textureDim);
+
+			float rayHeight = C + B * evalT + A * evalT * evalT;
+			float trueClearance = rayHeight - exactMinMax.y;
+
+			if (trueClearance >= 0.0) {
+				float stepPenumbra = clamp(kPenumbra * trueClearance / evalT, 0.0, 1.0);
+				softShadow = min(softShadow, stepPenumbra);
+				if (softShadow <= 0.0) {
+					return 0.0;
+				}
 			}
 		}
 	}
@@ -682,6 +693,24 @@ vec3 applyErosionColorMappingDefault(vec3 albedo, float ridgeMap, float heightDe
 	vec3 sediment = vec3(0.1, 0.08, 0.05); // Dark dirt/moist soil
 	vec3 rock = vec3(0.8, 0.75, 0.7);      // Lighter exposed rock
 	return applyErosionColorMapping(albedo, ridgeMap, heightDelta, sediment, rock);
+}
+
+/**
+ * Returns regional rock color mapped from geological biome parameter (0.0 to 1.0).
+ */
+vec3 getGeologicalRockColor(float geoBiome) {
+	vec3 chalk = vec3(0.55, 0.52, 0.47);        // Pale limestone / chalk / light clay
+	vec3 redSandstone = vec3(0.58, 0.28, 0.20); // Warm iron-rich red sandstone
+	vec3 granite = vec3(0.35, 0.36, 0.38);      // Cool neutral grey granite / slate
+	vec3 basalt = vec3(0.20, 0.19, 0.22);       // Dark volcanic basalt / igneous rock
+
+	if (geoBiome < 0.33) {
+		return mix(chalk, redSandstone, geoBiome / 0.33);
+	} else if (geoBiome < 0.66) {
+		return mix(redSandstone, granite, (geoBiome - 0.33) / 0.33);
+	} else {
+		return mix(granite, basalt, clamp((geoBiome - 0.66) / 0.34, 0.0, 1.0));
+	}
 }
 
 

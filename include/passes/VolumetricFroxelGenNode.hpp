@@ -108,11 +108,12 @@ namespace brassica {
 		// (a later S2b batch), and TerrainGenNode's Prepare phase schedules before this node's
 		// LightPreparation, so an empty-desc realization here would win via lesson #10's last-
 		// writer-wins and corrupt the real terrain descs. See GTAONode.hpp/CloudShadowGenNode.hpp
-		// for the same reasoning. CloudShadowMap, by contrast, now IS safe to Read<>: it was
-		// already declared (but never realized) before this conversion, and it's catalog-
-		// converted as of this same batch (CloudShadowGenNode.hpp) -- adding the realization
-		// restores the genuine data dependency (this node's shader reads cloudShadowIndex) as a
-		// real edge, which nothing enforced before.
+		// for the same reasoning. CloudShadowMap and TerrainWeatherBiomeTexture, by contrast, are
+		// both safe to Read<>: both are catalog-converted (CloudShadowGenNode.hpp/
+		// ResourceKeys.hpp), and both are real genuine data dependencies this node's shader
+		// already reads (cloudShadowIndex, weatherBiomeIndex) -- declaring them as real edges is
+		// what makes Provision/barrier synthesis actually order this node after their producers,
+		// instead of relying on nothing.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Create<VolumetricCascade0Scattering>();
@@ -124,6 +125,7 @@ namespace brassica {
 			r.Create<VolumetricNoiseTexture>();
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
+			r.Read<TerrainWeatherBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -189,6 +191,7 @@ namespace brassica {
 			std::uint32_t clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			std::uint32_t minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			std::uint32_t cloudShadowIndex = ctx.Index<CloudShadowMap>();
+			std::uint32_t weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
@@ -196,7 +199,7 @@ namespace brassica {
 			genPush.indices0.w = pack16(noiseTextureIdx, skyViewIndex);
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
-			genPush.indices1.y = pack16(cloudShadowIndex, 0u);
+			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
 			genPush.indices1.z = 0u;
 			genPush.indices1.w = 0u;
 

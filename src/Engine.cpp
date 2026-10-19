@@ -846,6 +846,55 @@ namespace brassica {
 			camera.position.y = -1024.0f;
 		}
 
+		// Apply world wrapping for 600km radius planet
+		constexpr float R = FAKE_PLANET_RADIUS; // 600,000 m
+		constexpr float X_max = glm::pi<float>() * R; // ~1,884,955.592 m
+		constexpr float Z_max = glm::half_pi<float>() * R; // ~942,477.796 m
+
+		// North / South seam crossing (Z axis)
+		if (camera.position.z > Z_max) {
+			float overstep = camera.position.z - Z_max;
+			camera.position.z = Z_max - overstep;
+			camera.position.z = std::clamp(camera.position.z, -Z_max, Z_max);
+			camera.yaw += glm::pi<float>();
+			while (camera.yaw > glm::pi<float>()) {
+				camera.yaw -= glm::two_pi<float>();
+			}
+			while (camera.yaw < -glm::pi<float>()) {
+				camera.yaw += glm::two_pi<float>();
+			}
+			camera.velocity.z = -camera.velocity.z;
+
+			camera.position.x += X_max;
+
+			camera.UpdateOrientation();
+		} else if (camera.position.z < -Z_max) {
+			float overstep = -Z_max - camera.position.z;
+			camera.position.z = -Z_max + overstep;
+			camera.position.z = std::clamp(camera.position.z, -Z_max, Z_max);
+			camera.yaw += glm::pi<float>();
+			while (camera.yaw > glm::pi<float>()) {
+				camera.yaw -= glm::two_pi<float>();
+			}
+			while (camera.yaw < -glm::pi<float>()) {
+				camera.yaw += glm::two_pi<float>();
+			}
+			camera.velocity.z = -camera.velocity.z;
+
+			camera.position.x += X_max;
+
+			camera.UpdateOrientation();
+		}
+
+		// East / West seam crossing (X axis)
+		while (camera.position.x > X_max) {
+			camera.position.x -= 2.0f * X_max;
+		}
+		while (camera.position.x < -X_max) {
+			camera.position.x += 2.0f * X_max;
+		}
+
+
 		// Trigger a new ground-height-and-normal readback for next frame, if TerrainClipmapTexture
 		// is initialized and has been populated/transitioned in the frame graph. Reads a 128x128
 		// window at LOD 0 mip 0 (64m x 64m footprint) to support smooth bilinear ground height
@@ -1445,7 +1494,7 @@ namespace brassica {
 		audioManager.UpdateState(audioState);
 		audioManager.Update(deltaTime);
 
-		lightManager.Update(deltaTime);
+		lightManager.Update(deltaTime, camera.position);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
 		FrameDetails frameDetails{
@@ -1584,26 +1633,8 @@ namespace brassica {
 		glm::vec3   moonRadiance = (lights.size() > 1) ? (lights[1].color * lights[1].intensity)
 													   : glm::vec3(0.1f, 0.12f, 0.16f);
 
-		glm::vec3 upRef(0.0f, 1.0f, 0.0f);
-		glm::vec3 planetCenter(0.0f, -FAKE_PLANET_RADIUS, 0.0f);
-		glm::vec3 camNormal = glm::normalize(camera.position - planetCenter);
-
-		float     cosTheta = glm::dot(upRef, camNormal);
-		glm::quat rotToCam(1.0f, 0.0f, 0.0f, 0.0f);
-		if (cosTheta < 0.99999f) {
-			if (cosTheta < -0.99999f) {
-				rotToCam = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
-			} else {
-				glm::vec3 rotAxis = glm::cross(upRef, camNormal);
-				float     s = std::sqrt((1.0f + cosTheta) * 2.0f);
-				float     invs = 1.0f / s;
-				rotToCam = glm::quat(s * 0.5f, rotAxis.x * invs, rotAxis.y * invs, rotAxis.z * invs);
-			}
-		}
-
-		glm::quat invRotToCam = glm::inverse(rotToCam);
-		glm::vec3 sunDir = invRotToCam * sunDirGlobal;
-		glm::vec3 moonDir = invRotToCam * moonDirGlobal;
+		glm::vec3 sunDir = sunDirGlobal;
+		glm::vec3 moonDir = moonDirGlobal;
 
 		render::NodeFrameParams frameParams{
 			.cameraPosition = camera.position,

@@ -370,7 +370,7 @@ namespace brassica {
 	// dispatch math; nothing there changes, it just reaches them through this header's own
 	// existing include.
 	namespace constants::Weather {
-		constexpr std::uint32_t kSimTextureDim = 1024;
+		constexpr std::uint32_t kSimTextureDim = 2048;
 		constexpr std::uint32_t kCoverageTextureDim = 2048;
 		constexpr std::uint32_t kBiomeTextureDim = 2048;
 		constexpr std::uint32_t kBlendDitherDivisor = 8;
