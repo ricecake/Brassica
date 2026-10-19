@@ -17,9 +17,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT error)
-if(ipo_supported)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-endif()
+# Note: CMAKE_INTERPROCEDURAL_OPTIMIZATION is not set globally to avoid massive LTO link overhead across test targets
 
 # Build Metadata
 execute_process(COMMAND git rev-parse --abbrev-ref HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE GIT_BRANCH OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
@@ -350,7 +348,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     add_executable(${TEST_NAME} ${TEST_SOURCE})
     target_link_libraries(${TEST_NAME} PRIVATE brassica doctest::doctest)
     target_include_directories(${TEST_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    set_target_properties(${TEST_NAME} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    set_target_properties(${TEST_NAME} PROPERTIES EXCLUDE_FROM_ALL TRUE INTERPROCEDURAL_OPTIMIZATION OFF)
     add_test(NAME ${TEST_NAME} COMMAND $<TARGET_FILE:${TEST_NAME}> WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     list(APPEND ALL_TEST_TARGETS ${TEST_NAME})
 endforeach()
