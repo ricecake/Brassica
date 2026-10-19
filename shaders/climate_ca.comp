@@ -1,0 +1,172 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "helpers/whittaker.glsl"
+
+layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform ClimateCAPushConstants {
+	uint inMapStorageIdx;       // Input CA cell state storage image
+	uint outMapStorageIdx;      // Output CA cell state storage image
+	uint weatherOutStorageIdx;  // Output weather coverage storage image
+	uint biomeOutStorageIdx;    // Output Whittaker biome storage image
+	uint textureDim;            // Texture grid dimension (e.g. 2048)
+	uint pad;
+} push;
+
+struct Cell {
+	float elevation;    // Static height (0.0 to 1.0)
+	float airMoisture;  // Moisture carried in the air
+	float groundwater;  // Pooled water in the soil
+	float vegetation;   // Plant coverage (0.0 to 1.0)
+};
+
+// Climate tunable constants
+const float MAX_TEMP = 35.0;        // Celsius at Equator sea-level
+const float MIN_TEMP = -20.0;       // Celsius at Pole
+const float LAPSE_RATE = 25.0;      // Temp drop per 1.0 elevation unit
+const float CONDENSATION_RATE = 0.5;
+const float DIFFUSION_RATE = 0.1;   // How fast groundwater spreads
+const float BASE_EVAPORATION = 0.05;
+
+void main() {
+	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+	int dim = int(push.textureDim);
+	if (pos.x >= dim || pos.y >= dim) {
+		return;
+	}
+
+	vec4 meData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx)], pos);
+	Cell me = Cell(meData.r, meData.g, meData.b, meData.a);
+	Cell next = me; // Start with current state
+
+	// 1. LATITUDE & TEMPERATURE
+	// Map Y coordinate to a -1.0 (South Pole) to 1.0 (North Pole) range
+	float lat = (float(pos.y) / float(dim)) * 2.0 - 1.0;
+
+	// Base temp by latitude, minus altitude lapse rate
+	float tempC = mix(MAX_TEMP, MIN_TEMP, abs(lat)) - (me.elevation * LAPSE_RATE);
+
+	// 2. POSITIONAL WIND VECTOR
+	// Simplified circulation cells into discrete grid offsets
+	ivec2 windDir;
+	float absLat = abs(lat);
+	if (absLat < 0.33) {
+		// Hadley cell: Trades blow West and slightly toward Equator
+		windDir = ivec2(-1, int(sign(lat)) * -1);
+	} else if (absLat < 0.66) {
+		// Ferrel cell: Westerlies blow East and slightly toward Pole
+		windDir = ivec2(1, int(sign(lat)) * 1);
+	} else {
+		// Polar cell: Easterlies blow West
+		windDir = ivec2(-1, 0);
+	}
+
+	// 3. ADVECTION & OROGRAPHIC LIFT
+	ivec2 upwindPos = pos - windDir;
+
+	// Handle torus / grid boundary wrapping for seamless planetary wrapping
+	ivec2 wrappedUpwind = ivec2(
+		(upwindPos.x + dim) % dim,
+		(upwindPos.y + dim) % dim
+	);
+
+	vec4 upwindData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx)], wrappedUpwind);
+	float incomingAir = upwindData.g;
+
+	// Inject moisture at ocean borders / ocean cells (elevation <= 0.02)
+	if (upwindData.r <= 0.02 || me.elevation <= 0.02) {
+		incomingAir = max(incomingAir, 0.85);
+	}
+
+	float elevationDelta = me.elevation - upwindData.r;
+
+	float rain = 0.0;
+	if (elevationDelta > 0.0) {
+		// Air pushed up the mountain drops its water
+		rain = min(incomingAir, elevationDelta * CONDENSATION_RATE);
+	}
+
+	next.airMoisture = clamp((incomingAir - rain) + 0.01, 0.0, 1.0); // Tiny global regen
+
+	// 4. VEGETATION GROWTH & RETENTION FEEDBACK
+	// Plants like it between 5C and 30C, and need groundwater
+	float tempFitness = smoothstep(0.0, 15.0, tempC) * (1.0 - smoothstep(25.0, 35.0, tempC));
+	float waterFitness = smoothstep(0.05, 0.5, me.groundwater);
+	float growthPotential = tempFitness * waterFitness;
+
+	// Slowly adapt vegetation to the current potential
+	next.vegetation = clamp(mix(me.vegetation, growthPotential, 0.02), 0.0, 1.0);
+
+	// Vegetation drastically reduces evaporation and prevents runoff
+	float retention = 1.0 - (next.vegetation * 0.85); // 85% less evaporation at full veg
+	float evaporation = BASE_EVAPORATION * retention;
+
+	// 5. GROUNDWATER DIFFUSION (Cheap Pooling)
+	float gwInflow = 0.0;
+	float gwOutflow = 0.0;
+	ivec2 neighbors[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+
+	for (int i = 0; i < 4; i++) {
+		ivec2 nPos = ivec2(
+			(pos.x + neighbors[i].x + dim) % dim,
+			(pos.y + neighbors[i].y + dim) % dim
+		);
+		vec4 nData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx)], nPos);
+		Cell n = Cell(nData.r, nData.g, nData.b, nData.a);
+
+		// Water flows downhill, taking both elevation and existing groundwater depth into account
+		float myH = me.elevation + me.groundwater;
+		float nH = n.elevation + n.groundwater;
+
+		if (nH > myH) {
+			gwInflow += (nH - myH) * DIFFUSION_RATE;
+		} else {
+			gwOutflow += (myH - nH) * DIFFUSION_RATE;
+		}
+	}
+
+	// Safety clamp to prevent negative groundwater
+	gwOutflow = min(gwOutflow, me.groundwater);
+
+	next.groundwater = max(0.0, me.groundwater + rain + (gwInflow - gwOutflow) - evaporation);
+
+	// Write updated CA state to OutMap
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outMapStorageIdx)],
+		pos,
+		vec4(next.elevation, next.airMoisture, next.groundwater, next.vegetation)
+	);
+
+	// Derive and write outputs for Weather and Biome maps
+	// Weather map format expected by shaders (e.g., cloud_render, deferred, volumetric_froxel_gen):
+	// r = Cloud Coverage, g = Weather Type, b = Moisture Content, a = Lightning Propensity
+	float cloudCoverage = clamp(next.airMoisture * 0.8 + rain * 2.0, 0.0, 1.0);
+	float weatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0); // 0.0 cold/low, 1.0 warm/convective
+	float moistureContent = clamp(next.groundwater, 0.0, 1.0);
+	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC), 0.0, 1.0);
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.weatherOutStorageIdx)],
+		pos,
+		vec4(cloudCoverage, weatherType, moistureContent, lightningPropensity)
+	);
+
+	// Biome map format expected by shaders (evaluateWhittakerBiome format):
+	// normalized temp in [0, 1], normalized moisture in [0, 1]
+	float normTemp = clamp((tempC - MIN_TEMP) / (MAX_TEMP - MIN_TEMP), 0.0, 1.0);
+	float normMoisture = clamp(next.groundwater, 0.0, 1.0);
+	float precipType = (normTemp < 0.25) ? 1.0 : ((normTemp < 0.35) ? 0.5 : 0.0);
+	WhittakerBiome wb = evaluateWhittakerBiome(normTemp, normMoisture, lightningPropensity, precipType);
+
+	// Biome map format stored in image:
+	// r = Normalized Biome Index (0..1), g = Roughness, b = Snow Cover, a = Moisture
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.biomeOutStorageIdx)],
+		pos,
+		vec4(clamp(wb.biomeIndex / 9.0, 0.0, 1.0), wb.roughness, wb.snowCover, normMoisture)
+	);
+}

@@ -9,8 +9,8 @@ layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform ClimateInitialPushConstants {
-	uint outStorageIdx;  // Storage image index for output (the persistent raw climate state)
-	uint textureDim;     // 1024
+	uint outStorageIdx;  // Storage image index for output initial CA cell state
+	uint textureDim;     // e.g. 2048
 } push;
 
 void main() {
@@ -27,30 +27,19 @@ void main() {
 	vec3 gradMask = vec3(0.0);
 	float waterLevel;
 	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
-	float elevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask, waterLevel);
+	float rawElevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, gradMask, waterLevel);
 
-	float landVal = clamp(elevation, 0.0, 1.0);
+	// Normalize elevation (0.0 = ocean/sea level, 1.0 = max mountain peak)
+	float elevation = clamp(rawElevation * 0.001, 0.0, 1.0);
 
-	// Latitude relative to planet radius (0 at equator, 1 at poles)
-	float latitude = clamp(abs(worldXZ.y) / (FAKE_PLANET_RADIUS * PI), 0.0, 1.0);
-
-	// Base temperature from latitude and elevation lapse rate
-	float baseTemp = cos(latitude * 0.5 * PI);
-	float lapseRate = max(0.0, elevation) * 0.0003;
-	float temp = clamp(baseTemp - lapseRate, 0.0, 1.0);
-
-	// Base moisture: Ocean vs Land + ITCZ equatorial belt
-	float baseMoisture = mix(0.85, 0.25, landVal) + 0.35 * exp(-16.0 * latitude * latitude);
-	float moisture = clamp(baseMoisture, 0.0, 1.0);
-
-	// 2D Atmospheric Circulation (Hadley/Ferrel/Polar cells) in planar domain
-	float wEast = -0.012 * sin(3.0 * latitude * PI);
-	float wNorth = -0.004 * sin(2.0 * latitude * PI) * (worldXZ.y >= 0.0 ? 1.0 : -1.0);
-	vec2 wind2D = vec2(wEast, wNorth);
+	// Base initial cell state: elevation, airMoisture, groundwater, vegetation
+	float airMoisture = (elevation <= 0.02) ? 1.0 : 0.4;
+	float groundwater = (elevation <= 0.02) ? 1.0 : 0.2;
+	float vegetation = 0.1;
 
 	imageStore(
 		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx)],
 		ivec2(pixel),
-		vec4(temp, moisture, wind2D.x, wind2D.y)
+		vec4(elevation, airMoisture, groundwater, vegetation)
 	);
 }
