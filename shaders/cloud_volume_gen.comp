@@ -88,6 +88,7 @@ void main() {
 		float amplitude = 1.0;
 		float maxAmplitude = 0.0;
 
+		vec3 grad = vec3(0.0);
 		for (int i = 0; i < 3; i++) {
 			float wavelength = 1.0 / frequency;
 
@@ -96,7 +97,8 @@ void main() {
 			float fade = clamp((wavelength - 2.0 * voxelSize) / (2.0 * voxelSize), 0.0, 1.0);
 			if (fade <= 0.0) break;
 
-			float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), push.cadencePhase);
+			// float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), push.cadencePhase);
+			float n = dot_noise_fbm((worldPos+grad*wavelength) * vec3(frequency, frequency, frequency), 3, push.cadencePhase, grad);
 
 			density += n * amplitude * fade;
 			maxAmplitude += amplitude * fade;
