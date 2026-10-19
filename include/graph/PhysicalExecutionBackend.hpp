@@ -252,7 +252,29 @@ namespace brassica::graph {
 		AccessKind        access,
 		ExecutionDomain   domain
 	) {
-		const auto&         desc = tex.GetDesc();
+		const auto& desc = tex.GetDesc();
+
+		// Defensive: vkCmdClearColorImage/clearDepthStencilImage both require the image to have
+		// been created with eTransferDst -- a real hardware test found exactly this (GTAOTexture
+		// had no reason to need it before ZeroInitializeInactiveReads/S5 started targeting it,
+		// so its own Desc() never declared it, and the clear hit a real "image not compatible"
+		// validation warning). That specific key is fixed at the source (ResourceKeys.hpp), but
+		// skip rather than emit an invalid call for any other key with the same gap, so this
+		// degrades to "reads stale/undefined content" (the pre-S5 behavior) instead of a
+		// validation error.
+		if (!(desc.usageMask & static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eTransferDst))) {
+			static bool warned = false;
+			if (!warned) {
+				spdlog::warn(
+					"ClearImageToZero: skipping zero-init clear for a texture whose desc lacks "
+					"eTransferDst usage -- add it to this key's Desc() to fix (see "
+					"GTAOTextureDesc for the pattern)."
+				);
+				warned = true;
+			}
+			return;
+		}
+
 		const auto          format = static_cast<vk::Format>(desc.formatCode);
 		const bool          isDepth = IsDepthFormat(format);
 		const std::uint32_t mips = desc.mips ? desc.mips : 1;
@@ -317,7 +339,22 @@ namespace brassica::graph {
 		AccessKind        access,
 		ExecutionDomain   domain
 	) {
-		const auto&          desc = buf.GetDesc();
+		const auto& desc = buf.GetDesc();
+
+		// Defensive: vkCmdFillBuffer requires eTransferDst -- see ClearImageToZero's identical
+		// guard and comment for why this degrades to a skip instead of an invalid call.
+		if (!(desc.usageMask & static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferDst))) {
+			static bool warned = false;
+			if (!warned) {
+				spdlog::warn(
+					"ClearBufferToZero: skipping zero-init clear for a buffer whose desc lacks "
+					"eTransferDst usage -- add it to this key's Desc()."
+				);
+				warned = true;
+			}
+			return;
+		}
+
 		const vk::DeviceSize size = desc.byteSize ? desc.byteSize : VK_WHOLE_SIZE;
 
 		vk::BufferMemoryBarrier2 toTransferDst{

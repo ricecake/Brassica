@@ -446,13 +446,28 @@ namespace brassica {
 	// written host-side via a PredefinedTextureNode whenever the UI changes a biome's properties.
 	struct FoliageBiomeTableTexture {};
 
+	// Lifetime::Persistent -- TransmittanceLUTNode/MultiScatteringLUTNode (AtmosphereLUTNode.hpp)
+	// only regenerate these when AtmospherePushConstants actually changes (AtmosphereRegenerationState's
+	// throttle), so "this frame's producer is inactive" is the *normal*, expected case once the
+	// atmosphere settles, not "there's no valid data" -- unlike a genuine feature toggle (GTAO,
+	// Foliage, bloom), where inactive really does mean "no contribution wanted." Without this,
+	// §E's zero-init list (RelationalCompiler.hpp) can't tell the two apart and wrongly clears a
+	// perfectly good cached LUT to black the moment the throttle kicks in -- found via a real
+	// hardware test: a stable sun angle produced a persistently black sky (SkyViewLUTNode's own
+	// plain Read<TransmittanceLUT>()/Read<MultiScatteringLUT>() got zeroed every frame once the
+	// throttle stopped regenerating them), while the independently-drawn sun disc kept rendering
+	// correctly. detail::IsPersistentKey (RelationalCompiler.hpp) is what actually reads this.
 	struct TransmittanceLUT {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
 			return graph::ComputeStorageImageDesc(256, 64, vk::Format::eR32G32B32A32Sfloat);
 		}
 	};
 
 	struct MultiScatteringLUT {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
 			return graph::ComputeStorageImageDesc(32, 32, vk::Format::eR32G32B32A32Sfloat);
 		}
@@ -472,9 +487,14 @@ namespace brassica {
 			.mips = 1,
 			.layers = 1,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16Sfloat),
+			// eTransferDst: lets ZeroInitializeInactiveReads (PhysicalExecutionBackend.hpp, S5)
+			// clear this texture via vkCmdClearColorImage when GTAO is disabled -- found via a
+			// real hardware test: a GTAO-off frame hit a real "image not compatible with
+			// VK_IMAGE_USAGE_TRANSFER_DST_BIT" validation warning on this exact clear, since
+			// nothing before S5 ever needed to transfer-write into this texture.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
-				vk::ImageUsageFlagBits::eColorAttachment
+				vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst
 			),
 		};
 	}

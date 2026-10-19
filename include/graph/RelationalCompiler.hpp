@@ -617,8 +617,22 @@ namespace brassica::graph {
 		// w <= reader in the schedule order established so far? "Write" here means Write or
 		// ReadWrite (accessOf != Read) -- a plain reader of the same key is never a source of
 		// defined content for another reader.
+		//
+		// A Persistent-lifetime key is exempt: "this frame's producer is inactive" is its normal,
+		// expected state (a throttled LUT not regenerating because nothing changed, say), not
+		// "there's no valid data" -- unlike a genuine feature toggle, where inactive really does
+		// mean no contribution wanted. Create-before-accessor already carves out this same
+		// exemption for persistent keys (§C.1); this is that same carve-out reaching the
+		// activity/zero-init side too. Found the hard way: a real hardware test showed a stable
+		// sun angle (so TransmittanceLUTNode/MultiScatteringLUTNode's own throttle correctly
+		// stopped regenerating them) producing a persistently black sky, because
+		// SkyViewLUTNode's plain Read<>() of both got flagged and zero-cleared every frame
+		// regardless of the perfectly good cached content already sitting there.
 		auto hasActiveWriterPreceding =
 			[&](ResourceId base, std::size_t reader, const std::vector<bool>& active) {
+				if (detail::IsPersistentKey(base)) {
+					return true;
+				}
 				for (std::size_t w = 0; w < n; ++w) {
 					if (w == reader || !active[w]) {
 						continue;

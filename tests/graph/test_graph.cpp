@@ -2077,3 +2077,79 @@ TEST_CASE("A plain Read with no active writer preceding it is flagged for zero-i
 		});
 	CHECK(flagged);
 }
+
+namespace {
+
+	// A real hardware test (not a hypothetical) found this exact gap: TransmittanceLUT/
+	// MultiScatteringLUT are throttled (only regenerate when atmosphere parameters change), so
+	// their producer going inactive once the throttle settles is normal, expected behavior, not
+	// "no valid data" -- unlike ZeroInitKey above, which models a genuine feature toggle. Without
+	// Lifetime::Persistent, a plain Read of a throttled-but-cached key gets wrongly zero-cleared
+	// every frame once the producer stops regenerating it.
+	struct PersistentZeroInitKey {
+		static constexpr Lifetime kLifetime = Lifetime::Persistent;
+	};
+
+	struct InactiveThrottledProducer {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Active(false);
+			r.Create<PersistentZeroInitKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct PlainReaderOfPersistentKey {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<PersistentZeroInitKey>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct RequiredReaderOfPersistentKey {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<PersistentZeroInitKey>().Required();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("A Persistent-lifetime key with an inactive producer is never flagged for zero-init") {
+	Graph graph;
+	graph.Register<InactiveThrottledProducer>();
+	graph.Register<PlainReaderOfPersistentKey>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t reader = IndexOfNamed(graph.Nodes(), "PlainReaderOfPersistentKey");
+	REQUIRE(reader < result.activity.size());
+	CHECK(result.activity[reader]);
+
+	const bool flagged =
+		std::any_of(result.zeroInitReads.begin(), result.zeroInitReads.end(), [&](const auto& pair) {
+			return pair.first == reader && pair.second == IdOf<PersistentZeroInitKey>();
+		});
+	CHECK_FALSE(flagged);
+}
+
+TEST_CASE(".Required() does not deactivate a reader of a Persistent-lifetime key whose producer is inactive") {
+	Graph graph;
+	graph.Register<InactiveThrottledProducer>();
+	graph.Register<RequiredReaderOfPersistentKey>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t reader = IndexOfNamed(graph.Nodes(), "RequiredReaderOfPersistentKey");
+	REQUIRE(reader < result.activity.size());
+	CHECK(result.activity[reader]);
+}
