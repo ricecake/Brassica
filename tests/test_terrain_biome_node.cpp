@@ -74,4 +74,8 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	CHECK(foundBiome);
 	CHECK(foundBiomeMapA);
 	CHECK(foundBiomeMapB);
+
+	// Verify push constant structures for climate compute shaders
+	CHECK(sizeof(ClimateInitialPushConstants) == 16);
+	CHECK(sizeof(ClimateCAPushConstants) == 32);
 }

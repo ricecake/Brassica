@@ -30,13 +30,17 @@ namespace brassica {
 	} // namespace constants::Weather
 
 	struct ClimateInitialPushConstants {
-		std::uint32_t outStorageIdx{0};
-		std::uint32_t textureDim{constants::Weather::kSimTextureDim};
+		std::uint32_t outStorageIdx1{0};
+		std::uint32_t outStorageIdx2{0};
+		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
+		std::uint32_t pad{0};
 	};
 
 	struct ClimateCAPushConstants {
-		std::uint32_t inMapStorageIdx{0};
-		std::uint32_t outMapStorageIdx{0};
+		std::uint32_t inMapStorageIdx1{0};
+		std::uint32_t inMapStorageIdx2{0};
+		std::uint32_t outMapStorageIdx1{0};
+		std::uint32_t outMapStorageIdx2{0};
 		std::uint32_t weatherOutStorageIdx{0};
 		std::uint32_t biomeOutStorageIdx{0};
 		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
@@ -206,6 +210,8 @@ namespace brassica {
 			std::uint32_t mainWeatherIdx = ctx.StorageIndex<TerrainWeatherBiomeTexture>();
 			std::uint32_t weatherMapAIdx = ctx.StorageIndex<TerrainWeatherMapATexture>();
 			std::uint32_t weatherMapBIdx = ctx.StorageIndex<TerrainWeatherMapBTexture>();
+			std::uint32_t biomeMapAIdx = ctx.StorageIndex<TerrainBiomeMapATexture>();
+			std::uint32_t biomeMapBIdx = ctx.StorageIndex<TerrainBiomeMapBTexture>();
 			std::uint32_t mainBiomeIdx = ctx.StorageIndex<TerrainBiomeMainTexture>();
 
 			auto insertComputeBarrier = [&](vk::CommandBuffer cmd) {
@@ -230,8 +236,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateInitialPushConstants{
-						.outStorageIdx = weatherMapAIdx,
-						.textureDim = constants::Weather::kCoverageTextureDim
+						.outStorageIdx1 = weatherMapAIdx,
+						.outStorageIdx2 = biomeMapAIdx,
+						.textureDim = constants::Weather::kCoverageTextureDim,
+						.pad = 0
 					},
 					constants::Weather::kCoverageTextureDim
 				);
@@ -244,8 +252,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateCAPushConstants{
-						.inMapStorageIdx = weatherMapAIdx,
-						.outMapStorageIdx = weatherMapBIdx,
+						.inMapStorageIdx1 = weatherMapAIdx,
+						.inMapStorageIdx2 = biomeMapAIdx,
+						.outMapStorageIdx1 = weatherMapBIdx,
+						.outMapStorageIdx2 = biomeMapBIdx,
 						.weatherOutStorageIdx = mainWeatherIdx,
 						.biomeOutStorageIdx = mainBiomeIdx,
 						.textureDim = constants::Weather::kCoverageTextureDim,
@@ -257,8 +267,10 @@ namespace brassica {
 				pingPongState = true; // Next input will be Map B
 				hasEverGenerated = true;
 			} else {
-				std::uint32_t inStateIdx = pingPongState ? weatherMapBIdx : weatherMapAIdx;
-				std::uint32_t outStateIdx = pingPongState ? weatherMapAIdx : weatherMapBIdx;
+				std::uint32_t inStateIdx1 = pingPongState ? weatherMapBIdx : weatherMapAIdx;
+				std::uint32_t inStateIdx2 = pingPongState ? biomeMapBIdx : biomeMapAIdx;
+				std::uint32_t outStateIdx1 = pingPongState ? weatherMapAIdx : weatherMapBIdx;
+				std::uint32_t outStateIdx2 = pingPongState ? biomeMapAIdx : biomeMapBIdx;
 
 				// Run cellular automata step
 				DispatchCompute(
@@ -267,8 +279,10 @@ namespace brassica {
 					setLayouts,
 					boundSets,
 					ClimateCAPushConstants{
-						.inMapStorageIdx = inStateIdx,
-						.outMapStorageIdx = outStateIdx,
+						.inMapStorageIdx1 = inStateIdx1,
+						.inMapStorageIdx2 = inStateIdx2,
+						.outMapStorageIdx1 = outStateIdx1,
+						.outMapStorageIdx2 = outStateIdx2,
 						.weatherOutStorageIdx = mainWeatherIdx,
 						.biomeOutStorageIdx = mainBiomeIdx,
 						.textureDim = constants::Weather::kCoverageTextureDim,
