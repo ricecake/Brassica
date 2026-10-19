@@ -695,5 +695,23 @@ vec3 applyErosionColorMappingDefault(vec3 albedo, float ridgeMap, float heightDe
 	return applyErosionColorMapping(albedo, ridgeMap, heightDelta, sediment, rock);
 }
 
+/**
+ * Returns regional rock color mapped from geological biome parameter (0.0 to 1.0).
+ */
+vec3 getGeologicalRockColor(float geoBiome) {
+	vec3 chalk = vec3(0.55, 0.52, 0.47);        // Pale limestone / chalk / light clay
+	vec3 redSandstone = vec3(0.58, 0.28, 0.20); // Warm iron-rich red sandstone
+	vec3 granite = vec3(0.35, 0.36, 0.38);      // Cool neutral grey granite / slate
+	vec3 basalt = vec3(0.20, 0.19, 0.22);       // Dark volcanic basalt / igneous rock
+
+	if (geoBiome < 0.33) {
+		return mix(chalk, redSandstone, geoBiome / 0.33);
+	} else if (geoBiome < 0.66) {
+		return mix(redSandstone, granite, (geoBiome - 0.33) / 0.33);
+	} else {
+		return mix(granite, basalt, clamp((geoBiome - 0.66) / 0.34, 0.0, 1.0));
+	}
+}
+
 
 #endif // BRASSICA_TERRAIN_GLSL

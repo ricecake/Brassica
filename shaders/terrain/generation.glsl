@@ -256,7 +256,8 @@ float evaluate_terrain_analytical(
     out vec3 out_normal,
     out float out_water_level,
     out float out_ridge_map,
-    out float out_substrate
+    out float out_substrate,
+    out float out_biome
 ) {
     // 0. Apply polar and seam world coordinate wrapping
     float Z_max = 0.5 * PI * FAKE_PLANET_RADIUS;
@@ -515,6 +516,22 @@ float evaluate_terrain_analytical(
     out_ridge_map = max(massive_ridge, ridgeMapVal);
     out_substrate = substrateVal;
 
+    // Derive geological biome classification from regional lithology and tectonic/hydrological structure
+    vec3 grad_geo_noise;
+    float raw_geo_noise = dot_noise_fbm(P_geo * 4.5, 3, phase + 314.15, grad_geo_noise);
+    float base_geo = clamp(raw_geo_noise * 0.5 + 0.5, 0.0, 1.0);
+
+    float fault_factor = clamp(fault_mask * 0.8 + collision_intensity * 0.5, 0.0, 1.0);
+    float canyon_factor = clamp(canyon_mask * 0.85, 0.0, 1.0);
+    float basin_factor = clamp(basin_mask * 0.75 + (1.0 - fault_mask) * smoothstep(0.1, -0.2, base_h), 0.0, 1.0);
+
+    float geo_biome = base_geo;
+    geo_biome = mix(geo_biome, 0.10, basin_factor * 0.7);
+    geo_biome = mix(geo_biome, 0.35, canyon_factor * 0.8);
+    geo_biome = mix(geo_biome, 0.65, fault_factor * 0.75);
+
+    out_biome = clamp(geo_biome, 0.0, 1.0);
+
     // Calculate water level in normalized height space
     float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
     float canyon_water_h = raw_final_h + canyon_carve * 0.05; // Canyons have shallow streams at the bottom
@@ -537,6 +554,21 @@ float evaluate_terrain_analytical(
     return true_height;
 }
 
+// Overload for callers requesting out_ridge_map and out_substrate
+float evaluate_terrain_analytical(
+    vec3 p_local,
+    float phase,
+    float warp_strength,
+    TerrainConfig config,
+    out vec3 out_normal,
+    out float out_water_level,
+    out float out_ridge_map,
+    out float out_substrate
+) {
+    float dummyBiome;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, out_ridge_map, out_substrate, dummyBiome);
+}
+
 // Overload for callers requesting out_ridge_map
 float evaluate_terrain_analytical(
     vec3 p_local,
@@ -548,7 +580,8 @@ float evaluate_terrain_analytical(
     out float out_ridge_map
 ) {
     float dummySubstrate;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, out_ridge_map, dummySubstrate);
+    float dummyBiome;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, out_ridge_map, dummySubstrate, dummyBiome);
 }
 
 // Overload for callers requesting out_water_level
@@ -562,7 +595,8 @@ float evaluate_terrain_analytical(
 ) {
     float dummyRidgeMap;
     float dummySubstrate;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, dummyRidgeMap, dummySubstrate);
+    float dummyBiome;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, dummyRidgeMap, dummySubstrate, dummyBiome);
 }
 
 // Overload for callers requesting only out_normal
@@ -576,5 +610,6 @@ float evaluate_terrain_analytical(
     float dummyWaterLevel;
     float dummyRidgeMap;
     float dummySubstrate;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummyWaterLevel, dummyRidgeMap, dummySubstrate);
+    float dummyBiome;
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummyWaterLevel, dummyRidgeMap, dummySubstrate, dummyBiome);
 }
