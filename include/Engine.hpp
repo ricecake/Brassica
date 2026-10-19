@@ -51,6 +51,8 @@ namespace brassica {
 		std::string terrainMapPath{"terrain_map.png"};
 		bool        aggressiveValidation{false};
 		bool        printRenderGraph{false};
+		bool        useMockICD{false};
+		bool        forceRealDriver{false};
 
 		static EngineOptions FromArgs(int argc, char** argv) {
 			ArgparseManager argManager;
@@ -69,6 +71,14 @@ namespace brassica {
 			if (opts.renderTerrainMap || opts.printRenderGraph) {
 				opts.headless = true;
 			}
+			opts.useMockICD = argManager.GetUseMockICD();
+			opts.forceRealDriver = argManager.GetForceRealDriver();
+
+			// Headless mode uses mock ICD by default unless specified to the contrary
+			if (opts.headless && !opts.forceRealDriver && !argManager.GetParser().is_used("--mock-icd")) {
+				opts.useMockICD = true;
+			}
+
 			return opts;
 		}
 	};

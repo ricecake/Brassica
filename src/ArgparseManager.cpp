@@ -55,6 +55,16 @@ namespace brassica {
 			.help("Print the graphviz formatted output of the render graph and exit")
 			.default_value(false)
 			.implicit_value(true);
+
+		m_parser.add_argument("--mock-icd", "--use-mock-icd", "-mock-icd")
+			.help("Use Vulkan Mock ICD / null driver")
+			.default_value(false)
+			.implicit_value(true);
+
+		m_parser.add_argument("--real-driver", "--use-real-driver", "--no-mock-icd", "-real-driver")
+			.help("Force using real driver even in headless mode")
+			.default_value(false)
+			.implicit_value(true);
 	}
 
 	void ArgparseManager::Initialize() {
@@ -164,6 +174,18 @@ namespace brassica {
 		if (!m_argsParsed)
 			return false;
 		return m_parser.get<bool>("--print-render-graph");
+	}
+
+	bool ArgparseManager::GetUseMockICD() const {
+		if (!m_argsParsed)
+			return false;
+		return m_parser.get<bool>("--mock-icd");
+	}
+
+	bool ArgparseManager::GetForceRealDriver() const {
+		if (!m_argsParsed)
+			return false;
+		return m_parser.get<bool>("--real-driver");
 	}
 
 } // namespace brassica
