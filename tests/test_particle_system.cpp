@@ -1067,3 +1067,42 @@ TEST_CASE("ExecuteOnce wrapper executes inner node once and skips subsequent run
 	onceNode.Setup(builder3, fctx);
 	CHECK(builder3.Active() == true);
 }
+
+// A real hardware bug, not a hypothetical: with the particle cluster's 6 nodes enabled, the
+// real engine's graph was rejected outright -- "nothing created the particle type buffer" --
+// because ParticleTypeBufferNode had never been registered anywhere in production (the 4
+// readers below all declared their own Read<ParticleTypeBuffer>(), but nothing ever registered
+// a Create<> for it). Fixed by giving ParticleTypeBufferNode a self-seeding default constructor
+// and a (still-commented, toggled with the rest of the cluster) BRASSICA_REGISTER_NODE line.
+TEST_CASE("ParticleTypeBufferNode satisfies the particle cluster's reads, with its Staged desc intact") {
+	graph::Graph graph;
+	ParticleResetNode resetNode;
+	ParticleTypeBufferNode typeBufferNode;
+	graph.RegisterRef(resetNode);
+	graph.RegisterRef(typeBufferNode);
+
+	graph::FrameContext ctx{.width = 256, .height = 256};
+	graph.Setup(ctx);
+	auto result = graph.Compile();
+	if (!result) {
+		MESSAGE("Compile failed: ", result.error().message);
+	}
+	REQUIRE(result.has_value());
+
+	// The real second half of the bug: ParticleResetNode used to also declare its own
+	// Read<ParticleTypeBuffer>().Desc(StorageBufferDesc(...)) (hostAccess=None), which --
+	// scheduling after the producer -- would win Provision's schedule-last-wins collapse and
+	// silently turn the producer's WriteSpan into a no-op (BeginHostWrite returns an empty span
+	// for HostAccess::None). Confirms the producer's own Staged desc is what actually reaches
+	// Compile(), not a disagreeing one from a reader.
+	bool foundStagedProducer = false;
+	for (const auto& recipe : graph.Recipes()) {
+		for (const auto& r : recipe.realizations) {
+			if (r.key == graph::IdOf<ParticleTypeBuffer>() && r.access == graph::AccessKind::Write) {
+				CHECK(r.desc.hostAccess == graph::HostAccess::Staged);
+				foundStagedProducer = true;
+			}
+		}
+	}
+	CHECK(foundStagedProducer);
+}

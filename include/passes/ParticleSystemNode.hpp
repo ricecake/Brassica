@@ -427,7 +427,15 @@ namespace brassica {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Active(active);
 			r.Modify<ParticleBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(Particle)));
-			r.Read<ParticleTypeBuffer>().Desc(graph::StorageBufferDesc(16 * sizeof(ParticleType)));
+			// No .Desc() here, deliberately: ParticleTypeBuffer has a real dedicated producer
+			// (ParticleTypeBufferNode below) whose own desc must win Provision's schedule-last
+			// collapse. A hand-rolled StorageBufferDesc here would disagree on hostAccess
+			// (None vs the producer's Staged) and, scheduling after the producer, would win --
+			// silently turning the producer's WriteSpan into a no-op (BeginHostWrite returns an
+			// empty span for HostAccess::None). An empty builder-default desc is explicitly
+			// exempt from that last-writer-wins collapse, so leaving this bare is what makes the
+			// real producer's desc actually reach Provision().
+			r.Read<ParticleTypeBuffer>();
 			r.Create<AboveWaterParticleAliveBuffer>().Desc(aliveDesc);
 			r.Modify<AboveWaterParticleIndirectBuffer>().Desc(indirectDesc);
 			r.Create<UnderwaterParticleAliveBuffer>().Desc(aliveDesc);
@@ -660,7 +668,15 @@ namespace brassica {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Active(active);
 			r.Modify<ParticleBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(Particle)));
-			r.Read<ParticleTypeBuffer>().Desc(graph::StorageBufferDesc(16 * sizeof(ParticleType)));
+			// No .Desc() here, deliberately: ParticleTypeBuffer has a real dedicated producer
+			// (ParticleTypeBufferNode below) whose own desc must win Provision's schedule-last
+			// collapse. A hand-rolled StorageBufferDesc here would disagree on hostAccess
+			// (None vs the producer's Staged) and, scheduling after the producer, would win --
+			// silently turning the producer's WriteSpan into a no-op (BeginHostWrite returns an
+			// empty span for HostAccess::None). An empty builder-default desc is explicitly
+			// exempt from that last-writer-wins collapse, so leaving this bare is what makes the
+			// real producer's desc actually reach Provision().
+			r.Read<ParticleTypeBuffer>();
 			r.Read<AboveWaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
 			r.Read<AboveWaterParticleIndirectBuffer>().Desc(indirectDesc);
 			r.Read<UnderwaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
@@ -795,11 +811,13 @@ namespace brassica {
 
 		void SetIndirectBuffer(vk::Buffer buf) { indirectBuffer = buf; }
 
-		// ParticleBuffer/ParticleTypeBuffer/UnderwaterParticleAliveBuffer/IndirectBuffer aren't
-		// catalog-converted, so each keeps the exact desc the old hand-rolled Recipe used (via
-		// .Desc()) -- same reasoning as every other not-yet-converted key in this migration:
-		// an empty builder-default desc would be a real desc regression, not just a style
-		// change. GBufferDepth/HdrColor are both catalog-converted; no .Desc() needed.
+		// ParticleBuffer/UnderwaterParticleAliveBuffer/IndirectBuffer aren't catalog-converted,
+		// so each keeps the exact desc the old hand-rolled Recipe used (via .Desc()) -- same
+		// reasoning as every other not-yet-converted key in this migration: an empty
+		// builder-default desc would be a real desc regression, not just a style change.
+		// ParticleTypeBuffer is the one exception -- see Read<ParticleTypeBuffer>()'s own
+		// comment for why it deliberately has no .Desc() here. GBufferDepth/HdrColor are both
+		// catalog-converted; no .Desc() needed either.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			bool active = true;
 			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
@@ -817,7 +835,15 @@ namespace brassica {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Active(active);
 			r.Read<ParticleBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(Particle)));
-			r.Read<ParticleTypeBuffer>().Desc(graph::StorageBufferDesc(16 * sizeof(ParticleType)));
+			// No .Desc() here, deliberately: ParticleTypeBuffer has a real dedicated producer
+			// (ParticleTypeBufferNode below) whose own desc must win Provision's schedule-last
+			// collapse. A hand-rolled StorageBufferDesc here would disagree on hostAccess
+			// (None vs the producer's Staged) and, scheduling after the producer, would win --
+			// silently turning the producer's WriteSpan into a no-op (BeginHostWrite returns an
+			// empty span for HostAccess::None). An empty builder-default desc is explicitly
+			// exempt from that last-writer-wins collapse, so leaving this bare is what makes the
+			// real producer's desc actually reach Provision().
+			r.Read<ParticleTypeBuffer>();
 			r.Read<UnderwaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
 			r.Read<UnderwaterParticleIndirectBuffer>().Desc(indirectDesc);
 			r.Modify<GBufferDepth>();
@@ -971,7 +997,15 @@ namespace brassica {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Active(active);
 			r.Read<ParticleBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(Particle)));
-			r.Read<ParticleTypeBuffer>().Desc(graph::StorageBufferDesc(16 * sizeof(ParticleType)));
+			// No .Desc() here, deliberately: ParticleTypeBuffer has a real dedicated producer
+			// (ParticleTypeBufferNode below) whose own desc must win Provision's schedule-last
+			// collapse. A hand-rolled StorageBufferDesc here would disagree on hostAccess
+			// (None vs the producer's Staged) and, scheduling after the producer, would win --
+			// silently turning the producer's WriteSpan into a no-op (BeginHostWrite returns an
+			// empty span for HostAccess::None). An empty builder-default desc is explicitly
+			// exempt from that last-writer-wins collapse, so leaving this bare is what makes the
+			// real producer's desc actually reach Provision().
+			r.Read<ParticleTypeBuffer>();
 			r.Read<AboveWaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
 			r.Read<AboveWaterParticleIndirectBuffer>().Desc(indirectDesc);
 			r.Modify<GBufferDepth>();
@@ -1065,7 +1099,36 @@ namespace brassica {
 	// internal order correct -- Create-before-accessor on the shared buffers already establishes
 	// Reset -> Liveness -> GridBuild -> Behavior with no explicit relation needed (verified via a
 	// scratch harness during the split; see project memory).
-	using ParticleTypeBufferNode = graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType, SubPhase::Prepare>;
+	//
+	// The sole producer of ParticleTypeBuffer -- previously a bare PredefinedBufferNode alias
+	// with no owner anywhere in production (the particle cluster's 4 readers above all declared
+	// their own Read<ParticleTypeBuffer>(), but nothing ever registered a node to Create<> it,
+	// so the real engine's graph was rejected outright the one time the cluster was actually
+	// enabled: "nothing created the particle type buffer"). A derived type instead of a bare
+	// alias specifically so a default-constructed instance (BRASSICA_REGISTER_NODE's own
+	// NodeLifecycle<T>, same as every other flat-registered node here) self-seeds real data --
+	// there's no per-type tuning a manager would ever mutate at runtime (unlike MaterialManager's
+	// m_materials), so a one-time self-seed is simpler than threading a RegisterTypeBufferNode-
+	// style call through Engine.cpp for data that never changes. `using Base::Base;` preserves
+	// PredefinedBufferNode's own (initialData, desc) constructor for callers (tests) that want to
+	// seed different data explicitly.
+	//
+	// Every entry is deliberately all-zero, not ParticleType's own non-zero in-class defaults:
+	// particle.mesh's own fallback logic (`pType.color.a > 0.0 ? pType.color : p.color`,
+	// `pType.size > 0.0 ? pType.size : <per-type hardcoded size>`) only kicks in when this
+	// buffer's entry is zero -- a non-zero default here would silently override the already-
+	// correct per-type color/size the liveness shader assigns per particle on respawn.
+	// gravityScale/drag are declared in every particle shader's ParticleType mirror but never
+	// actually indexed anywhere today (confirmed: only particle.mesh ever reads
+	// uParticleTypes[p.type] at all), so zero is a correct value for them, not just a safe
+	// placeholder.
+	struct ParticleTypeBufferNode: graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType, SubPhase::Prepare> {
+		using Base = graph::PredefinedBufferNode<ParticleTypeBuffer, ParticleType, SubPhase::Prepare>;
+		using Base::Base;
+
+		ParticleTypeBufferNode():
+			Base(std::vector<ParticleType>(16, ParticleType{glm::vec4(0.0f), 0.0f, 0.0f, 0.0f, 0.0f})) {}
+	};
 
 	// BRASSICA_REGISTER_NODE(UnderwaterParticleRenderNode);
 	// BRASSICA_REGISTER_NODE(AboveWaterParticleRenderNode);
@@ -1073,5 +1136,6 @@ namespace brassica {
 	// BRASSICA_REGISTER_NODE(ParticleLivenessNode);
 	// BRASSICA_REGISTER_NODE(ParticleGridBuildNode);
 	// BRASSICA_REGISTER_NODE(ParticleBehaviorNode);
+	// BRASSICA_REGISTER_NODE(ParticleTypeBufferNode);
 
 } // namespace brassica
