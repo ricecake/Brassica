@@ -24,89 +24,30 @@ namespace {
 	// WaterNode's Phase::Late, is what makes a plain Modify<HdrColor> on both nodes -- with no
 	// version number between them -- schedule correctly; see WaterNode.hpp's own comment.
 	struct FakeSceneProducer {
-		using Resources = graph::Declares<
-			graph::Create<GBufferPosition>,
-			graph::Create<GBufferAlbedo>,
-			graph::Create<GBufferNormal>,
-			graph::Create<GBufferMaterial>,
-			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>,
-			graph::Create<TerrainMinMaxTexture>,
-			graph::Create<SkyViewLUT>>;
-
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferPosition>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferMaterial>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferAlbedo>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferNormal>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainMinMaxTexture>(),
-					.access = graph::AccessKind::Write,
-					// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainManager.hpp), which also
-					// requests eStorage for terrain_gen.comp's writer -- this fixture only needs
-					// WaterNode's read side, and this bindless set (below) declares no storage-image
-					// binding to write that second descriptor into.
-					.desc = graph::ResourceDesc{
-						.kind = graph::ResourceDesc::Kind::Image2D,
-						.width = 4,
-						.height = 4,
-						.layers = 2,
-						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
-						.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
-					},
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<SkyViewLUT>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Create<GBufferPosition>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			r.Create<GBufferMaterial>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm));
+			r.Create<GBufferAlbedo>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<GBufferNormal>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
+			r.Create<HdrColor>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainManager.hpp), which also
+			// requests eStorage for terrain_gen.comp's writer -- this fixture only needs
+			// WaterNode's read side, and this bindless set (below) declares no storage-image
+			// binding to write that second descriptor into.
+			r.Create<TerrainMinMaxTexture>().Desc(graph::ResourceDesc{
+				.kind = graph::ResourceDesc::Kind::Image2D,
+				.width = 4,
+				.height = 4,
+				.layers = 2,
+				.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
+				.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+			});
+			r.Create<SkyViewLUT>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
 		}
 
 		void Execute(graph::NodeContext&) {}

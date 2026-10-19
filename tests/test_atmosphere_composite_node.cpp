@@ -30,71 +30,29 @@ namespace {
 	// setup below), that's the underwater view-ray-reconstruction + evaluateAtmosphere path, real
 	// exercise of the new math, not just an early discard.
 	struct FakeSceneProducer {
-		using Resources = graph::Declares<
-			graph::Create<GBufferPosition>,
-			graph::Create<GBufferAlbedo>,
-			graph::Create<GBufferNormal>,
-			graph::Create<GBufferMaterial>,
-			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>>;
-
 		// Defaults (albedo.a=0 everywhere) match the original no-surface-anywhere fixture. Setting
 		// albedoAlpha=1 + relPos simulates "there's opaque terrain at this camera-relative
 		// position" without needing TerrainNode/mesh shaders at all.
 		float     albedoAlpha = 0.0f;
 		glm::vec3 relPos{0.0f};
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferPosition>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
-					.clearColor = {relPos.x, relPos.y, relPos.z, 0.0f},
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferAlbedo>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-					.clearColor = {0.5f, 0.5f, 0.5f, albedoAlpha},
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferNormal>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferMaterial>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-					// Known white baseline -- lets the GPU readback test below compare "left alone
-					// (discarded, above water)" against "actually fogged (submerged)" against an
-					// exact starting value, instead of whatever an unspecified clear would give.
-					.clearColor = {1.0f, 1.0f, 1.0f, 1.0f},
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Create<GBufferPosition>()
+				.Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat))
+				.Clear({relPos.x, relPos.y, relPos.z, 0.0f});
+			r.Create<GBufferAlbedo>()
+				.Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb))
+				.Clear({0.5f, 0.5f, 0.5f, albedoAlpha});
+			r.Create<GBufferNormal>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			r.Create<GBufferMaterial>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm));
+			r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
+			// Known white baseline -- lets the GPU readback test below compare "left alone
+			// (discarded, above water)" against "actually fogged (submerged)" against an exact
+			// starting value, instead of whatever an unspecified clear would give.
+			r.Create<HdrColor>()
+				.Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat))
+				.Clear({1.0f, 1.0f, 1.0f, 1.0f});
 		}
 
 		void Execute(graph::NodeContext&) {}

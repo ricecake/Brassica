@@ -407,9 +407,6 @@ namespace brassica::graph {
 	// is what tells those two cases apart. Reading garbage isn't just visually wrong for a
 	// History slot: a fragment-shading-rate attachment full of undefined bits is spec-invalid,
 	// not merely ugly.
-	// Takes Graph& (not a flat recipe span) and recurses into every Subgraph node's inner graph
-	// -- a History<K> realization nested inside a Subgraph needs this exact same first-frame
-	// treatment, and its recipes only exist on the inner Graph, not the outer one.
 	inline void ZeroInitializeUndefinedReads(vk::CommandBuffer cmd, PhysicalResourceRegistry& registry, Graph& graph) {
 		if (!cmd) {
 			return;
@@ -436,12 +433,6 @@ namespace brassica::graph {
 				ClearImageToZero(cmd, *tex, r.access, recipe.domain);
 			}
 		}
-
-		for (std::size_t i = 0; i < recipes.size(); ++i) {
-			if (Graph* inner = graph.InnerGraphOfNode(i)) {
-				ZeroInitializeUndefinedReads(cmd, registry, *inner);
-			}
-		}
 	}
 
 	// Generalization of the same idea for §E's zero-init list (S5): Graph::ZeroInitReads()
@@ -450,9 +441,7 @@ namespace brassica::graph {
 	// GTAO disabled, DeferredNode's plain Read<GTAOTexture>() would otherwise see whatever
 	// garbage/stale content the texture physically has). Looks up each flagged read's own
 	// realization (for its access/desc, the same ones the compiler itself used) rather than
-	// re-deriving anything. Recurses into Subgraphs the same way ZeroInitializeUndefinedReads
-	// does, for the same reason -- a flagged read nested inside one only exists on the inner
-	// Graph's own list.
+	// re-deriving anything.
 	//
 	// Deliberately does NOT check HasDefinedContents() the way ZeroInitializeUndefinedReads
 	// does -- that flag is right for isHistory's one-time "has this slot EVER been written"
@@ -505,12 +494,6 @@ namespace brassica::graph {
 			}
 			ClearImageToZero(cmd, *tex, realization->access, recipe.domain);
 		}
-
-		for (std::size_t i = 0; i < recipes.size(); ++i) {
-			if (Graph* inner = graph.InnerGraphOfNode(i)) {
-				ZeroInitializeInactiveReads(cmd, registry, *inner);
-			}
-		}
 	}
 
 	class PhysicalExecutionBackend {
@@ -522,9 +505,7 @@ namespace brassica::graph {
 		const QueueSet& GetQueueSet() const { return m_queues; }
 
 		void Execute(Graph& graph, const FrameContext& ctx, CommandBuffer& cmd, bool enableAliasing = true) {
-			// 1. Setup recipes for the frame. Recursive: Subgraph::Setup (Frame.hpp) compiles
-			// its own inner graph as part of this call, so every nesting level's Schedule/
-			// Recipes are already current by the time step 2 below even runs.
+			// 1. Setup recipes for the frame.
 			graph.Setup(ctx);
 
 			// 2. Compile: levels nodes into dependency-respecting stages and synthesizes the
@@ -535,10 +516,8 @@ namespace brassica::graph {
 				throw std::runtime_error("Graph compilation failed: " + compileRes.error().message);
 			}
 
-			// 3. Provision physical resources matching concrete recipes, at every nesting level
-			// -- see ProvisionRecursive's comment for why aliasing is forced off below the top
-			// level.
-			ProvisionRecursive(graph, ctx, enableAliasing);
+			// 3. Provision physical resources matching concrete recipes.
+			m_registry.Provision(graph.GetSchedule(), graph.Recipes(), ctx.frameIndex, enableAliasing, graph.Nodes(), ctx);
 
 			// 4. The graph's opaque CommandBuffer handle, viewed as real Vulkan at this boundary
 			// only -- Execution.hpp's CommandBuffer stays untouched and Vulkan-free.
@@ -569,8 +548,7 @@ namespace brassica::graph {
 
 			// 4b. Any resource a node is about to Read but that has never actually been written
 			// (a History<K> pair's first frame, most notably) gets a one-time zero-fill here,
-			// before any node's barriers or commands are recorded -- recurses into every nested
-			// Subgraph itself.
+			// before any node's barriers or commands are recorded.
 			ZeroInitializeUndefinedReads(vkCmd, m_registry, graph);
 
 			// 4c. §E's zero-init list (S5): a plain Read with no active writer this frame (e.g.
@@ -579,41 +557,13 @@ namespace brassica::graph {
 			// per-resource flag.
 			ZeroInitializeInactiveReads(vkCmd, m_registry, graph);
 
-			// 5. Staged execution, recursing into any Subgraph node with this exact same
-			// treatment rather than the naive per-node loop Graph::Execute/Subgraph::Execute
-			// give it directly -- see RunSchedule.
+			// 5. Staged execution -- see RunSchedule.
 			RunSchedule(graph, nodeCtx, vkCmd);
 		}
 
 	private:
-		// Provisions this graph's own schedule/recipes, then recurses into every Subgraph
-		// node's inner graph and does the same. All of it lands in m_registry, which is keyed
-		// by ResourceId regardless of which Graph instance a call came from -- so a resource a
-		// Subgraph produces is just as visible to an outer sibling reading it afterward as one
-		// the outer graph produced directly.
-		//
-		// enableAliasing is forced off below the top level: ImageAliasPool's lifetime math is
-		// keyed purely on stage index within *one* Schedule, so mixing an inner graph's
-		// independently-numbered stages into the same pool as the outer graph's could alias two
-		// resources that are actually live at the same time. Nothing exercises Subgraph-nested
-		// aliasing today, so this is a safe default rather than a regression -- revisit only if
-		// a real workload wants transient aliasing inside a Subgraph.
-		void ProvisionRecursive(Graph& graph, const FrameContext& ctx, bool enableAliasing) {
-			m_registry.Provision(graph.GetSchedule(), graph.Recipes(), ctx.frameIndex, enableAliasing, graph.Nodes(), ctx);
-			for (std::size_t i = 0; i < graph.Recipes().size(); ++i) {
-				if (Graph* inner = graph.InnerGraphOfNode(i)) {
-					ProvisionRecursive(*inner, ctx, /*enableAliasing=*/false);
-				}
-			}
-		}
-
-		// The staged-execution loop Execute() used to run inline, now shared between the
-		// top-level call and every level of Subgraph recursion so a nested cluster gets the
-		// exact same correctness guarantees (per-stage Acquire/Release barriers, dynamic-
-		// rendering Begin/End around each node) as the top-level graph -- rather than the
-		// zero-synchronization loop Graph::Execute/Subgraph::Execute give it when called
-		// directly (still correct for a pure Vulkan-free test with no real barriers to issue,
-		// just not what a real render needs).
+		// The staged-execution loop Execute() used to run inline, factored out here so the
+		// per-stage Acquire/Release barrier and dynamic-rendering Begin/End logic has one home.
 		void RunSchedule(Graph& graph, NodeContext& nodeCtx, vk::CommandBuffer vkCmd) {
 			const Schedule& schedule = graph.GetSchedule();
 			const auto      recipes = graph.Recipes();
@@ -658,18 +608,6 @@ namespace brassica::graph {
 
 				for (std::size_t nodeIndex : stage.nodes) {
 					const auto& recipe = recipes[nodeIndex];
-
-					// A Subgraph node is provably independent of everything else sharing its
-					// stage (that's what put it there), so recursing here -- rather than calling
-					// ExecuteNode, which would dispatch to Subgraph::Execute's naive loop --
-					// is what gives its own inner nodes real barriers and dynamic-rendering.
-					// This node's own realizations are empty (Subgraph::Setup returns a bare
-					// Recipe -- its Resources are declared at the type level, not per-frame), so
-					// there's nothing else this loop iteration would have done for it anyway.
-					if (Graph* inner = graph.InnerGraphOfNode(nodeIndex)) {
-						RunSchedule(*inner, nodeCtx, vkCmd);
-						continue;
-					}
 
 					bool activeRendering = DynamicRenderingWrapper::Begin(vkCmd, m_registry, recipe);
 					nodeCtx.insideRendering = activeRendering;

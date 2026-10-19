@@ -21,10 +21,10 @@ namespace brassica::graph {
 		{ t.Desc(ctx) } -> std::same_as<ResourceDesc>;
 	};
 
-	// Get<K> below is for a BASE key only -- History<K>/VersionedKey<K,N> borrow the base's one
-	// instance and Desc() (DescFor's historyTarget redirect below), they never get their own.
+	// Get<K> below is for a BASE key only -- History<K> borrows the base's one instance and
+	// Desc() (DescFor's historyTarget redirect below), it never gets its own.
 	template <typename K>
-	concept CatalogKey = ResourceRef<K> && !IsHistory<K> && !IsVersioned<K> && HasTypeOwnedDesc<K>;
+	concept CatalogKey = ResourceRef<K> && !IsHistory<K> && HasTypeOwnedDesc<K>;
 
 	// One persistent instance per converted resource TYPE, holding whatever config an owning
 	// manager publishes (e.g. TerrainManager setting TerrainMinMaxTexture::gridDim) plus the

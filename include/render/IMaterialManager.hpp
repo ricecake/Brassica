@@ -11,6 +11,10 @@
 #include "passes/ResourceKeys.hpp"
 #include "types/MaterialData.hpp"
 
+namespace brassica::graph {
+	class Graph;
+}
+
 namespace brassica {
 
 	/**

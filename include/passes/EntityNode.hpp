@@ -5,14 +5,12 @@
 
 #include "spdlog/spdlog.h"
 
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/EntityPrepareNode.hpp"
 #include "passes/RenderPhases.hpp"
-#include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"

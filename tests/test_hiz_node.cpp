@@ -31,8 +31,6 @@ using namespace brassica;
 // Vulkan's mandatory format-feature set), so a compute-shader imageStore approach doesn't work
 // either -- it would resolve to the bindless-miss fallback index and silently write nothing.
 struct FakeDepthWriterNode {
-	using Resources = graph::Declares<graph::Create<GBufferDepth>>;
-
 	VmaAllocator                     allocator{nullptr};
 	graph::PhysicalResourceRegistry* registry{nullptr};
 	vk::Buffer                       stagingBuffer{nullptr};
@@ -51,16 +49,9 @@ struct FakeDepthWriterNode {
 		}
 	}
 
-	graph::Recipe Setup(const graph::FrameContext& ctx) {
-		graph::Recipe r{.domain = graph::ExecutionDomain::Transfer};
-		r.realizations.push_back(
-			graph::ResourceRealization{
-				.key = graph::IdOf<GBufferDepth>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-			}
-		);
-		return r;
+	void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+		r.Domain(graph::ExecutionDomain::Transfer);
+		r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
 	}
 
 	void Execute(graph::NodeContext& ctx) {

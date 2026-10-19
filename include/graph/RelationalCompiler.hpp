@@ -99,21 +99,16 @@ namespace brassica::graph {
 			descriptors.push_back(node.Descriptor());
 		}
 
-		// Resolve a key to its version base (VersionedKey<K,N-1>/<K,N> group under K, matching
-		// Graph::AccessOf -- History<K> stays distinct from K, never unwrapped) and classify a
-		// node's access to a resolved base purely from NodeDescriptor::consumes/produces. Built
+		// Classify a node's access to a key purely from NodeDescriptor::consumes/produces. Built
 		// from descriptors, not Recipe::realizations: realizations are authoritative for a
 		// builder node (LowerBuilder derives both from the same SetupBuilder call, so they can't
 		// disagree), but a legacy node's Resources/Recipe split is explicitly allowed to leave
 		// realizations sparser than its declared contract -- the same reason Graph::AccessOf
 		// itself never reads realizations.
-		auto resolveBase = [](ResourceId id) { return id->versionBase ? id->versionBase : id; };
-		auto accessOf = [&](std::size_t node, ResourceId base) {
+		auto accessOf = [&](std::size_t node, ResourceId key) {
 			const auto& d = descriptors[node];
-			const bool  reads =
-				std::any_of(d.consumes.begin(), d.consumes.end(), [&](ResourceId id) { return resolveBase(id) == base; });
-			const bool writes =
-				std::any_of(d.produces.begin(), d.produces.end(), [&](ResourceId id) { return resolveBase(id) == base; });
+			const bool  reads = std::any_of(d.consumes.begin(), d.consumes.end(), [&](ResourceId id) { return id == key; });
+			const bool writes = std::any_of(d.produces.begin(), d.produces.end(), [&](ResourceId id) { return id == key; });
 			if (reads && writes) {
 				return AccessKind::ReadWrite;
 			}
@@ -124,9 +119,9 @@ namespace brassica::graph {
 		// no descriptor equivalent -- it can only be read from a node's own realizations. Defaults
 		// to false for a legacy node whose Recipe is sparser than its declared contract (same
 		// split accessOf's own comment explains): an opt-out has to be explicit, never inferred.
-		auto anyOrderFor = [&](std::size_t node, ResourceId base) {
+		auto anyOrderFor = [&](std::size_t node, ResourceId key) {
 			for (const ResourceRealization& r : recipes[node].realizations) {
-				if (resolveBase(r.key) == base) {
+				if (r.key == key) {
 					return r.anyOrder;
 				}
 			}
@@ -308,10 +303,10 @@ namespace brassica::graph {
 			std::vector<ResourceId> allBases;
 			for (const auto& d : descriptors) {
 				for (ResourceId id : d.consumes) {
-					allBases.push_back(resolveBase(id));
+					allBases.push_back(id);
 				}
 				for (ResourceId id : d.produces) {
-					allBases.push_back(resolveBase(id));
+					allBases.push_back(id);
 				}
 			}
 			std::sort(allBases.begin(), allBases.end());
@@ -328,10 +323,10 @@ namespace brassica::graph {
 						std::any_of(
 							descriptors[i].consumes.begin(),
 							descriptors[i].consumes.end(),
-							[&](ResourceId id) { return resolveBase(id) == base; }
+							[&](ResourceId id) { return id == base; }
 						) ||
 						std::any_of(descriptors[i].produces.begin(), descriptors[i].produces.end(), [&](ResourceId id) {
-							return resolveBase(id) == base;
+							return id == base;
 						});
 					if (!touches) {
 						continue;
@@ -423,11 +418,9 @@ namespace brassica::graph {
 		}
 		auto precedes = [&](std::size_t a, std::size_t b) { return reach[a].test(b); };
 
-		// --- Resource edges from the closure (§C.3). Keyed by each key's resolved base (so
-		// VersionedKey<K,N-1>/VersionedKey<K,N> group under K, matching Graph::AccessOf's own
-		// resolution and reproducing what version lifting replaces -- History<K> stays distinct
-		// from K, same as everywhere else in this codebase). resolveBase/accessOf are the ones
-		// defined up near `descriptors` above.
+		// --- Resource edges from the closure (§C.3). Keyed by each distinct key touched --
+		// History<K> stays distinct from K, same as everywhere else in this codebase. accessOf
+		// is the one defined up near `descriptors` above.
 		struct Toucher {
 			std::size_t node;
 			AccessKind  access;
@@ -444,10 +437,10 @@ namespace brassica::graph {
 		};
 		for (std::size_t i = 0; i < n; ++i) {
 			for (ResourceId id : descriptors[i].consumes) {
-				touchersFor(resolveBase(id));
+				touchersFor(id);
 			}
 			for (ResourceId id : descriptors[i].produces) {
-				touchersFor(resolveBase(id));
+				touchersFor(id);
 			}
 		}
 		for (auto& [key, touchers] : byKey) {
@@ -456,10 +449,10 @@ namespace brassica::graph {
 					std::any_of(
 						descriptors[i].consumes.begin(),
 						descriptors[i].consumes.end(),
-						[&](ResourceId id) { return resolveBase(id) == key; }
+						[&](ResourceId id) { return id == key; }
 					) ||
 					std::any_of(descriptors[i].produces.begin(), descriptors[i].produces.end(), [&](ResourceId id) {
-						return resolveBase(id) == key;
+						return id == key;
 					});
 				if (touches) {
 					touchers.push_back(Toucher{i, accessOf(i, key)});
@@ -641,10 +634,10 @@ namespace brassica::graph {
 						std::any_of(
 							descriptors[w].consumes.begin(),
 							descriptors[w].consumes.end(),
-							[&](ResourceId id) { return resolveBase(id) == base; }
+							[&](ResourceId id) { return id == base; }
 						) ||
 						std::any_of(descriptors[w].produces.begin(), descriptors[w].produces.end(), [&](ResourceId id) {
-							return resolveBase(id) == base;
+							return id == base;
 						});
 					if (!touchesBase || accessOf(w, base) == AccessKind::Read) {
 						continue;
@@ -684,8 +677,7 @@ namespace brassica::graph {
 				}
 				for (std::size_t ri = 0; !deactivate && ri < recipes[i].realizations.size(); ++ri) {
 					const ResourceRealization& r = recipes[i].realizations[ri];
-					if (r.required && r.access == AccessKind::Read &&
-					    !hasActiveWriterPreceding(resolveBase(r.key), i, isActive)) {
+					if (r.required && r.access == AccessKind::Read && !hasActiveWriterPreceding(r.key, i, isActive)) {
 						deactivate = true;
 					}
 				}
@@ -713,8 +705,7 @@ namespace brassica::graph {
 				if (r.access != AccessKind::Read) {
 					continue;
 				}
-				const ResourceId base = resolveBase(r.key);
-				if (!hasActiveWriterPreceding(base, i, isActive)) {
+				if (!hasActiveWriterPreceding(r.key, i, isActive)) {
 					result.zeroInitReads.push_back({i, r.key});
 				}
 			}
@@ -845,10 +836,10 @@ namespace brassica::graph {
 			for (std::size_t node : stage) {
 				std::vector<ResourceId> nodeBases;
 				for (ResourceId id : descriptors[node].consumes) {
-					nodeBases.push_back(resolveBase(id));
+					nodeBases.push_back(id);
 				}
 				for (ResourceId id : descriptors[node].produces) {
-					nodeBases.push_back(resolveBase(id));
+					nodeBases.push_back(id);
 				}
 				std::sort(nodeBases.begin(), nodeBases.end());
 				nodeBases.erase(std::unique(nodeBases.begin(), nodeBases.end()), nodeBases.end());

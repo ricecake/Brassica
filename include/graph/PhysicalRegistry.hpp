@@ -160,21 +160,13 @@ namespace brassica::graph {
 
 		[[nodiscard]] vk::DescriptorSetLayout GetFrameDescriptorSetLayout() const { return m_bindless.frameSetLayout; }
 
-		// Maps any VersionedKey<K, N> id to the id of the one physical resource every version
-		// shares -- derived purely from ResourceTypeInfo::versionBase (ResourceKey.hpp), so a node
-		// author never registers this: writing Modify<Swapchain, 2> is enough for GetTexture,
-		// Provision, and every barrier to agree it's the same image Modify<Swapchain, 1> touched.
-		// Loops rather than a single hop only because a version's base is itself always unversioned
-		// (VersionOf<K, 0> collapses to K -- ResourceKey.hpp) -- one hop always suffices today, but
-		// looping costs nothing and doesn't depend on that staying true. Deliberately does not
+		// The one normalization hook every registry lookup goes through on its way to m_textures/
+		// m_buffers/m_accelStructs -- today a plain identity (VersionedKey<K,N>, the one thing
+		// this used to collapse to its base, is gone), kept as its own named step rather than
+		// inlined away so a future key-aliasing concept has a single place to plug into. Does not
 		// follow historyTarget: History<K> is a genuinely different, double-buffered resource (see
 		// the temporal-pair storage below), not an alias.
-		[[nodiscard]] ResourceId ResolveId(ResourceId id) const {
-			while (id->versionBase) {
-				id = id->versionBase;
-			}
-			return id;
-		}
+		[[nodiscard]] ResourceId ResolveId(ResourceId id) const { return id; }
 
 		// initialLayout/hasDefinedContents describe what the caller already knows about this
 		// import -- see PhysicalTexture's Imported constructor. Defaults are right for a

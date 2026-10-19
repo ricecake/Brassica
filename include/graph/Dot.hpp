@@ -2,13 +2,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <map>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "graph/Execution.hpp"
@@ -25,9 +22,10 @@ namespace brassica::graph {
 
 	namespace detail {
 
-		// Node ids are qualified by the path of Subgraph indices leading to them, so
-		// identifiers stay unique once subgraphs are inlined as nested clusters
-		// ("n0_2_1" = top-level node 0's subgraph, its node 2's subgraph, its node 1).
+		// Node ids are qualified by their path from the root graph ("n_2" = top-level node 2).
+		// The path is always a single index today -- nothing recurses into a nested graph
+		// anymore (Subgraph was deleted) -- but DotId/EmitGraph still take a path/prefix vector
+		// rather than a bare index, since that's what both still naturally thread through.
 		inline std::string DotId(const std::vector<std::size_t>& path) {
 			std::string id = "n";
 			for (std::size_t index : path) {
@@ -49,42 +47,6 @@ namespace brassica::graph {
 			return out;
 		}
 
-		// A node found by FindTouching, together with the domain it actually runs in --
-		// Subgraph::Setup reports a fixed placeholder domain for the subgraph-as-a-whole, so
-		// once we've resolved an edge down to the real inner node, its domain must be read
-		// from the inner Graph's own Recipes(), not the outer Subgraph node's.
-		struct TouchResult {
-			std::vector<std::size_t> path;
-			ExecutionDomain          domain;
-		};
-
-		// Finds the specific inner node (recursing through nested subgraphs) that produces or
-		// consumes `key`, so a boundary-crossing edge can point at the real node -- with its
-		// real domain -- rather than stopping at the cluster's outer box. Returns nullopt if
-		// none is found (the caller then falls back to the subgraph node itself).
-		inline std::optional<TouchResult>
-		FindTouching(const Graph& graph, ResourceId key, bool wantProducer, std::vector<std::size_t> prefix) {
-			const auto nodes = graph.Nodes();
-			const auto recipes = graph.Recipes();
-			for (std::size_t i = 0; i < nodes.size(); ++i) {
-				const auto&              desc = nodes[i].Descriptor();
-				const auto&              side = wantProducer ? desc.produces : desc.consumes;
-				std::vector<std::size_t> path = prefix;
-				path.push_back(i);
-
-				if (std::find(side.begin(), side.end(), key) != side.end()) {
-					const ExecutionDomain domain = i < recipes.size() ? recipes[i].domain : ExecutionDomain::Graphics;
-					return TouchResult{std::move(path), domain};
-				}
-				if (const Graph* inner = nodes[i].InnerGraphIfAny()) {
-					if (auto found = FindTouching(*inner, key, wantProducer, path)) {
-						return found;
-					}
-				}
-			}
-			return std::nullopt;
-		}
-
 		inline std::string_view FillColorFor(NodeKind kind) {
 			switch (kind) {
 			case NodeKind::PreviousFrame:
@@ -92,8 +54,6 @@ namespace brassica::graph {
 				return "gold";
 			case NodeKind::Import:
 				return "lightsteelblue";
-			case NodeKind::Subgraph:
-				return "white";
 			case NodeKind::Ordinary:
 				break;
 			}
@@ -216,19 +176,7 @@ namespace brassica::graph {
 			return edgeStyle;
 		}
 
-		inline void EmitGraph(
-			const Graph&                    graph,
-			const std::vector<std::size_t>& path,
-			std::string_view                label,
-			std::ostringstream&             out,
-			bool                            asCluster
-		) {
-			const std::string clusterId = "cluster_" + DotId(path);
-			if (asCluster) {
-				out << "subgraph " << clusterId << " {\n";
-				out << "label=\"" << Escape(label) << "\";\nstyle=dashed;\n";
-			}
-
+		inline void EmitGraph(const Graph& graph, const std::vector<std::size_t>& path, std::ostringstream& out) {
 			const auto nodes = graph.Nodes();
 
 			std::map<Phase, std::vector<std::size_t>> phaseGroups;
@@ -255,11 +203,6 @@ namespace brassica::graph {
 					std::vector<std::size_t> nodePath = path;
 					nodePath.push_back(i);
 					const auto& desc = nodes[i].Descriptor();
-
-					if (const Graph* inner = nodes[i].InnerGraphIfAny()) {
-						EmitGraph(*inner, nodePath, desc.name, out, /*asCluster=*/true);
-						continue;
-					}
 
 					out << DotId(nodePath) << " [label=\"" << Escape(desc.name) << "\", shape=" << ShapeFor(desc.kind)
 					    << ", style=filled, fillcolor=" << FillColorFor(desc.kind) << "];\n";
@@ -294,23 +237,6 @@ namespace brassica::graph {
 						producerPath.push_back(producer);
 						std::vector<std::size_t> consumerPath = path;
 						consumerPath.push_back(consumer);
-
-						// If the producer/consumer is itself a Subgraph, resolve the edge down to
-						// the real inner node -- and its real domain, not the Subgraph's own
-						// placeholder Recipe -- so the drawn edge and its barrier annotation both
-						// reflect what's actually running, not the opaque box wrapping it.
-						if (const Graph* innerProducer = nodes[producer].InnerGraphIfAny()) {
-							if (auto found = FindTouching(*innerProducer, key, /*wantProducer=*/true, producerPath)) {
-								producerPath = found->path;
-								producerDomain = found->domain;
-							}
-						}
-						if (const Graph* innerConsumer = nodes[consumer].InnerGraphIfAny()) {
-							if (auto found = FindTouching(*innerConsumer, key, /*wantProducer=*/false, consumerPath)) {
-								consumerPath = found->path;
-								consumerDomain = found->domain;
-							}
-						}
 
 						EdgeStyle edgeStyle = StyleFor(key, producerDomain, consumerDomain);
 
@@ -352,10 +278,6 @@ namespace brassica::graph {
 					}
 				}
 			}
-
-			if (asCluster) {
-				out << "}\n";
-			}
 		}
 
 	} // namespace detail
@@ -366,7 +288,7 @@ namespace brassica::graph {
 		out << "rankdir=LR;\n";
 		out << "label=\"" << detail::Escape(label) << "\";\n";
 
-		detail::EmitGraph(graph, {}, label, out, /*asCluster=*/false);
+		detail::EmitGraph(graph, {}, out);
 
 		const auto& schedule = graph.GetSchedule();
 		for (std::size_t stageIndex = 0; stageIndex < schedule.stages.size(); ++stageIndex) {

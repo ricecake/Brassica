@@ -4,11 +4,11 @@
 // (include/graph/ResourceKey.hpp). Replaces include/passes/RenderResources.hpp's
 // SwapchainData/GBufferData, which carried FrameGraphResource handles into a shared blackboard;
 // the new model has no separate blackboard, cross-pass resource sharing is just these keys plus
-// Declares<Create/Read/Modify<K>...> (or SetupBuilder, for a converted node) on each node. Most
-// keys below are still plain empty tags -- a key gains a `Desc(const FrameContext&) const`
-// member only once something has converted to the resource-type-ownership model (see
-// graph/ResourceCatalog.hpp); an empty tag with no Desc() is just as valid as before, Provision
-// falls back to whatever a legacy node's realization supplies.
+// each node's own SetupBuilder calls (Create/Read/Modify<K>()) inside Setup. Most keys below are
+// still plain empty tags -- a key gains a `Desc(const FrameContext&) const` member only once
+// something has converted to the resource-type-ownership model (see graph/ResourceCatalog.hpp);
+// an empty tag with no Desc() is just as valid as before, Provision falls back to whatever a
+// node's realization supplies.
 
 #include <algorithm>
 #include <cmath>

@@ -82,7 +82,7 @@ namespace brassica::render {
 		virtual void SetFrameParams(const NodeFrameParams&) = 0;
 	};
 
-	template <graph::AnyNode T>
+	template <graph::BuilderNode T>
 	struct NodeLifecycle final: INodeLifecycle {
 		T value{};
 

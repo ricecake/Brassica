@@ -2,7 +2,6 @@
 
 #include "vulkan/vulkan.hpp"
 
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"

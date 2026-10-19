@@ -5,7 +5,6 @@
 #include "doctest/doctest.h"
 
 #include "Engine.hpp"
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Frame.hpp"
 #include "graph/Graph.hpp"
@@ -14,7 +13,6 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/ResourceKey.hpp"
 #include "graph/TypeList.hpp"
-#include "graph/Validation.hpp"
 #include "MinimalDevice.hpp"
 #include "Shader.hpp"
 
@@ -29,56 +27,26 @@ namespace {
 	struct TestBufferTarget {};
 
 	struct PassA {
-		using Resources = Declares<Create<TestColorTarget>, Create<TestDepthTarget>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestColorTarget>(),
-					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestDepthTarget>(),
-					.access = AccessKind::Write,
-					.desc = DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestColorTarget>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<TestDepthTarget>().Desc(DepthBufferDesc(ctx.width, ctx.height));
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct PassB {
-		using Resources = Declares<Read<TestColorTarget>, Create<TestBufferTarget>>;
-
 		// width/height must match PassA's own Create<TestColorTarget> (ctx-based, not a
 		// hardcoded 1920x1080 unrelated to this test's real 256x256 FrameContext): PhysicalExecutionBackend::
 		// DeriveAttachments now sizes a node's render area from the real provisioned texture
 		// (PhysicalExecutionBackend.hpp), not this realization's own desc, so a genuine
 		// cross-node size mismatch here surfaces as a real color/depth attachment-size
 		// validation error instead of staying silently masked.
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Compute};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestColorTarget>(),
-					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestBufferTarget>(),
-					.access = AccessKind::Write,
-					.desc = StorageBufferDesc(1024),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<TestColorTarget>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<TestBufferTarget>().Desc(StorageBufferDesc(1024));
 		}
 
 		void Execute(NodeContext&) {}
@@ -93,18 +61,9 @@ namespace {
 	// exactly mirroring how Engine registers TerrainPass::GetTLAS() before constructing the
 	// Frame each frame.
 	struct PassTLASBuild {
-		using Resources = Declares<Create<TestTLAS>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestTLAS>(),
-					.access = AccessKind::Write,
-					.desc = AccelerationStructureDesc()
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestTLAS>().Desc(AccelerationStructureDesc());
 		}
 
 		void Execute(NodeContext&) {}
@@ -112,18 +71,9 @@ namespace {
 
 	// Mirrors DeferredNode's ray-query read of the TLAS in shaders/deferred.frag.
 	struct PassTLASRead {
-		using Resources = Declares<Read<TestTLAS>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestTLAS>(),
-					.access = AccessKind::Read,
-					.desc = AccelerationStructureDesc()
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<TestTLAS>().Desc(AccelerationStructureDesc());
 		}
 
 		void Execute(NodeContext&) {}
@@ -135,18 +85,9 @@ namespace {
 
 	// Writes this frame's mask in place -- mirrors ShadingRateNode's Modify<ShadingRateMap>.
 	struct TemporalWriter {
-		using Resources = Declares<Modify<TestTemporalMask>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestTemporalMask>(),
-					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<TestTemporalMask>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext&) {}
@@ -157,18 +98,9 @@ namespace {
 	// this declaratively, and PhysicalRegistry::ProvisionTemporalPairs is what satisfies it
 	// physically (see PhysicalExecutionBackend.hpp).
 	struct TemporalReader {
-		using Resources = Declares<Read<History<TestTemporalMask>>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<History<TestTemporalMask>>(),
-					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.ReadPrevious<TestTemporalMask>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext&) {}
@@ -187,18 +119,12 @@ namespace {
 	};
 
 	struct CatalogWriter {
-		using Resources = Declares<Modify<TestCatalogMask>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestCatalogMask>(),
-					.access = AccessKind::ReadWrite,
-					.desc = {}, // deliberately wrong/empty -- the catalog's Desc() must win
-				}
-			);
-			return r;
+		// Deliberately no .Desc() call -- a bare Modify<K>() carries an empty ResourceDesc{} by
+		// default, same as the old hand-rolled realization's wrong/empty one; the catalog's own
+		// Desc() must win regardless.
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<TestCatalogMask>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -215,92 +141,21 @@ namespace {
 	using CatalogTemporalTypeList = TypeList<TestCatalogTemporalMask>;
 
 	struct CatalogTemporalWriter {
-		using Resources = Declares<Modify<TestCatalogTemporalMask>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestCatalogTemporalMask>(),
-					.access = AccessKind::ReadWrite,
-					.desc = {},
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<TestCatalogTemporalMask>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
-	// Reads History<TestCatalogTemporalMask> but pushes a deliberately empty .desc for it --
-	// lesson #9 required this exact realization to supply the real desc; a converted key no
-	// longer needs the reader to get anything right at all.
+	// Reads History<TestCatalogTemporalMask> with no .Desc() at all -- lesson #9 required this
+	// exact realization to supply the real desc; a converted key no longer needs the reader to
+	// get anything right at all.
 	struct CatalogTemporalReader {
-		using Resources = Declares<Read<History<TestCatalogTemporalMask>>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<History<TestCatalogTemporalMask>>(),
-					.access = AccessKind::Read,
-					.desc = {},
-				}
-			);
-			return r;
-		}
-
-		void Execute(NodeContext&) {}
-	};
-
-	struct TestVersionedTarget {};
-
-	// Modify<K, 1>'s single realization carries ReadWrite access on the *produced* version --
-	// the same shape DeferredNode's real Modify<Swapchain> realization uses -- since consuming
-	// version 0 and producing version 1 is one read-modify-write of one physical resource, not
-	// two separate ones.
-	struct FirstVersionWriter {
-		using Resources = Declares<Modify<TestVersionedTarget, 1>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<VersionedKey<TestVersionedTarget, 1>>(),
-					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
-		}
-
-		void Execute(NodeContext&) {}
-	};
-
-	struct SecondVersionWriter {
-		using Resources = Declares<Modify<TestVersionedTarget, 2>>;
-
-		// S3 deleted version lifting and self-modify chaining -- the mechanisms that used to
-		// order two same-phase ReadWrite writers of one base key by version number / registration
-		// index. Both writers here resolve to the same base (TestVersionedTarget) and are both
-		// ReadWrite, so neither is a Create-before-accessor "creator"; with nothing else ordering
-		// them, that's now a hard ambiguity error, not a scheduling nicety. A real builder node
-		// would use After<X>()/Before<X>(); this fixture is legacy-shaped (no SetupBuilder) and
-		// exists to test PhysicalResourceRegistry's version resolution, not graph scheduling, so
-		// the minimal fix is the same one the old phase-based Modify<Swapchain> chains already
-		// relied on: a later phase.
-		static constexpr Phase kPhase = Phase::Late;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<VersionedKey<TestVersionedTarget, 2>>(),
-					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.ReadPrevious<TestCatalogTemporalMask>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -321,36 +176,18 @@ namespace {
 	struct TestBindlessFresh {};
 
 	struct SampledWriterA {
-		using Resources = Declares<Create<TestBindlessSampledA>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestBindlessSampledA>(),
-					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestBindlessSampledA>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct SampledWriterB {
-		using Resources = Declares<Create<TestBindlessSampledB>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestBindlessSampledB>(),
-					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestBindlessSampledB>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext&) {}
@@ -360,18 +197,9 @@ namespace {
 	// one node via imageStore, sampled by a different one via texture(). Needs a slot in *both*
 	// bindless arrays at once (PhysicalTexture::GetSampledBindlessIndex's comment).
 	struct StorageWriter {
-		using Resources = Declares<Create<TestBindlessStorage>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Compute};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestBindlessStorage>(),
-					.access = AccessKind::Write,
-					.desc = ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Create<TestBindlessStorage>().Desc(ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
 		}
 
 		void Execute(NodeContext&) {}
@@ -380,16 +208,11 @@ namespace {
 	// layers > 1: routes to the sampled-2D-*array* binding, not the plain sampled-2D one --
 	// mirrors the terrain clipmap's real shape (PhysicalResource.hpp's CreateView fix).
 	struct ArrayWriter {
-		using Resources = Declares<Create<TestBindlessArray>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe       r{.domain = ExecutionDomain::Graphics};
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
 			ResourceDesc desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
 			desc.layers = 4;
-			r.realizations.push_back(
-				ResourceRealization{.key = IdOf<TestBindlessArray>(), .access = AccessKind::Write, .desc = desc}
-			);
-			return r;
+			r.Create<TestBindlessArray>().Desc(desc);
 		}
 
 		void Execute(NodeContext&) {}
@@ -402,17 +225,12 @@ namespace {
 	// other resource in this file uses. eTransferSrc added on top of ComputeStorageImageDesc's
 	// usual mask so the test below can read each mip back directly.
 	struct MipStorageWriter {
-		using Resources = Declares<Create<TestMipStorage>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe       r{.domain = ExecutionDomain::Compute};
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
 			ResourceDesc desc = ComputeStorageImageDesc(8, 8, vk::Format::eR16G16B16A16Sfloat);
 			desc.mips = 4; // 8 -> 4 -> 2 -> 1
 			desc.usageMask |= static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eTransferSrc);
-			r.realizations.push_back(
-				ResourceRealization{.key = IdOf<TestMipStorage>(), .access = AccessKind::Write, .desc = desc}
-			);
-			return r;
+			r.Create<TestMipStorage>().Desc(desc);
 		}
 
 		// The real per-mip imageStore writes happen by hand in the test body, directly after
@@ -423,36 +241,18 @@ namespace {
 	// Setup()'s desc tracks ctx.width/height directly, so re-running with a different FrameContext
 	// extent is what exercises ProvisionTexture's desc-mismatch replace-and-retire path.
 	struct ResizableWriter {
-		using Resources = Declares<Modify<TestBindlessResizable>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestBindlessResizable>(),
-					.access = AccessKind::ReadWrite,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<TestBindlessResizable>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct FreshWriter {
-		using Resources = Declares<Create<TestBindlessFresh>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestBindlessFresh>(),
-					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestBindlessFresh>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext&) {}
@@ -533,90 +333,6 @@ namespace {
 		device.destroyDescriptorSetLayout(s.layout);
 	}
 
-	// Fixtures for the Subgraph-recursion test below: a two-node cluster (SubWriter -> SubReader,
-	// a Graphics->Compute cross-domain edge entirely internal to the cluster) nested inside an
-	// outer graph via Subgraph<SubClusterSpec>, plus an outer node reading what the cluster
-	// produced -- the cross-boundary edge PhysicalExecutionBackend::RunSchedule's recursion must
-	// get right for a real multipass post-processing cluster to work at all.
-	struct TestSubColor {};
-
-	struct TestSubBuffer {};
-
-	struct TestOuterBuffer {};
-
-	struct SubWriter {
-		using Resources = Declares<Create<TestSubColor>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestSubColor>(),
-					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
-		}
-
-		void Execute(NodeContext&) {}
-	};
-
-	struct SubReader {
-		using Resources = Declares<Read<TestSubColor>, Create<TestSubBuffer>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Compute};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestSubColor>(),
-					.access = AccessKind::Read,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestSubBuffer>(),
-					.access = AccessKind::Write,
-					.desc = StorageBufferDesc(1024),
-				}
-			);
-			return r;
-		}
-
-		void Execute(NodeContext&) {}
-	};
-
-	using SubClusterSpec = FrameSpec<SubWriter, SubReader>;
-	using SubCluster = Subgraph<SubClusterSpec>;
-
-	static_assert(std::is_same_v<SubClusterSpec::Unsatisfied, TypeList<>>); // fully self-contained
-
-	struct OuterConsumer {
-		using Resources = Declares<Read<TestSubBuffer>, Create<TestOuterBuffer>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Compute};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestSubBuffer>(),
-					.access = AccessKind::Read,
-					.desc = StorageBufferDesc(1024),
-				}
-			);
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestOuterBuffer>(),
-					.access = AccessKind::Write,
-					.desc = StorageBufferDesc(64),
-				}
-			);
-			return r;
-		}
-
-		void Execute(NodeContext&) {}
-	};
-
 	// -- CPU-write + sync helper: Stage 0 empirical proof, since converted to Stage 3's real seam
 	// See .claude/plans/ancient-booping-magpie.md. Stage 0 proved the *unmodified* barrier
 	// machinery -- ResourceState.hpp's DeriveBufferState Host-write branch and DeriveImageState's
@@ -632,20 +348,11 @@ namespace {
 
 	// HostAccess::Mapped: WriteSpan writes straight into this frame's ring slot, no copy command.
 	struct HostWriterNode {
-		using Resources = Declares<Create<TestHostBuffer>>;
-
 		std::uint32_t sentinel = 0;
 
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Host};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestHostBuffer>(),
-					.access = AccessKind::Write,
-					.desc = MappedStorageBufferDesc(sizeof(std::uint32_t)),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Host);
+			r.Create<TestHostBuffer>().Desc(MappedStorageBufferDesc(sizeof(std::uint32_t)));
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -654,18 +361,9 @@ namespace {
 	};
 
 	struct HostBufferReaderNode {
-		using Resources = Declares<Read<TestHostBuffer>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Compute};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestHostBuffer>(),
-					.access = AccessKind::Read,
-					.desc = MappedStorageBufferDesc(sizeof(std::uint32_t)),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<TestHostBuffer>().Desc(MappedStorageBufferDesc(sizeof(std::uint32_t)));
 		}
 
 		void Execute(NodeContext&) {}
@@ -674,21 +372,12 @@ namespace {
 	// HostAccess::Staged: WriteSpan copies into the registry's own staging ring; EndHostWrite
 	// records the real copyBufferToImage into a graph-provisioned (not imported) texture.
 	struct StagedWriterNode {
-		using Resources = Declares<Create<TestStagedTexture>>;
-
 		std::uint32_t width = 0;
 		std::uint32_t height = 0;
 
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Transfer};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestStagedTexture>(),
-					.access = AccessKind::Write,
-					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Transfer);
+			r.Create<TestStagedTexture>().Desc(StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -698,21 +387,12 @@ namespace {
 	};
 
 	struct StagedTextureReaderNode {
-		using Resources = Declares<Read<TestStagedTexture>>;
-
 		std::uint32_t width = 0;
 		std::uint32_t height = 0;
 
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestStagedTexture>(),
-					.access = AccessKind::Read,
-					.desc = StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<TestStagedTexture>().Desc(StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb));
 		}
 
 		void Execute(NodeContext&) {}
@@ -725,20 +405,11 @@ namespace {
 	struct TestMappedRingBuffer {};
 
 	struct MappedRingWriterNode {
-		using Resources = Declares<Create<TestMappedRingBuffer>>;
-
 		std::uint64_t byteSize = sizeof(std::uint32_t);
 
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Host};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestMappedRingBuffer>(),
-					.access = AccessKind::Write,
-					.desc = MappedStorageBufferDesc(byteSize),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Host);
+			r.Create<TestMappedRingBuffer>().Desc(MappedStorageBufferDesc(byteSize));
 		}
 
 		void Execute(NodeContext&) {}
@@ -754,25 +425,10 @@ namespace {
 	struct TestIllegalStagedBuffer {};
 
 	struct IllegalStagedWriteNode {
-		using Resources = Declares<Create<TestIllegalStagedTarget>, Create<TestIllegalStagedBuffer>>;
-
-		Recipe Setup(const FrameContext& ctx) {
-			Recipe r{.domain = ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestIllegalStagedTarget>(),
-					.access = AccessKind::Write,
-					.desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<TestIllegalStagedBuffer>(),
-					.access = AccessKind::Write,
-					.desc = StagedStorageBufferDesc(sizeof(std::uint32_t)),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestIllegalStagedTarget>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<TestIllegalStagedBuffer>().Desc(StagedStorageBufferDesc(sizeof(std::uint32_t)));
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -931,27 +587,19 @@ namespace {
 
 	struct ZeroInitBufferKey {};
 
-	// Never active -- stands in for e.g. GTAONode disabled: declares the key (so
+	ResourceDesc ZeroInitBufferDesc() {
+		ResourceDesc desc = StorageBufferDesc(64);
+		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
+		return desc;
+	}
+
+	// Never active -- stands in for e.g. GTAONode disabled: declares the key unconditionally (so
 	// ValidateRuntime's renderability check is satisfied) but never actually runs or writes it.
 	struct InactiveZeroInitProducer {
-		using Resources = Declares<Create<ZeroInitBufferKey>>;
-
-		Recipe Setup(const FrameContext&) {
-			return Recipe{
-				.domain = ExecutionDomain::Compute,
-				.isActive = false,
-				.realizations = {
-					ResourceRealization{
-						.key = IdOf<ZeroInitBufferKey>(),
-						.access = AccessKind::Write,
-						.desc = []() {
-							ResourceDesc desc = StorageBufferDesc(64);
-							desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
-							return desc;
-						}(),
-					},
-				},
-			};
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Active(false);
+			r.Create<ZeroInitBufferKey>().Desc(ZeroInitBufferDesc());
 		}
 
 		void Execute(NodeContext&) {}
@@ -960,22 +608,9 @@ namespace {
 	// Plain Read, no Required() -- mirrors DeferredNode's Read<GTAOTexture>(): this node must
 	// keep running regardless of the producer's activity, it just needs defined (zero) content.
 	struct ActiveZeroInitReader {
-		using Resources = Declares<Read<ZeroInitBufferKey>>;
-
-		Recipe Setup(const FrameContext&) {
-			Recipe r{.domain = ExecutionDomain::Compute};
-			r.realizations.push_back(
-				ResourceRealization{
-					.key = IdOf<ZeroInitBufferKey>(),
-					.access = AccessKind::Read,
-					.desc = []() {
-						ResourceDesc desc = StorageBufferDesc(64);
-						desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
-						return desc;
-					}(),
-				}
-			);
-			return r;
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<ZeroInitBufferKey>().Desc(ZeroInitBufferDesc());
 		}
 
 		void Execute(NodeContext&) {}
@@ -1134,79 +769,6 @@ TEST_CASE(
 
 		vmaDestroyBuffer(device.GetAllocator(), readbackBuffer, readbackAllocation);
 		vkDevice.destroyCommandPool(pool);
-	}
-
-	CHECK(device.GetValidationErrorCount() == 0);
-	CHECK(device.GetValidationWarningCount() == 0);
-}
-
-// Subgraph is not in production use yet, but real multipass post-processing work is planned
-// around it, so its execution path needs the same real-hardware coverage as everything else in
-// this file rather than staying verified by structure/Dot tests alone (test_graph.cpp) -- those
-// never actually run a Subgraph's inner nodes, so they could never have caught
-// RunSchedule/Subgraph::Setup not existing at all before this test did.
-//
-// SubCluster (SubWriter -> SubReader, a Graphics->Compute edge entirely inside the cluster) is
-// registered as one node in the outer graph; OuterConsumer reads TestSubBuffer, which only the
-// cluster's own SubReader produces -- a real cross-boundary edge the outer Compile() must wire
-// from the Subgraph node (by its declared Produces) to OuterConsumer, and RunSchedule's recursion
-// must have the cluster's own barriers/dynamic-rendering actually run before that edge's Acquire
-// makes sense. A real command buffer + validation layers is what actually proves the recursion
-// emits a legal barrier sequence rather than the compile-only Vulkan-free tests' proof that the
-// schedule merely *exists*.
-TEST_CASE(
-	"PhysicalExecutionBackend recurses into a Subgraph's inner graph with real barriers/dynamic-rendering, and an "
-	"outer node can read what the subgraph produced"
-) {
-	brassica::testing::MinimalDevice device;
-
-	if (!device.IsValid()) {
-		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
-		return;
-	}
-
-	vk::Device vkDevice = device.GetDevice();
-
-	{
-		vk::CommandPool pool = vkDevice.createCommandPool(
-			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
-		);
-		vk::CommandBuffer vkCmd = vkDevice
-									  .allocateCommandBuffers(
-										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
-									  )
-									  .front();
-
-		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
-		PhysicalExecutionBackend backend(registry);
-
-		SubCluster cluster;
-		cluster.InnerGraph().Register<SubWriter>();
-		cluster.InnerGraph().Register<SubReader>();
-
-		Graph graph;
-		graph.Register<SubCluster>(std::move(cluster));
-		graph.Register<OuterConsumer>();
-
-		FrameContext ctx{.width = 256, .height = 256};
-
-		vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-		CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
-		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, true));
-		vkCmd.end();
-
-		vk::SubmitInfo submitInfo{};
-		submitInfo.setCommandBuffers(vkCmd);
-		device.GetQueue().submit(submitInfo);
-		device.GetQueue().waitIdle();
-
-		vkDevice.destroyCommandPool(pool);
-
-		// Provisioned into the same registry the outer graph used -- proof the recursion's own
-		// Provision call, not just its barrier dispatch, actually ran for the cluster's nodes.
-		CHECK(registry.GetTexture<TestSubColor>() != nullptr);
-		CHECK(registry.GetBuffer<TestSubBuffer>() != nullptr);
-		CHECK(registry.GetBuffer<TestOuterBuffer>() != nullptr);
 	}
 
 	CHECK(device.GetValidationErrorCount() == 0);
@@ -1620,63 +1182,6 @@ TEST_CASE(
 // base id, a node consuming version N-1 and producing version N reported Read (not ReadWrite)
 // for the edge into it, and two versions of one key could desynchronize into two separate
 // EmitImageBarrier calls racing to mutate the same PhysicalTexture's tracked state.
-TEST_CASE(
-	"Two versions of one key resolve to one PhysicalTexture and coalesce into a single "
-	"barrier"
-) {
-	brassica::testing::MinimalDevice device;
-
-	if (!device.IsValid()) {
-		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
-		return;
-	}
-
-	vk::Device vkDevice = device.GetDevice();
-
-	{
-		vk::CommandPool pool = vkDevice.createCommandPool(
-			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
-		);
-		vk::CommandBuffer vkCmd = vkDevice
-									  .allocateCommandBuffers(
-										  vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1}
-									  )
-									  .front();
-
-		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
-		PhysicalExecutionBackend backend(registry);
-
-		Graph graph;
-		graph.Register<Import<TestVersionedTarget>>();
-		graph.Register<FirstVersionWriter>();
-		graph.Register<SecondVersionWriter>();
-
-		FrameContext ctx{.width = 64, .height = 64};
-
-		vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-		CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
-		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
-		vkCmd.end();
-
-		vk::SubmitInfo submitInfo{};
-		submitInfo.setCommandBuffers(vkCmd);
-		device.GetQueue().submit(submitInfo);
-		device.GetQueue().waitIdle();
-
-		auto base = registry.GetTexture<TestVersionedTarget>();
-		auto v1 = registry.GetTexture<VersionedKey<TestVersionedTarget, 1>>();
-		auto v2 = registry.GetTexture<VersionedKey<TestVersionedTarget, 2>>();
-		REQUIRE(base != nullptr);
-		CHECK(v1 == base);
-		CHECK(v2 == base);
-
-		vkDevice.destroyCommandPool(pool);
-	}
-
-	CHECK(device.GetValidationErrorCount() == 0);
-	CHECK(device.GetValidationWarningCount() == 0);
-}
-
 // The regression this closes: before PhysicalTexture owned its own bindless index (assigned once
 // at creation, descriptor written once), the seed code's inert m_bindlessIndices map kept a
 // single flat index per ResourceId, which can't express a texture needing a slot in *two* arrays

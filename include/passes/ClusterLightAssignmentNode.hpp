@@ -5,7 +5,6 @@
 #include "spdlog/spdlog.h"
 #include "vulkan/vulkan.hpp"
 
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"

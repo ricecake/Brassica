@@ -6,7 +6,6 @@
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
 
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/SetupBuilder.hpp"

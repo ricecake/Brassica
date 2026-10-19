@@ -111,8 +111,6 @@ namespace {
 		// pair by registration index; Create<K> instead gets a real Create-before-accessor edge
 		// to every other accessor of K (TerrainMinMaxDownsampleNode included), which is both
 		// correct and matches production's own edge for the same pair.
-		using Resources = graph::Declares<graph::Create<TerrainMinMaxTexture>>;
-
 		// Must match TerrainMinMaxDownsampleNode's own kPhase (both SubPhase::Prepare in
 		// production, via TerrainGenNode) so this still lands in the schedule where production
 		// does, even though Create-before-accessor no longer needs the phase match to order the
@@ -143,16 +141,9 @@ namespace {
 
 		void Destroy(vk::Device device) { shader.Destroy(device); }
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainMinMaxTexture>(),
-					.access = graph::AccessKind::Write,
-					.desc = TerrainMinMaxDesc(gridParams.x),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Create<TerrainMinMaxTexture>().Desc(TerrainMinMaxDesc(gridParams.x));
 		}
 
 		void Execute(graph::NodeContext& ctx) {

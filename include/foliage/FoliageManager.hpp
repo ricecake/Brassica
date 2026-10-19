@@ -8,6 +8,10 @@
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 
+namespace brassica::graph {
+	class Graph;
+}
+
 namespace brassica {
 
 	class FoliageManager final: public IFoliageManager {

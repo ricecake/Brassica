@@ -20,12 +20,11 @@ namespace brassica::graph {
 		std::vector<ResourceId> missing;
 	};
 
-	// Runtime counterpart of IsRenderable/MissingOf (Validation.hpp), for graphs assembled
-	// dynamically -- e.g. a subgraph registered at runtime with no compile-time FrameSpec
-	// proof available. Same vocabulary, same diagnosability, different enforcement point.
-	inline std::expected<void, ValidationError>
-	ValidateRuntime(std::span<const NodeDescriptor> nodes, std::span<const ResourceId> imported) {
-		std::vector<ResourceId> produced(imported.begin(), imported.end());
+	// Checks that every consumed key is produced by some node in the set (an Import<K> node
+	// counts -- it produces keys and consumes nothing, Node.hpp) or is a History<K>, which is
+	// self-satisfying regardless (see the isHistory check below).
+	inline std::expected<void, ValidationError> ValidateRuntime(std::span<const NodeDescriptor> nodes) {
+		std::vector<ResourceId> produced;
 		for (const auto& node : nodes) {
 			produced.insert(produced.end(), node.produces.begin(), node.produces.end());
 		}
@@ -33,6 +32,14 @@ namespace brassica::graph {
 		std::vector<ResourceId> missing;
 		for (const auto& node : nodes) {
 			for (ResourceId key : node.consumes) {
+				// A History<K> consumption is self-satisfying: its physical pairing comes from
+				// PhysicalResourceRegistry::ProvisionTemporalPairs, which pairs it with K's own
+				// catalog desc (or a sibling realization's), never from a graph-level producer
+				// edge -- requiring a formal Import<History<K>>/PreviousFrame<K> producer here was
+				// always a fiction this check imposed on top of a mechanism that doesn't need one.
+				if (key->isHistory) {
+					continue;
+				}
 				if (std::find(produced.begin(), produced.end(), key) == produced.end() &&
 				    std::find(missing.begin(), missing.end(), key) == missing.end()) {
 					missing.push_back(key);
@@ -97,19 +104,9 @@ namespace brassica::graph {
 			return kQueueFamilyIgnored;
 		}
 
-		template <NodeLike T, typename... Args>
-		void Register(Args&&... args) {
-			Add(NodeHandle::Make<T>(std::forward<Args>(args)...));
-		}
-
 		template <BuilderNode T, typename... Args>
 		void Register(Args&&... args) {
 			Add(NodeHandle::Make<T>(std::forward<Args>(args)...));
-		}
-
-		template <NodeLike T>
-		void RegisterRef(T& node) {
-			Add(NodeHandle::MakeRef<T>(node));
 		}
 
 		template <BuilderNode T>
@@ -118,14 +115,6 @@ namespace brassica::graph {
 		}
 
 		void Add(NodeHandle handle) { m_nodes.push_back(std::move(handle)); }
-
-		// Non-null only when node `index` is a Subgraph -- lets a backend recurse into its
-		// inner graph with the same treatment (Provision/barrier-synthesis/DynamicRendering) it
-		// gives this graph, instead of falling through to ExecuteNode/Subgraph::Execute's naive
-		// per-node loop. See PhysicalExecutionBackend::RunSchedule.
-		[[nodiscard]] Graph* InnerGraphOfNode(std::size_t index) {
-			return index < m_nodes.size() ? m_nodes[index].InnerGraphIfAny() : nullptr;
-		}
 
 		void Setup(const FrameContext& ctx) {
 			m_recipes.clear();
@@ -157,14 +146,6 @@ namespace brassica::graph {
 		// external/FrameGraph, which culls by refcount but executes in registration order and
 		// never batches a barrier at all.
 		//
-		// externallyProvided is for a Subgraph's own inner graph (Frame.hpp): its Resources are
-		// its *net* interface (Spec::Unsatisfied), so a key in that set has, by construction, no
-		// producer inside this graph at all -- the parent supplies it. Without naming that here,
-		// ValidateRuntime would report it missing every time, which is exactly backwards: an
-		// unsatisfied input is a Subgraph's interface, not a bug. A root Graph/Frame has none of
-		// these, hence the empty default -- Frame already asserts full renderability itself
-		// (Validation.hpp's AssertRenderable), so nothing is lost by requiring every input to be
-		// a real producer or Import there.
 		// S3: swapped to the relational compiler (CompileRelational, graph/RelationalCompiler.hpp)
 		// -- see the design plan's §C. Replaces three things that used to live inline here:
 		// version lifting (a VersionedKey<K,N> consumer no longer needs rewriting to the highest
@@ -176,14 +157,14 @@ namespace brassica::graph {
 		// relation does, not a hard partition -- a "later phase" producer for an "earlier phase"
 		// reader is either a real ambiguity, caught by CompileRelational's own ambiguity check,
 		// or legitimately fine, caught by nothing because it no longer needs special-casing).
-		std::expected<void, ValidationError> Compile(std::span<const ResourceId> externallyProvided = {}) {
+		std::expected<void, ValidationError> Compile() {
 			std::vector<NodeDescriptor> descriptors;
 			descriptors.reserve(m_nodes.size());
 			for (const auto& node : m_nodes) {
 				descriptors.push_back(node.Descriptor());
 			}
 
-			if (auto result = ValidateRuntime(descriptors, externallyProvided); !result) {
+			if (auto result = ValidateRuntime(descriptors); !result) {
 				return result;
 			}
 
@@ -296,18 +277,12 @@ namespace brassica::graph {
 			ResourceId  key;
 		};
 
-		// A node's access to a key it touches: ReadWrite if the key's base appears in both its
-		// consumes and produces, Write if produces-only, Read otherwise. Matches by resolved base
-		// rather than exact id so a node consuming VersionOf<K, N-1> and producing VersionOf<K, N>
-		// (Modify<K, N>) reports ReadWrite for either version's edge -- both versions name the one
-		// physical resource PhysicalResourceRegistry::ResolveId resolves them to, so a plain
-		// exact-id match would wrongly report Read for the consumed (lower) version. For any
-		// unversioned key this collapses to exact-id matching, unchanged from before.
+		// A node's access to a key it touches: ReadWrite if the key appears in both its consumes
+		// and produces, Write if produces-only, Read otherwise.
 		static AccessKind AccessOf(const NodeDescriptor& node, ResourceId key) {
-			const ResourceId base = key->versionBase ? key->versionBase : key;
-			auto             matchesBase = [base](ResourceId id) { return id == base || id->versionBase == base; };
-			const bool       reads = std::any_of(node.consumes.begin(), node.consumes.end(), matchesBase);
-			const bool       writes = std::any_of(node.produces.begin(), node.produces.end(), matchesBase);
+			auto       matchesBase = [key](ResourceId id) { return id == key; };
+			const bool reads = std::any_of(node.consumes.begin(), node.consumes.end(), matchesBase);
+			const bool writes = std::any_of(node.produces.begin(), node.produces.end(), matchesBase);
 			if (reads && writes) {
 				return AccessKind::ReadWrite;
 			}

@@ -35,53 +35,38 @@ namespace {
 	}
 
 	struct PrepTerrainProducer {
-		using Resources = graph::Declares<
-			graph::Create<TerrainMinMaxTexture>,
-			graph::Create<TerrainClipmapTexture>,
-			graph::Create<TerrainWeatherBiomeTexture>>;
 		static constexpr graph::Phase kPhase = graph::Phase::PreviousFrame;
-		graph::Recipe Setup(const graph::FrameContext&) { return graph::Recipe{.domain = graph::ExecutionDomain::Host}; }
+
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Host);
+			r.Create<TerrainMinMaxTexture>();
+			r.Create<TerrainClipmapTexture>();
+			r.Create<TerrainWeatherBiomeTexture>();
+		}
+
 		void Execute(graph::NodeContext&) {}
 	};
 
+	// Stands in for DeferredNode: produces everything WaterNode/the particle render nodes read
+	// or modify, for this test's schedule-order check only (this never goes through
+	// PhysicalExecutionBackend::Execute, so no realization here needs a real desc).
+	// TerrainMinMaxTexture's producer is PrepTerrainProducer above, not this node -- the old
+	// legacy-shaped version of this fixture declared a Create<TerrainMinMaxTexture> realization
+	// here too, but never claimed it in its compile-time Resources (which is what the old
+	// scheduler actually read), so it was always dead weight; dropped rather than carried
+	// forward now that Setup is the single source of truth for both.
 	struct DeferredShadingProducer {
-		using Resources = graph::Declares<
-			graph::Create<GBufferPosition>,
-			graph::Create<GBufferAlbedo>,
-			graph::Create<GBufferNormal>,
-			graph::Create<GBufferMaterial>,
-			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>,
-			graph::Create<SkyViewLUT>>;
-
 		static constexpr graph::Phase kPhase = graph::Phase::Default;
 
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainMinMaxTexture>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ResourceDesc{
-						.kind = graph::ResourceDesc::Kind::Image2D,
-						.width = 16,
-						.height = 16,
-						.layers = 1,
-						.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
-						.usageMask = static_cast<std::uint32_t>(
-							vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
-						),
-					},
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Create<GBufferPosition>();
+			r.Create<GBufferAlbedo>();
+			r.Create<GBufferNormal>();
+			r.Create<GBufferMaterial>();
+			r.Create<GBufferDepth>();
+			r.Create<HdrColor>();
+			r.Create<SkyViewLUT>();
 		}
 
 		void Execute(graph::NodeContext&) {}
@@ -1042,17 +1027,11 @@ TEST_CASE("ExecuteOnce wrapper executes inner node once and skips subsequent run
 	graph::PhysicalResourceRegistry registry(vkDevice, allocator, queue);
 
 	struct MockComputeNode {
-		using Resources = graph::Declares<graph::Create<ParticleIndirectBuffer>>;
 		int runCount = 0;
 
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(graph::ResourceRealization{
-				.key = graph::IdOf<ParticleIndirectBuffer>(),
-				.access = graph::AccessKind::Write,
-				.desc = graph::StorageBufferDesc(12),
-			});
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Create<ParticleIndirectBuffer>().Desc(graph::StorageBufferDesc(12));
 		}
 
 		void Execute(graph::NodeContext&) {
@@ -1067,18 +1046,24 @@ TEST_CASE("ExecuteOnce wrapper executes inner node once and skips subsequent run
 	graph::FrameContext fctx{};
 
 	CHECK(onceNode.executed == false);
-	CHECK(onceNode.Setup(fctx).isActive == true);
+	graph::SetupBuilder builder1;
+	onceNode.Setup(builder1, fctx);
+	CHECK(builder1.Active() == true);
 
 	onceNode.Execute(nctx);
 
 	CHECK(onceNode.executed == true);
 	CHECK(onceNode.inner.runCount == 1);
-	CHECK(onceNode.Setup(fctx).isActive == false);
+	graph::SetupBuilder builder2;
+	onceNode.Setup(builder2, fctx);
+	CHECK(builder2.Active() == false);
 
 	onceNode.Execute(nctx);
 	CHECK(onceNode.inner.runCount == 1);
 
 	onceNode.Reset();
 	CHECK(onceNode.executed == false);
-	CHECK(onceNode.Setup(fctx).isActive == true);
+	graph::SetupBuilder builder3;
+	onceNode.Setup(builder3, fctx);
+	CHECK(builder3.Active() == true);
 }

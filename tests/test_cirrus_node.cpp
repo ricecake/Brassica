@@ -17,78 +17,23 @@ using namespace brassica;
 namespace {
 
 	struct FakeSceneProducer {
-		using Resources = graph::Declares<
-			graph::Create<GBufferPosition>,
-			graph::Create<GBufferAlbedo>,
-			graph::Create<GBufferNormal>,
-			graph::Create<GBufferMaterial>,
-			graph::Create<GBufferDepth>,
-			graph::Create<HdrColor>>;
-
-		graph::Recipe Setup(const graph::FrameContext& ctx) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Graphics};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferPosition>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferAlbedo>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferNormal>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferMaterial>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<GBufferDepth>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::DepthBufferDesc(ctx.width, ctx.height),
-				}
-			);
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<HdrColor>(),
-					.access = graph::AccessKind::Write,
-					.desc = graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Create<GBufferPosition>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat));
+			r.Create<GBufferAlbedo>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<GBufferNormal>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			r.Create<GBufferMaterial>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm));
+			r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
+			r.Create<HdrColor>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
 		}
 
 		void Execute(graph::NodeContext&) {}
 	};
 
 	struct FakeWeatherProducer {
-		using Resources = graph::Declares<
-			graph::Create<TerrainWeatherBiomeTexture>>;
-
-		graph::Recipe Setup(const graph::FrameContext&) {
-			graph::Recipe r{.domain = graph::ExecutionDomain::Compute};
-			r.realizations.push_back(
-				graph::ResourceRealization{
-					.key = graph::IdOf<TerrainWeatherBiomeTexture>(),
-					.access = graph::AccessKind::Write,
-					.desc = WeatherBiomeImageDesc(256),
-				}
-			);
-			return r;
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Create<TerrainWeatherBiomeTexture>().Desc(WeatherBiomeImageDesc(256));
 		}
 
 		void Execute(graph::NodeContext&) {}

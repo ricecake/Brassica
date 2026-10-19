@@ -7,7 +7,6 @@
 #include <glm/glm.hpp>
 
 #include "constants.h"
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"

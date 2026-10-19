@@ -7,12 +7,10 @@
 #include <map>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "doctest/doctest.h"
 
-#include "graph/Declaration.hpp"
 #include "graph/Dot.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Frame.hpp"
@@ -21,7 +19,6 @@
 #include "graph/RelationalCompiler.hpp"
 #include "graph/ResourceKey.hpp"
 #include "graph/TypeList.hpp"
-#include "graph/Validation.hpp"
 #include "ArgparseManager.hpp"
 #include "ConfigManager.hpp"
 #include "SystemHandler.hpp"
@@ -58,33 +55,43 @@ namespace {
 	// -- example passes ---------------------------------------------------------------
 
 	struct GBufferPass {
-		using Resources = Declares<Create<GBufferAlbedo>, Create<GBufferNormal>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<GBufferAlbedo>();
+			r.Create<GBufferNormal>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct GtaoPass {
-		using Resources = Declares<Read<GBufferNormal>, Read<History<GTAOData>>, Create<GTAOData>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<GBufferNormal>();
+			r.ReadPrevious<GTAOData>();
+			r.Create<GTAOData>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct LightingPass {
-		using Resources = Declares<Read<GBufferAlbedo>, Read<GTAOData>, Create<HdrColor>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<GBufferAlbedo>();
+			r.Read<GTAOData>();
+			r.Create<HdrColor>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct TonemapPass {
-		using Resources = Declares<Transform<HdrColor, Swapchain>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<HdrColor>();
+			r.Create<Swapchain>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -96,17 +103,19 @@ namespace {
 	struct KeyQ {};
 
 	struct NodeP {
-		using Resources = Declares<Create<KeyP>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<KeyP>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct NodeQ {
-		using Resources = Declares<Create<KeyQ>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Create<KeyQ>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -116,18 +125,21 @@ namespace {
 	// -- example passes: node phases and versioned write chains ----------------------
 
 	struct DeferredLikeNode {
-		using Resources = Declares<Modify<Swapchain>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<Swapchain>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct WaterLikeNode {
 		static constexpr Phase kPhase = Phase::Late;
-		using Resources = Declares<Modify<Swapchain>>;
 
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<Swapchain>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -136,17 +148,20 @@ namespace {
 
 	struct StandaloneLateNode {
 		static constexpr Phase kPhase = Phase::Late;
-		using Resources = Declares<Create<StandaloneKey>>;
 
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<StandaloneKey>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct GtaoLikeProducer {
-		using Resources = Declares<Create<GTAOData>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Create<GTAOData>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -155,43 +170,22 @@ namespace {
 
 	struct LateProducer {
 		static constexpr Phase kPhase = Phase::Late;
-		using Resources = Declares<Create<ViolationKey>>;
 
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<ViolationKey>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct EarlyReader {
 		static constexpr Phase kPhase = Phase::Early;
-		using Resources = Declares<Read<ViolationKey>>;
 
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
-
-		void Execute(NodeContext&) {}
-	};
-
-	struct FirstWriter {
-		using Resources = Declares<Modify<Swapchain, 1>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
-
-		void Execute(NodeContext&) {}
-	};
-
-	struct SecondWriter {
-		using Resources = Declares<Modify<Swapchain, 2>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
-
-		void Execute(NodeContext&) {}
-	};
-
-	struct LatePlainReader {
-		static constexpr Phase kPhase = Phase::Late;
-		using Resources = Declares<Read<Swapchain>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<ViolationKey>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -201,17 +195,21 @@ namespace {
 	struct CycleKeyB {};
 
 	struct CycleNodeA {
-		using Resources = Declares<Read<CycleKeyB>, Create<CycleKeyA>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<CycleKeyB>();
+			r.Create<CycleKeyA>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct CycleNodeB {
-		using Resources = Declares<Read<CycleKeyA>, Create<CycleKeyB>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<CycleKeyA>();
+			r.Create<CycleKeyB>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -224,20 +222,6 @@ namespace {
 	static_assert(IsSubsetOf<TypeList<char>, TypeList<int, char>>);
 	static_assert(!IsSubsetOf<TypeList<char, double>, TypeList<int, char>>);
 
-	static_assert(std::is_same_v<
-				   Declares<Group<Read, GBufferAlbedo, GBufferNormal>>::Consumes,
-				   Declares<Read<GBufferAlbedo>, Read<GBufferNormal>>::Consumes>);
-	static_assert(std::is_same_v<
-				   Declares<Group<Read, GBufferAlbedo, GBufferNormal>>::Produces,
-				   Declares<Read<GBufferAlbedo>, Read<GBufferNormal>>::Produces>);
-
-	static_assert(std::is_same_v<
-				   Declares<Group<Read, GBufferAlbedo, GBufferNormal>, Modify<Swapchain>>::Consumes,
-				   Declares<Read<GBufferAlbedo>, Read<GBufferNormal>, Modify<Swapchain>>::Consumes>);
-	static_assert(std::is_same_v<
-				   Declares<Group<Create, GBufferAlbedo, GBufferNormal>, Create<GBufferAlbedo>>::Produces,
-				   Declares<Create<GBufferAlbedo>, Create<GBufferNormal>>::Produces>);
-
 	static_assert(ResourceKey<GBufferAlbedo> && !ResourceKey<int>);
 	static_assert(ResourceRef<History<GTAOData>>);
 	static_assert(IsHistory<History<GTAOData>> && !IsHistory<GTAOData>);
@@ -247,37 +231,11 @@ namespace {
 	static_assert(kResourceTypeInfo<History<GTAOData>>.historyTarget == IdOf<GTAOData>());
 	static_assert(kResourceTypeInfo<GTAOData>.historyTarget == nullptr);
 
-	static_assert(std::is_same_v<VersionOf<Swapchain, 0>, Swapchain>);
-	static_assert(std::is_same_v<VersionOf<Swapchain, 1>, VersionedKey<Swapchain, 1>>);
-	static_assert(ResourceRef<VersionedKey<Swapchain, 1>>);
-	static_assert(IsVersioned<VersionedKey<Swapchain, 1>> && !IsVersioned<Swapchain>);
-	static_assert(std::is_same_v<VersionBase<VersionedKey<Swapchain, 1>>, Swapchain>);
-	static_assert(VersionIndexOf<VersionedKey<Swapchain, 2>> == 2 && VersionIndexOf<Swapchain> == 0);
-	static_assert(IdOf<VersionedKey<Swapchain, 1>>() != IdOf<VersionedKey<Swapchain, 2>>());
-
-	static_assert(kResourceTypeInfo<VersionedKey<Swapchain, 1>>.versionBase == IdOf<Swapchain>());
-	static_assert(kResourceTypeInfo<VersionedKey<Swapchain, 1>>.version == 1);
-	static_assert(kResourceTypeInfo<Swapchain>.versionBase == nullptr);
-	static_assert(kResourceTypeInfo<Swapchain>.version == 0);
-
-	static_assert(std::is_same_v<ConsumesOf<GtaoPass>, TypeList<GBufferNormal, History<GTAOData>>>);
-	static_assert(std::is_same_v<ProducesOf<GBufferPass>, TypeList<GBufferAlbedo, GBufferNormal>>);
-	static_assert(std::is_same_v<ConsumesOf<TonemapPass>, TypeList<HdrColor>>);
-	static_assert(std::is_same_v<ProducesOf<TonemapPass>, TypeList<Swapchain>>);
-
-	static_assert(std::is_same_v<ConsumesOf<DeferredLikeNode>, TypeList<Swapchain>>);
-	static_assert(std::is_same_v<ProducesOf<DeferredLikeNode>, TypeList<Swapchain>>);
-
-	static_assert(std::is_same_v<ConsumesOf<FirstWriter>, TypeList<Swapchain>>);
-	static_assert(std::is_same_v<ProducesOf<FirstWriter>, TypeList<VersionedKey<Swapchain, 1>>>);
-	static_assert(std::is_same_v<ConsumesOf<SecondWriter>, TypeList<VersionedKey<Swapchain, 1>>>);
-	static_assert(std::is_same_v<ProducesOf<SecondWriter>, TypeList<VersionedKey<Swapchain, 2>>>);
-
-	static_assert(NodeLike<GBufferPass>);
-	static_assert(NodeLike<GtaoPass>);
-	static_assert(NodeLike<Import<Swapchain>>);
-	static_assert(NodeLike<PreviousFrame<Temporal>>);
-	static_assert(NodeLike<NextFrame<Temporal>>);
+	static_assert(BuilderNode<GBufferPass>);
+	static_assert(BuilderNode<GtaoPass>);
+	static_assert(BuilderNode<Import<Swapchain>>);
+	static_assert(BuilderNode<PreviousFrame<Temporal>>);
+	static_assert(BuilderNode<NextFrame<Temporal>>);
 
 	static_assert(PhaseOf<GBufferPass> == Phase::Default);
 	static_assert(PhaseOf<DeferredLikeNode> == Phase::Default);
@@ -287,146 +245,46 @@ namespace {
 	static_assert(PhaseOf<NextFrame<Temporal>> == Phase::NextFrame);
 	static_assert(Phase::PreviousFrame < Phase::Early && Phase::Late < Phase::NextFrame);
 
-	static_assert(TemporalInvariantHolds<PreviousFrame<Temporal>, NextFrame<Temporal>>);
-	static_assert(!TemporalInvariantHolds<PreviousFrame<Temporal>, NextFrame<TypeList<HdrColor>>>);
-
-	using GoodFrame =
-		FrameSpec<Import<Swapchain>, PreviousFrame<Temporal>, GBufferPass, GtaoPass, LightingPass, TonemapPass>;
-	static_assert(IsRenderable<GoodFrame>);
-
-	using BrokenFrame =
-		FrameSpec<Import<Swapchain>, GBufferPass, GtaoPass, LightingPass, TonemapPass, NextFrame<Temporal>>;
-	static_assert(!IsRenderable<BrokenFrame>);
-	static_assert(std::is_same_v<MissingOf<BrokenFrame>, TypeList<History<GTAOData>>>);
-
-	using CompleteFrame = FrameSpec<
-		Import<Swapchain>,
-		PreviousFrame<Temporal>,
-		GBufferPass,
-		GtaoPass,
-		LightingPass,
-		TonemapPass,
-		NextFrame<Temporal>>;
-	static_assert(IsRenderable<CompleteFrame>);
-
-	using InnerSpec = FrameSpec<GBufferPass, GtaoPass>;
-	using Inner = Subgraph<InnerSpec>;
-
-	static_assert(NodeLike<Inner>);
-	static_assert(std::is_same_v<ConsumesOf<Inner>, TypeList<History<GTAOData>>>);
-	static_assert(std::is_same_v<ProducesOf<Inner>, TypeList<GBufferAlbedo, GBufferNormal, GTAOData>>);
-
-	using ParentSpec =
-		FrameSpec<Import<Swapchain>, PreviousFrame<Temporal>, Inner, LightingPass, TonemapPass, NextFrame<Temporal>>;
-	static_assert(IsRenderable<ParentSpec>);
-
 	static_assert(NodeKindOf<GtaoPass> == NodeKind::Ordinary);
 	static_assert(NodeKindOf<Import<Swapchain>> == NodeKind::Import);
 	static_assert(NodeKindOf<PreviousFrame<Temporal>> == NodeKind::PreviousFrame);
 	static_assert(NodeKindOf<NextFrame<Temporal>> == NodeKind::NextFrame);
-	static_assert(NodeKindOf<Inner> == NodeKind::Subgraph);
-
-	using RootFrame = Frame<
-		Import<Swapchain>,
-		PreviousFrame<Temporal>,
-		GBufferPass,
-		GtaoPass,
-		LightingPass,
-		TonemapPass,
-		NextFrame<Temporal>>;
-	static_assert(RootFrame::kRenderable);
-
-	using DotFrame =
-		Frame<Import<Swapchain>, PreviousFrame<Temporal>, Inner, LightingPass, TonemapPass, NextFrame<Temporal>>;
-	static_assert(DotFrame::kRenderable);
-
-	// -- S2: SetupBuilder shim, builder-shaped vs. legacy-shaped node -----------------
-
-	struct BuilderProofTarget {};
-
-	struct LegacyProofProducer {
-		using Resources = Declares<Create<BuilderProofTarget>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
-
-		void Execute(NodeContext&) {}
-	};
-
-	// Same contract as LegacyProofProducer above (Create<BuilderProofTarget>, Graphics domain),
-	// declared through SetupBuilder instead of Declares<>/a hand-built Recipe.
-	struct BuilderProofProducer {
-		void Setup(SetupBuilder& r, const FrameContext&) {
-			r.Domain(ExecutionDomain::Graphics);
-			r.Create<BuilderProofTarget>();
-		}
-
-		void Execute(NodeContext&) {}
-	};
-
-	struct ProofConsumer {
-		using Resources = Declares<Read<BuilderProofTarget>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
-
-		void Execute(NodeContext&) {}
-	};
-
-	static_assert(NodeLike<LegacyProofProducer> && !BuilderNode<LegacyProofProducer>);
-	static_assert(BuilderNode<BuilderProofProducer> && !NodeLike<BuilderProofProducer>);
 
 } // namespace
 
 TEST_CASE("NodeHandle erasure preserves the declared resource contract") {
 	NodeHandle handle = NodeHandle::Make<GtaoPass>();
 
+	// Descriptor() has nothing to report before Setup has run once -- builder nodes have no
+	// compile-time Resources, so consumes/produces are only known after this call.
+	Recipe recipe = handle.Setup(FrameContext{});
+	CHECK(recipe.domain == ExecutionDomain::Compute);
+
 	const auto& desc = handle.Descriptor();
 	CHECK(desc.name.find("GtaoPass") != std::string_view::npos);
 	REQUIRE(desc.consumes.size() == 2);
 	CHECK(desc.produces.size() == 1);
 	CHECK(desc.produces[0] == IdOf<GTAOData>());
-
-	Recipe recipe = handle.Setup(FrameContext{});
-	CHECK(recipe.domain == ExecutionDomain::Compute);
-}
-
-TEST_CASE("A builder-shaped node's Descriptor() reports the same contract as an equivalent "
-		  "legacy-shaped node's") {
-	NodeHandle legacy = NodeHandle::Make<LegacyProofProducer>();
-	NodeHandle builder = NodeHandle::Make<BuilderProofProducer>();
-
-	// Descriptor() on a builder node has nothing to report before Setup has run once -- unlike
-	// a legacy node, whose compile-time Resources means Descriptor() is always already correct.
-	NodeDescriptor beforeSetup = builder.Descriptor();
-	CHECK(beforeSetup.produces.empty());
-
-	FrameContext ctx{};
-	Recipe       legacyRecipe = legacy.Setup(ctx);
-	Recipe       builderRecipe = builder.Setup(ctx);
-
-	NodeDescriptor legacyDesc = legacy.Descriptor();
-	NodeDescriptor builderDesc = builder.Descriptor();
-
-	REQUIRE(builderDesc.produces.size() == legacyDesc.produces.size());
-	CHECK(builderDesc.produces[0] == legacyDesc.produces[0]);
-	CHECK(builderDesc.produces[0] == IdOf<BuilderProofTarget>());
-	CHECK(builderDesc.consumes.empty());
-	CHECK(builderDesc.phase == legacyDesc.phase);
-	CHECK(builderRecipe.domain == legacyRecipe.domain);
-	CHECK(builderRecipe.isActive == legacyRecipe.isActive);
-	REQUIRE(builderRecipe.realizations.size() == 1);
-	CHECK(builderRecipe.realizations[0].key == IdOf<BuilderProofTarget>());
-	CHECK(builderRecipe.realizations[0].access == AccessKind::Write);
 }
 
 TEST_CASE("ValidateRuntime reports the missing key by name") {
-	std::vector<NodeDescriptor> nodes{
-		NodeHandle::Make<GtaoPass>().Descriptor(),
-		NodeHandle::Make<LightingPass>().Descriptor(),
-	};
+	NodeHandle gtaoHandle = NodeHandle::Make<GtaoPass>();
+	NodeHandle lightingHandle = NodeHandle::Make<LightingPass>();
+	// Descriptor() on a builder-shaped handle has nothing to report until Setup has run once.
+	gtaoHandle.Setup(FrameContext{});
+	lightingHandle.Setup(FrameContext{});
 
-	auto result = ValidateRuntime(nodes, {});
+	std::vector<NodeDescriptor> nodes{gtaoHandle.Descriptor(), lightingHandle.Descriptor()};
+
+	// GBufferNormal/GBufferAlbedo have no producer in this list -- genuinely missing.
+	// History<GTAOData> also has no PreviousFrame/Import producer here, but is NOT
+	// reported: a History<K> consumption is self-satisfying (its physical pairing comes
+	// from ProvisionTemporalPairs, not a graph-level producer edge), so requiring one
+	// here would be a false positive.
+	auto result = ValidateRuntime(nodes);
 	REQUIRE(!result.has_value());
-	CHECK(result.error().message.find("GTAOData") != std::string::npos);
+	CHECK(result.error().message.find("GBufferNormal") != std::string::npos);
+	CHECK(result.error().message.find("History") == std::string::npos);
 }
 
 namespace {
@@ -449,49 +307,6 @@ namespace {
 		return false;
 	}
 } // namespace
-
-TEST_CASE("A builder-shaped producer and an equivalent legacy-shaped producer, each paired with "
-		  "the same legacy consumer, compile into identical schedules") {
-	FrameContext ctx{};
-
-	Graph legacyGraph;
-	legacyGraph.Register<LegacyProofProducer>();
-	legacyGraph.Register<ProofConsumer>();
-	legacyGraph.Setup(ctx);
-	REQUIRE(legacyGraph.Compile().has_value());
-
-	Graph builderGraph;
-	builderGraph.Register<BuilderProofProducer>();
-	builderGraph.Register<ProofConsumer>();
-	builderGraph.Setup(ctx);
-	REQUIRE(builderGraph.Compile().has_value());
-
-	const Schedule& legacySchedule = legacyGraph.GetSchedule();
-	const Schedule& builderSchedule = builderGraph.GetSchedule();
-
-	REQUIRE(legacySchedule.stages.size() == builderSchedule.stages.size());
-	REQUIRE(legacySchedule.stages.size() == 2);
-	// Index 0 is the producer, 1 is ProofConsumer, in both graphs -- registration order.
-	CHECK(StageOf(legacySchedule, 0) == 0);
-	CHECK(StageOf(builderSchedule, 0) == 0);
-	CHECK(StageOf(legacySchedule, 1) == 1);
-	CHECK(StageOf(builderSchedule, 1) == 1);
-
-	// Same barrier shape at the stage boundary: one same-domain preBarrier for
-	// BuilderProofTarget, in both graphs.
-	CHECK(BarrierBetween(
-		legacySchedule.stages[1].preBarriers,
-		IdOf<BuilderProofTarget>(),
-		ExecutionDomain::Graphics,
-		ExecutionDomain::Graphics
-	));
-	CHECK(BarrierBetween(
-		builderSchedule.stages[1].preBarriers,
-		IdOf<BuilderProofTarget>(),
-		ExecutionDomain::Graphics,
-		ExecutionDomain::Graphics
-	));
-}
 
 TEST_CASE("Graph stages nodes by dependency, independent of registration order, with correct transfer barriers") {
 	Graph graph;
@@ -678,12 +493,9 @@ TEST_CASE("Compile() reports a cycle when a later-phase node is the only produce
 	CHECK(result.error().message.find("LateProducer") != std::string::npos);
 }
 
-// S3: version lifting is gone (FirstWriter/SecondWriter/LatePlainReader above are kept only for
-// Declaration.hpp's own type-level VersionedKey<K,N> static_asserts -- VersionedKey itself isn't
-// deleted until S6). The real replacement idiom for "two same-key writers in sequence, same
-// phase" is an explicit relation, exactly what the particle system's GBufferDepth v1/v2 chain
-// becomes in this same stage (§F) -- demonstrated fresh here with builder-shaped nodes instead of
-// reusing the version fixtures above, since there's no version number left to carry the order.
+// S3: version lifting is gone. The replacement idiom for "two same-key writers in sequence,
+// same phase" is an explicit relation, exactly what the particle system's GBufferDepth v1/v2
+// chain becomes in this same stage (§F) -- demonstrated here with builder-shaped nodes.
 namespace {
 
 	struct SeqKey {};
@@ -711,9 +523,11 @@ namespace {
 
 	struct SeqLateReader {
 		static constexpr Phase kPhase = Phase::Late;
-		using Resources = Declares<Read<SeqKey>>;
 
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<SeqKey>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -819,37 +633,31 @@ TEST_CASE("BarrierBatch merges repeated reads and records domain transitions") {
 	CHECK(batch.Items().size() == 2);
 }
 
-TEST_CASE("InnerGraphIfAny is non-null only for a Subgraph") {
-	CHECK(NodeHandle::Make<GtaoPass>().InnerGraphIfAny() == nullptr);
-	CHECK(NodeHandle::Make<Inner>().InnerGraphIfAny() != nullptr);
-}
+TEST_CASE("ToDot renders nodes, phase clusters, and the PreviousFrame/NextFrame temporal edge") {
+	Graph graph;
+	graph.Register<Import<Swapchain>>();
+	graph.Register<PreviousFrame<Temporal>>();
+	graph.Register<GBufferPass>();
+	graph.Register<GtaoPass>();
+	graph.Register<LightingPass>();
+	graph.Register<TonemapPass>();
+	graph.Register<NextFrame<Temporal>>();
 
-TEST_CASE("ToDot renders nodes, recurses into a populated subgraph, and draws the temporal edge") {
-	Inner innerNode;
-	innerNode.InnerGraph().Register<GBufferPass>();
-	innerNode.InnerGraph().Register<GtaoPass>();
+	graph.Setup(FrameContext{});
+	REQUIRE(graph.Compile().has_value());
 
-	DotFrame frame;
-	frame.Register<Import<Swapchain>>();
-	frame.Register<PreviousFrame<Temporal>>();
-	frame.Register<Inner>(std::move(innerNode));
-	frame.Register<LightingPass>();
-	frame.Register<TonemapPass>();
-	frame.Register<NextFrame<Temporal>>();
-
-	frame.Setup(FrameContext{});
-	REQUIRE(frame.Compile().has_value());
-
-	std::string dot = frame.ToDot("DotFrameTest");
+	std::string dot = ToDot(graph, "TemporalEdgeTest");
 
 	CHECK(dot.find("digraph") != std::string::npos);
 	CHECK(dot.find("GBufferPass") != std::string::npos);
 	CHECK(dot.find("GtaoPass") != std::string::npos);
 	CHECK(dot.find("LightingPass") != std::string::npos);
 	CHECK(dot.find("TonemapPass") != std::string::npos);
-	CHECK(dot.find("cluster") != std::string::npos);
 	CHECK(dot.find("cluster_phase_") != std::string::npos);
 	CHECK(dot.find("[transfer]") != std::string::npos);
+	// PreviousFrame/NextFrame fill color and the History<K>/K temporal edge they share --
+	// pure Dot-rendering coverage, no Subgraph involved (never was: EmitGraph's temporal-edge
+	// loop always scanned this graph's own nodes directly, with no recursion).
 	CHECK(dot.find("gold") != std::string::npos);
 	CHECK(dot.find("purple") != std::string::npos);
 }
@@ -950,32 +758,39 @@ TEST_CASE("LightningManager strike generation and flash light updates") {
 
 namespace {
 	struct ClusterLightAssignmentLikeNode {
-		using Resources = Declares<Create<brassica::ClusteredLighting>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Create<brassica::ClusteredLighting>();
+		}
 		void Execute(NodeContext&) {}
 	};
 
 	struct DeferredWithLightingNode {
-		using Resources = Declares<Read<brassica::ClusteredLighting>, Modify<Swapchain>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<brassica::ClusteredLighting>();
+			r.Modify<Swapchain>();
+		}
 		void Execute(NodeContext&) {}
 	};
 } // namespace
 
 TEST_CASE("GTAONode creates dependency before deferred shading pass") {
 	struct GtaoTestNode {
-		using Resources = Declares<
-			Read<GBufferNormal>,
-			Create<brassica::GTAOTexture>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<GBufferNormal>();
+			r.Create<brassica::GTAOTexture>();
+		}
 		void Execute(NodeContext&) {}
 	};
 
 	struct DeferredTestNode {
-		using Resources = Declares<
-			Read<brassica::GTAOTexture>,
-			Modify<Swapchain>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<brassica::GTAOTexture>();
+			r.Modify<Swapchain>();
+		}
 		void Execute(NodeContext&) {}
 	};
 
@@ -1007,38 +822,48 @@ TEST_CASE("Cluster light assignment node creates dependency before deferred shad
 
 namespace {
 	struct TransmittanceLUTLikeNode {
-		using Resources = Declares<Create<brassica::TransmittanceLUT>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Create<brassica::TransmittanceLUT>();
+		}
 		void Execute(NodeContext&) {}
 	};
 
 	struct MultiScatteringLUTLikeNode {
-		using Resources = Declares<Read<brassica::TransmittanceLUT>, Create<brassica::MultiScatteringLUT>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<brassica::TransmittanceLUT>();
+			r.Create<brassica::MultiScatteringLUT>();
+		}
 		void Execute(NodeContext&) {}
 	};
 
 	struct SkyViewLUTLikeNode {
-		using Resources = Declares<
-			Read<brassica::TransmittanceLUT>,
-			Read<brassica::MultiScatteringLUT>,
-			Create<brassica::SkyViewLUT>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Compute}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<brassica::TransmittanceLUT>();
+			r.Read<brassica::MultiScatteringLUT>();
+			r.Create<brassica::SkyViewLUT>();
+		}
 		void Execute(NodeContext&) {}
 	};
 
 	struct SkyBackgroundLikeNode {
-		using Resources = Declares<
-			Read<brassica::SkyViewLUT>,
-			Read<brassica::TransmittanceLUT>,
-			Create<brassica::AtmosphereRadiance>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<brassica::SkyViewLUT>();
+			r.Read<brassica::TransmittanceLUT>();
+			r.Create<brassica::AtmosphereRadiance>();
+		}
 		void Execute(NodeContext&) {}
 	};
 
 	struct DeferredReadingSkyNode {
-		using Resources = Declares<Read<brassica::AtmosphereRadiance>, Modify<Swapchain>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<brassica::AtmosphereRadiance>();
+			r.Modify<Swapchain>();
+		}
 		void Execute(NodeContext&) {}
 	};
 } // namespace
@@ -1132,10 +957,12 @@ namespace {
 	struct EntityDataKey {};
 
 	struct HostEntityLogicNode {
-		using Resources = Declares<Create<EntityDataKey>>;
 		bool* executedFlag = nullptr;
 
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Host}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Host);
+			r.Create<EntityDataKey>();
+		}
 		void Execute(NodeContext&) {
 			if (executedFlag) {
 				*executedFlag = true;
@@ -1144,8 +971,11 @@ namespace {
 	};
 
 	struct GpuRenderUsingEntityDataNode {
-		using Resources = Declares<Read<EntityDataKey>, Modify<Swapchain>>;
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<EntityDataKey>();
+			r.Modify<Swapchain>();
+		}
 		void Execute(NodeContext&) {}
 	};
 } // namespace
@@ -1256,13 +1086,12 @@ namespace {
 
 namespace {
 	struct BallLikeNode {
-		using Resources = Declares<
-			Modify<GBufferAlbedo>,
-			Modify<GBufferNormal>,
-			Create<brassica::EntityIndirectBuffer>
-		>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<GBufferAlbedo>();
+			r.Modify<GBufferNormal>();
+			r.Create<brassica::EntityIndirectBuffer>();
+		}
 		void Execute(NodeContext&) {}
 	};
 } // namespace
@@ -1592,17 +1421,19 @@ namespace {
 	struct AmbiguousKey {};
 
 	struct AmbiguousWriterA {
-		using Resources = Declares<Modify<AmbiguousKey>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<AmbiguousKey>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct AmbiguousWriterB {
-		using Resources = Declares<Modify<AmbiguousKey>>;
-
-		Recipe Setup(const FrameContext&) { return Recipe{.domain = ExecutionDomain::Graphics}; }
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Modify<AmbiguousKey>();
+		}
 
 		void Execute(NodeContext&) {}
 	};
@@ -2152,4 +1983,42 @@ TEST_CASE(".Required() does not deactivate a reader of a Persistent-lifetime key
 	std::size_t reader = IndexOfNamed(graph.Nodes(), "RequiredReaderOfPersistentKey");
 	REQUIRE(reader < result.activity.size());
 	CHECK(result.activity[reader]);
+}
+
+namespace {
+
+	struct PreviousFrameTemporalKey {};
+
+	using PreviousFrameTemporal = TypeList<PreviousFrameTemporalKey>;
+
+	// Required() on a ReadPrevious<K>() read: if PreviousFrame<Temporal>'s builder-shaped Setup
+	// (Frame.hpp) didn't actually call Create<History<K>>() for every K, this reader would see
+	// no active writer at all and get wrongly deactivated here -- the exact silent-failure risk
+	// flagged when PreviousFrame/NextFrame were converted off the legacy Resources-based shape
+	// (same bug class as the GTAO/sky zero-init incidents: a reader that should see real data
+	// instead gets treated as having nothing feeding it).
+	struct RequiredReaderOfPreviousFrame {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.ReadPrevious<PreviousFrameTemporalKey>().Required();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+TEST_CASE("PreviousFrame<Temporal>'s builder Setup registers as an active writer for ReadPrevious<K>().Required()") {
+	Graph graph;
+	graph.Register<PreviousFrame<PreviousFrameTemporal>>();
+	graph.Register<RequiredReaderOfPreviousFrame>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty());
+
+	std::size_t reader = IndexOfNamed(graph.Nodes(), "RequiredReaderOfPreviousFrame");
+	REQUIRE(reader < result.activity.size());
+	CHECK(result.activity[reader]);
+	CHECK(result.zeroInitReads.empty());
 }

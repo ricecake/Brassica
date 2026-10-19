@@ -8,13 +8,11 @@
 #include <glm/glm.hpp>
 
 #include "constants.h"
-#include "graph/Declaration.hpp"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
-#include "passes/ResourceGroups.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -52,10 +50,7 @@ namespace brassica {
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
 	// unification: no descriptor set, no pipeline layout boilerplate, no positional
 	// pipeline-creation call. Just a resource contract, a phase, a pipeline-state literal, and
-	// two shaders. Runs at Phase::Late so it composites over whatever DeferredNode already wrote
-	// -- both declare a plain Modify<Swapchain> with no version number between them, which is
-	// exactly what Phase (rather than a resource-version chain) is for: see Modify's own comment,
-	// graph/Declaration.hpp.
+	// two shaders.
 	//
 	// The first real consumer of GraphicsPipelineState::enableBlend outside a synthetic test --
 	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
