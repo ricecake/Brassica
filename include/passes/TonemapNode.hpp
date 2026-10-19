@@ -13,6 +13,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -154,35 +155,10 @@ namespace brassica {
 			downPush.outWgtMip3Index = ctx.StorageIndex<LtmWgtTextureMip3>();
 			downPush.outWgtMip4Index = ctx.StorageIndex<LtmWgtTextureMip4>();
 
-			std::array<vk::DescriptorSetLayout, 2> downSetLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> downPushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(DownsamplePushConstants)}
-			};
-			render::ComputePipelineRequest downRequest{
-				.shader = &downsampleShader,
-				.setLayouts = downSetLayouts,
-				.pushConstantRanges = downPushConstantRanges,
-			};
-			render::ResolvedPipeline downResolved = pipelineLibrary->ResolveCached(downRequest);
+			render::ResolvedPipeline downResolved =
+				render::BindCompute(ctx, *pipelineLibrary, downsampleShader, downPush);
 
 			if (downResolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, downResolved.pipeline);
-				std::array<vk::DescriptorSet, 2> boundSets{
-					static_cast<VkDescriptorSet>(ctx.frameSet),
-					static_cast<VkDescriptorSet>(ctx.globalSet)
-				};
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, downResolved.layout, 0, boundSets, nullptr);
-				vkCmd.pushConstants(
-					downResolved.layout,
-					vk::ShaderStageFlagBits::eCompute,
-					0,
-					sizeof(DownsamplePushConstants),
-					&downPush
-				);
-
 				std::uint32_t groupsX = (ctx.width / 2 + 15) / 16;
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
 				vkCmd.dispatch(groupsX, groupsY, 1);
@@ -224,61 +200,31 @@ namespace brassica {
 				glm::vec2(std::max(1u, ctx.width / 32), std::max(1u, ctx.height / 32))
 			};
 
-			std::array<vk::DescriptorSetLayout, 2> upSetLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> upPushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(BloomUpsamplePushConstants)}
-			};
-			render::ComputePipelineRequest upRequest{
-				.shader = &upsampleShader,
-				.setLayouts = upSetLayouts,
-				.pushConstantRanges = upPushConstantRanges,
-			};
-			render::ResolvedPipeline upResolved = pipelineLibrary->ResolveCached(upRequest);
+			for (int mip = downPush.numMips - 1; mip > 0; --mip) {
+				upPush.srcIndex = bloomMipReadIndex[mip];
+				upPush.dstReadIndex = bloomMipReadIndex[mip - 1];
+				upPush.dstWriteIndex = bloomMipWriteIndex[mip - 1];
+				upPush.srcResolution = bloomMipResolution[mip];
+				upPush.dstResolution = bloomMipResolution[mip - 1];
 
-			if (upResolved.pipeline) {
-				for (int mip = downPush.numMips - 1; mip > 0; --mip) {
-					upPush.srcIndex = bloomMipReadIndex[mip];
-					upPush.dstReadIndex = bloomMipReadIndex[mip - 1];
-					upPush.dstWriteIndex = bloomMipWriteIndex[mip - 1];
-					upPush.srcResolution = bloomMipResolution[mip];
-					upPush.dstResolution = bloomMipResolution[mip - 1];
-
-					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, upResolved.pipeline);
-					std::array<vk::DescriptorSet, 2> upBoundSets{
-						static_cast<VkDescriptorSet>(ctx.frameSet),
-						static_cast<VkDescriptorSet>(ctx.globalSet)
-					};
-					vkCmd.bindDescriptorSets(
-						vk::PipelineBindPoint::eCompute,
-						upResolved.layout,
-						0,
-						upBoundSets,
-						nullptr
-					);
-					vkCmd.pushConstants(
-						upResolved.layout,
-						vk::ShaderStageFlagBits::eCompute,
-						0,
-						sizeof(BloomUpsamplePushConstants),
-						&upPush
-					);
-
-					std::uint32_t dstW = static_cast<std::uint32_t>(bloomMipResolution[mip - 1].x);
-					std::uint32_t dstH = static_cast<std::uint32_t>(bloomMipResolution[mip - 1].y);
-					vkCmd.dispatch((dstW + 15) / 16, (dstH + 15) / 16, 1);
-
-					vk::MemoryBarrier2 upBarrier(
-						vk::PipelineStageFlagBits2::eComputeShader,
-						vk::AccessFlagBits2::eShaderStorageWrite,
-						vk::PipelineStageFlagBits2::eComputeShader,
-						vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead
-					);
-					vk::DependencyInfo upDep({}, 1, &upBarrier);
-					vkCmd.pipelineBarrier2(upDep);
+				render::ResolvedPipeline upResolved =
+					render::BindCompute(ctx, *pipelineLibrary, upsampleShader, upPush);
+				if (!upResolved.pipeline) {
+					continue;
 				}
+
+				std::uint32_t dstW = static_cast<std::uint32_t>(bloomMipResolution[mip - 1].x);
+				std::uint32_t dstH = static_cast<std::uint32_t>(bloomMipResolution[mip - 1].y);
+				vkCmd.dispatch((dstW + 15) / 16, (dstH + 15) / 16, 1);
+
+				vk::MemoryBarrier2 upBarrier(
+					vk::PipelineStageFlagBits2::eComputeShader,
+					vk::AccessFlagBits2::eShaderStorageWrite,
+					vk::PipelineStageFlagBits2::eComputeShader,
+					vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead
+				);
+				vk::DependencyInfo upDep({}, 1, &upBarrier);
+				vkCmd.pipelineBarrier2(upDep);
 			}
 
 			// Compute LTM Fuse Pass
@@ -288,35 +234,9 @@ namespace brassica {
 			fusePush.startMip = 4;
 			fusePush.endMip = 0;
 
-			std::array<vk::DescriptorSetLayout, 2> fuseSetLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> fusePushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(LtmFusePushConstants)}
-			};
-			render::ComputePipelineRequest fuseRequest{
-				.shader = &ltmFuseShader,
-				.setLayouts = fuseSetLayouts,
-				.pushConstantRanges = fusePushConstantRanges,
-			};
-			render::ResolvedPipeline fuseResolved = pipelineLibrary->ResolveCached(fuseRequest);
+			render::ResolvedPipeline fuseResolved = render::BindCompute(ctx, *pipelineLibrary, ltmFuseShader, fusePush);
 
 			if (fuseResolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, fuseResolved.pipeline);
-				std::array<vk::DescriptorSet, 2> boundSets{
-					static_cast<VkDescriptorSet>(ctx.frameSet),
-					static_cast<VkDescriptorSet>(ctx.globalSet)
-				};
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, fuseResolved.layout, 0, boundSets, nullptr);
-				vkCmd.pushConstants(
-					fuseResolved.layout,
-					vk::ShaderStageFlagBits::eCompute,
-					0,
-					sizeof(LtmFusePushConstants),
-					&fusePush
-				);
-
 				std::uint32_t groupsX = (ctx.width / 2 + 15) / 16;
 				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
 				vkCmd.dispatch(groupsX, groupsY, 1);
@@ -404,49 +324,20 @@ namespace brassica {
 			push.ltmRes = glm::vec2(ctx.width / 2, ctx.height / 2);
 			push.numCdlEntries = s_cdlGradingLayers.numEntries;
 
-			std::array<GraphicsShader*, 2>         stages{&vertShader, &fragShader};
-			std::array<vk::Format, 1>              colorFormats{swapchainFormat};
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eFragment, 0, sizeof(TonemapPushConstants)}
-			};
-			render::GraphicsPipelineRequest request{
-				.stages = stages,
-				.state = kPipelineState,
-				.colorFormats = colorFormats,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
-
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
+			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
+			std::array<vk::Format, 1>      colorFormats{swapchainFormat};
+			render::ResolvedPipeline       resolved = render::BindGraphics(
+                ctx,
+                *pipelineLibrary,
+                stages,
+                kPipelineState,
+                colorFormats,
+                push,
+                vk::ShaderStageFlagBits::eFragment
+            );
+			if (!resolved.pipeline) {
+				return;
 			}
-
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
-			}
-
-			vk::Extent2D extent{ctx.width, ctx.height};
-			vk::Viewport
-				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-			vkCmd.setViewport(0, viewport);
-			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
-
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eFragment,
-				0,
-				sizeof(TonemapPushConstants),
-				&push
-			);
 
 			vkCmd.draw(3, 1, 0, 0);
 		}

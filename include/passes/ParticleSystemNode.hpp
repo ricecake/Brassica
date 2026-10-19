@@ -15,6 +15,7 @@
 #include "particle/IParticleManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "ServiceLocator.hpp"
@@ -187,15 +188,6 @@ namespace brassica {
 			s.set = nullptr;
 		}
 
-		inline std::array<vk::DescriptorSetLayout, 3>
-		ParticleSetLayouts(const graph::NodeContext& ctx, vk::DescriptorSetLayout particleLayout) {
-			return {
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout),
-				particleLayout,
-			};
-		}
-
 		struct ParticleDescriptorCache {
 			vk::DescriptorSet         set{nullptr};
 			std::array<vk::Buffer, 8> buffers{};
@@ -241,23 +233,6 @@ namespace brassica {
 			UpdateParticleDescriptorSet(device, particleSet, registry);
 			cache.set = particleSet;
 			cache.buffers = buffers;
-		}
-
-		inline void BindParticleSets(
-			vk::CommandBuffer         cmd,
-			vk::PipelineBindPoint     bindPoint,
-			vk::PipelineLayout        layout,
-			const graph::NodeContext& ctx,
-			vk::DescriptorSet         particleSet
-		) {
-			std::array<vk::DescriptorSet, 3> sets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet),
-				particleSet,
-			};
-			if (sets[0] && sets[1] && sets[2]) {
-				cmd.bindDescriptorSets(bindPoint, layout, 0, sets, nullptr);
-			}
 		}
 
 	} // namespace detail
@@ -331,34 +306,22 @@ namespace brassica {
 				}
 			}
 
-			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, descriptorSet.layout);
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleResetPushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &compShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			ParticleResetPushConstants             push{.gridSize = gridSize};
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{descriptorSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{descriptorSet.set};
+			render::ResolvedPipeline               resolved = render::BindCompute(
+                ctx,
+                *pipelineLibrary,
+                compShader,
+                push,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, descriptorSet.set);
-
-			ParticleResetPushConstants push{.gridSize = gridSize};
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(ParticleResetPushConstants),
-				&push
-			);
-
-			std::uint32_t groupCount = (gridSize + 63u) / 64u;
+			std::uint32_t     groupCount = (gridSize + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
@@ -457,24 +420,6 @@ namespace brassica {
 				}
 			}
 
-			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, descriptorSet.layout);
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleLivenessPushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &compShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
-
-			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, descriptorSet.set);
-
 			std::uint32_t activeCount = maxParticles;
 			float         birdProp = 0.34f;
 			float         fishProp = 0.67f;
@@ -502,15 +447,22 @@ namespace brassica {
 				.terrainTextureDim = terrainTextureDim,
 				.terrainNumLevels = terrainNumLevels,
 			};
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(ParticleLivenessPushConstants),
-				&push
-			);
 
-			std::uint32_t groupCount = (maxParticles + 63u) / 64u;
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{descriptorSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{descriptorSet.set};
+			render::ResolvedPipeline               resolved = render::BindCompute(
+                ctx,
+                *pipelineLibrary,
+                compShader,
+                push,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			std::uint32_t     groupCount = (maxParticles + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
@@ -573,38 +525,27 @@ namespace brassica {
 				}
 			}
 
-			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, descriptorSet.layout);
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleGridBuildPushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &compShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
-
-			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, descriptorSet.set);
-
 			ParticleGridBuildPushConstants push{
 				.maxParticles = maxParticles,
 				.gridSize = gridSize,
 				.cellSize = cellSize,
 			};
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(ParticleGridBuildPushConstants),
-				&push
-			);
 
-			std::uint32_t groupCount = (maxParticles + 63u) / 64u;
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{descriptorSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{descriptorSet.set};
+			render::ResolvedPipeline               resolved = render::BindCompute(
+                ctx,
+                *pipelineLibrary,
+                compShader,
+                push,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			std::uint32_t     groupCount = (maxParticles + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
@@ -677,9 +618,13 @@ namespace brassica {
 			// exempt from that last-writer-wins collapse, so leaving this bare is what makes the
 			// real producer's desc actually reach Provision().
 			r.Read<ParticleTypeBuffer>();
-			r.Read<AboveWaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
+			r.Read<AboveWaterParticleAliveBuffer>().Desc(
+				graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t))
+			);
 			r.Read<AboveWaterParticleIndirectBuffer>().Desc(indirectDesc);
-			r.Read<UnderwaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
+			r.Read<UnderwaterParticleAliveBuffer>().Desc(
+				graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t))
+			);
 			r.Read<UnderwaterParticleIndirectBuffer>().Desc(indirectDesc);
 			r.Read<ParticleGridHeadsBuffer>().Desc(graph::StorageBufferDesc(gridSize * sizeof(int)));
 			r.Read<ParticleGridNextBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(int)));
@@ -698,24 +643,6 @@ namespace brassica {
 					);
 				}
 			}
-
-			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, descriptorSet.layout);
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ParticleBehaviorPushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &compShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
-
-			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eCompute, resolved.layout, ctx, descriptorSet.set);
 
 			bool enableLights = true;
 			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<IParticleManager>()) {
@@ -737,15 +664,22 @@ namespace brassica {
 				.terrainNumLevels = terrainNumLevels,
 				.waterLevel = waterLevel,
 			};
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(ParticleBehaviorPushConstants),
-				&push
-			);
 
-			std::uint32_t groupCount = (maxParticles + 63u) / 64u;
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{descriptorSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{descriptorSet.set};
+			render::ResolvedPipeline               resolved = render::BindCompute(
+                ctx,
+                *pipelineLibrary,
+                compShader,
+                push,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			std::uint32_t     groupCount = (maxParticles + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
@@ -844,7 +778,9 @@ namespace brassica {
 			// exempt from that last-writer-wins collapse, so leaving this bare is what makes the
 			// real producer's desc actually reach Provision().
 			r.Read<ParticleTypeBuffer>();
-			r.Read<UnderwaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
+			r.Read<UnderwaterParticleAliveBuffer>().Desc(
+				graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t))
+			);
 			r.Read<UnderwaterParticleIndirectBuffer>().Desc(indirectDesc);
 			r.Modify<GBufferDepth>();
 			r.Modify<HdrColor>();
@@ -874,43 +810,26 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
-			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, descriptorSet.layout);
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eMeshEXT, 0, sizeof(ParticleRenderPushConstants)}
-			};
-
-			render::GraphicsPipelineRequest request{
-				.stages = stages,
-				.state = kPipelineState,
-				.colorFormats = colorFormats,
-				.depthFormat = depthFormat,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{descriptorSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{descriptorSet.set};
+			ParticleRenderPushConstants            push{.isUnderwater = 1u};
+			render::ResolvedPipeline               resolved = render::BindGraphics(
+                ctx,
+                *pipelineLibrary,
+                stages,
+                kPipelineState,
+                colorFormats,
+                push,
+                vk::ShaderStageFlagBits::eMeshEXT,
+                depthFormat,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
-			}
-			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eGraphics, resolved.layout, ctx, descriptorSet.set);
-
-			ParticleRenderPushConstants push{.isUnderwater = 1u};
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eMeshEXT,
-				0,
-				sizeof(ParticleRenderPushConstants),
-				&push
-			);
-
-			vk::Extent2D extent{ctx.width, ctx.height};
-			vk::Viewport
-				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-			vkCmd.setViewport(0, viewport);
-			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
-
-			vk::Buffer indirectBuf = indirectBuffer;
+			vk::Buffer        indirectBuf = indirectBuffer;
 			if (!indirectBuf && ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					if (auto physBuf = registry->GetBuffer<UnderwaterParticleIndirectBuffer>()) {
@@ -1006,7 +925,9 @@ namespace brassica {
 			// exempt from that last-writer-wins collapse, so leaving this bare is what makes the
 			// real producer's desc actually reach Provision().
 			r.Read<ParticleTypeBuffer>();
-			r.Read<AboveWaterParticleAliveBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t)));
+			r.Read<AboveWaterParticleAliveBuffer>().Desc(
+				graph::StorageBufferDesc(maxParticles * sizeof(std::uint32_t))
+			);
 			r.Read<AboveWaterParticleIndirectBuffer>().Desc(indirectDesc);
 			r.Modify<GBufferDepth>();
 			r.Modify<HdrColor>();
@@ -1034,43 +955,26 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 2>         stages{&meshShader, &fragShader};
 			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
-			std::array<vk::DescriptorSetLayout, 3> setLayouts = detail::ParticleSetLayouts(ctx, descriptorSet.layout);
-			std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eMeshEXT, 0, sizeof(ParticleRenderPushConstants)}
-			};
-
-			render::GraphicsPipelineRequest request{
-				.stages = stages,
-				.state = kPipelineState,
-				.colorFormats = colorFormats,
-				.depthFormat = depthFormat,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{descriptorSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{descriptorSet.set};
+			ParticleRenderPushConstants            push{.isUnderwater = 0u};
+			render::ResolvedPipeline               resolved = render::BindGraphics(
+                ctx,
+                *pipelineLibrary,
+                stages,
+                kPipelineState,
+                colorFormats,
+                push,
+                vk::ShaderStageFlagBits::eMeshEXT,
+                depthFormat,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
-			}
-			detail::BindParticleSets(vkCmd, vk::PipelineBindPoint::eGraphics, resolved.layout, ctx, descriptorSet.set);
-
-			ParticleRenderPushConstants push{.isUnderwater = 0u};
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eMeshEXT,
-				0,
-				sizeof(ParticleRenderPushConstants),
-				&push
-			);
-
-			vk::Extent2D extent{ctx.width, ctx.height};
-			vk::Viewport
-				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-			vkCmd.setViewport(0, viewport);
-			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
-
-			vk::Buffer indirectBuf = indirectBuffer;
+			vk::Buffer        indirectBuf = indirectBuffer;
 			if (!indirectBuf && ctx.resources) {
 				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
 					if (auto physBuf = registry->GetBuffer<AboveWaterParticleIndirectBuffer>()) {

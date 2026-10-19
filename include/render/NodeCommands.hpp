@@ -36,9 +36,9 @@ namespace brassica::render {
 
 		struct CombinedSets {
 			std::array<vk::DescriptorSetLayout, kMaxBoundSets> layouts{};
-			std::array<vk::DescriptorSet, kMaxBoundSets>        sets{};
-			std::uint32_t                                       count = 0;
-			bool                                                allValid = false;
+			std::array<vk::DescriptorSet, kMaxBoundSets>       sets{};
+			std::uint32_t                                      count = 0;
+			bool                                               allValid = false;
 		};
 
 		inline CombinedSets CombineSets(const graph::NodeContext& ctx, ExtraSets extra) {
@@ -63,6 +63,36 @@ namespace brassica::render {
 		}
 
 	} // namespace detail
+
+	// Overload for a shader with no push constants at all (e.g. ClusterLightAssignmentNode) --
+	// everything else is identical to the PushT overload below, just without a push-constant
+	// range on the request or a pushConstants call after binding.
+	inline ResolvedPipeline
+	BindCompute(graph::NodeContext& ctx, PipelineLibrary& library, ComputeShader& shader, ExtraSets extra = {}) {
+		detail::CombinedSets sets = detail::CombineSets(ctx, extra);
+
+		ComputePipelineRequest request{
+			.shader = &shader,
+			.setLayouts = std::span(sets.layouts.data(), sets.count),
+		};
+		ResolvedPipeline resolved = library.ResolveCached(request);
+		if (!resolved.pipeline) {
+			return resolved;
+		}
+
+		vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+		vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
+		if (sets.allValid) {
+			vkCmd.bindDescriptorSets(
+				vk::PipelineBindPoint::eCompute,
+				resolved.layout,
+				0,
+				std::span(sets.sets.data(), sets.count),
+				nullptr
+			);
+		}
+		return resolved;
+	}
 
 	// Resolves `shader` to a cached compute pipeline, binds it, binds the frame/global (+ extra)
 	// descriptor sets, and pushes `push` as the pipeline's sole push-constant range. Everything
@@ -118,21 +148,21 @@ namespace brassica::render {
 		const GraphicsPipelineState&     state,
 		std::span<const vk::Format>      colorFormats,
 		const PushT&                     push,
-		vk::ShaderStageFlags              pushStage,
+		vk::ShaderStageFlags             pushStage,
 		vk::Format                       depthFormat = vk::Format::eUndefined,
 		ExtraSets                        extra = {}
 	) {
 		detail::CombinedSets sets = detail::CombineSets(ctx, extra);
 
 		std::array<vk::PushConstantRange, 1> pushRanges{vk::PushConstantRange{pushStage, 0, sizeof(PushT)}};
-		GraphicsPipelineRequest request{
-			.stages = stages,
-			.state = state,
-			.colorFormats = colorFormats,
-			.depthFormat = depthFormat,
-			.setLayouts = std::span(sets.layouts.data(), sets.count),
-			.pushConstantRanges = pushRanges,
-		};
+		GraphicsPipelineRequest              request{
+						 .stages = stages,
+						 .state = state,
+						 .colorFormats = colorFormats,
+						 .depthFormat = depthFormat,
+						 .setLayouts = std::span(sets.layouts.data(), sets.count),
+						 .pushConstantRanges = pushRanges,
+        };
 		ResolvedPipeline resolved = library.ResolveCached(request);
 		if (!resolved.pipeline) {
 			return resolved;
@@ -151,14 +181,8 @@ namespace brassica::render {
 		}
 
 		vk::Extent2D extent{ctx.width, ctx.height};
-		vk::Viewport viewport{
-			0.0f,
-			0.0f,
-			static_cast<float>(extent.width),
-			static_cast<float>(extent.height),
-			0.0f,
-			1.0f
-		};
+		vk::Viewport
+			viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 		vkCmd.setViewport(0, viewport);
 		vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
 

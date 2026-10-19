@@ -13,6 +13,7 @@
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -107,41 +108,12 @@ namespace brassica {
 				.outIndex = ctx.StorageIndex<TransmittanceLUT>(),
 			};
 
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TransmittanceLUTPushConstants)}
-			};
-			render::ComputePipelineRequest request{
-				.shader = &shader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, shader, push);
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(TransmittanceLUTPushConstants),
-				&push
-			);
-
 			vkCmd.dispatch((256 + 7) / 8, (64 + 7) / 8, 1);
 
 			// Runs only when isActive (Graph::Compile culls inactive nodes before Execute), so
@@ -190,41 +162,12 @@ namespace brassica {
 				.transmittanceIndex = ctx.Index<TransmittanceLUT>(),
 			};
 
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(MultiScatteringLUTPushConstants)}
-			};
-			render::ComputePipelineRequest request{
-				.shader = &shader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, shader, push);
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(MultiScatteringLUTPushConstants),
-				&push
-			);
-
 			// Unlike TransmittanceLUTNode, this doesn't mark the throttle caught up itself --
 			// both nodes check the same criterion against the same per-frame atmosphere value,
 			// and TransmittanceLUTNode already does it once for both (matching
@@ -279,41 +222,12 @@ namespace brassica {
 			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
 			push.multiScatteringIndex = ctx.Index<MultiScatteringLUT>();
 
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(SkyViewPushConstants)}
-			};
-			render::ComputePipelineRequest request{
-				.shader = &shader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, shader, push);
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(SkyViewPushConstants),
-				&push
-			);
-
 			vkCmd.dispatch((192 + 7) / 8, (108 + 7) / 8, 1);
 		}
 	};

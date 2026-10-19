@@ -16,6 +16,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -130,11 +131,11 @@ namespace brassica {
 		VmaAllocator                   allocator{nullptr};
 		TerrainDownsamplePushConstants push{};
 		glm::uvec4                     gridParams{
-			constants::Class::Terrain::DefaultMaxLODs,
-			constants::Class::Terrain::MeshletsPerRow,
-			constants::Class::Terrain::TotalMeshlets,
-			constants::Class::Terrain::MapDim
-		};
+            constants::Class::Terrain::DefaultMaxLODs,
+            constants::Class::Terrain::MeshletsPerRow,
+            constants::Class::Terrain::TotalMeshlets,
+            constants::Class::Terrain::MapDim
+        };
 		bool hasUpdate{true};
 		bool forceRegeneration{true};
 
@@ -246,17 +247,6 @@ namespace brassica {
 				return;
 			}
 
-			std::array<vk::DescriptorSetLayout, 3> setLayouts{
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)),
-				counterSet.layout,
-			};
-			std::array<vk::DescriptorSet, 3> boundSets{
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.frameSet)),
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet)),
-				counterSet.set,
-			};
-
 			// A gridParams change reprovisions TerrainMinMaxTexture with a different layer count or
 			// width (PhysicalRegistry::ProvisionTexture's desc-mismatch path), so last frame's
 			// coarse mips are gone -- that, the very first dispatch, and an explicit
@@ -273,32 +263,20 @@ namespace brassica {
 			push.textureDim = gridParams.w;
 			std::uint32_t tilesPerAxis = (gridParams.w + kTileSize - 1) / kTileSize;
 
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainDownsamplePushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &downsampleShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{counterSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{counterSet.set};
+			render::ResolvedPipeline               resolved = render::BindCompute(
+                ctx,
+                *pipelineLibrary,
+                downsampleShader,
+                push,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-			if (boundSets[0] && boundSets[1] && boundSets[2]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(TerrainDownsamplePushConstants),
-				&push
-			);
-
 			vkCmd.dispatch(tilesPerAxis, tilesPerAxis, gridParams.x);
 
 			hasDispatched = true;

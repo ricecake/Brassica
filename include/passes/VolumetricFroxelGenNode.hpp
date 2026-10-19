@@ -14,6 +14,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -129,49 +130,17 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout))
-			};
-			std::array<vk::DescriptorSet, 2> boundSets{
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.frameSet)),
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
-			};
-
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			// 1. Generate 2D noise map
 			noisePush.noiseStorageIdx = ctx.StorageIndex<VolumetricNoiseTexture>();
 			noisePush.time = time;
 
-			std::array<vk::PushConstantRange, 1> noisePushRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricNoiseGenPushConstants)}
-			};
-
-			render::ComputePipelineRequest noiseRequest{
-				.shader = &noiseShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = noisePushRanges,
-			};
-			render::ResolvedPipeline noiseResolved = pipelineLibrary->ResolveCached(noiseRequest);
-
+			render::ResolvedPipeline noiseResolved = render::BindCompute(ctx, *pipelineLibrary, noiseShader, noisePush);
 			if (noiseResolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, noiseResolved.pipeline);
+				// 512 / 16 = 32
+				vkCmd.dispatch(32, 32, 1);
 			}
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, noiseResolved.layout, 0, boundSets, nullptr);
-			}
-
-			vkCmd.pushConstants(
-				noiseResolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(VolumetricNoiseGenPushConstants),
-				&noisePush
-			);
-
-			// 512 / 16 = 32
-			vkCmd.dispatch(32, 32, 1);
 
 			// 2. Generate froxel cascade volumes
 			auto pack16 = [](std::uint32_t low, std::uint32_t high) -> std::uint32_t {
@@ -203,34 +172,11 @@ namespace brassica {
 			genPush.indices1.z = 0u;
 			genPush.indices1.w = 0u;
 
-			std::array<vk::PushConstantRange, 1> genPushRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(VolumetricFroxelGenPushConstants)}
-			};
-
-			render::ComputePipelineRequest genRequest{
-				.shader = &genShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = genPushRanges,
-			};
-			render::ResolvedPipeline genResolved = pipelineLibrary->ResolveCached(genRequest);
-
+			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, genResolved.pipeline);
+				// 64 / 8 = 8 workgroups per dimension x and y (z is integrated in shader column)
+				vkCmd.dispatch(8, 8, 1);
 			}
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, genResolved.layout, 0, boundSets, nullptr);
-			}
-
-			vkCmd.pushConstants(
-				genResolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(VolumetricFroxelGenPushConstants),
-				&genPush
-			);
-
-			// 64 / 8 = 8 workgroups per dimension x and y (z is integrated in shader column)
-			vkCmd.dispatch(8, 8, 1);
 		}
 	};
 

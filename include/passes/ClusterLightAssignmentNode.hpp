@@ -11,6 +11,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "lighting/Light.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -61,30 +62,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &compShader,
-				.setLayouts = setLayouts,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, compShader);
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-
 			vkCmd.dispatch(1, 1, 24);
 		}
 	};

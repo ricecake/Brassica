@@ -14,6 +14,7 @@
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "passes/TerrainBiomeNode.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -81,15 +82,6 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout))
-			};
-			std::array<vk::DescriptorSet, 2> boundSets{
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.frameSet)),
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
-			};
-
 			push.cascadeSampledIdx.x = ctx.Index<CloudVolumeCascade0>();
 			push.cascadeSampledIdx.y = ctx.Index<CloudVolumeCascade1>();
 			push.cascadeSampledIdx.z = ctx.Index<CloudVolumeCascade2>();
@@ -98,34 +90,12 @@ namespace brassica {
 			push.shadowMapStorageIdx = ctx.StorageIndex<CloudShadowMap>();
 			push.cameraPos = glm::vec4(cameraPos, 320000.0f);
 
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudShadowGenPushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &genShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(CloudShadowGenPushConstants),
-				&push
-			);
-
 			// Dispatch 1024 / 16 = 64 workgroups per dimension
 			vkCmd.dispatch(64, 64, 1);
 		}

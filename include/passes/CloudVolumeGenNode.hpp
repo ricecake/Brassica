@@ -13,6 +13,7 @@
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -110,15 +111,6 @@ namespace brassica {
 				return;
 			}
 
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout))
-			};
-			std::array<vk::DescriptorSet, 2> boundSets{
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.frameSet)),
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
-			};
-
 			// Update cascade states
 			float extents[3] = {push.cascadeExtents.x, push.cascadeExtents.y, push.cascadeExtents.z};
 			for (int i = 0; i < 3; ++i) {
@@ -134,34 +126,12 @@ namespace brassica {
 			push.forceRegeneration = forceRegeneration ? 1 : 0;
 			push.cadencePhase = static_cast<float>(frameCount / 30) * 0.1f;
 
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(CloudVolumeGenPushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &genShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(CloudVolumeGenPushConstants),
-				&push
-			);
-
 			// Dispatch 256 / 8 = 32 workgroups per dimension
 			vkCmd.dispatch(32, 32, 32);
 		}

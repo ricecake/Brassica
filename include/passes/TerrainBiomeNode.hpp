@@ -15,6 +15,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -114,48 +115,23 @@ namespace brassica {
 			r.Modify<TerrainBiomeMapBTexture>();
 		}
 
+		// Shared square-workgroup dispatch math for all three CA passes below -- bind/push itself
+		// comes from render::BindCompute, this just adds the one piece genuinely specific to this
+		// node's shaders (dispatchDim -> group count).
 		template <typename PushT>
-		void DispatchCompute(
-			vk::CommandBuffer                             vkCmd,
-			ComputeShader&                                shader,
-			const std::array<vk::DescriptorSetLayout, 2>& setLayouts,
-			const std::array<vk::DescriptorSet, 2>&       boundSets,
-			const PushT&                                  push,
-			std::uint32_t                                 dispatchDim
-		) {
-			std::array<vk::PushConstantRange, 1> pushRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushT)}
-			};
-
-			render::ComputePipelineRequest req{
-				.shader = &shader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushRanges,
-			};
-			render::ResolvedPipeline res = pipelineLibrary->ResolveCached(req);
-
-			if (res.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, res.pipeline);
+		void
+		DispatchCompute(graph::NodeContext& ctx, ComputeShader& shader, const PushT& push, std::uint32_t dispatchDim) {
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, shader, push);
+			if (!resolved.pipeline) {
+				return;
 			}
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, res.layout, 0, boundSets, nullptr);
-			}
-			vkCmd.pushConstants(res.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushT), &push);
 
-			std::uint32_t groupCount = (dispatchDim + 15) / 16;
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			std::uint32_t     groupCount = (dispatchDim + 15) / 16;
 			vkCmd.dispatch(groupCount, groupCount, 1);
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			std::uint32_t mainWeatherIdx = ctx.StorageIndex<TerrainWeatherBiomeTexture>();
@@ -182,10 +158,8 @@ namespace brassica {
 			if (!hasEverGenerated || forceRegeneration) {
 				// Initial baseline CA generation
 				DispatchCompute(
-					vkCmd,
+					ctx,
 					initialShader,
-					setLayouts,
-					boundSets,
 					ClimateInitialPushConstants{
 						.outStorageIdx1 = weatherMapAIdx,
 						.outStorageIdx2 = biomeMapAIdx,
@@ -196,12 +170,11 @@ namespace brassica {
 				);
 				insertComputeBarrier(vkCmd);
 
-				// First Cellular Automata update step from Map A -> Map B, writing outputs to main weather and biome maps
+				// First Cellular Automata update step from Map A -> Map B, writing outputs to main weather and biome
+				// maps
 				DispatchCompute(
-					vkCmd,
+					ctx,
 					caShader,
-					setLayouts,
-					boundSets,
 					ClimateCAPushConstants{
 						.inMapStorageIdx1 = weatherMapAIdx,
 						.inMapStorageIdx2 = biomeMapAIdx,
@@ -225,10 +198,8 @@ namespace brassica {
 
 				// Run cellular automata step
 				DispatchCompute(
-					vkCmd,
+					ctx,
 					caShader,
-					setLayouts,
-					boundSets,
 					ClimateCAPushConstants{
 						.inMapStorageIdx1 = inStateIdx1,
 						.inMapStorageIdx2 = inStateIdx2,

@@ -17,6 +17,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -203,17 +204,6 @@ namespace brassica {
 				return;
 			}
 
-			std::array<vk::DescriptorSetLayout, 3> setLayouts{
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)),
-				counterSet.layout,
-			};
-			std::array<vk::DescriptorSet, 3> boundSets{
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.frameSet)),
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet)),
-				counterSet.set,
-			};
-
 			push.srcIndex = ctx.Index<GBufferDepth>();
 			for (std::uint32_t mip = 0; mip < outputMips; ++mip) {
 				push.mipIndices[mip] = ctx.StorageIndex<HiZTexture>(mip + 1);
@@ -224,32 +214,20 @@ namespace brassica {
 			push.numWorkGroups = tilesX * tilesY;
 			push.workGroupOffset = glm::uvec2(0, 0);
 
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{
-				vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(HiZDownsamplePushConstants)}
-			};
-
-			render::ComputePipelineRequest request{
-				.shader = &downsampleShader,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			std::array<vk::DescriptorSetLayout, 1> extraLayouts{counterSet.layout};
+			std::array<vk::DescriptorSet, 1>       extraSets{counterSet.set};
+			render::ResolvedPipeline               resolved = render::BindCompute(
+                ctx,
+                *pipelineLibrary,
+                downsampleShader,
+                push,
+                render::ExtraSets{extraLayouts, extraSets}
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-			}
-			if (boundSets[0] && boundSets[1] && boundSets[2]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-			}
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eCompute,
-				0,
-				sizeof(HiZDownsamplePushConstants),
-				&push
-			);
-
 			vkCmd.dispatch(tilesX, tilesY, 1);
 		}
 	};

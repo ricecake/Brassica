@@ -14,6 +14,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -153,56 +154,24 @@ namespace brassica {
 			push.gMaterialIndex = ctx.Index<GBufferMaterial>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 
-			std::array<GraphicsShader*, 3>         stages{&taskShader, &meshShader, &fragShader};
-			std::array<vk::Format, 1>              colorFormats{vk::Format::eR16G16B16A16Sfloat};
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout),
-				static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout)
-			};
-			std::array<vk::PushConstantRange, 1> pushConstantRanges{vk::PushConstantRange{
-				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT |
-					vk::ShaderStageFlagBits::eFragment,
-				0,
-				sizeof(WaterPushConstants)
-			}};
-			render::GraphicsPipelineRequest      request{
-				.stages = stages,
-				.state = kPipelineState,
-				.colorFormats = colorFormats,
-				.depthFormat = vk::Format::eD32Sfloat,
-				.setLayouts = setLayouts,
-				.pushConstantRanges = pushConstantRanges,
-			};
-			render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
+			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
+			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};
+			render::ResolvedPipeline       resolved = render::BindGraphics(
+                ctx,
+                *pipelineLibrary,
+                stages,
+                kPipelineState,
+                colorFormats,
+                push,
+                vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT |
+                    vk::ShaderStageFlagBits::eFragment,
+                vk::Format::eD32Sfloat
+            );
+			if (!resolved.pipeline) {
+				return;
+			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			if (resolved.pipeline) {
-				vkCmd.bindPipeline(vk::PipelineBindPoint::eGraphics, resolved.pipeline);
-			}
-
-			std::array<vk::DescriptorSet, 2> boundSets{
-				static_cast<VkDescriptorSet>(ctx.frameSet),
-				static_cast<VkDescriptorSet>(ctx.globalSet)
-			};
-			if (boundSets[0] && boundSets[1]) {
-				vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, resolved.layout, 0, boundSets, nullptr);
-			}
-
-			vk::Extent2D extent{ctx.width, ctx.height};
-			vk::Viewport
-				viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
-			vkCmd.setViewport(0, viewport);
-			vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
-
-			vkCmd.pushConstants(
-				resolved.layout,
-				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT |
-					vk::ShaderStageFlagBits::eFragment,
-				0,
-				sizeof(WaterPushConstants),
-				&push
-			);
-
 			if (dls && dls->vkCmdDrawMeshTasksEXT) {
 				std::uint32_t taskGroupCount = (push.gridParams.z + 31) / 32;
 				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, *dls);

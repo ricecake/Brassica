@@ -13,6 +13,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/ResourceKeys.hpp"
+#include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
@@ -112,74 +113,25 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			std::array<vk::DescriptorSetLayout, 2> setLayouts{
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.frameSetLayout)),
-				vk::DescriptorSetLayout(static_cast<VkDescriptorSetLayout>(ctx.globalSetLayout))
-			};
-			std::array<vk::DescriptorSet, 2> boundSets{
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.frameSet)),
-				vk::DescriptorSet(static_cast<VkDescriptorSet>(ctx.globalSet))
-			};
-
-			if (hasUpdate || forceRegeneration) {
-				push.clipmapStorageIdx = ctx.StorageIndex<TerrainClipmapTexture>();
-				push.minMaxStorageIdx = ctx.StorageIndex<TerrainMinMaxTexture>();
-				push.biomeStorageIdx = ctx.StorageIndex<TerrainBiomeTexture>();
-				push.forceRegeneration = forceRegeneration;
-
-				std::array<vk::PushConstantRange, 1> pushConstantRanges{
-					vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainGenPushConstants)}
-				};
-
-				render::ComputePipelineRequest request{
-					.shader = &genShader,
-					.setLayouts = setLayouts,
-					.pushConstantRanges = pushConstantRanges,
-				};
-				render::ResolvedPipeline resolved = pipelineLibrary->ResolveCached(request);
-
-				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-				if (resolved.pipeline) {
-					vkCmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
-				}
-
-				if (boundSets[0] && boundSets[1]) {
-					vkCmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, boundSets, nullptr);
-				}
-
-				vkCmd.pushConstants(
-					resolved.layout,
-					vk::ShaderStageFlagBits::eCompute,
-					0,
-					sizeof(TerrainGenPushConstants),
-					&push
-				);
-
-				uint32_t groupX = (push.gridParams.w + 15) / 16;
-				uint32_t groupY = (push.gridParams.w + 15) / 16;
-				uint32_t groupZ = push.gridParams.x;
-				vkCmd.dispatch(groupX, groupY, groupZ);
+			if (!hasUpdate && !forceRegeneration) {
+				return;
 			}
 
-			if (false && terrainAS) {
-				vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-				terrainAS->BuildOrUpdate(
-					vkCmd,
-					cameraPos,
-					0.5f,
-					push.gridParams.x,
-					pipelineLibrary,
-					&aabbShader,
-					boundSets[0],
-					boundSets[1],
-					setLayouts[0],
-					setLayouts[1],
-					push.gridParams
-				);
-				if (physicalRegistry && terrainAS->GetTLAS()) {
-					physicalRegistry->RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS->GetTLAS());
-				}
+			push.clipmapStorageIdx = ctx.StorageIndex<TerrainClipmapTexture>();
+			push.minMaxStorageIdx = ctx.StorageIndex<TerrainMinMaxTexture>();
+			push.biomeStorageIdx = ctx.StorageIndex<TerrainBiomeTexture>();
+			push.forceRegeneration = forceRegeneration;
+
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
+			if (!resolved.pipeline) {
+				return;
 			}
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			uint32_t          groupX = (push.gridParams.w + 15) / 16;
+			uint32_t          groupY = (push.gridParams.w + 15) / 16;
+			uint32_t          groupZ = push.gridParams.x;
+			vkCmd.dispatch(groupX, groupY, groupZ);
 		}
 	};
 
