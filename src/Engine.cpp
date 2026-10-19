@@ -997,6 +997,33 @@ namespace brassica {
 			);
 		}
 
+		if (options.useMockICD) {
+			spdlog::info("Engine: Vulkan Mock ICD / Null Driver enabled for validation testing.");
+			const char* envDriverFiles = std::getenv("VK_DRIVER_FILES");
+			const char* envIcdFilenames = std::getenv("VK_ICD_FILENAMES");
+			if (!envDriverFiles && !envIcdFilenames) {
+				const std::vector<std::string> searchPaths = {
+					"VkICD_mock_icd.json",
+					"/usr/share/vulkan/icd.d/VkICD_mock_icd.json",
+					"/etc/vulkan/icd.d/VkICD_mock_icd.json",
+					"/usr/local/share/vulkan/icd.d/VkICD_mock_icd.json"
+				};
+				for (const auto& path : searchPaths) {
+					if (std::filesystem::exists(path)) {
+#if defined(_WIN32)
+						_putenv_s("VK_DRIVER_FILES", path.c_str());
+						_putenv_s("VK_ICD_FILENAMES", path.c_str());
+#else
+						setenv("VK_DRIVER_FILES", path.c_str(), 1);
+						setenv("VK_ICD_FILENAMES", path.c_str(), 1);
+#endif
+						spdlog::info("Found Vulkan Mock ICD manifest at: {}", path);
+						break;
+					}
+				}
+			}
+		}
+
 		// 1. Instance
 		vkb::InstanceBuilder builder;
 		builder.set_app_name("Brassica")
@@ -1004,7 +1031,7 @@ namespace brassica {
 			.set_debug_callback(Engine::VulkanDebugCallback)
 			.set_debug_callback_user_data_pointer(this);
 
-		if (options.headless) {
+		if (options.headless || options.useMockICD) {
 			builder.set_headless(true);
 
 			uint32_t count = 0;
@@ -1162,16 +1189,30 @@ namespace brassica {
 			.set_minimum_version(chosenMajor, chosenMinor)
 			.set_required_features(features1)
 			.set_required_features_13(features13)
-			.set_required_features_12(features12)
-			.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
-			.add_required_extension_features(meshFeatures)
-			.add_required_extension_features(asFeatures)
-			.add_required_extension_features(rqFeatures);
+			.set_required_features_12(features12);
+
+		if (!options.useMockICD) {
+			selector.add_required_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME)
+				.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+				.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
+				.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
+				.add_required_extension_features(meshFeatures)
+				.add_required_extension_features(asFeatures)
+				.add_required_extension_features(rqFeatures);
+		} else {
+			selector.allow_any_gpu_device_type(true);
+		}
 
 		auto phys_ret = selector.select();
+		if (!phys_ret && options.useMockICD) {
+			vkb::PhysicalDeviceSelector fallbackSelector{vkbInst};
+			fallbackSelector.set_surface(surface).allow_any_gpu_device_type(true);
+			auto fallback_ret = fallbackSelector.select();
+			if (fallback_ret) {
+				phys_ret = std::move(fallback_ret);
+			}
+		}
+
 		if (!phys_ret) {
 			spdlog::critical("Failed to select physical device: {}", phys_ret.error().message());
 			return false;
@@ -1360,14 +1401,14 @@ namespace brassica {
 			return;
 		}
 
-		if (options.headless || options.maxFrames > 0) {
+		if (options.headless || options.useMockICD || options.maxFrames > 0) {
 			auto props2 = chosenGPU.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
-			if (props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
+			if (!options.useMockICD && props2.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaLlvmpipe) {
 				spdlog::warn("Mesa LLVMpipe software driver detected; skipping GPU dispatches in headless mode.");
 				return;
 			}
 			uint32_t targetFrames = (options.maxFrames > 0) ? options.maxFrames : 10;
-			spdlog::info("Running engine in headless mode for {} frames...", targetFrames);
+			spdlog::info("Running engine in headless/mock mode for {} frames...", targetFrames);
 			for (uint32_t i = 0; i < targetFrames && !fatalErrorEncountered; ++i) {
 				DrawFrame();
 			}

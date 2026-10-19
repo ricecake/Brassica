@@ -19,6 +19,8 @@ namespace brassica {
 		std::string terrainMapPath{"terrain_map.png"};
 		bool        aggressiveValidation{false};
 		bool        printRenderGraph{false};
+		bool        useMockICD{false};
+		bool        forceRealDriver{false};
 
 		auto GetReflection() const {
 			return std::make_tuple(
@@ -40,7 +42,9 @@ namespace brassica {
 					"Aggressive Vulkan Validation (GPU-assisted + sync, slow)",
 					&ArgparseManagerState::aggressiveValidation
 				),
-				MakeField("printRenderGraph", "Print Render Graph", &ArgparseManagerState::printRenderGraph)
+				MakeField("printRenderGraph", "Print Render Graph", &ArgparseManagerState::printRenderGraph),
+				MakeField("useMockICD", "Use Vulkan Mock ICD", &ArgparseManagerState::useMockICD),
+				MakeField("forceRealDriver", "Force Real Vulkan Driver", &ArgparseManagerState::forceRealDriver)
 			);
 		}
 	};
@@ -67,7 +71,9 @@ namespace brassica {
 				.renderTerrainMap = GetRenderTerrainMap(),
 				.terrainMapPath = GetTerrainMapPath(),
 				.aggressiveValidation = GetAggressiveValidation(),
-				.printRenderGraph = GetPrintRenderGraph()
+				.printRenderGraph = GetPrintRenderGraph(),
+				.useMockICD = GetUseMockICD(),
+				.forceRealDriver = GetForceRealDriver()
 			};
 		}
 
@@ -86,6 +92,8 @@ namespace brassica {
 		[[nodiscard]] std::string GetTerrainMapPath() const;
 		[[nodiscard]] bool        GetAggressiveValidation() const;
 		[[nodiscard]] bool        GetPrintRenderGraph() const;
+		[[nodiscard]] bool        GetUseMockICD() const;
+		[[nodiscard]] bool        GetForceRealDriver() const;
 
 		argparse::ArgumentParser& GetParser() { return m_parser; }
 
