@@ -179,10 +179,13 @@ void main() {
 		float frequency = 1.0 / 32000.0; // Base shape frequency (100km)
 		float amplitude = 1.0;
 		float maxAmplitude = 0.0;
-		float gridSize = 8.0;
 
-		for (int i = 0; i < 4; i++) {
-			float wavelength = 1.0 / (gridSize*frequency);
+		float gridSize = 8.0;
+		vec3 grad = vec3(0.0);
+
+		for (int i = 0; i < 3; i++) {
+			// float wavelength = 1.0 / (gridSize*frequency);
+			float wavelength = 1.0 / frequency;
 
 			// Nyquist clamp: Stop accumulating detail if the noise feature is smaller than 2 voxels.
 			// We fade it out smoothly to guarantee that Cascade 0 and Cascade 1 match perfectly at their boundary.
@@ -190,7 +193,8 @@ void main() {
 			if (fade <= 0.0) break;
 
 			// float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), globalPhase);
-			float n = alligator(worldPos * vec3(frequency, frequency, frequency), gridSize, vec3(globalPhase), true);
+			// float n = alligator(worldPos * vec3(frequency, frequency, frequency), gridSize, vec3(globalPhase), true);
+			float n = dot_noise_fbm((worldPos+grad*wavelength) * vec3(frequency, frequency, frequency), 3, globalPhase, grad);
 
 			density += n * amplitude * fade;
 			maxAmplitude += amplitude*amplitude * fade;

@@ -48,18 +48,51 @@ void main() {
 
 	vec2 perturbedGradSum = vec2(0.0);
 
+	// Sample climate weather biome parameters if available
+	float cloudCoverage = 0.0;
+	float temp = 0.5;
+	float moisture = 0.5;
+	float severity = 0.0;
+	bool hasWeather = false;
+
+	if (params.weatherBiomeIndex > 0u) {
+		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, worldPos);
+		cloudCoverage = weatherSample.r;
+		temp = weatherSample.g;
+		moisture = weatherSample.b;
+		severity = weatherSample.a;
+		hasWeather = true;
+	}
+
+	if (hasWeather) {
+		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+
+		// 1. Climate biome color blending: enhance greenness in moist regions
+		if (grassW > 0.01) {
+			vec3 lushGreen = mix(wb.color, vec3(0.12, 0.48, 0.10), smoothstep(0.35, 0.75, moisture));
+			finalAlbedo = mix(finalAlbedo, lushGreen, grassW * 0.65);
+			roughness = mix(roughness, wb.roughness, grassW * 0.5);
+		}
+
+		// 2. Patches of green moss / damp vegetation on wet cliff ledges and crevices
+		if (rockW > 0.01 && moisture > 0.20) {
+			float ledgeFactor = smoothstep(0.25, 0.75, N.y);
+			float mossNoise = psrdnoise(worldXZ * 1.5);
+			float mossAmount = rockW * ledgeFactor * smoothstep(0.25, 0.65, moisture) * smoothstep(-0.3, 0.4, mossNoise);
+			vec3 mossColor = mix(vec3(0.18, 0.40, 0.14), vec3(0.10, 0.52, 0.12), moisture);
+			finalAlbedo = mix(finalAlbedo, mossColor, mossAmount * 0.75);
+			roughness = mix(roughness, 0.85, mossAmount * 0.5);
+		}
+	}
+
 	// -------------------------------------------------------------------------
 	// 1. Procedural Tree Forest Canopy Proxy & Feature-Size Normal Perturbation
 	// -------------------------------------------------------------------------
 	// Serves as a 3D canopy standin at distance where explicit foliage meshes
 	// fade out, providing normal mapping, crevice shadowing, and roughness tweaks.
-	if (params.weatherBiomeIndex > 0u && grassW > 0.02 && N.y > 0.50 && worldPos.y > params.waterLevel - 0.5) {
-		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, worldPos);
-		float temp = weatherSample.r;
-		float moisture = weatherSample.g;
-		float severity = weatherSample.b;
+	if (hasWeather && grassW > 0.02 && N.y > 0.50 && worldPos.y > params.waterLevel - 0.5) {
 		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
-
 		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
 		uint biomeIdx = uint(clamp(wb.biomeIndex, 0.0, 9.0));
 
@@ -244,7 +277,23 @@ void main() {
 	}
 
 	// -------------------------------------------------------------------------
-	// 5. Toksvig Roughness Filtering & Normal Perturbation Derivation
+	// 5. Dynamic Rain Wetness, Darkening, Glossiness & Glint
+	// -------------------------------------------------------------------------
+	if (hasWeather) {
+		float rainFactor = clamp(cloudCoverage * 1.2 * smoothstep(0.15, 0.55, moisture) + severity * 0.5, 0.0, 1.0);
+		if (rainFactor > 0.01) {
+			// Porous wet surfaces darken when rained on
+			float wetDarkening = mix(1.0, 0.65, rainFactor * (1.0 - snowW));
+			finalAlbedo *= wetDarkening;
+
+			// Wet surfaces become glossy and glisten in the rain
+			roughness = mix(roughness, 0.08, rainFactor * 0.80);
+			glint = mix(glint, 0.95, rainFactor * 0.85);
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// 6. Toksvig Roughness Filtering & Normal Perturbation Derivation
 	// -------------------------------------------------------------------------
 	if (length(perturbedGradSum) > 0.0001) {
 		vec3 grad3D = vec3(perturbedGradSum.x, 0.0, perturbedGradSum.y);

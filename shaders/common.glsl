@@ -907,3 +907,13 @@ uint bayer3D(uvec3 pos) {
     // // Normalize to [0, 1) by dividing by 2^32
     // return float(reversed) * 2.3283064365386963e-10;
 }
+
+vec3 get_curl(mat3 J) {
+    // Curl = ( dFz/dy - dFy/dz,  dFx/dz - dFz/dx,  dFy/dx - dFx/dy )
+    // In GLSL: J[col][row] -> J[1][2] is dFz/dy
+    return vec3(
+        J[1][2] - J[2][1],
+        J[2][0] - J[0][2],
+        J[0][1] - J[1][0]
+    );
+}
