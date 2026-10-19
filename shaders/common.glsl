@@ -882,3 +882,13 @@ HierarchicalWorleyData2D hierarchicalWorleyTiled(in vec2 p, in float period) {
 
     return HierarchicalWorleyData2D(sqrt(f1_dist), sqrt(f2_dist), f1_pos, f2_pos, f1_level, f2_level, f1_id, f2_id, p);
 }
+
+vec3 get_curl(mat3 J) {
+    // Curl = ( dFz/dy - dFy/dz,  dFx/dz - dFz/dx,  dFy/dx - dFx/dy )
+    // In GLSL: J[col][row] -> J[1][2] is dFz/dy
+    return vec3(
+        J[1][2] - J[2][1],
+        J[2][0] - J[0][2],
+        J[0][1] - J[1][0]
+    );
+}
