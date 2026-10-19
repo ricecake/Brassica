@@ -304,16 +304,6 @@ float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
 	}
 }
 
-vec3 get_curl(mat3 J) {
-    // Curl = ( dFz/dy - dFy/dz,  dFx/dz - dFz/dx,  dFy/dx - dFx/dy )
-    // In GLSL: J[col][row] -> J[1][2] is dFz/dy
-    return vec3(
-        J[1][2] - J[2][1],
-        J[2][0] - J[0][2],
-        J[0][1] - J[1][0]
-    );
-}
-
 // Change signature to return vec4
 vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
 	float stepSize = 50.0;
