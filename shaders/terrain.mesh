@@ -226,12 +226,14 @@ void main() {
 	vec3 absWorldPos = uCameraPosition.xyz + relWorldPos;
 
 	float geoBiome = 0.5;
+	float localWaterLevel = params.waterLevel;
 	float ridgeMap = 0.0;
 	float substrate = 0.0;
 
 	if (params.biomeIndex > 0u) {
 		vec4 biomeSample = sampleTerrainBiome(params.biomeIndex, morphedWorldXZ, morphLOD, params.gridParams.w);
 		geoBiome = biomeSample.r;
+		localWaterLevel = biomeSample.g;
 		ridgeMap = biomeSample.b;
 		substrate = biomeSample.a;
 	}
@@ -253,18 +255,18 @@ void main() {
 
 	float sandWeight = 0.0;
 	if (normal.y > 0.4) {
-		float distToWater = abs(height - params.waterLevel);
-		if (distToWater < 5.0) {
-			float shoreFactor = (1.0 - smoothstep(0.0, 5.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
-			sandWeight = shoreFactor * 0.8;
+		float distToWater = abs(height - localWaterLevel);
+		if (distToWater < 6.0) {
+			float shoreFactor = (1.0 - smoothstep(0.0, 6.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
+			sandWeight = shoreFactor * 0.85;
 			vec3 sandColor = mix(vec3(0.82, 0.75, 0.55), regionalRockColor * 1.15, 0.25);
 			baseColor = mix(baseColor, sandColor, sandWeight);
 			roughness = mix(roughness, 0.75, sandWeight);
 		}
 	}
 
-	if (height < params.waterLevel) {
-		float depth = params.waterLevel - height;
+	if (height < localWaterLevel) {
+		float depth = localWaterLevel - height;
 		vec3 wetSand = vec3(0.65, 0.60, 0.45);
 		vec3 shallowReef = vec3(0.35, 0.60, 0.50);
 		vec3 deepOceanBed = vec3(0.12, 0.16, 0.20);
@@ -278,11 +280,20 @@ void main() {
 	}
 
 	float snowWeight = 0.0;
-	if (height > 2000.0) {
-		snowWeight = smoothstep(2000.0, 3500.0, height) * smoothstep(0.2, 0.6, normal.y);
-		vec3 snowColor = vec3(0.92, 0.95, 0.98);
-		baseColor = mix(baseColor, snowColor, snowWeight);
-		roughness = mix(roughness, 0.30, snowWeight);
+	if (params.weatherBiomeIndex > 0u) {
+		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, absWorldPos);
+		float temp = weatherSample.g;
+		float moisture = weatherSample.b;
+		float severity = weatherSample.a;
+		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+
+		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+		if (wb.snowCover > 0.01) {
+			snowWeight = wb.snowCover * smoothstep(0.2, 0.6, normal.y);
+			vec3 snowColor = vec3(0.92, 0.95, 0.98);
+			baseColor = mix(baseColor, snowColor, snowWeight);
+			roughness = mix(roughness, 0.30, snowWeight);
+		}
 	}
 
 	float grassWeight = clamp(1.0 - max(rockWeight, max(sandWeight, snowWeight)), 0.0, 1.0);
