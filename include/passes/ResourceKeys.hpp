@@ -375,6 +375,7 @@ namespace brassica {
 		constexpr std::uint32_t kBiomeTextureDim = 2048;
 		constexpr std::uint32_t kBlendDitherDivisor = 8;
 		constexpr std::uint32_t kUpdateInterval = 300;
+		constexpr std::uint32_t kCellsPerUpdate = 512;
 	} // namespace constants::Weather
 
 	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim) {
