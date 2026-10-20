@@ -1,3 +1,6 @@
+#ifndef COMMON_GLSL
+#define COMMON_GLSL
+
 #include "lygia/generative/random.glsl"
 
 const float FAKE_PLANET_RADIUS = 600000.0; // 600km radius (1/10th scale planet)
@@ -892,3 +895,5 @@ vec3 get_curl(mat3 J) {
         J[0][1] - J[1][0]
     );
 }
+
+#endif // COMMON_GLSL
