@@ -17,6 +17,8 @@ layout(push_constant) uniform ClimateCAPushConstants {
 	uint weatherOutStorageIdx;  // Output weather coverage storage image
 	uint biomeOutStorageIdx;    // Output Whittaker biome storage image
 	uint textureDim;            // Texture grid dimension (e.g. 2048)
+	uint cellOffset;            // Row offset for partial update
+	uint cellsPerUpdate;        // Number of rows in partial update
 	uint pad;
 } push;
 
@@ -43,9 +45,9 @@ const float DIFFUSION_RATE = 0.1;   // How fast groundwater spreads
 const float BASE_EVAPORATION = 0.05;
 
 void main() {
-	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 pos = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + push.cellOffset);
 	int dim = int(push.textureDim);
-	if (pos.x >= dim || pos.y >= dim) {
+	if (pos.x >= dim || pos.y >= dim || pos.y >= int(push.cellOffset + push.cellsPerUpdate)) {
 		return;
 	}
 

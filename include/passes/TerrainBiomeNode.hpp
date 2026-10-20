@@ -14,6 +14,8 @@
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
+#include "ConfigManager.hpp"
+#include "ServiceLocator.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -45,6 +47,8 @@ namespace brassica {
 		std::uint32_t weatherOutStorageIdx{0};
 		std::uint32_t biomeOutStorageIdx{0};
 		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
+		std::uint32_t cellOffset{0};
+		std::uint32_t cellsPerUpdate{512};
 		std::uint32_t pad{0};
 	};
 
@@ -61,6 +65,8 @@ namespace brassica {
 		bool          hasEverGenerated{false};
 		bool          pingPongState{false};
 		std::uint32_t frameCounter{0};
+		std::uint32_t cellOffset{0};
+		std::uint32_t cellsPerUpdate{512};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -98,6 +104,17 @@ namespace brassica {
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			forceRegeneration = p.forceRegeneration;
 			++frameCounter;
+			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<ConfigManager>()) {
+				auto config = ServiceLocator::Instance().Get<ConfigManager>();
+				std::uint32_t cfgVal = config->GetManagerSetting<std::uint32_t>("TerrainBiomeNode", "cellsPerUpdate", 512);
+				if (cfgVal == 512 && config->HasValue("TerrainBiome", "cellsPerUpdate")) {
+					cfgVal = config->GetManagerSetting<std::uint32_t>("TerrainBiome", "cellsPerUpdate", 512);
+				}
+				if (cfgVal == 512 && config->HasValue("BiomeCA", "cellsPerUpdate")) {
+					cfgVal = config->GetManagerSetting<std::uint32_t>("BiomeCA", "cellsPerUpdate", 512);
+				}
+				cellsPerUpdate = std::max(1u, cfgVal);
+			}
 		}
 
 		// All seven are Modify (not Create): legacy used ReadWrite for every one of these, since
@@ -120,15 +137,28 @@ namespace brassica {
 		// node's shaders (dispatchDim -> group count).
 		template <typename PushT>
 		void
-		DispatchCompute(graph::NodeContext& ctx, ComputeShader& shader, const PushT& push, std::uint32_t dispatchDim) {
+		DispatchCompute2D(
+			graph::NodeContext& ctx,
+			ComputeShader&      shader,
+			const PushT&        push,
+			std::uint32_t       dispatchDimX,
+			std::uint32_t       dispatchDimY
+		) {
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, shader, push);
 			if (!resolved.pipeline) {
 				return;
 			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			std::uint32_t     groupCount = (dispatchDim + 15) / 16;
-			vkCmd.dispatch(groupCount, groupCount, 1);
+			std::uint32_t     groupCountX = (dispatchDimX + 15) / 16;
+			std::uint32_t     groupCountY = (dispatchDimY + 15) / 16;
+			vkCmd.dispatch(groupCountX, groupCountY, 1);
+		}
+
+		template <typename PushT>
+		void
+		DispatchCompute(graph::NodeContext& ctx, ComputeShader& shader, const PushT& push, std::uint32_t dispatchDim) {
+			DispatchCompute2D(ctx, shader, push, dispatchDim, dispatchDim);
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -155,6 +185,8 @@ namespace brassica {
 				cmd.pipelineBarrier2(depInfo);
 			};
 
+			const std::uint32_t textureDim = constants::Weather::kCoverageTextureDim;
+
 			if (!hasEverGenerated || forceRegeneration) {
 				// Initial baseline CA generation
 				DispatchCompute(
@@ -163,16 +195,18 @@ namespace brassica {
 					ClimateInitialPushConstants{
 						.outStorageIdx1 = weatherMapAIdx,
 						.outStorageIdx2 = biomeMapAIdx,
-						.textureDim = constants::Weather::kCoverageTextureDim,
+						.textureDim = textureDim,
 						.pad = 0
 					},
-					constants::Weather::kCoverageTextureDim
+					textureDim
 				);
 				insertComputeBarrier(vkCmd);
 
-				// First Cellular Automata update step from Map A -> Map B, writing outputs to main weather and biome
-				// maps
-				DispatchCompute(
+				cellOffset = 0;
+				std::uint32_t cellsToProcess = std::min(cellsPerUpdate, textureDim - cellOffset);
+
+				// First Cellular Automata partial update step from Map A -> Map B, writing outputs to main weather and biome maps
+				DispatchCompute2D(
 					ctx,
 					caShader,
 					ClimateCAPushConstants{
@@ -182,13 +216,22 @@ namespace brassica {
 						.outMapStorageIdx2 = biomeMapBIdx,
 						.weatherOutStorageIdx = mainWeatherIdx,
 						.biomeOutStorageIdx = mainBiomeIdx,
-						.textureDim = constants::Weather::kCoverageTextureDim,
+						.textureDim = textureDim,
+						.cellOffset = cellOffset,
+						.cellsPerUpdate = cellsToProcess,
 						.pad = 0
 					},
-					constants::Weather::kCoverageTextureDim
+					textureDim,
+					cellsToProcess
 				);
 
-				pingPongState = true; // Next input will be Map B
+				cellOffset += cellsToProcess;
+				if (cellOffset >= textureDim) {
+					cellOffset = 0;
+					pingPongState = true;
+				} else {
+					pingPongState = false;
+				}
 				hasEverGenerated = true;
 			} else {
 				std::uint32_t inStateIdx1 = pingPongState ? weatherMapBIdx : weatherMapAIdx;
@@ -196,8 +239,10 @@ namespace brassica {
 				std::uint32_t outStateIdx1 = pingPongState ? weatherMapAIdx : weatherMapBIdx;
 				std::uint32_t outStateIdx2 = pingPongState ? biomeMapAIdx : biomeMapBIdx;
 
-				// Run cellular automata step
-				DispatchCompute(
+				std::uint32_t cellsToProcess = std::min(cellsPerUpdate, textureDim - cellOffset);
+
+				// Run cellular automata step for fixed subset of cells
+				DispatchCompute2D(
 					ctx,
 					caShader,
 					ClimateCAPushConstants{
@@ -207,13 +252,20 @@ namespace brassica {
 						.outMapStorageIdx2 = outStateIdx2,
 						.weatherOutStorageIdx = mainWeatherIdx,
 						.biomeOutStorageIdx = mainBiomeIdx,
-						.textureDim = constants::Weather::kCoverageTextureDim,
+						.textureDim = textureDim,
+						.cellOffset = cellOffset,
+						.cellsPerUpdate = cellsToProcess,
 						.pad = 0
 					},
-					constants::Weather::kCoverageTextureDim
+					textureDim,
+					cellsToProcess
 				);
 
-				pingPongState = !pingPongState;
+				cellOffset += cellsToProcess;
+				if (cellOffset >= textureDim) {
+					cellOffset = 0;
+					pingPongState = !pingPongState;
+				}
 			}
 		}
 	};
