@@ -93,29 +93,28 @@ void main() {
 
 	const uint NUM_CHUNKS = 16u;
 	const uint FADE_FRAMES = 8u;
-	const uint STAGGER_FRAMES = 4u; // Start next chunk halfway through current
+	const uint STAGGER_FRAMES = 4u;
 
-	// 15 staggers * 4 frames + 8 frames to finish the last one = 68 frames of activity
-	const uint ACTIVE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
-	const uint REST_FRAMES = 300u; // Adjust this to lengthen/shorten the static period
-	const uint CYCLE_FRAMES = ACTIVE_FRAMES + REST_FRAMES; // e.g., 128 frames
+	// Remove REST_FRAMES. A continuous rolling wave is better for EMA.
+	const uint CYCLE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
 
-	// Current temporal state
 	uint cycleFrame = uFrameIndex % CYCLE_FRAMES;
-	uint globalPhase = uFrameIndex / CYCLE_FRAMES;
+
+	// Use a continuous fractional time instead of integer leaps
+	float evolutionSpeed = 0.05; // Adjust this to control how fast the clouds morph
+	float continuousTime = float(int(uFrameIndex/CYCLE_FRAMES) * evolutionSpeed);
+
 
 	// uint mCode = bayer3D(vox);
 	uint mCode = encodeMorton3D(vox);
-	uint chunkId = ((mCode >> 19u) & 15u);
+	uint chunkId = ((mCode >> 20u) & 15u);
 
 	// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
 	uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
 
-	// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
-	// ditherStep = (encodeMorton3D(vox) & 7u) ^ ditherStep; // Equivalent to % 8
-
 	// 3. Exact target frame for this specific voxel
-	uint voxelUpdateFrame = (chunkId * STAGGER_FRAMES) + ditherStep;
+	uint voxelUpdateFrame = ((chunkId * STAGGER_FRAMES) + ditherStep)%CYCLE_FRAMES;
+	// uint voxelUpdateFrame = mCode % CYCLE_FRAMES;
 
 
 
@@ -194,7 +193,7 @@ void main() {
 
 			// float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), globalPhase);
 			// float n = alligator(worldPos * vec3(frequency, frequency, frequency), gridSize, vec3(globalPhase), true);
-			float n = dot_noise_fbm((worldPos+grad*wavelength) * vec3(frequency, frequency, frequency), 3, globalPhase, grad);
+			float n = dot_noise_fbm((worldPos+grad*wavelength) * vec3(frequency, frequency, frequency), 3, continuousTime, grad);
 
 			density += n * amplitude * fade;
 			maxAmplitude += amplitude*amplitude * fade;
