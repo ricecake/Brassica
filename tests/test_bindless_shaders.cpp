@@ -64,11 +64,14 @@ TEST_CASE("WaterPushConstants is exactly as large as water.task/water.mesh/water
 	CHECK(sizeof(WaterPushConstants) == 60);
 }
 
-TEST_CASE("atmosphere/composite.frag compiles to valid SPIR-V against the real AtmosphereUBO/bindless.glsl substitution") {
+TEST_CASE("volumetric_froxel_gen.comp and volumetric_render.frag compile to valid SPIR-V against the real bindless.glsl substitution") {
 	RegisterBindlessSamplerConstants();
 
+	ComputeShader  comp;
 	FragmentShader frag;
-	CHECK(frag.CompileFragmentFromFile(vk::Device{}, "shaders/atmosphere/composite.frag"));
+	CHECK(comp.CompileComputeFromFile(vk::Device{}, "shaders/volumetric_froxel_gen.comp"));
+	CHECK(frag.CompileFragmentFromFile(vk::Device{}, "shaders/volumetric_render.frag"));
+	CHECK(!comp.GetSPIRV().empty());
 	CHECK(!frag.GetSPIRV().empty());
 
 	Shader::ClearConstants();

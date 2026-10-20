@@ -24,7 +24,7 @@ namespace brassica {
 
 	// Forward-declared only: After<AtmosphereCompositeNode>()/Before<WaterNode>() below need
 	// just the type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
-	struct AtmosphereCompositeNode;
+	struct DeferredNode;
 	struct WaterNode;
 
 	struct alignas(16) VolumetricRenderPushConstants {
@@ -108,7 +108,7 @@ namespace brassica {
 			r.Read<VolumetricCascade2Scattering>();
 			r.Read<VolumetricCascade2Extinction>();
 			r.Modify<HdrColor>();
-			r.After<AtmosphereCompositeNode>();
+			r.After<DeferredNode>();
 			r.Before<WaterNode>();
 		}
 

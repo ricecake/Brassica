@@ -109,9 +109,9 @@ namespace brassica {
 	inline graph::ResourceDesc VolumetricFroxelDesc() {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image3D,
-			.width = 64,
-			.height = 64,
-			.depth = 64,
+			.width = 160,
+			.height = 90,
+			.depth = 128,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
@@ -144,23 +144,6 @@ namespace brassica {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return VolumetricFroxelDesc(); }
 	};
 
-	inline graph::ResourceDesc VolumetricNoiseDesc() {
-		return graph::ResourceDesc{
-			.kind = graph::ResourceDesc::Kind::Image2D,
-			.width = 512,
-			.height = 512,
-			.depth = 1,
-			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
-			.usageMask = static_cast<std::uint32_t>(
-				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
-				vk::ImageUsageFlagBits::eTransferDst
-			),
-		};
-	}
-
-	struct VolumetricNoiseTexture {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return VolumetricNoiseDesc(); }
-	};
 
 	struct Swapchain {};
 
