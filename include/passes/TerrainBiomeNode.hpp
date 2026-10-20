@@ -113,6 +113,8 @@ namespace brassica {
 			r.Modify<TerrainBiomeMainTexture>();
 			r.Modify<TerrainBiomeMapATexture>();
 			r.Modify<TerrainBiomeMapBTexture>();
+			// shaders/climate_ca.comp reads uLights[0].direction via clustered_lighting.glsl.
+			r.Read<LightsBuffer>();
 		}
 
 		// Shared square-workgroup dispatch math for all three CA passes below -- bind/push itself

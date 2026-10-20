@@ -62,6 +62,7 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	frameGraph.Register<graph::Import<TerrainTLAS>>();
 	frameGraph.Register<graph::Import<Swapchain>>();
 	frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+	frameGraph.Register<graph::Import<LightsBuffer>>();
 	frameGraph.Register<graph::Import<graph::History<HiZTexture>>>();
 
 	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);

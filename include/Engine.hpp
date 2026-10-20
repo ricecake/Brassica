@@ -118,6 +118,11 @@ namespace brassica {
 
 		uint32_t GetTransferQueueFamily() const { return transferQueueFamily; }
 
+		// What TerrainManager::PollReadbackData compares a pending readback's frame index
+		// against -- exposed so a caller outside Engine (tests, mainly) can poll it the same
+		// way UpdateCamera does internally.
+		vk::Semaphore GetFrameTimelineSemaphore() const { return frameTimelineSemaphore; }
+
 		const graph::QueueSet& GetQueueSet() const { return queueSet; }
 
 		VmaAllocator GetAllocator() const { return allocator; }

@@ -186,7 +186,13 @@ namespace brassica::graph {
 		}
 
 		if (isWrite) {
-			if (IsDepthFormat(format) && (usage & vk::ImageUsageFlagBits::eDepthStencilAttachment)) {
+			// Graphics-only, matching the eColorAttachment branch below: eEarlyFragmentTests/
+			// eLateFragmentTests are graphics-pipeline stages. A Compute-domain write to a
+			// depth-format/depth-usage image (not possible today -- every depth attachment is
+			// Graphics-domain -- but no longer latent once nodes can be placed off Graphics)
+			// falls through to the eStorage/defensive branches below instead.
+			if (IsDepthFormat(format) && (usage & vk::ImageUsageFlagBits::eDepthStencilAttachment) &&
+			    domain == ExecutionDomain::Graphics) {
 				vk::AccessFlags2 acc = vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
 				if (isReadWrite) {
 					acc |= vk::AccessFlagBits2::eDepthStencilAttachmentRead;
@@ -239,8 +245,11 @@ namespace brassica::graph {
 		// Read. Checked before Storage/Sampled deliberately: a shading-rate map is also built
 		// with eStorage set (a compute shader writes it via imageStore), so the usage bit alone
 		// can't disambiguate -- AttachmentRoleFor already checks this bit first for exactly that
-		// reason (see its comment).
-		if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR) {
+		// reason (see its comment). Graphics-only for the same reason as the depth-write branch
+		// above: eFragmentShadingRateAttachmentKHR is a graphics-pipeline stage, so a Compute-
+		// domain read of the same key (the eStorage case this comment describes) must fall
+		// through to the eStorage branch below instead.
+		if (usage & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR && domain == ExecutionDomain::Graphics) {
 			return ResourceState{
 				vk::ImageLayout::eFragmentShadingRateAttachmentOptimalKHR,
 				vk::PipelineStageFlagBits2::eFragmentShadingRateAttachmentKHR,

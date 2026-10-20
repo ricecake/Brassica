@@ -3,7 +3,10 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "graph/ResourceKey.hpp"
@@ -20,6 +23,23 @@
 namespace brassica::graph {
 
 	enum class ExecutionDomain : std::uint8_t { Graphics, Compute, Transfer, Host };
+
+	// Bit for a GPU queue's slot in a resource's queue-touch mask (PhysicalTexture/Buffer/
+	// AccelerationStructure's m_queueTouchMask, PhysicalResource.hpp) -- Graphics/Compute/
+	// Transfer only, relying on their declaration order above as bit index. Host never
+	// participates: it has no GPU queue and never records a barrier. Used both to update a
+	// resource's mask after a touch and to test the mask against the queue about to record one
+	// (BarrierTranslator.hpp's cross-queue sanitization).
+	inline constexpr std::uint8_t QueueBit(ExecutionDomain domain) {
+		return static_cast<std::uint8_t>(1u << static_cast<unsigned>(domain));
+	}
+
+	// Every GPU queue bit at once -- the conservative "assume the worst" default a resource's
+	// queue-touch mask starts from (PhysicalResource.hpp), matching the existing "assume
+	// eAllCommands already touched it" reasoning the Aliased-memory-reused and Imported-with-
+	// defined-contents constructors already use for lastStage/lastAccess.
+	inline constexpr std::uint8_t kAllQueuesTouchMask =
+		QueueBit(ExecutionDomain::Graphics) | QueueBit(ExecutionDomain::Compute) | QueueBit(ExecutionDomain::Transfer);
 
 	inline constexpr std::uint32_t kQueueFamilyIgnored = 0xFFFFFFFFu;
 
@@ -106,6 +126,52 @@ namespace brassica::graph {
 		bool persistent = false;
 	};
 
+	// Moved up from just below Recipe (where it's still used) so NodeContext's undeclared-access
+	// guard (CheckDeclared, below) can hold a std::span<const ResourceRealization> over a node's
+	// own Recipe::realizations -- NodeContext is defined before Recipe, so this type needs to be
+	// complete by the time NodeContext's inline method bodies reference it.
+	struct ResourceRealization {
+		ResourceId   key = nullptr;
+		AccessKind   access = AccessKind::Read;
+		ResourceDesc desc{};
+
+		// Used only when this realization becomes a color attachment with loadOp=eClear (see
+		// DynamicRenderingWrapper::Begin, PhysicalExecutionBackend.hpp). Defaults to opaque
+		// black, matching what every current color target except the G-buffer wants. The
+		// G-buffer's alpha channel is a data sentinel, not just opacity -- deferred.frag reads
+		// albedo.a < 0.01 to mean "no terrain rendered here, show the gradient background" -- so
+		// TerrainNode overrides this to {0,0,0,0} for its three color realizations. Getting this
+		// wrong doesn't fail to compile or throw; it just silently miscomposites, which is
+		// exactly what happened before this field existed (see the migration's post-port fix).
+		std::array<float, 4> clearColor{0.0f, 0.0f, 0.0f, 1.0f};
+
+		// Used only when this realization's AttachmentRole (ResourceState.hpp) is ShadingRate --
+		// VkRenderingFragmentShadingRateAttachmentInfoKHR::shadingRateAttachmentTexelSize, which
+		// has no principled default this layer could pick on its own (it's a per-device minimum,
+		// see ShadingRateAttachmentDesc's comment, PhysicalResource.hpp). 16x16 matches the most
+		// common reported minimum; a node targeting a device with a different minimum must set
+		// this explicitly.
+		std::array<std::uint32_t, 2> shadingRateTexelSize{16, 16};
+
+		// Set via AccessHandle::AnyOrder() -- the author is asserting that a conflicting write
+		// against this exact key from another AnyOrder() access needs no relation, because the
+		// two commute (e.g. depth-tested opaque geometry writing disjoint screen regions). Without
+		// this, two writers of one key with nothing ordering them is an ambiguity error (design
+		// plan's §E); this is the single opt-out, and it only suppresses that specific check -- a
+		// real data race from an actual conflicting write still corrupts output the same as ever,
+		// this is not a correctness guarantee, just a declaration that the author already checked.
+		bool anyOrder = false;
+
+		// Set via AccessHandle::Required() on a Read access -- design plan's §E: this node is
+		// inactive unless an active writer W of this key satisfies W <= this node in the schedule
+		// order (a writer that only runs *after* this node doesn't count; that would make
+		// activity depend on something that hasn't happened yet). Meaningless on a Write/
+		// ReadWrite access -- a node always "has" whatever it itself just wrote. Distinct from
+		// Requires<A>(), which couples activity to a specific *node*; this couples it to whether
+		// a specific *key* actually has live data flowing into this read.
+		bool required = false;
+	};
+
 	// Opaque per-resource bindless-index lookup *and* CPU-write entry point. Implemented by
 	// PhysicalResourceRegistry (PhysicalRegistry.hpp, Vulkan-aware) so that
 	// NodeContext::Index<K>()/StorageIndex<K>()/Write<K>()/WriteSpan<K>() below can live in this
@@ -153,11 +219,25 @@ namespace brassica::graph {
 		// insideRendering must be true exactly when called from within a dynamic-rendering scope
 		// (DynamicRenderingWrapper::Begin/End) -- a Staged write records a real copy command in
 		// EndHostWrite, which vkCmdCopyBuffer/vkCmdCopyBufferToImage can't do there; a Mapped
-		// write never touches the command buffer at all, so it's unaffected either way. Returns
-		// an empty span by default (matching every other virtual here, all no-ops until
+		// write never touches the command buffer at all, so it's unaffected either way.
+		// domain is the calling node's own ExecutionDomain -- a Staged write's real copy command
+		// always executes at the transfer stage (EndHostWrite's vkCmdCopyBuffer/CopyBufferToImage
+		// below), but the Acquire pre-barrier that runs before Execute() derives the stage/access
+		// it leaves in tracked state from this domain, not from "there happens to be a transfer
+		// copy inside." A Transfer-domain node's pre-barrier already lands on eAllTransfer/
+		// eTransferWrite, which matches; any other domain's pre-barrier lands on that domain's own
+		// stage (e.g. eColorAttachmentOutput for Graphics), which doesn't -- the next consumer's
+		// srcStage would then miss the real transfer write. PhysicalResourceRegistry's override
+		// throws on that combination rather than letting it corrupt tracked state. Returns an
+		// empty span by default (matching every other virtual here, all no-ops until
 		// PhysicalResourceRegistry overrides them).
-		virtual std::span<std::byte>
-		BeginHostWrite(ResourceId, std::size_t /*sizeBytes*/, std::uint64_t /*frameIndex*/, bool /*insideRendering*/) {
+		virtual std::span<std::byte> BeginHostWrite(
+			ResourceId /*id*/,
+			std::size_t /*sizeBytes*/,
+			std::uint64_t /*frameIndex*/,
+			bool /*insideRendering*/,
+			ExecutionDomain /*domain*/
+		) {
 			return {};
 		}
 
@@ -206,18 +286,78 @@ namespace brassica::graph {
 		// with a clear message instead of a cryptic validation error later.
 		bool insideRendering = false;
 
+		// This node's own Recipe::domain (set by PhysicalExecutionBackend::RunSchedule, same
+		// place as insideRendering above) -- what BeginHostWrite needs to reject a Staged write
+		// from a non-Transfer-domain node (see its declaration's comment), and what
+		// CheckDeclared below needs to decide throw-vs-warn.
+		ExecutionDomain domain = ExecutionDomain::Graphics;
+
+		// This node's own Recipe::realizations for the current frame (set by
+		// PhysicalExecutionBackend::RunSchedule/MultiQueueExecutionBackend::RunQueueBatch, same
+		// place as domain above) -- the undeclared-access guard's source of truth for "did
+		// Setup() actually declare this key." Empty by default (every pre-existing bare-
+		// CommandBuffer construction of NodeContext, Graph.hpp's legacy Execute(CommandBuffer&)
+		// wrapper included), which CheckDeclared treats as "nothing to check against" rather
+		// than "nothing is declared" -- see its own comment.
+		std::span<const ResourceRealization> declared{};
+
+		// A node that can't execute concurrently with another has an unexpressed dependency --
+		// this is what actually enforces that principle once nodes can be placed on different
+		// queues (design plan's ground rules): an access to a key Setup() never declared can't
+		// have gotten a barrier/wait synthesized for it, so placement could silently change
+		// correctness for exactly the keys this misses. Throws for Compute/Transfer domain
+		// (where an undeclared access is a straight-up bug, not just a code-smell -- there's no
+		// queue it would ever be *correct* to run on), warns once per K for Graphics (today's
+		// only domain with real, audited offenders -- see VolumetricFroxelGenNode's history) so
+		// existing passes don't start throwing mid-migration while still surfacing the gap.
+		// `declared.empty()` short-circuits before either path: a NodeContext nothing ever
+		// populated (the legacy bare-CommandBuffer wrapper, or a test fixture with no recipe in
+		// scope at all) has no realizations to check against, which is "unknown," not "none."
+		template <typename K>
+		void CheckDeclared(const char* accessor) const {
+			if (declared.empty()) {
+				return;
+			}
+			const ResourceId id = IdOf<K>();
+			for (const ResourceRealization& r : declared) {
+				if (r.key == id) {
+					return;
+				}
+			}
+			if (domain == ExecutionDomain::Compute || domain == ExecutionDomain::Transfer) {
+				throw std::runtime_error(
+					std::string("NodeContext::") + accessor + ": undeclared access to '" +
+					std::string(id->name) +
+					"' from a Compute/Transfer-domain node -- declare it via Read<>/Create<>/"
+					"Modify<>() in Setup(), or this node's queue placement could silently change "
+					"correctness."
+				);
+			}
+			static bool warned = false;
+			if (!warned) {
+				std::cerr << "NodeContext::" << accessor << ": undeclared access to '" << id->name
+						  << "' from a Graphics-domain node -- declare it via Read<>/Create<>/"
+							 "Modify<>() in Setup()."
+						  << std::endl;
+				warned = true;
+			}
+		}
+
 		template <typename K>
 		[[nodiscard]] std::uint32_t Index() const {
+			CheckDeclared<K>("Index");
 			return resources ? resources->IndexOf(IdOf<K>()) : 0u;
 		}
 
 		template <typename K>
 		[[nodiscard]] std::uint32_t StorageIndex(std::uint32_t mip = 0) const {
+			CheckDeclared<K>("StorageIndex");
 			return resources ? resources->StorageIndexOf(IdOf<K>(), mip) : 0u;
 		}
 
 		template <typename K>
 		[[nodiscard]] std::uint32_t BufferIndex() const {
+			CheckDeclared<K>("BufferIndex");
 			return resources ? resources->BufferIndexOf(IdOf<K>()) : 0u;
 		}
 
@@ -227,10 +367,12 @@ namespace brassica::graph {
 		// called in that case, so it's safe to pass a lambda that assumes a full-sized span.
 		template <typename K>
 		void Write(std::size_t sizeBytes, auto&& fn) {
+			CheckDeclared<K>("Write");
 			if (!resources) {
 				return;
 			}
-			std::span<std::byte> dst = resources->BeginHostWrite(IdOf<K>(), sizeBytes, frameIndex, insideRendering);
+			std::span<std::byte> dst =
+				resources->BeginHostWrite(IdOf<K>(), sizeBytes, frameIndex, insideRendering, domain);
 			if (dst.empty()) {
 				return;
 			}
@@ -239,7 +381,8 @@ namespace brassica::graph {
 		}
 
 		// memcpy convenience over Write<K> for the common "I already have the data in one
-		// contiguous span" case -- SetData-style callers, mostly.
+		// contiguous span" case -- SetData-style callers, mostly. No separate CheckDeclared call
+		// here: this always calls Write<K>, which already makes one.
 		template <typename K, typename T>
 		void WriteSpan(std::span<const T> data) {
 			Write<K>(data.size_bytes(), [&](std::span<std::byte> dst) {
@@ -258,48 +401,6 @@ namespace brassica::graph {
 		std::uint32_t height = 0;
 		std::uint32_t renderScalePercent = 100;
 		std::uint64_t frameIndex = 0;
-	};
-
-	struct ResourceRealization {
-		ResourceId   key = nullptr;
-		AccessKind   access = AccessKind::Read;
-		ResourceDesc desc{};
-
-		// Used only when this realization becomes a color attachment with loadOp=eClear (see
-		// DynamicRenderingWrapper::Begin, PhysicalExecutionBackend.hpp). Defaults to opaque
-		// black, matching what every current color target except the G-buffer wants. The
-		// G-buffer's alpha channel is a data sentinel, not just opacity -- deferred.frag reads
-		// albedo.a < 0.01 to mean "no terrain rendered here, show the gradient background" -- so
-		// TerrainNode overrides this to {0,0,0,0} for its three color realizations. Getting this
-		// wrong doesn't fail to compile or throw; it just silently miscomposites, which is
-		// exactly what happened before this field existed (see the migration's post-port fix).
-		std::array<float, 4> clearColor{0.0f, 0.0f, 0.0f, 1.0f};
-
-		// Used only when this realization's AttachmentRole (ResourceState.hpp) is ShadingRate --
-		// VkRenderingFragmentShadingRateAttachmentInfoKHR::shadingRateAttachmentTexelSize, which
-		// has no principled default this layer could pick on its own (it's a per-device minimum,
-		// see ShadingRateAttachmentDesc's comment, PhysicalResource.hpp). 16x16 matches the most
-		// common reported minimum; a node targeting a device with a different minimum must set
-		// this explicitly.
-		std::array<std::uint32_t, 2> shadingRateTexelSize{16, 16};
-
-		// Set via AccessHandle::AnyOrder() -- the author is asserting that a conflicting write
-		// against this exact key from another AnyOrder() access needs no relation, because the
-		// two commute (e.g. depth-tested opaque geometry writing disjoint screen regions). Without
-		// this, two writers of one key with nothing ordering them is an ambiguity error (design
-		// plan's §E); this is the single opt-out, and it only suppresses that specific check -- a
-		// real data race from an actual conflicting write still corrupts output the same as ever,
-		// this is not a correctness guarantee, just a declaration that the author already checked.
-		bool anyOrder = false;
-
-		// Set via AccessHandle::Required() on a Read access -- design plan's §E: this node is
-		// inactive unless an active writer W of this key satisfies W <= this node in the schedule
-		// order (a writer that only runs *after* this node doesn't count; that would make
-		// activity depend on something that hasn't happened yet). Meaningless on a Write/
-		// ReadWrite access -- a node always "has" whatever it itself just wrote. Distinct from
-		// Requires<A>(), which couples activity to a specific *node*; this couples it to whether
-		// a specific *key* actually has live data flowing into this read.
-		bool required = false;
 	};
 
 	// Returned by Node::Setup for a given frame. isActive drives culling; realizations are
@@ -329,8 +430,13 @@ namespace brassica::graph {
 		std::uint32_t   newLayout = 0;
 		ExecutionDomain srcDomain = ExecutionDomain::Graphics;
 		ExecutionDomain dstDomain = ExecutionDomain::Graphics;
-		std::uint32_t   srcQueueFamily = kQueueFamilyIgnored;
-		std::uint32_t   dstQueueFamily = kQueueFamilyIgnored;
+		// No srcQueueFamily/dstQueueFamily (removed, design plan's S4): under
+		// VK_SHARING_MODE_CONCURRENT (what every multi-queue-touched resource now uses,
+		// PhysicalResource.hpp), a barrier's queue family fields must both be
+		// VK_QUEUE_FAMILY_IGNORED -- naming two real, distinct families there is a genuine
+		// ownership-transfer request, which CONCURRENT resources never need and never allow.
+		// There is no real queue-family ownership transfer in this engine at all: a cross-queue
+		// hazard is synchronized by QueueHazardTracker's semaphore wait, not by a barrier.
 	};
 
 	class Resource {

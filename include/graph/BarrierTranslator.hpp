@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -28,11 +29,21 @@ namespace brassica::graph {
 		// changes. DynamicRenderingWrapper (PhysicalExecutionBackend.hpp) only ever reads it
 		// through a const registry reference; that asymmetry is deliberate, not an oversight --
 		// see PhysicalRegistry.hpp's non-const GetTexture/GetBuffer overloads.
+		//
+		// currentQueue: nullopt (the default, every existing call site) preserves today's
+		// behavior exactly -- a resource's queue-touch mask is never read, so no barrier's src is
+		// ever sanitized away from tracked state. Pass the real domain this batch is being
+		// recorded for only from a multi-queue caller that has *actually* split batches by
+		// destination domain into separate per-queue command buffers (QueueHazardTracker.hpp) --
+		// passing a real value here while still recording a mixed-domain batch into one shared
+		// command buffer would wrongly sanitize same-queue barriers that have nothing to do with
+		// a real queue boundary.
 		static void TranslateAndDispatch(
-			vk::CommandBuffer         cmd,
-			PhysicalResourceRegistry& registry,
-			const BarrierBatch&       batch,
-			BarrierPhase              phase
+			vk::CommandBuffer              cmd,
+			PhysicalResourceRegistry&      registry,
+			const BarrierBatch&            batch,
+			BarrierPhase                   phase,
+			std::optional<ExecutionDomain> currentQueue = std::nullopt
 		) {
 			if (batch.Empty() || !cmd) {
 				return;
@@ -41,7 +52,7 @@ namespace brassica::graph {
 			if (phase == BarrierPhase::Release) {
 				DispatchRelease(cmd, registry, batch);
 			} else {
-				DispatchAcquire(cmd, registry, batch);
+				DispatchAcquire(cmd, registry, batch, currentQueue);
 			}
 		}
 
@@ -74,13 +85,15 @@ namespace brassica::graph {
 			vk::ImageLayout                                layout{}; // only meaningful when tex is set
 			vk::PipelineStageFlags2                        stage{};
 			vk::AccessFlags2                               access{};
-			std::uint32_t                                  srcQueueFamily = kQueueFamilyIgnored;
-			std::uint32_t                                  dstQueueFamily = kQueueFamilyIgnored;
 			int                                            priority = -1;
 		};
 
-		static void
-		DispatchAcquire(vk::CommandBuffer cmd, PhysicalResourceRegistry& registry, const BarrierBatch& batch) {
+		static void DispatchAcquire(
+			vk::CommandBuffer               cmd,
+			PhysicalResourceRegistry&       registry,
+			const BarrierBatch&             batch,
+			std::optional<ExecutionDomain>  currentQueue
+		) {
 			std::unordered_map<ResourceId, Coalesced> coalesced;
 
 			for (const auto& mb : batch.Items()) {
@@ -131,11 +144,6 @@ namespace brassica::graph {
 					entry.layout = derived.layout;
 					entry.priority = priority;
 				}
-				if (mb.srcQueueFamily != kQueueFamilyIgnored && mb.dstQueueFamily != kQueueFamilyIgnored &&
-				    mb.srcQueueFamily != mb.dstQueueFamily) {
-					entry.srcQueueFamily = mb.srcQueueFamily;
-					entry.dstQueueFamily = mb.dstQueueFamily;
-				}
 				entry.stage |= derived.stage;
 				entry.access |= derived.access;
 			}
@@ -146,30 +154,25 @@ namespace brassica::graph {
 
 			for (auto& [resource, entry] : coalesced) {
 				if (entry.tex) {
-					EmitImageBarrier(
-						*entry.tex,
-						entry.layout,
-						entry.stage,
-						entry.access,
-						imageBarriers,
-						entry.srcQueueFamily,
-						entry.dstQueueFamily
-					);
+					EmitImageBarrier(*entry.tex, entry.layout, entry.stage, entry.access, imageBarriers, currentQueue);
 				} else if (entry.buf) {
-					EmitBufferBarrier(
-						*entry.buf,
-						entry.stage,
-						entry.access,
-						bufferBarriers,
-						entry.srcQueueFamily,
-						entry.dstQueueFamily
-					);
+					EmitBufferBarrier(*entry.buf, entry.stage, entry.access, bufferBarriers, currentQueue);
 				} else {
-					EmitAccelerationStructureBarrier(*entry.as, entry.stage, entry.access, memoryBarriers);
+					EmitAccelerationStructureBarrier(*entry.as, entry.stage, entry.access, memoryBarriers, currentQueue);
 				}
 			}
 
 			Flush(cmd, imageBarriers, bufferBarriers, memoryBarriers);
+		}
+
+		// True iff `mask` (a resource's queue-touch mask, PhysicalResource.hpp) contains a bit
+		// other than `currentQueue`'s own -- i.e. some other GPU queue contributed to this
+		// resource's tracked lastStage/lastAccess since currentQueue itself last did, whether via
+		// a real barrier or an accumulated read-after-read skip. currentQueue == nullopt (no
+		// multi-queue caller in the picture) always reads as "not cross-queue" -- see
+		// TranslateAndDispatch's currentQueue comment for why that's the correct default.
+		static bool IsCrossQueue(std::uint8_t mask, std::optional<ExecutionDomain> currentQueue) {
+			return currentQueue.has_value() && (mask & ~QueueBit(*currentQueue)) != 0;
 		}
 
 		// Skip rule: only a genuine read-after-read (same layout, neither side a write) may be
@@ -186,38 +189,61 @@ namespace brassica::graph {
 		// always the producer's write, IsWrite(tracked.access) is always true, and the skip
 		// condition's `!IsWrite(tracked.access)` is always false. Edges always emit as a
 		// structural consequence, not a hand-coded exception.
+		//
+		// A cross-queue read-after-read is still a legal skip: neither side writes, so there is
+		// no hazard to synchronize regardless of which queue(s) did the reading (the hazard
+		// table that decided whether a *wait* was needed already covers that -- see
+		// QueueHazardTracker.hpp). The mask is still OR-accumulated across both queues below, same
+		// as the same-queue case, so a *later* write sees every reader it must have waited past.
+		// No srcQueueFamily/dstQueueFamily param -- removed, design plan's S4. A barrier never
+		// names real queue families here: there's no real ownership transfer in this engine at
+		// all (every multi-queue-touched resource is VK_SHARING_MODE_CONCURRENT,
+		// PhysicalResource.hpp, which forbids naming one), so the real
+		// vk::ImageMemoryBarrier2/vk::BufferMemoryBarrier2 below always passes
+		// VK_QUEUE_FAMILY_IGNORED for both. The RAR-skip rule's old "same family, or one side
+		// ignored" clause is gone with it -- IsCrossQueue (queue-touch-mask-based, below) is the
+		// one and only cross-queue signal this function needs now.
 		static void EmitImageBarrier(
 			PhysicalTexture&                      tex,
 			vk::ImageLayout                       newLayout,
 			vk::PipelineStageFlags2               dstStage,
 			vk::AccessFlags2                      dstAccess,
 			std::vector<vk::ImageMemoryBarrier2>& out,
-			std::uint32_t                         srcQueueFamily = kQueueFamilyIgnored,
-			std::uint32_t                         dstQueueFamily = kQueueFamilyIgnored
+			std::optional<ExecutionDomain>        currentQueue = std::nullopt
 		) {
-			const bool readAfterRead = tex.GetCurrentLayout() == newLayout && !IsWrite(tex.GetLastAccess()) &&
-				!IsWrite(dstAccess) && (srcQueueFamily == dstQueueFamily || srcQueueFamily == kQueueFamilyIgnored);
+			const bool readAfterRead =
+				tex.GetCurrentLayout() == newLayout && !IsWrite(tex.GetLastAccess()) && !IsWrite(dstAccess);
 			if (readAfterRead) {
 				tex.SetLastStageAccess(tex.GetLastStage() | dstStage, tex.GetLastAccess() | dstAccess);
+				if (currentQueue.has_value()) {
+					tex.SetQueueTouchMask(tex.GetQueueTouchMask() | QueueBit(*currentQueue));
+				}
 				return;
 			}
 
-			const auto&         desc = tex.GetDesc();
-			const std::uint32_t srcQueue = (srcQueueFamily != kQueueFamilyIgnored) ? srcQueueFamily
-																				   : VK_QUEUE_FAMILY_IGNORED;
-			const std::uint32_t dstQueue = (dstQueueFamily != kQueueFamilyIgnored) ? dstQueueFamily
-																				   : VK_QUEUE_FAMILY_IGNORED;
+			// Cross-queue: tex.GetLastStage()/GetLastAccess() describe what some *other* queue
+			// did, which a pipeline barrier on currentQueue's own command buffer cannot
+			// meaningfully cite as its src -- barriers only order commands already submitted to
+			// the same queue. The hazard table (QueueHazardTracker.hpp) has already inserted
+			// whatever semaphore wait makes that other queue's work visible-before this point;
+			// eAllCommands/no-access-bits here just orders this barrier after currentQueue's own
+			// prior work (trivially true if there is none yet) without claiming a src scope this
+			// queue never actually produced.
+			const bool crossQueue = IsCrossQueue(tex.GetQueueTouchMask(), currentQueue);
+
+			const auto& desc = tex.GetDesc();
 
 			out.push_back(
 				vk::ImageMemoryBarrier2{
-					tex.GetLastStage() ? tex.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
-					tex.GetLastAccess(),
+					crossQueue ? vk::PipelineStageFlagBits2::eAllCommands
+							   : (tex.GetLastStage() ? tex.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe),
+					crossQueue ? vk::AccessFlags2{} : tex.GetLastAccess(),
 					dstStage,
 					dstAccess,
 					tex.GetCurrentLayout(),
 					newLayout,
-					srcQueue,
-					dstQueue,
+					VK_QUEUE_FAMILY_IGNORED,
+					VK_QUEUE_FAMILY_IGNORED,
 					tex.GetImage(),
 					vk::ImageSubresourceRange(
 						AspectFor(static_cast<vk::Format>(desc.formatCode)),
@@ -230,6 +256,9 @@ namespace brassica::graph {
 			);
 			tex.SetCurrentLayout(newLayout);
 			tex.SetLastStageAccess(dstStage, dstAccess);
+			if (currentQueue.has_value()) {
+				tex.SetQueueTouchMask(QueueBit(*currentQueue));
+			}
 		}
 
 		static void EmitBufferBarrier(
@@ -237,36 +266,40 @@ namespace brassica::graph {
 			vk::PipelineStageFlags2                dstStage,
 			vk::AccessFlags2                       dstAccess,
 			std::vector<vk::BufferMemoryBarrier2>& out,
-			std::uint32_t                          srcQueueFamily = kQueueFamilyIgnored,
-			std::uint32_t                          dstQueueFamily = kQueueFamilyIgnored
+			std::optional<ExecutionDomain>         currentQueue = std::nullopt
 		) {
-			const bool readAfterRead = !IsWrite(buf.GetLastAccess()) && !IsWrite(dstAccess) &&
-				(srcQueueFamily == dstQueueFamily || srcQueueFamily == kQueueFamilyIgnored);
+			const bool readAfterRead = !IsWrite(buf.GetLastAccess()) && !IsWrite(dstAccess);
 			if (readAfterRead) {
 				buf.SetLastStageAccess(buf.GetLastStage() | dstStage, buf.GetLastAccess() | dstAccess);
+				if (currentQueue.has_value()) {
+					buf.SetQueueTouchMask(buf.GetQueueTouchMask() | QueueBit(*currentQueue));
+				}
 				return;
 			}
 
-			const auto&         desc = buf.GetDesc();
-			const std::uint32_t srcQueue = (srcQueueFamily != kQueueFamilyIgnored) ? srcQueueFamily
-																				   : VK_QUEUE_FAMILY_IGNORED;
-			const std::uint32_t dstQueue = (dstQueueFamily != kQueueFamilyIgnored) ? dstQueueFamily
-																				   : VK_QUEUE_FAMILY_IGNORED;
+			// See EmitImageBarrier's identical comment just above.
+			const bool crossQueue = IsCrossQueue(buf.GetQueueTouchMask(), currentQueue);
+
+			const auto& desc = buf.GetDesc();
 
 			out.push_back(
 				vk::BufferMemoryBarrier2{
-					buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
-					buf.GetLastAccess(),
+					crossQueue ? vk::PipelineStageFlagBits2::eAllCommands
+							   : (buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe),
+					crossQueue ? vk::AccessFlags2{} : buf.GetLastAccess(),
 					dstStage,
 					dstAccess,
-					srcQueue,
-					dstQueue,
+					VK_QUEUE_FAMILY_IGNORED,
+					VK_QUEUE_FAMILY_IGNORED,
 					buf.GetBuffer(),
 					0,
 					desc.byteSize ? desc.byteSize : VK_WHOLE_SIZE,
 				}
 			);
 			buf.SetLastStageAccess(dstStage, dstAccess);
+			if (currentQueue.has_value()) {
+				buf.SetQueueTouchMask(QueueBit(*currentQueue));
+			}
 		}
 
 		// Per the Vulkan spec, an acceleration structure is synchronized via a generic,
@@ -278,23 +311,34 @@ namespace brassica::graph {
 			PhysicalAccelerationStructure&   as,
 			vk::PipelineStageFlags2          dstStage,
 			vk::AccessFlags2                 dstAccess,
-			std::vector<vk::MemoryBarrier2>& out
+			std::vector<vk::MemoryBarrier2>& out,
+			std::optional<ExecutionDomain>   currentQueue = std::nullopt
 		) {
 			const bool readAfterRead = !IsWrite(as.GetLastAccess()) && !IsWrite(dstAccess);
 			if (readAfterRead) {
 				as.SetLastStageAccess(as.GetLastStage() | dstStage, as.GetLastAccess() | dstAccess);
+				if (currentQueue.has_value()) {
+					as.SetQueueTouchMask(as.GetQueueTouchMask() | QueueBit(*currentQueue));
+				}
 				return;
 			}
 
+			// See EmitImageBarrier's identical comment on why cross-queue sanitizes src.
+			const bool crossQueue = IsCrossQueue(as.GetQueueTouchMask(), currentQueue);
+
 			out.push_back(
 				vk::MemoryBarrier2{
-					as.GetLastStage() ? as.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
-					as.GetLastAccess(),
+					crossQueue ? vk::PipelineStageFlagBits2::eAllCommands
+							   : (as.GetLastStage() ? as.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe),
+					crossQueue ? vk::AccessFlags2{} : as.GetLastAccess(),
 					dstStage,
 					dstAccess,
 				}
 			);
 			as.SetLastStageAccess(dstStage, dstAccess);
+			if (currentQueue.has_value()) {
+				as.SetQueueTouchMask(QueueBit(*currentQueue));
+			}
 		}
 
 		// The producer side of a cross-domain edge (Graph.hpp's SynthesizeBarrier posts these to

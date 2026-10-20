@@ -19,12 +19,6 @@
 
 namespace brassica {
 
-	// Forward-declared only: After<ParticleBehaviorNode>() below needs just the type's name
-	// (TypeName<T>(), ResourceKey.hpp), never a complete type -- including the real definition
-	// (passes/ParticleSystemNode.hpp) would pull in the whole particle subsystem for a node that
-	// otherwise has nothing to do with it.
-	struct ParticleBehaviorNode;
-
 	struct ClusterLightAssignmentNode: render::NodeRegistrar<ClusterLightAssignmentNode> {
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
@@ -50,15 +44,12 @@ namespace brassica {
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Create<ClusteredLighting>();
-			// ParticleBehaviorNode's firefly particles write real dynamic lights into uLights/
-			// uLightCount (shaders/particle_behavior.comp, set 0 binding 2 -- the always-bound
-			// frame set, not a graph-tracked resource, so there's no key to Read<> here) before
-			// this shader reads them. Not yet enforced -- relations are inert until S3's
-			// scheduler lands (SetupBuilder.hpp) -- but this makes the real dependency explicit
-			// instead of leaving it to an undeclared phase-ordering assumption. If particle
-			// nodes are ever moved off Prepare, this is the declaration that needs to start
-			// doing real work, not a comment to go find.
-			r.After<ParticleBehaviorNode>();
+			// uLights/uLightCount (shaders/lighting.glsl, set 0 binding 2) is now a real graph
+			// key (LightsBuffer, ResourceKeys.hpp) -- this Read<>() is a genuine RAW edge against
+			// ParticleBehaviorNode's Modify<LightsBuffer>() (its firefly particles write real
+			// dynamic lights on top of the CPU's own per-frame write), replacing the manual
+			// After<ParticleBehaviorNode>() relation this used to need instead.
+			r.Read<LightsBuffer>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

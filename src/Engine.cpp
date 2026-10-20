@@ -420,10 +420,20 @@ namespace brassica {
 		terrainManager.Init(
 			device,
 			allocator,
-			transferQueue,
-			transferQueueFamily,
 			constants::Class::Terrain::DefaultMaxLODs,
 			constants::Class::Terrain::BaseTexelSize
+		);
+		// One-time: unlike AutoExposureBuffer/LightsBuffer (a different real handle per
+		// FRAME_OVERLAP slot, re-imported every frame), this staging buffer's handle never
+		// changes once TerrainManager::Init allocates it, so there's nothing to refresh.
+		physicalRegistry.RegisterImportedBuffer<TerrainReadbackStaging>(
+			terrainManager.GetReadbackStagingBuffer(),
+			graph::ResourceDesc{
+				.kind = graph::ResourceDesc::Kind::Buffer,
+				.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferDst),
+				.byteSize = TerrainManager::kReadbackStagingBytes,
+			},
+			false
 		);
 
 		render::NodeServices nodeServices{
@@ -560,7 +570,7 @@ namespace brassica {
 
 	void Engine::UpdateCamera(float deltaTime) {
 		// Poll GPU readback data first
-		terrainManager.PollReadbackData();
+		terrainManager.PollReadbackData(device, frameTimelineSemaphore);
 
 		glm::vec2 camPos2D(camera.position.x, camera.position.z);
 		// Query terrain height from TerrainManager.
@@ -895,66 +905,11 @@ namespace brassica {
 		}
 
 
-		// Trigger a new ground-height-and-normal readback for next frame, if TerrainClipmapTexture
-		// is initialized and has been populated/transitioned in the frame graph. Reads a 128x128
-		// window at LOD 0 mip 0 (64m x 64m footprint) to support smooth bilinear ground height
-		// interpolation below the camera and significantly reduce transfer frequency. Reads the
-		// real per-texel height+normal map rather than TerrainMinMaxTexture's hierarchical
-		// occlusion bound (what this used to read, before it turned out unrelated to the terrain
-		// shadow investigation that prompted a closer look here) -- it's written directly by
-		// TerrainGenNode with no downstream pass to wait on, and carries the surface normal
-		// (TerrainManager::GetInterpolatedGroundNormal) for physics besides, which is part of why
-		// this readback existed in the first place.
-		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
-		if (clipmapTex && clipmapTex->GetImage() && terrainManager.GetNumLODs() > 0 &&
-		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
-			bool shouldTrigger = !terrainManager.IsReadbackInFlight();
-			if (shouldTrigger && terrainManager.HasReadbackData()) {
-				float distFromLastTrigger = glm::distance(camPos2D, terrainManager.GetLastReadbackCamPos());
-				if (distFromLastTrigger < 16.0f) {
-					shouldTrigger = false;
-				}
-			}
-
-			if (shouldTrigger) {
-				constexpr int kReadbackWidth = 128;
-				constexpr int kReadbackHeight = 128;
-				int           dim = static_cast<int>(constants::Class::Terrain::MapDim); // 1024
-				float     texelSize = terrainManager.GetBaseTexelSize() > 0.0001f ? terrainManager.GetBaseTexelSize()
-																				  : 0.5f;
-				glm::vec2 camGrid = glm::floor(camPos2D / texelSize);
-
-				int camU = static_cast<int>(camGrid.x) % dim;
-				int camV = static_cast<int>(camGrid.y) % dim;
-				if (camU < 0)
-					camU += dim;
-				if (camV < 0)
-					camV += dim;
-
-				int minU = std::clamp(camU - kReadbackWidth / 2, 0, dim - kReadbackWidth);
-				int minV = std::clamp(camV - kReadbackHeight / 2, 0, dim - kReadbackHeight);
-
-				int g_x0 = static_cast<int>(camGrid.x) - (camU - minU);
-				int g_y0 = static_cast<int>(camGrid.y) - (camV - minV);
-
-				glm::vec2 originWorld(
-					(static_cast<float>(g_x0) + 0.5f) * texelSize,
-					(static_cast<float>(g_y0) + 0.5f) * texelSize
-				);
-
-				terrainManager.TriggerImageRegionReadbackAsync(
-					clipmapTex->GetImage(),
-					0, // arrayLayer (LOD 0)
-					0, // mipLevel 0
-					vk::Offset2D{minU, minV},
-					vk::Extent2D{static_cast<uint32_t>(kReadbackWidth), static_cast<uint32_t>(kReadbackHeight)},
-					originWorld,
-					texelSize,
-					camPos2D,
-					clipmapTex->GetCurrentLayout()
-				);
-			}
-		}
+		// Plans (but doesn't record) a new ground-height-and-normal readback -- the real copy
+		// now happens through TerrainReadbackNode (passes/TerrainReadbackNode.hpp), as part of
+		// this frame's graph execution, not here. PlanReadback carries the same cooldown/region
+		// math this used to do inline (see its own comment, terrain/TerrainManager.cpp).
+		terrainManager.PlanReadback(camPos2D);
 
 		// Apply camera height constraint with basketball collision radius for free-fly modes
 		if (camera.mode != CameraMode::FirstPerson) {
@@ -1344,6 +1299,7 @@ namespace brassica {
 			frameGraph.Register<graph::Import<TerrainTLAS>>();
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+			frameGraph.Register<graph::Import<LightsBuffer>>();
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
@@ -1586,6 +1542,16 @@ namespace brassica {
 			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
 			vmaFlushAllocation(allocator, lightsSSBOAllocations[activeFrame], 0, sizeof(LightsSSBOData));
 		}
+		// Imported right after the CPU write it covers, same pattern and reasoning as
+		// AutoExposureBuffer just below -- this is what lets ParticleBehaviorNode's later GPU
+		// write (shaders/particle_behavior.comp) and ClusterLightAssignmentNode's read get a
+		// real tracked dependency instead of the manual After<ParticleBehaviorNode>() relation
+		// that used to be the only thing connecting them.
+		physicalRegistry.RegisterImportedBuffer<LightsBuffer>(
+			lightsSSBOBuffers[activeFrame],
+			graph::StorageBufferDesc(sizeof(LightsSSBOData)),
+			true
+		);
 
 		// bindlessBindings.set/layout (set 1) never change frame to frame -- only frameSet
 		// actually varies here, since it's the only piece that's genuinely double-buffered. This
@@ -1665,6 +1631,18 @@ namespace brassica {
 
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		// LightsBuffer (uLights/uLightCount, frame set binding 2) is a genuine hybrid: the CPU
+		// upload a few lines above writes it fresh every frame, and ParticleBehaviorNode's own
+		// Modify<LightsBuffer>() (firefly particles) writes on top of that during graph
+		// execution -- but ParticleBehaviorNode being the sole real-node "producer" ValidateRuntime
+		// sees made every *other* reader's Read<LightsBuffer>() depend on it actually being
+		// registered and active this frame, which doesn't always hold (particles can be
+		// disabled). An explicit Import<>, same pattern TerrainTLAS already uses alongside
+		// TerrainGenNode's own Modify<TerrainTLAS>(), gives it a producer that's never missing
+		// regardless -- confirmed the hard way: this was missing here (though present in the
+		// --print-render-graph path below) and produced exactly ValidateRuntime's "no node or
+		// import produces these resource keys" error on real hardware.
+		frameGraph.Register<graph::Import<LightsBuffer>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
@@ -1772,15 +1750,20 @@ namespace brassica {
 
 		std::vector<vk::SemaphoreSubmitInfo> signalInfos;
 
+		// eAllCommands, not eAllGraphics: a compute dispatch recorded into this same command
+		// buffer sits outside eAllGraphics' scope, so a signal there would let the CPU reset
+		// this slot's command pool (frameTimelineSemaphore) or let the presentation engine read
+		// the swapchain image (swapchainRenderSemaphores) while trailing compute work is still
+		// in flight.
 		vk::SemaphoreSubmitInfo renderSignalInfo{};
 		renderSignalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
-		renderSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+		renderSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 		signalInfos.push_back(renderSignalInfo);
 
 		vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
 		frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
 		frameTimelineSignalInfo.setValue(frameNumber + 1);
-		frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+		frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 		signalInfos.push_back(frameTimelineSignalInfo);
 
 		vk::SubmitInfo2 submitInfo{};

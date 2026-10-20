@@ -281,8 +281,13 @@ namespace brassica::graph {
 		const std::uint32_t layers = desc.layers ? desc.layers : 1;
 		const auto          range = vk::ImageSubresourceRange(AspectFor(format), 0, mips, 0, layers);
 
+		// Src comes from tracked state (ClearBufferToZero's pattern below), not eTopOfPipe --
+		// eTopOfPipe chains with nothing, so a prior read of this resource (e.g. a reader that
+		// ran before this frame decided the key needed zero-init) could still be in flight when
+		// the clear's layout transition starts.
 		vk::ImageMemoryBarrier2 toTransferDst{};
-		toTransferDst.setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe);
+		toTransferDst.setSrcStageMask(tex.GetLastStage() ? tex.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe);
+		toTransferDst.setSrcAccessMask(tex.GetLastAccess());
 		toTransferDst.setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
 		toTransferDst.setDstAccessMask(vk::AccessFlagBits2::eTransferWrite);
 		toTransferDst.setOldLayout(tex.GetCurrentLayout());
@@ -611,6 +616,8 @@ namespace brassica::graph {
 
 					bool activeRendering = DynamicRenderingWrapper::Begin(vkCmd, m_registry, recipe);
 					nodeCtx.insideRendering = activeRendering;
+					nodeCtx.domain = recipe.domain;
+					nodeCtx.declared = recipe.realizations;
 					graph.ExecuteNode(nodeIndex, nodeCtx);
 					if (activeRendering) {
 						DynamicRenderingWrapper::End(vkCmd);

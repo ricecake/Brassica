@@ -630,6 +630,13 @@ namespace brassica {
 			r.Read<ParticleGridNextBuffer>().Desc(graph::StorageBufferDesc(maxParticles * sizeof(int)));
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
+			// Firefly particles write real dynamic lights into uLights/uLightCount on top of the
+			// CPU's own per-frame write (shaders/particle_behavior.comp's LIGHTS_BUFFER_WRITABLE
+			// path, set 0 binding 2) -- genuinely ReadWrite: it reads the CPU-seeded uLightCount
+			// via atomicMax, and zeroes its own claimed slots' intensity unconditionally before
+			// conditionally overwriting them. Replaces the manual After<ParticleBehaviorNode>()
+			// relation ClusterLightAssignmentNode used to need for this.
+			r.Modify<LightsBuffer>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

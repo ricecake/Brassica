@@ -221,6 +221,21 @@ namespace brassica::graph {
 			m_lastAccess = access;
 		}
 
+		// Which GPU queue(s) contributed to the tracked lastStage/lastAccess above since it was
+		// last fully overwritten (as opposed to OR-accumulated by a read-after-read skip -- see
+		// BarrierTranslator's EmitImageBarrier). A mask, not a single "last queue" scalar: two
+		// different queues can both read this resource via the RAR-skip path with no barrier
+		// between them, and a later write on either queue must still know BOTH contributed --
+		// only BarrierTranslator's cross-queue sanitization path (an explicit opt-in each caller
+		// requests, see TranslateAndDispatch's currentQueue parameter) ever reads this; every
+		// existing single-queue call site leaves it unread and unaffected. Defaults to every GPU
+		// queue (Graphics|Compute|Transfer): the same "assume the worst until proven otherwise"
+		// reasoning as the Aliased-memory-reused and Imported-with-defined-contents constructors
+		// below, which seed lastStage/lastAccess the same conservative way.
+		[[nodiscard]] std::uint8_t GetQueueTouchMask() const { return m_queueTouchMask; }
+
+		void SetQueueTouchMask(std::uint8_t mask) { m_queueTouchMask = mask; }
+
 		// Whether this resource, as this key, has meaningful content to preserve. False for a
 		// resource nothing has written yet -- the signal DynamicRenderingWrapper::Begin uses to
 		// force AttachmentLoadOp::eClear rather than eLoad even for a ReadWrite access, since
@@ -381,6 +396,7 @@ namespace brassica::graph {
 		vk::ImageLayout         m_currentLayout{vk::ImageLayout::eUndefined};
 		vk::PipelineStageFlags2 m_lastStage{};
 		vk::AccessFlags2        m_lastAccess{};
+		std::uint8_t            m_queueTouchMask{kAllQueuesTouchMask};
 		bool                    m_hasDefinedContents{false};
 		std::uint32_t           m_sampledBindlessIndex{0};
 		std::uint32_t           m_storageBindlessIndex{0};
@@ -583,6 +599,11 @@ namespace brassica::graph {
 			m_lastAccess = access;
 		}
 
+		// See PhysicalTexture::GetQueueTouchMask -- same contract.
+		[[nodiscard]] std::uint8_t GetQueueTouchMask() const { return m_queueTouchMask; }
+
+		void SetQueueTouchMask(std::uint8_t mask) { m_queueTouchMask = mask; }
+
 		[[nodiscard]] bool HasDefinedContents() const { return m_hasDefinedContents; }
 
 		void SetHasDefinedContents(bool defined) { m_hasDefinedContents = defined; }
@@ -674,6 +695,7 @@ namespace brassica::graph {
 
 		vk::PipelineStageFlags2 m_lastStage{};
 		vk::AccessFlags2        m_lastAccess{};
+		std::uint8_t            m_queueTouchMask{kAllQueuesTouchMask};
 		bool                    m_hasDefinedContents{false};
 		std::uint32_t           m_bindlessIndex{0};
 	};
@@ -708,6 +730,11 @@ namespace brassica::graph {
 			m_lastAccess = access;
 		}
 
+		// See PhysicalTexture::GetQueueTouchMask -- same contract.
+		[[nodiscard]] std::uint8_t GetQueueTouchMask() const { return m_queueTouchMask; }
+
+		void SetQueueTouchMask(std::uint8_t mask) { m_queueTouchMask = mask; }
+
 		// Same meaning as PhysicalTexture::GetBindlessIndex, but the caller (PhysicalRegistry's
 		// RegisterImportedAccelerationStructure) must carry this forward itself across a rebuild:
 		// unlike a texture, a new AS handle always replaces this object outright rather than
@@ -721,6 +748,7 @@ namespace brassica::graph {
 		vk::AccelerationStructureKHR m_as{};
 		vk::PipelineStageFlags2      m_lastStage{};
 		vk::AccessFlags2             m_lastAccess{};
+		std::uint8_t                 m_queueTouchMask{kAllQueuesTouchMask};
 		std::uint32_t                m_bindlessIndex{0};
 	};
 

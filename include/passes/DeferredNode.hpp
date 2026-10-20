@@ -129,6 +129,7 @@ namespace brassica {
 			r.Read<GBufferMaterial>();
 			r.Read<GBufferDepth>();
 			r.Read<ClusteredLighting>();
+			r.Read<LightsBuffer>();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();

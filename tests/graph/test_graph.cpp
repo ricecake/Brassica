@@ -1000,7 +1000,14 @@ TEST_CASE("Host queue CPU node executes entity logic before GPU consumers") {
 	CHECK(entityLogicExecuted == true);
 }
 
-TEST_CASE("Multi-queue domain mapping and queue family barrier propagation") {
+// MemoryBarrier::srcQueueFamily/dstQueueFamily (checked here against real family values
+// directly) were removed at S4: under VK_SHARING_MODE_CONCURRENT (what every multi-queue-touched
+// resource now uses, PhysicalResource.hpp), a barrier's queue family fields must both be
+// VK_QUEUE_FAMILY_IGNORED, so there is nothing left to assert about real family values on a
+// MemoryBarrier at all -- the cross-domain split (postBarriers in the producer's stage,
+// preBarriers in the consumer's) is still keyed on each node's own *declared* domain exactly as
+// before, which is what this test checks instead now.
+TEST_CASE("Multi-queue domain mapping and declared-domain barrier propagation") {
 	CHECK(DomainToLane(ExecutionDomain::Graphics) == 0);
 	CHECK(DomainToLane(ExecutionDomain::Compute) == 1);
 	CHECK(DomainToLane(ExecutionDomain::Transfer) == 2);
@@ -1036,12 +1043,12 @@ TEST_CASE("Multi-queue domain mapping and queue family barrier propagation") {
 	bool foundCrossQueueBarrier = false;
 	for (const auto& stage : schedule.stages) {
 		for (const auto& item : stage.preBarriers.Items()) {
-			if (item.srcQueueFamily == 0 && item.dstQueueFamily == 1) {
+			if (item.srcDomain == ExecutionDomain::Graphics && item.dstDomain == ExecutionDomain::Compute) {
 				foundCrossQueueBarrier = true;
 			}
 		}
 		for (const auto& item : stage.postBarriers.Items()) {
-			if (item.srcQueueFamily == 0 && item.dstQueueFamily == 1) {
+			if (item.srcDomain == ExecutionDomain::Graphics && item.dstDomain == ExecutionDomain::Compute) {
 				foundCrossQueueBarrier = true;
 			}
 		}

@@ -70,6 +70,19 @@ namespace brassica::graph {
 		std::vector<std::size_t> nodes;
 		BarrierBatch             preBarriers;
 		BarrierBatch             postBarriers;
+
+		// Which GPU queue (Graphics/Compute/Transfer) a multi-queue backend should record this
+		// stage's nodes into, or Host meaning "no GPU queue -- run inline, no segment, no
+		// barriers" -- design plan's S4. Every node in one stage shares this queue by
+		// construction (PlaceNodes/BuildBatches, Scheduler.hpp, only ever group same-queue
+		// nodes together); it says nothing about any node's own *declared* Recipe::domain, which
+		// still drives barrier derivation (DeriveImageState/DeriveBufferState) completely
+		// unchanged -- a Compute-domain node placed onto Graphics still dispatches a real
+		// compute shader, which is a property of the operation, not of which queue recorded it.
+		// Always Graphics under QueuePlacementMode::GraphicsOnly (Compile()'s default and the
+		// only mode PhysicalExecutionBackend ever compiles with), so the single-queue backend
+		// never needs to read this field at all.
+		ExecutionDomain queue = ExecutionDomain::Graphics;
 	};
 
 	// The whole point of Compile(): a structure a renderer walks without making any further
@@ -157,7 +170,7 @@ namespace brassica::graph {
 		// relation does, not a hard partition -- a "later phase" producer for an "earlier phase"
 		// reader is either a real ambiguity, caught by CompileRelational's own ambiguity check,
 		// or legitimately fine, caught by nothing because it no longer needs special-casing).
-		std::expected<void, ValidationError> Compile() {
+		std::expected<void, ValidationError> Compile(QueuePlacementMode mode = QueuePlacementMode::GraphicsOnly) {
 			std::vector<NodeDescriptor> descriptors;
 			descriptors.reserve(m_nodes.size());
 			for (const auto& node : m_nodes) {
@@ -199,12 +212,76 @@ namespace brassica::graph {
 
 			std::vector<std::size_t> nodeStage(n, 0);
 			m_schedule.stages.clear();
-			for (auto& level : rel.stages) {
-				const std::size_t stageIndex = m_schedule.stages.size();
-				for (std::size_t index : level) {
-					nodeStage[index] = stageIndex;
+
+			if (mode == QueuePlacementMode::GraphicsOnly) {
+				// Verbatim today's path -- not just output-equivalent, the literal same
+				// computation (rel.stages' own Kahn leveling), so this mode can never regress by
+				// construction. Every stage happens to run on Graphics (the only mode
+				// PhysicalExecutionBackend, the single-queue backend, ever compiles with -- it
+				// never reads ScheduleStage::queue at all).
+				for (auto& level : rel.stages) {
+					const std::size_t stageIndex = m_schedule.stages.size();
+					for (std::size_t index : level) {
+						nodeStage[index] = stageIndex;
+					}
+					m_schedule.stages.push_back(ScheduleStage{std::move(level), {}, {}, ExecutionDomain::Graphics});
 				}
-				m_schedule.stages.push_back(ScheduleStage{std::move(level), {}, {}});
+			} else {
+				// ForceDomain/Heft: real queue placement (design plan's §Compiler, S3's
+				// PlaceNodes/BuildBatches). PlaceNodes/BuildBatches are activity-agnostic by
+				// design (Vulkan-free, decoupled from CompileRelational entirely) -- they place
+				// and batch every index 0..n-1 unconditionally, the same way rel.stages' own
+				// Kahn leveling restricts itself to "activeReal" first. Remap to a dense
+				// active-only index space here (and back again below) so an inactive node never
+				// reaches PlaceNodes/BuildBatches at all, matching that same restriction -- the
+				// first version of this branch skipped this and inactive nodes started
+				// executing again, found by test_multiqueue_sync.cpp's existing inactive-node
+				// cases.
+				std::vector<std::size_t> activeIndices;
+				activeIndices.reserve(n);
+				std::vector<std::size_t> toActive(n, static_cast<std::size_t>(-1));
+				for (std::size_t i = 0; i < n; ++i) {
+					if (m_recipes[i].isActive) {
+						toActive[i] = activeIndices.size();
+						activeIndices.push_back(i);
+					}
+				}
+				const std::size_t activeN = activeIndices.size();
+
+				std::vector<ExecutionDomain> nodeDomains(activeN);
+				for (std::size_t i = 0; i < activeN; ++i) {
+					nodeDomains[i] = m_recipes[activeIndices[i]].domain;
+				}
+				// SchedulingEdge is built straight from rel.edges -- e.key != nullptr is exactly
+				// "real" (a RAW/WAR/WAW resource edge or an explicit relation) vs "order-only" (a
+				// phase marker or virtual relation-target edge), same filter the barrier-
+				// synthesis loop below already applies for the same reason (never reason about an
+				// edge CompileRelational already contracted out).
+				std::vector<SchedulingEdge> edges;
+				edges.reserve(rel.edges.size());
+				for (const RelEdge& e : rel.edges) {
+					if (e.from >= n || e.to >= n || !m_recipes[e.from].isActive || !m_recipes[e.to].isActive) {
+						continue;
+					}
+					edges.push_back(SchedulingEdge{toActive[e.from], toActive[e.to], e.key != nullptr});
+				}
+
+				// Default weights only -- no measured-timestamp infrastructure exists yet
+				// (design plan's S5). Placement under Heft mode is therefore structural, not
+				// cost-based, until that lands.
+				PlacementResult placement = PlaceNodes(activeN, nodeDomains, edges, DynamicWeights{}, mode);
+				std::vector<ScheduleBatchPlan> batches = BuildBatches(activeN, nodeDomains, edges, placement);
+
+				for (auto& batch : batches) {
+					for (std::size_t& index : batch.nodes) {
+						index = activeIndices[index]; // map back to the real node index
+					}
+					const std::size_t stageIndex = m_schedule.stages.size();
+					for (std::size_t index : batch.nodes) {
+						nodeStage[index] = stageIndex;
+					}
+					m_schedule.stages.push_back(ScheduleStage{std::move(batch.nodes), {}, {}, batch.queue});
+				}
 			}
 
 			// Only resource edges (RAW/WAR/WAW, key != nullptr) need a barrier -- a pure Order
@@ -308,9 +385,6 @@ namespace brassica::graph {
 			const std::size_t     producerStage = nodeStage[edge.producer];
 			const std::size_t     consumerStage = nodeStage[edge.consumer];
 
-			const std::uint32_t srcQueueFam = QueueFamilyForDomain(producerDomain);
-			const std::uint32_t dstQueueFam = QueueFamilyForDomain(consumerDomain);
-
 			if (producerDomain == consumerDomain) {
 				m_schedule.stages[consumerStage].preBarriers.Add(
 					MemoryBarrier{
@@ -318,8 +392,6 @@ namespace brassica::graph {
 						.access = consumerAccess,
 						.srcDomain = producerDomain,
 						.dstDomain = consumerDomain,
-						.srcQueueFamily = srcQueueFam,
-						.dstQueueFamily = dstQueueFam,
 					}
 				);
 				return;
@@ -331,8 +403,6 @@ namespace brassica::graph {
 					.access = producerAccess,
 					.srcDomain = producerDomain,
 					.dstDomain = consumerDomain,
-					.srcQueueFamily = srcQueueFam,
-					.dstQueueFamily = dstQueueFam,
 				}
 			);
 			m_schedule.stages[consumerStage].preBarriers.Add(
@@ -341,8 +411,6 @@ namespace brassica::graph {
 					.access = consumerAccess,
 					.srcDomain = producerDomain,
 					.dstDomain = consumerDomain,
-					.srcQueueFamily = srcQueueFam,
-					.dstQueueFamily = dstQueueFam,
 				}
 			);
 		}

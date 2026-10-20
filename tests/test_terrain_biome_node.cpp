@@ -3,6 +3,7 @@
 
 #include "graph/Graph.hpp"
 #include "graph/SetupBuilder.hpp"
+#include "passes/ResourceKeys.hpp"
 #include "passes/TerrainBiomeNode.hpp"
 #include "render/NodeLifecycle.hpp"
 
@@ -21,7 +22,9 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 
 	CHECK(builder.Active() == true);
 	CHECK(builder.Domain() == graph::ExecutionDomain::Compute);
-	CHECK(builder.Realizations().size() == 7);
+	// 7 ReadWrite texture realizations plus one Read<LightsBuffer>() (shaders/climate_ca.comp
+	// reads uLights[0].direction via clustered_lighting.glsl).
+	CHECK(builder.Realizations().size() == 8);
 
 	bool foundWeatherBiome = false;
 	bool foundPingPong = false;
@@ -30,8 +33,14 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	bool foundBiome = false;
 	bool foundBiomeMapA = false;
 	bool foundBiomeMapB = false;
+	bool foundLightsBuffer = false;
 
 	for (const auto& real : builder.Realizations()) {
+		if (real.key == graph::IdOf<LightsBuffer>()) {
+			foundLightsBuffer = true;
+			CHECK(real.access == graph::AccessKind::Read);
+			continue;
+		}
 		CHECK(real.access == graph::AccessKind::ReadWrite);
 		if (real.key == graph::IdOf<TerrainWeatherBiomeTexture>()) {
 			foundWeatherBiome = true;
@@ -63,6 +72,7 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	CHECK(foundBiome);
 	CHECK(foundBiomeMapA);
 	CHECK(foundBiomeMapB);
+	CHECK(foundLightsBuffer);
 
 	// Dims now come from each key's own catalog Desc() (ResourceKeys.hpp), not the realization --
 	// a builder node's realization carries an empty desc by design (see SetupBuilder.hpp).

@@ -1,11 +1,15 @@
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <iostream>
-#include <queue>
+#include <span>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include "spdlog/spdlog.h"
 
 #include "graph/Execution.hpp"
 
@@ -143,259 +147,452 @@ namespace brassica::graph {
 		return ranks;
 	}
 
-} // namespace brassica::graph
+	// -- S3: HEFT placement + batching (design plan's §Compiler) --------------------------------
+	//
+	// Deliberately decoupled from RelationalCompiler.hpp/Graph.hpp: this takes a plain edge list
+	// (SchedulingEdge below), not RelEdge, so it stays testable in total isolation and carries no
+	// risk to the schedule Graph::Compile() produces today -- nothing calls any of this yet.
+	// Wiring it in (replacing Schedule's shape, touching the two execution backends) is S4's job.
 
-struct Node {
-	int id;
-	int allowed_queue;
-};
+	enum class QueuePlacementMode : std::uint8_t { GraphicsOnly, ForceDomain, Heft };
 
-struct Edge {
-	int from;
-	int to;
-};
-
-using DynamicWeights = brassica::graph::DynamicWeights;
-
-struct ScheduledTask {
-	int node_id;
-	int start_time;
-	int end_time;
-	int queue_id;
-};
-
-struct CompilerGraph {
-	std::unordered_map<int, Node>              nodes;
-	std::unordered_map<int, std::vector<Edge>> adj_list;
-	std::unordered_map<int, std::vector<Edge>> rev_adj_list; // Required for backward pass
-	std::unordered_map<int, int>               upward_ranks;
-
-	void add_node(int id, int queue) { nodes[id] = {id, queue}; }
-
-	void add_edge(int from, int to) {
-		adj_list[from].push_back({from, to});
-		rev_adj_list[to].push_back({from, to});
-	}
-
-	void clear_evaluations() { upward_ranks.clear(); }
-};
-
-// Calculates the Upward Rank for priority sorting
-inline int calculate_upward_rank(int node_id, CompilerGraph& graph, const DynamicWeights& weights) {
-	if (graph.upward_ranks.find(node_id) != graph.upward_ranks.end()) {
-		return graph.upward_ranks[node_id];
-	}
-
-	int         max_successor_cost = 0;
-	const Node& curr_node = graph.nodes[node_id];
-	int current_weight = weights.node_execution_weights.count(node_id) ? weights.node_execution_weights.at(node_id)
-																	   : 10;
-
-	if (graph.adj_list.find(node_id) != graph.adj_list.end()) {
-		for (const auto& edge : graph.adj_list[node_id]) {
-			int comm_overhead = 0;
-			if (curr_node.allowed_queue != graph.nodes[edge.to].allowed_queue) {
-				if (weights.edge_latencies.count(edge.from) && weights.edge_latencies.at(edge.from).count(edge.to)) {
-					comm_overhead = weights.edge_latencies.at(edge.from).at(edge.to);
-				} else {
-					comm_overhead = 5;
-				}
-			}
-			int successor_rank = calculate_upward_rank(edge.to, graph, weights);
-			max_successor_cost = std::max(max_successor_cost, comm_overhead + successor_rank);
-		}
-	}
-
-	int rank = current_weight + max_successor_cost;
-	graph.upward_ranks[node_id] = rank;
-	return rank;
-}
-
-// Main scheduling and bottleneck detection algorithm
-inline void identify_bottlenecks(CompilerGraph& graph, const DynamicWeights& weights, int num_queues) {
-	graph.clear_evaluations();
-	for (const auto& pair : graph.nodes) {
-		calculate_upward_rank(pair.first, graph, weights);
-	}
-
-	std::unordered_map<int, int>           in_degree;
-	std::unordered_map<int, int>           data_ready_time;
-	std::unordered_map<int, ScheduledTask> final_schedule;
-
-	for (const auto& pair : graph.nodes) {
-		in_degree[pair.first] = 0;
-		data_ready_time[pair.first] = 0;
-	}
-	for (const auto& pair : graph.adj_list) {
-		for (const auto& edge : pair.second) {
-			in_degree[edge.to]++;
-		}
-	}
-
-	auto rank_comp = [&](int left, int right) { return graph.upward_ranks[left] < graph.upward_ranks[right]; };
-	using QueueType = std::priority_queue<int, std::vector<int>, decltype(rank_comp)>;
-
-	std::vector<QueueType> ready_lanes;
-	for (int i = 0; i < num_queues; ++i) {
-		ready_lanes.emplace_back(rank_comp);
-	}
-
-	std::vector<int> queue_free_at(num_queues, 0);
-	// Track execution sequences inside each individual queue for the backward pass
-	std::vector<std::vector<int>> queue_execution_histories(num_queues);
-
-	using Event = std::pair<int, int>;
-	std::priority_queue<Event, std::vector<Event>, std::greater<Event>> event_queue;
-
-	auto try_schedule_task = [&](int node_id, int current_time) {
-		const auto& node = graph.nodes[node_id];
-		int         q = node.allowed_queue;
-		int         weight = weights.node_execution_weights.at(node_id);
-
-		int start_time = std::max({current_time, queue_free_at[q], data_ready_time[node_id]});
-		int end_time = start_time + weight;
-
-		queue_free_at[q] = end_time;
-		event_queue.push({end_time, node_id});
-		final_schedule[node_id] = {node_id, start_time, end_time, q};
-		queue_execution_histories[q].push_back(node_id);
+	// One edge CompileRelational's contracted DAG produces, typed real (a RAW/WAR/WAW resource
+	// edge, or an explicit relation -- RelEdge::kind != Order) vs order-only (a phase marker or
+	// virtual relation-target edge -- RelEdge::kind == Order). The distinction is exactly
+	// RelEdge::key != nullptr vs == nullptr (RelationalCompiler.hpp) -- a thin adapter at the S4
+	// call site builds this from RelationalResult::edges; this file never needs to know that
+	// type exists.
+	struct SchedulingEdge {
+		std::size_t from;
+		std::size_t to;
+		bool        real;
 	};
 
-	for (const auto& pair : graph.nodes) {
-		if (in_degree[pair.first] == 0) {
-			ready_lanes[pair.second.allowed_queue].push(pair.first);
+	// Which queues (ExecutionDomain standing in for queue identity: Graphics/Compute/Transfer
+	// are real GPU queues, Host is "no GPU queue at all" -- it runs inline at record time) a
+	// node of this domain may be placed on, under this placement mode. GraphicsOnly and
+	// ForceDomain exist to stress/validate the sync layer with a single deterministic queue per
+	// domain, independent of whether HEFT's cost model is trustworthy yet (design plan's own
+	// "Default domain weights until S5" decision) -- Heft is the only mode that actually lets
+	// PlaceNodes choose.
+	inline std::vector<ExecutionDomain> EligibleQueues(ExecutionDomain domain, QueuePlacementMode mode) {
+		if (domain == ExecutionDomain::Host) {
+			return {};
 		}
+		if (mode == QueuePlacementMode::GraphicsOnly) {
+			return {ExecutionDomain::Graphics};
+		}
+		if (mode == QueuePlacementMode::ForceDomain) {
+			return {domain};
+		}
+		switch (domain) {
+		case ExecutionDomain::Graphics:
+			return {ExecutionDomain::Graphics};
+		case ExecutionDomain::Compute:
+			return {ExecutionDomain::Graphics, ExecutionDomain::Compute};
+		case ExecutionDomain::Transfer:
+			return {ExecutionDomain::Graphics, ExecutionDomain::Compute, ExecutionDomain::Transfer};
+		case ExecutionDomain::Host:
+			return {};
+		}
+		return {ExecutionDomain::Graphics};
 	}
 
-	for (int q = 0; q < num_queues; ++q) {
-		if (!ready_lanes[q].empty()) {
-			int node_id = ready_lanes[q].top();
-			ready_lanes[q].pop();
-			try_schedule_task(node_id, 0);
+	// ancestors[v][u] is true iff u has a path to v over the *whole* edge set (real and
+	// order-only alike). Needed by PlaceNodes' second ready_Q term ("every already-placed node
+	// on this queue that reaches it", design plan's §Compiler): a node that does *not* reach the
+	// one being placed must never serialize behind it on the same queue, or every queue would
+	// collapse to strict rank order regardless of real independence -- exactly what batching
+	// exists to avoid, and the reason this isn't simply "the latest thing already on this queue."
+	inline std::vector<std::vector<bool>> ComputeAncestors(std::size_t n, std::span<const SchedulingEdge> edges) {
+		std::vector<std::vector<std::size_t>> successors(n);
+		std::vector<std::vector<std::size_t>> predecessors(n);
+		std::vector<std::size_t>              indegree(n, 0);
+		for (const auto& e : edges) {
+			successors[e.from].push_back(e.to);
+			predecessors[e.to].push_back(e.from);
+			++indegree[e.to];
 		}
-	}
 
-	int total_makespan = 0;
-	while (!event_queue.empty()) {
-		auto [event_time, completed_node] = event_queue.top();
-		event_queue.pop();
-
-		total_makespan = event_time;
-		int q_finished = graph.nodes[completed_node].allowed_queue;
-
-		if (graph.adj_list.find(completed_node) != graph.adj_list.end()) {
-			for (const auto& edge : graph.adj_list[completed_node]) {
-				int target_q = graph.nodes[edge.to].allowed_queue;
-				int transfer_overhead = 0;
-				if (q_finished != target_q) {
-					if (weights.edge_latencies.count(edge.from) &&
-					    weights.edge_latencies.at(edge.from).count(edge.to)) {
-						transfer_overhead = weights.edge_latencies.at(edge.from).at(edge.to);
+		// Any valid topological order works -- ancestry only needs "every predecessor processed
+		// before its dependents," not rank's specific priority ordering.
+		std::vector<std::size_t> order;
+		order.reserve(n);
+		std::vector<std::size_t> remaining = indegree;
+		std::vector<std::size_t> frontier;
+		for (std::size_t i = 0; i < n; ++i) {
+			if (remaining[i] == 0) {
+				frontier.push_back(i);
+			}
+		}
+		while (!frontier.empty()) {
+			std::vector<std::size_t> next;
+			for (std::size_t node : frontier) {
+				order.push_back(node);
+				for (std::size_t succ : successors[node]) {
+					if (--remaining[succ] == 0) {
+						next.push_back(succ);
 					}
 				}
-				int arrival_time = total_makespan + transfer_overhead;
-				data_ready_time[edge.to] = std::max(data_ready_time[edge.to], arrival_time);
-
-				in_degree[edge.to]--;
-				if (in_degree[edge.to] == 0) {
-					ready_lanes[target_q].push(edge.to);
-				}
 			}
+			frontier = std::move(next);
 		}
+		// order.size() < n would mean a cycle in `edges` -- CompileRelational already rejects
+		// that before any of this runs (its own cycle check, independent of this file); any node
+		// left unordered here just gets an all-false ancestor row, which is harmless -- it only
+		// means PlaceNodes won't find a (nonexistent) reachability relationship for it.
 
-		for (int q = 0; q < num_queues; ++q) {
-			if (queue_free_at[q] <= total_makespan && !ready_lanes[q].empty()) {
-				int next_node = ready_lanes[q].top();
-				ready_lanes[q].pop();
-				try_schedule_task(next_node, total_makespan);
-			}
-		}
-	}
-
-	// ==========================================
-	// BACKWARD PASS FOR BOTTLENECK ANALYSIS
-	// ==========================================
-	std::unordered_map<int, int> latest_start;
-	std::unordered_map<int, int> latest_end;
-
-	// Initialize all tasks to end at least at the total makespan limit
-	for (const auto& pair : graph.nodes) {
-		latest_end[pair.first] = total_makespan;
-		latest_start[pair.first] = total_makespan - weights.node_execution_weights.at(pair.first);
-	}
-
-	// Constraint 1: Sequential dependency within the same execution queue
-	for (int q = 0; q < num_queues; ++q) {
-		const auto& history = queue_execution_histories[q];
-		if (history.empty())
-			continue;
-		for (size_t i = history.size() - 1; i > 0; --i) {
-			int current = history[i];
-			int previous = history[i - 1];
-			latest_end[previous] = std::min(latest_end[previous], latest_start[current]);
-			latest_start[previous] = latest_end[previous] - weights.node_execution_weights.at(previous);
-		}
-	}
-
-	// Constraint 2: Data dependency cross-lane requirements (Reverse topological sweep)
-	// To do this simply, we sort nodes by scheduled end_time descending
-	std::vector<int> sorted_node_ids;
-	for (const auto& pair : graph.nodes)
-		sorted_node_ids.push_back(pair.first);
-	std::sort(sorted_node_ids.begin(), sorted_node_ids.end(), [&](int a, int b) {
-		return final_schedule[a].end_time > final_schedule[b].end_time;
-	});
-
-	for (int node_id : sorted_node_ids) {
-		if (graph.rev_adj_list.find(node_id) != graph.rev_adj_list.end()) {
-			for (const auto& edge : graph.rev_adj_list[node_id]) {
-				int parent = edge.from;
-				int child = edge.to;
-				int transfer_overhead = 0;
-				if (graph.nodes[parent].allowed_queue != graph.nodes[child].allowed_queue) {
-					if (weights.edge_latencies.count(parent) && weights.edge_latencies.at(parent).count(child)) {
-						transfer_overhead = weights.edge_latencies.at(parent).at(child);
+		std::vector<std::vector<bool>> ancestors(n, std::vector<bool>(n, false));
+		for (std::size_t node : order) {
+			for (std::size_t p : predecessors[node]) {
+				ancestors[node][p] = true;
+				for (std::size_t i = 0; i < n; ++i) {
+					if (ancestors[p][i]) {
+						ancestors[node][i] = true;
 					}
 				}
-				// The parent must end before the child starts minus data transfer flight time
-				latest_end[parent] = std::min(latest_end[parent], latest_start[child] - transfer_overhead);
-				latest_start[parent] = latest_end[parent] - weights.node_execution_weights.at(parent);
+			}
+		}
+		return ancestors;
+	}
+
+	struct PlacementResult {
+		std::vector<ExecutionDomain> queue;  // per node; Host nodes get ExecutionDomain::Host
+		std::vector<int>            start;   // per node
+		std::vector<int>            finish;  // per node
+	};
+
+	// Append-only HEFT (design plan's §Compiler step 2 -- "why append-only rather than
+	// insertion-based" explains the choice): processes nodes in rank order (strictly decreasing
+	// along every edge, real or order-only, so every real predecessor of a node is already
+	// placed by the time that node is reached) and, for each node, puts it on whichever eligible
+	// queue gives the earliest finish time -- the max of (every real predecessor's finish, plus
+	// comm cost if the predecessor landed on a different queue) and (every already-placed node
+	// on that queue that reaches this one, per ancestors above). Ties prefer Graphics,
+	// deterministically, via EligibleQueues' iteration order (Graphics always checked first) --
+	// no separate tie-break needed. Host nodes are never placed on a queue at all: zero weight,
+	// start/finish both 0, matching "a Host node never gets a GPU wait."
+	inline PlacementResult
+	PlaceNodes(std::size_t n, const std::vector<ExecutionDomain>& domains, std::span<const SchedulingEdge> edges, const DynamicWeights& weights, QueuePlacementMode mode) {
+		// Rank: every edge contributes (keeps same-queue phase order's priority signal intact,
+		// matching today's leveling, which also levels over the whole contracted edge set) --
+		// but comm cost (GetEdgeLatency's domain-mismatch default) only applies to real edges;
+		// order-only ones are pinned to 0 regardless of domain, since they never cross a
+		// semaphore boundary (ground rule: "Phase order is not a dependency").
+		DynamicWeights rankWeights = weights;
+		std::vector<std::vector<std::size_t>> successors(n);
+		for (const auto& e : edges) {
+			successors[e.from].push_back(e.to);
+			if (!e.real) {
+				rankWeights.edge_latencies[e.from][e.to] = 0;
+			}
+		}
+		std::vector<int> rank = CalculateAllUpwardRanks(n, domains, successors, rankWeights);
+
+		std::vector<std::vector<bool>> ancestors = ComputeAncestors(n, edges);
+
+		std::vector<std::size_t> order(n);
+		for (std::size_t i = 0; i < n; ++i) {
+			order[i] = i;
+		}
+		std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return rank[a] > rank[b]; });
+
+		std::vector<std::vector<std::size_t>> realPredecessors(n);
+		for (const auto& e : edges) {
+			if (e.real) {
+				realPredecessors[e.to].push_back(e.from);
+			}
+		}
+
+		PlacementResult result;
+		result.queue.assign(n, ExecutionDomain::Host);
+		result.start.assign(n, 0);
+		result.finish.assign(n, 0);
+
+		std::array<std::vector<std::pair<std::size_t, int>>, kNumExecutionDomains> placedOnQueue;
+
+		for (std::size_t node : order) {
+			const ExecutionDomain domain = domains[node];
+			if (domain == ExecutionDomain::Host) {
+				continue; // defaults above (Host, start=finish=0) already correct
+			}
+
+			const std::vector<ExecutionDomain> eligible = EligibleQueues(domain, mode);
+			ExecutionDomain                    bestQueue = ExecutionDomain::Graphics;
+			int                                bestReady = 0;
+			int                                bestFinish = -1;
+
+			for (ExecutionDomain candidate : eligible) {
+				int ready = 0;
+				for (std::size_t p : realPredecessors[node]) {
+					// result.queue[p], not domains[p]: p was already placed (rank order
+					// guarantees every real predecessor is), possibly onto a *different* queue
+					// than its own declared domain (exactly what "sandwiched compute pass stays
+					// on Graphics" means) -- charging comm cost against the domain it merely
+					// *declared* rather than the queue it actually landed on would double-count
+					// a hop that never happens. Host always costs 0 regardless of candidate: it
+					// runs inline at record time, before any GPU submission, so there is no
+					// semaphore for a GPU node to actually wait on (ground rule: "a Host node
+					// never gets a GPU wait").
+					const ExecutionDomain predQueue = result.queue[p];
+					const int             comm = (predQueue == ExecutionDomain::Host || predQueue == candidate)
+						? 0
+						: weights.GetEdgeLatency(p, node, predQueue, candidate);
+					ready = std::max(ready, result.finish[p] + comm);
+				}
+				for (const auto& [placedNode, placedFinish] : placedOnQueue[DomainToLane(candidate)]) {
+					if (ancestors[node][placedNode]) {
+						ready = std::max(ready, placedFinish);
+					}
+				}
+				const int finish = ready + weights.GetNodeWeight(node, candidate);
+				if (bestFinish < 0 || finish < bestFinish) {
+					bestFinish = finish;
+					bestReady = ready;
+					bestQueue = candidate;
+				}
+			}
+
+			result.queue[node] = bestQueue;
+			result.start[node] = bestReady;
+			result.finish[node] = bestFinish < 0 ? 0 : bestFinish;
+			placedOnQueue[DomainToLane(bestQueue)].push_back({node, result.finish[node]});
+		}
+
+		return result;
+	}
+
+	struct ScheduleBatchPlan {
+		ExecutionDomain          queue; // Host batches are always a singleton
+		std::vector<std::size_t> nodes;
+	};
+
+	// Batching (design plan's §Compiler step 3), simplified from true first-fit packing to
+	// per-queue dependency levels -- level[v] = 1 + max(level[p]) over every real edge p->v
+	// (regardless of queue) and every order-only edge p->v where p and v share a queue. That
+	// second clause is what keeps same-queue phase order binding while a cross-queue marker
+	// edge imposes nothing, matching the ground rules; the first is what makes two nodes with a
+	// real edge between them always land in different batches, on any queue. A deliberate
+	// simplification, not literal first-fit: it reproduces every property first-fit guarantees
+	// (topological record order, no two edge-connected nodes sharing a batch, phase order intact
+	// within a queue) via plain Kahn leveling instead of packing against PlaceNodes' literal EFT
+	// numbers -- true packing (filling a gap left by a cross-queue wait with independent
+	// same-queue work) is S5 scope, alongside the producer-side pre-transition work it's paired
+	// with there. Host nodes get their own singleton batch each: no GPU segment, so there is
+	// nothing to batch them *with*.
+	inline std::vector<ScheduleBatchPlan>
+	BuildBatches(std::size_t n, const std::vector<ExecutionDomain>& domains, std::span<const SchedulingEdge> edges, const PlacementResult& placement) {
+		std::vector<std::vector<std::size_t>> levelPredecessors(n);
+		for (const auto& e : edges) {
+			if (e.real || placement.queue[e.from] == placement.queue[e.to]) {
+				levelPredecessors[e.to].push_back(e.from);
+			}
+		}
+
+		// Plain longest-path-from-source level, computed via a topological walk (same shape as
+		// ComputeAncestors' own) rather than recursion -- n is a per-frame node count, not deep
+		// enough to need memoized recursion's cycle guard, and CompileRelational already
+		// rejects a real cycle before any of this runs.
+		std::vector<std::size_t> indegree(n, 0);
+		std::vector<std::vector<std::size_t>> dependents(n);
+		for (std::size_t v = 0; v < n; ++v) {
+			for (std::size_t p : levelPredecessors[v]) {
+				dependents[p].push_back(v);
+			}
+			indegree[v] = levelPredecessors[v].size();
+		}
+
+		std::vector<int>         level(n, 0);
+		std::vector<std::size_t> remaining = indegree;
+		std::vector<std::size_t> frontier;
+		for (std::size_t i = 0; i < n; ++i) {
+			if (remaining[i] == 0) {
+				frontier.push_back(i);
+			}
+		}
+		while (!frontier.empty()) {
+			std::vector<std::size_t> next;
+			for (std::size_t node : frontier) {
+				for (std::size_t dep : dependents[node]) {
+					level[dep] = std::max(level[dep], level[node] + 1);
+					if (--remaining[dep] == 0) {
+						next.push_back(dep);
+					}
+				}
+			}
+			frontier = std::move(next);
+		}
+
+		std::vector<ScheduleBatchPlan> batches;
+		// (queue lane, level) -> index into `batches`, so same-(queue,level) nodes merge into one
+		// batch regardless of visit order.
+		std::unordered_map<std::size_t, std::size_t> batchIndexOf;
+		std::vector<std::size_t>                     order(n);
+		for (std::size_t i = 0; i < n; ++i) {
+			order[i] = i;
+		}
+		std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+			if (level[a] != level[b]) {
+				return level[a] < level[b];
+			}
+			return a < b;
+		});
+
+		for (std::size_t node : order) {
+			if (domains[node] == ExecutionDomain::Host) {
+				batches.push_back(ScheduleBatchPlan{ExecutionDomain::Host, {node}});
+				continue;
+			}
+			const std::size_t lane = DomainToLane(placement.queue[node]);
+			// level fits comfortably in the high bits for any realistic per-frame node count;
+			// this is a cache key, not a time value anything else reads.
+			const std::size_t key = (static_cast<std::size_t>(level[node]) << 8) | lane;
+			auto              it = batchIndexOf.find(key);
+			if (it == batchIndexOf.end()) {
+				batchIndexOf[key] = batches.size();
+				batches.push_back(ScheduleBatchPlan{placement.queue[node], {node}});
+			} else {
+				batches[it->second].nodes.push_back(node);
+			}
+		}
+
+		// Record order: by level (every batch's nodes share one level by construction above),
+		// then queue, then the lowest original node index -- deterministic, and topological
+		// since level strictly increases along every edge BuildBatches respects.
+		auto levelOf = [&](const ScheduleBatchPlan& b) { return level[b.nodes.front()]; };
+		auto minIndexOf = [&](const ScheduleBatchPlan& b) { return *std::min_element(b.nodes.begin(), b.nodes.end()); };
+		std::stable_sort(batches.begin(), batches.end(), [&](const ScheduleBatchPlan& a, const ScheduleBatchPlan& b) {
+			if (levelOf(a) != levelOf(b)) {
+				return levelOf(a) < levelOf(b);
+			}
+			if (a.queue != b.queue) {
+				return DomainToLane(a.queue) < DomainToLane(b.queue);
+			}
+			return minIndexOf(a) < minIndexOf(b);
+		});
+
+		return batches;
+	}
+
+	struct ScheduleSlackInfo {
+		std::vector<int> latestStart;
+		std::vector<int> latestFinish;
+		std::vector<int> slack; // latestStart - placement.start; 0 means on the critical path
+	};
+
+	// Classic CPM backward pass over *real* edges only -- diagnostic (slack/critical path),
+	// never a scheduling input, so it doesn't need BuildBatches' same-queue-order-only clause:
+	// "how much can this node's finish slip before something real downstream is delayed" is
+	// well-defined from real edges alone, independent of how same-queue phase order groups
+	// batches. Ports identify_bottlenecks' backward pass (the deleted legacy scheduler, S0) onto
+	// PlacementResult's per-node EST/EFT instead of a strict per-queue execution history, since
+	// batching here allows several nodes to share one queue's batch with no relative order
+	// between them at all.
+	inline ScheduleSlackInfo ComputeSlack(
+		std::size_t                          n,
+		const std::vector<ExecutionDomain>&  domains,
+		std::span<const SchedulingEdge>      edges,
+		const DynamicWeights&                weights,
+		const PlacementResult&               placement
+	) {
+		ScheduleSlackInfo info;
+		info.latestStart.assign(n, 0);
+		info.latestFinish.assign(n, 0);
+		info.slack.assign(n, 0);
+		if (n == 0) {
+			return info;
+		}
+
+		int makespan = 0;
+		for (std::size_t i = 0; i < n; ++i) {
+			makespan = std::max(makespan, placement.finish[i]);
+		}
+		info.latestFinish.assign(n, makespan);
+
+		std::vector<std::vector<std::size_t>> realSuccessors(n);
+		std::vector<std::vector<std::size_t>> allSuccessors(n);
+		for (const auto& e : edges) {
+			allSuccessors[e.from].push_back(e.to);
+			if (e.real) {
+				realSuccessors[e.from].push_back(e.to);
+			}
+		}
+
+		// Ascending rank order visits every successor strictly before its predecessors (rank
+		// decreases along every edge -- the same property PlaceNodes relies on, just walked in
+		// the opposite direction here), so each node's successors already have a final
+		// latestStart by the time this reads it.
+		std::vector<int> rank = CalculateAllUpwardRanks(n, domains, allSuccessors, weights);
+		std::vector<std::size_t> order(n);
+		for (std::size_t i = 0; i < n; ++i) {
+			order[i] = i;
+		}
+		std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return rank[a] < rank[b]; });
+
+		for (std::size_t node : order) {
+			for (std::size_t succ : realSuccessors[node]) {
+				// Same Host/same-queue zero-cost rule as PlaceNodes' own comm computation --
+				// see its comment.
+				const int comm = (placement.queue[node] == ExecutionDomain::Host || placement.queue[node] == placement.queue[succ])
+					? 0
+					: weights.GetEdgeLatency(node, succ, placement.queue[node], placement.queue[succ]);
+				info.latestFinish[node] = std::min(info.latestFinish[node], info.latestStart[succ] - comm);
+			}
+			const int weight =
+				(domains[node] == ExecutionDomain::Host) ? 0 : weights.GetNodeWeight(node, placement.queue[node]);
+			info.latestStart[node] = info.latestFinish[node] - weight;
+			info.slack[node] = info.latestStart[node] - placement.start[node];
+		}
+
+		return info;
+	}
+
+	inline std::string_view QueueName(ExecutionDomain domain) {
+		switch (domain) {
+		case ExecutionDomain::Graphics:
+			return "G";
+		case ExecutionDomain::Compute:
+			return "C";
+		case ExecutionDomain::Transfer:
+			return "T";
+		case ExecutionDomain::Host:
+			return "Host";
+		}
+		return "?";
+	}
+
+	// Queue -> batch -> nodes, with EST/EFT/slack and the critical path marked -- the one piece
+	// of identify_bottlenecks' report this keeps (minus its std::cout and global-namespace
+	// types). `names` is caller-supplied (NodeDescriptor::name at the real S4 call site) rather
+	// than looked up here, since this file deliberately carries no dependency on
+	// RelationalCompiler.hpp/Node.hpp -- any name shorter than `n` entries falls back to "?".
+	inline void DumpSchedule(
+		std::span<const std::string_view>     names,
+		const std::vector<ExecutionDomain>&   domains,
+		const PlacementResult&                placement,
+		const std::vector<ScheduleBatchPlan>& batches,
+		const ScheduleSlackInfo&              slack
+	) {
+		auto nameOf = [&](std::size_t node) -> std::string_view {
+			return node < names.size() ? names[node] : std::string_view{"?"};
+		};
+
+		spdlog::info("==== Schedule dump ({} batches) ====", batches.size());
+		for (std::size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
+			const ScheduleBatchPlan& batch = batches[batchIndex];
+			spdlog::info("  Batch {} [{}]:", batchIndex, QueueName(batch.queue));
+			for (std::size_t node : batch.nodes) {
+				const bool onCriticalPath = domains[node] != ExecutionDomain::Host && slack.slack[node] == 0;
+				spdlog::info(
+					"    {} EST={} EFT={} slack={}{}",
+					nameOf(node),
+					placement.start[node],
+					placement.finish[node],
+					slack.slack[node],
+					onCriticalPath ? " [CRITICAL]" : ""
+				);
 			}
 		}
 	}
 
-	// ==========================================
-	// REPORT GENERATION & CRITICAL PATH SLACK
-	// ==========================================
-	std::cout << "====================================================\n";
-	std::cout << "SCHEDULE TIMELINE & BOTTLENECK ANALYSIS\n";
-	std::cout << "====================================================\n";
-
-	std::vector<ScheduledTask> sorted_plan;
-	for (const auto& pair : final_schedule)
-		sorted_plan.push_back(pair.second);
-	std::sort(sorted_plan.begin(), sorted_plan.end(), [](const ScheduledTask& a, const ScheduledTask& b) {
-		return a.start_time < b.start_time;
-	});
-
-	std::vector<int> critical_path_nodes;
-
-	for (const auto& t : sorted_plan) {
-		int         slack = latest_start[t.node_id] - t.start_time;
-		std::string tag = (slack == 0) ? " [BOTTLENECK!]" : "";
-		if (slack == 0)
-			critical_path_nodes.push_back(t.node_id);
-
-		std::cout << "Task " << t.node_id << " -> Q[" << t.queue_id << "] | "
-		          << "Interval: [" << t.start_time << " -> " << t.end_time << "] | "
-		          << "Slack: " << slack << tag << "\n";
-	}
-
-	std::cout << "----------------------------------------------------\n";
-	std::cout << "Total System Makespan: " << total_makespan << " units\n";
-	std::cout << "Bottleneck Critical Path Sequence: ";
-	for (size_t i = 0; i < critical_path_nodes.size(); ++i) {
-		std::cout << critical_path_nodes[i] << (i == critical_path_nodes.size() - 1 ? "" : " -> ");
-	}
-	std::cout << "\n====================================================\n";
-}
+} // namespace brassica::graph

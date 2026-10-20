@@ -328,8 +328,13 @@ namespace brassica::graph {
 		// ResourceServices: NodeContext::Write<K>/WriteSpan<K> call through to these. Defined in
 		// Util.hpp, same as the three above -- the real bodies need vk::Buffer(Image)Copy/VMA,
 		// which would bloat this class if inlined here.
-		std::span<std::byte>
-		BeginHostWrite(ResourceId id, std::size_t sizeBytes, std::uint64_t frameIndex, bool insideRendering) override;
+		std::span<std::byte> BeginHostWrite(
+			ResourceId      id,
+			std::size_t     sizeBytes,
+			std::uint64_t   frameIndex,
+			bool            insideRendering,
+			ExecutionDomain domain
+		) override;
 
 		void EndHostWrite(ResourceId id, CommandBuffer cmd) override;
 
