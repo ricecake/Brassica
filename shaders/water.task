@@ -20,6 +20,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  clipmapIndex;
+	uint  biomeIndex;
 }
 params;
 
@@ -109,7 +111,16 @@ void main() {
 		if (visible && params.minMaxIndex > 0u) {
 			vec2 worldMinXZ = uCameraPosition.xz + relMinB.xz;
 			vec2 worldMaxXZ = uCameraPosition.xz + relMaxB.xz;
+			vec2 worldCenterXZ = (worldMinXZ + worldMaxXZ) * 0.5;
 			uint sampleLOD = min(ringLevel + 4u, params.gridParams.x - 1u);
+
+			float tileWaterLevel = params.waterLevel;
+			if (params.biomeIndex > 0u) {
+				float sampledWL = sampleTerrainBiome(params.biomeIndex, worldCenterXZ, sampleLOD, params.gridParams.w).g;
+				if (sampledWL > params.waterLevel - 500.0) {
+					tileWaterLevel = sampledWL;
+				}
+			}
 
 			float tileMinHeight = 1e9;
 			for (int j = 0; j < 3; j++) {
@@ -122,7 +133,7 @@ void main() {
 			}
 
 			float dryLandMargin = 50.0;
-			if (tileMinHeight > params.waterLevel + maxWaveAmp + dryLandMargin) {
+			if (tileMinHeight > tileWaterLevel + maxWaveAmp + dryLandMargin) {
 				visible = false;
 			}
 		}

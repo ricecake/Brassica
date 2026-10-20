@@ -20,6 +20,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  clipmapIndex;
+	uint  biomeIndex;
 } params;
 
 void main() {
@@ -85,7 +87,17 @@ void main() {
 		baseNormal = isAboveWater ? vec3(0.0, 1.0, 0.0) : vec3(0.0, -1.0, 0.0);
 	}
 
-	vec3 waveNormal = baseNormal;
+	// Evaluate multi-scale normal perturbations using dot_noise_fbm and its analytical derivative
+	vec3 grad1, grad2;
+	float n1 = dot_noise_fbm(vec3(absWaterPos.xz * 0.12, uTime * 0.4), 3, uTime * 0.25, grad1);
+	float n2 = dot_noise_fbm(vec3(absWaterPos.xz * 0.35 + vec2(uTime * 0.1, -uTime * 0.15), uTime * 0.6), 2, uTime * 0.5, grad2);
+
+	vec3 totalGrad = grad1 * 0.15 + grad2 * 0.08;
+	vec3 waveNormal = normalize(baseNormal + vec3(-totalGrad.x, 0.0, -totalGrad.z));
+
+	// Wave crest whitening where the noise derivative magnitude is larger
+	float derivMag = length(totalGrad.xz);
+	float crestWhitening = smoothstep(0.12, 0.45, derivMag);
 
 	float distToCam = distToCamWater;
 	float closeThreshold = 800.0;
@@ -181,10 +193,9 @@ void main() {
 	float foamNoise = InterleavedGradientNoise(absWaterPos.xz * 3.5, int(uTime * 12.0));
 	shoreFoam *= 0.65 + 0.35 * foamNoise;
 
-	float crestFactor = clamp((1.0 - waveNormal.y) * 3.5, 0.0, 1.0);
-	float crestFoam = crestFactor * closeFactor;
+	float crestFoam = crestWhitening * (0.6 + 0.4 * foamNoise);
 
-	float totalFoam = clamp(shoreFoam * 1.25 + crestFoam * 0.6, 0.0, 1.0);
+	float totalFoam = clamp(shoreFoam * 1.25 + crestFoam * 0.8, 0.0, 1.0);
 	if (!isAboveWater) totalFoam *= 0.15; // Diminish foam visibility heavily from underneath
 
 	vec3 foamBaseColor = vec3(0.92, 0.96, 1.0);

@@ -47,6 +47,22 @@ namespace {
 				.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
 				.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
 			});
+			r.Create<TerrainClipmapTexture>().Desc(graph::ResourceDesc{
+				.kind = graph::ResourceDesc::Kind::Image2D,
+				.width = 4,
+				.height = 4,
+				.layers = 2,
+				.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+				.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+			});
+			r.Create<TerrainBiomeTexture>().Desc(graph::ResourceDesc{
+				.kind = graph::ResourceDesc::Kind::Image2D,
+				.width = 4,
+				.height = 4,
+				.layers = 2,
+				.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+				.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
+			});
 			r.Create<SkyViewLUT>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
 		}
 

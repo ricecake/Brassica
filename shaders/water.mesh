@@ -3,7 +3,6 @@
 
 #include "bindless.glsl"
 #include "common.glsl"
-#include "lygia/generative/gerstnerWave.glsl"
 #include "terrain.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
@@ -20,6 +19,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  clipmapIndex;
+	uint  biomeIndex;
 }
 params;
 
@@ -37,29 +38,22 @@ float getWaterRingScale(float ring) {
 	return pow(2.0, ring);
 }
 
-vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
-	vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, uv, uint(ringLevel), params.gridParams.w);
+vec3 calculateWaterWaveOffset(vec2 worldXZ, float distToCam, float ringLevel, out vec3 waveNormal) {
+	float closeThreshold = 40.0;
+	float closeFactor = 1.0 - smoothstep(10.0, closeThreshold, distToCam);
 
-	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y) * mix(vec3(10, 1.0, 10), vec3(1, 1.0, 1), 1.0-smoothstep(-100.0, 0.0, minMax.x) );
-	mat3 grad;
-	// vec3 amplitude = mix(vec3(1, 0.75, 1), vec3(1, 10.0, 1), 1.0-smoothstep(-200.0, 0.0, minMax.x) )* (1.0 - smoothstep(3000.0, 20000.0, distToCam));
-	vec3 amplitude = mix(vec3(0.25, 1.0, 0.25), vec3(1,20,1), 1.0-smoothstep(-200.0, 0.0, minMax.x));
-	float frequency = 0.01;
-
-	vec3 sinGrad = amplitude * cross_noise_fbm((inWorldPos) * frequency + abs(dot_noise(inWorldPos * 0.0025, time * 0.5)), 2, time * 0.5, grad) * (1.0 - smoothstep(10.0, 100.0, distToCam));
-
-	vec3 dX = grad[0] * amplitude * frequency;
-	vec3 dZ = grad[2] * amplitude * frequency;
-
-	vec3 tangentX = vec3(1.0, 0.0, 0.0) + dX;
-	vec3 tangentZ = vec3(0.0, 0.0, 1.0) + dZ;
-
-	normal = normalize(cross(tangentZ, tangentX));
-	if (ringLevel >= 8.0) {
+	waveNormal = vec3(0.0, 1.0, 0.0);
+	if (closeFactor <= 0.001 || ringLevel >= 8.0) {
 		return vec3(0.0);
 	}
 
-	return sinGrad;
+	vec3 waveGrad;
+	float n = dot_noise_fbm(vec3(worldXZ * 0.25, uTime * 0.8), 2, uTime * 0.5, waveGrad);
+
+	float yOffset = n * 0.08 * closeFactor;
+	waveNormal = normalize(vec3(-waveGrad.x * 0.1 * closeFactor, 1.0, -waveGrad.z * 0.1 * closeFactor));
+
+	return vec3(0.0, yOffset, 0.0);
 }
 
 void main() {
@@ -116,12 +110,47 @@ void main() {
 	vec2 worldXZ = uCameraPosition.xz + relMorphedXZ;
 
 	vec3 waveNormal;
-	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, length(relMorphedXZ), float(ringLevel), waveNormal);
+	vec3 waveOffset = calculateWaterWaveOffset(worldXZ, length(relMorphedXZ), float(ringLevel), waveNormal);
+
+	float waterHeight = params.waterLevel;
+	if (params.biomeIndex > 0u) {
+		vec4 biomeSample = sampleTerrainBiome(params.biomeIndex, worldXZ, ringLevel, params.gridParams.w);
+		waterHeight = biomeSample.g;
+	}
+
+	if (waterHeight <= params.waterLevel - 500.0) {
+		waterHeight = params.waterLevel - 100.0;
+	}
+
+	float groundHeight = waterHeight - 10.0;
+	if (params.clipmapIndex > 0u) {
+		groundHeight = sampleTerrainClipmap(params.clipmapIndex, worldXZ, ringLevel, params.gridParams.w).r;
+	}
+
+	float depthAboveGround = waterHeight - groundHeight;
+	float fallThreshold = 3.5;
+
+	if (waterHeight > params.waterLevel - 500.0 && depthAboveGround > fallThreshold) {
+		float eps = 2.0;
+		float wX = (params.biomeIndex > 0u) ? sampleTerrainBiome(params.biomeIndex, worldXZ + vec2(eps, 0.0), ringLevel, params.gridParams.w).g : waterHeight;
+		float wZ = (params.biomeIndex > 0u) ? sampleTerrainBiome(params.biomeIndex, worldXZ + vec2(0.0, eps), ringLevel, params.gridParams.w).g : waterHeight;
+		float gradW = length(vec2(wX - waterHeight, wZ - waterHeight)) / eps;
+
+		float gX = (params.clipmapIndex > 0u) ? sampleTerrainClipmap(params.clipmapIndex, worldXZ + vec2(eps, 0.0), ringLevel, params.gridParams.w).r : groundHeight;
+		float gZ = (params.clipmapIndex > 0u) ? sampleTerrainClipmap(params.clipmapIndex, worldXZ + vec2(0.0, eps), ringLevel, params.gridParams.w).r : groundHeight;
+		float gradG = length(vec2(gX - groundHeight, gZ - groundHeight)) / eps;
+
+		float isRiverOrDrop = smoothstep(0.01, 0.12, max(gradW, gradG * 0.5));
+		float dropTarget = groundHeight + fallThreshold;
+		float sharpDrop = smoothstep(fallThreshold, fallThreshold + 1.2, depthAboveGround);
+
+		waterHeight = mix(waterHeight, dropTarget, sharpDrop * isRiverOrDrop);
+	}
 
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 
-	vec3 relWorldPos = vec3(relMorphedXZ.x, params.waterLevel - uCameraPosition.y, relMorphedXZ.y) + waveOffset - vec3(0.0, dropOff, 0.0);
+	vec3 relWorldPos = vec3(relMorphedXZ.x, waterHeight - uCameraPosition.y, relMorphedXZ.y) + waveOffset - vec3(0.0, dropOff, 0.0);
 
 	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
