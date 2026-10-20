@@ -46,6 +46,8 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t gMaterialIndex{0};
 		std::uint32_t skyViewIndex{0};
+		std::uint32_t clipmapIndex{0};
+		std::uint32_t biomeIndex{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -139,6 +141,8 @@ namespace brassica {
 			r.Read<GBufferMaterial>();
 			r.Read<GBufferDepth>();
 			r.Read<TerrainMinMaxTexture>();
+			r.Read<TerrainClipmapTexture>();
+			r.Read<TerrainBiomeTexture>();
 			r.Read<SkyViewLUT>();
 			r.Modify<HdrColor>();
 			r.After<VolumetricRenderNode>();
@@ -151,6 +155,8 @@ namespace brassica {
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 			push.sceneColor = ctx.Index<HdrColor>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
+			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
+			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.gMaterialIndex = ctx.Index<GBufferMaterial>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 
