@@ -80,15 +80,16 @@ bool isAABBOccludedByHiZ(vec3 relMinB, vec3 relMaxB, mat4 viewProjRel, uint hizI
 		return false;
 	}
 
-	vec3 corners[8];
-	corners[0] = vec3(relMinB.x, relMinB.y, relMinB.z);
-	corners[1] = vec3(relMaxB.x, relMinB.y, relMinB.z);
-	corners[2] = vec3(relMinB.x, relMaxB.y, relMinB.z);
-	corners[3] = vec3(relMaxB.x, relMaxB.y, relMinB.z);
-	corners[4] = vec3(relMinB.x, relMinB.y, relMaxB.z);
-	corners[5] = vec3(relMaxB.x, relMinB.y, relMaxB.z);
-	corners[6] = vec3(relMinB.x, relMaxB.y, relMaxB.z);
-	corners[7] = vec3(relMaxB.x, relMaxB.y, relMaxB.z);
+	vec3 corners[8] = vec3[](
+		vec3(relMinB.x, relMinB.y, relMinB.z),
+		vec3(relMaxB.x, relMinB.y, relMinB.z),
+		vec3(relMinB.x, relMaxB.y, relMinB.z),
+		vec3(relMaxB.x, relMaxB.y, relMinB.z),
+		vec3(relMinB.x, relMinB.y, relMaxB.z),
+		vec3(relMaxB.x, relMinB.y, relMaxB.z),
+		vec3(relMinB.x, relMaxB.y, relMaxB.z),
+		vec3(relMaxB.x, relMaxB.y, relMaxB.z)
+	);
 
 	vec2 minUV = vec2(1.0);
 	vec2 maxUV = vec2(0.0);
