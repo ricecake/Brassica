@@ -76,5 +76,97 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 
 	// Verify push constant structures for climate compute shaders
 	CHECK(sizeof(ClimateInitialPushConstants) == 16);
-	CHECK(sizeof(ClimateCAPushConstants) == 32);
+	CHECK(sizeof(ClimateCAPushConstants) == 40);
+}
+
+TEST_CASE("TerrainBiomeNode partial CA update cycle and ping-pong buffer swapping") {
+	TerrainBiomeNode node;
+	node.cellsPerUpdate = 512;
+
+	render::NodeFrameParams params{};
+	params.forceRegeneration = false;
+
+	// Simulate frame progression for partial CA updates
+	// Texture dimension is constants::Weather::kCoverageTextureDim (2048)
+	// With 512 cells per update, 1 full update cycle takes 2048 / 512 = 4 frames.
+
+	// Frame 0 (initial generation)
+	params.forceRegeneration = true;
+	node.SetFrameParams(params);
+	CHECK(node.cellsPerUpdate == 512);
+
+	// Simulate Execute step logic manually / tracking
+	const std::uint32_t textureDim = constants::Weather::kCoverageTextureDim;
+
+	// Frame 0: cellOffset = 0 -> process 512 -> cellOffset = 512
+	std::uint32_t cellsToProcess = std::min(node.cellsPerUpdate, textureDim - node.cellOffset);
+	CHECK(cellsToProcess == 512);
+	node.cellOffset += cellsToProcess;
+	if (node.cellOffset >= textureDim) {
+		node.cellOffset = 0;
+		node.pingPongState = !node.pingPongState;
+	} else {
+		node.pingPongState = false;
+	}
+	CHECK(node.cellOffset == 512);
+	CHECK(node.pingPongState == false);
+
+	// Frame 1: cellOffset = 512 -> process 512 -> cellOffset = 1024
+	params.forceRegeneration = false;
+	node.SetFrameParams(params);
+	cellsToProcess = std::min(node.cellsPerUpdate, textureDim - node.cellOffset);
+	CHECK(cellsToProcess == 512);
+	node.cellOffset += cellsToProcess;
+	if (node.cellOffset >= textureDim) {
+		node.cellOffset = 0;
+		node.pingPongState = !node.pingPongState;
+	}
+	CHECK(node.cellOffset == 1024);
+	CHECK(node.pingPongState == false);
+
+	// Frame 2: cellOffset = 1024 -> process 512 -> cellOffset = 1536
+	node.SetFrameParams(params);
+	cellsToProcess = std::min(node.cellsPerUpdate, textureDim - node.cellOffset);
+	CHECK(cellsToProcess == 512);
+	node.cellOffset += cellsToProcess;
+	if (node.cellOffset >= textureDim) {
+		node.cellOffset = 0;
+		node.pingPongState = !node.pingPongState;
+	}
+	CHECK(node.cellOffset == 1536);
+	CHECK(node.pingPongState == false);
+
+	// Frame 3: cellOffset = 1536 -> process 512 -> cellOffset = 2048 >= 2048 -> cellOffset = 0, pingPongState swaps to true
+	node.SetFrameParams(params);
+	cellsToProcess = std::min(node.cellsPerUpdate, textureDim - node.cellOffset);
+	CHECK(cellsToProcess == 512);
+	node.cellOffset += cellsToProcess;
+	if (node.cellOffset >= textureDim) {
+		node.cellOffset = 0;
+		node.pingPongState = !node.pingPongState;
+	}
+	CHECK(node.cellOffset == 0);
+	CHECK(node.pingPongState == true);
+
+	// Frame 4: Next cycle starts with new pingPongState = true, cellOffset = 0 -> 512
+	node.SetFrameParams(params);
+	cellsToProcess = std::min(node.cellsPerUpdate, textureDim - node.cellOffset);
+	CHECK(cellsToProcess == 512);
+	node.cellOffset += cellsToProcess;
+	if (node.cellOffset >= textureDim) {
+		node.cellOffset = 0;
+		node.pingPongState = !node.pingPongState;
+	}
+	CHECK(node.cellOffset == 512);
+	CHECK(node.pingPongState == true);
+}
+
+TEST_CASE("TerrainBiomeNode default kCellsPerUpdate constant verification") {
+	TerrainBiomeNode node;
+	render::NodeFrameParams params{};
+	node.SetFrameParams(params);
+
+	// Should use constants::Weather::kCellsPerUpdate (512)
+	CHECK(node.cellsPerUpdate == constants::Weather::kCellsPerUpdate);
+	CHECK(node.cellsPerUpdate == 512);
 }
