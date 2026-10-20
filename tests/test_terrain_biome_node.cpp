@@ -1,8 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
-#include "ConfigManager.hpp"
-#include "ServiceLocator.hpp"
 #include "graph/Graph.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/TerrainBiomeNode.hpp"
@@ -163,45 +161,12 @@ TEST_CASE("TerrainBiomeNode partial CA update cycle and ping-pong buffer swappin
 	CHECK(node.pingPongState == true);
 }
 
-TEST_CASE("TerrainBiomeNode ConfigManager integration for cellsPerUpdate") {
-	ServiceLocator locator;
-	ServiceLocator::SetInstance(&locator);
-
-	auto configMgr = std::make_shared<ConfigManager>("TestApp");
-	configMgr->SetManagerSetting<std::uint32_t>("TerrainBiomeNode", "cellsPerUpdate", 1024);
-	locator.Provide<ConfigManager>(configMgr);
-
+TEST_CASE("TerrainBiomeNode default kCellsPerUpdate constant verification") {
 	TerrainBiomeNode node;
 	render::NodeFrameParams params{};
 	node.SetFrameParams(params);
 
-	// Should load 1024 from ConfigManager
-	CHECK(node.cellsPerUpdate == 1024);
-
-	// With 1024 cells per update, a full 2048 texture update completes in 2 frames
-	const std::uint32_t textureDim = constants::Weather::kCoverageTextureDim;
-
-	// Frame 0: cellOffset 0 -> 1024
-	std::uint32_t cellsToProcess = std::min(node.cellsPerUpdate, textureDim - node.cellOffset);
-	CHECK(cellsToProcess == 1024);
-	node.cellOffset += cellsToProcess;
-	if (node.cellOffset >= textureDim) {
-		node.cellOffset = 0;
-		node.pingPongState = !node.pingPongState;
-	}
-	CHECK(node.cellOffset == 1024);
-	CHECK(node.pingPongState == false);
-
-	// Frame 1: cellOffset 1024 -> 2048 -> resets to 0, swaps pingPongState
-	cellsToProcess = std::min(node.cellsPerUpdate, textureDim - node.cellOffset);
-	CHECK(cellsToProcess == 1024);
-	node.cellOffset += cellsToProcess;
-	if (node.cellOffset >= textureDim) {
-		node.cellOffset = 0;
-		node.pingPongState = !node.pingPongState;
-	}
-	CHECK(node.cellOffset == 0);
-	CHECK(node.pingPongState == true);
-
-	ServiceLocator::SetInstance(nullptr);
+	// Should use constants::Weather::kCellsPerUpdate (512)
+	CHECK(node.cellsPerUpdate == constants::Weather::kCellsPerUpdate);
+	CHECK(node.cellsPerUpdate == 512);
 }

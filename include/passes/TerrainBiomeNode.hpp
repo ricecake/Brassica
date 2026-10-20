@@ -14,8 +14,6 @@
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
-#include "ConfigManager.hpp"
-#include "ServiceLocator.hpp"
 #include "passes/ResourceKeys.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -48,7 +46,7 @@ namespace brassica {
 		std::uint32_t biomeOutStorageIdx{0};
 		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
 		std::uint32_t cellOffset{0};
-		std::uint32_t cellsPerUpdate{512};
+		std::uint32_t cellsPerUpdate{constants::Weather::kCellsPerUpdate};
 		std::uint32_t pad{0};
 	};
 
@@ -66,7 +64,7 @@ namespace brassica {
 		bool          pingPongState{false};
 		std::uint32_t frameCounter{0};
 		std::uint32_t cellOffset{0};
-		std::uint32_t cellsPerUpdate{512};
+		std::uint32_t cellsPerUpdate{constants::Weather::kCellsPerUpdate};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -104,17 +102,6 @@ namespace brassica {
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			forceRegeneration = p.forceRegeneration;
 			++frameCounter;
-			if (ServiceLocator::HasInstance() && ServiceLocator::Instance().Has<ConfigManager>()) {
-				auto config = ServiceLocator::Instance().Get<ConfigManager>();
-				std::uint32_t cfgVal = config->GetManagerSetting<std::uint32_t>("TerrainBiomeNode", "cellsPerUpdate", 512);
-				if (cfgVal == 512 && config->HasValue("TerrainBiome", "cellsPerUpdate")) {
-					cfgVal = config->GetManagerSetting<std::uint32_t>("TerrainBiome", "cellsPerUpdate", 512);
-				}
-				if (cfgVal == 512 && config->HasValue("BiomeCA", "cellsPerUpdate")) {
-					cfgVal = config->GetManagerSetting<std::uint32_t>("BiomeCA", "cellsPerUpdate", 512);
-				}
-				cellsPerUpdate = std::max(1u, cfgVal);
-			}
 		}
 
 		// All seven are Modify (not Create): legacy used ReadWrite for every one of these, since
