@@ -90,6 +90,11 @@ void main() {
 
 	float alpha = 0.0;
 	vec2 relMorphedXZ = relBaseXZ;
+	float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
+	vec2 worldBaseXZ = uCameraPosition.xz + relBaseXZ;
+	vec2 worldTargetXZ = floor(worldBaseXZ / targetGrid + 0.5) * targetGrid;
+	vec2 relTargetXZ = worldTargetXZ - uCameraPosition.xz;
+
 
 	if (morphLOD < params.gridParams.x - 1 && outerDist > 0.0) {
 		float morphWidth = 2.5 * parentMeshletSize;
@@ -98,12 +103,6 @@ void main() {
 		if (distToCam > morphStart) {
 			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
 			alpha = 0.5*round(2.0*alpha * alpha * (3.0 - 2.0 * alpha));
-
-			float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
-
-			vec2 worldBaseXZ = uCameraPosition.xz + relBaseXZ;
-			vec2 worldTargetXZ = floor(worldBaseXZ / targetGrid + 0.5) * targetGrid;
-			vec2 relTargetXZ = worldTargetXZ - uCameraPosition.xz;
 
 			relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
 		}
@@ -181,47 +180,6 @@ void main() {
 
 	outPosition[vertexIndex] = relWorldPos;
 	outNormal[vertexIndex] = normal;
-
-	// vec3 lodColor = vec3(0.2, 0.6, 0.2);
-	// vec3 sand = vec3(0.9, 0.8, 0.5);
-	// vec3 snow = vec3(0.9, 0.95, 1.0);
-	// vec3 rock = vec3(0.3, 0.22, 0.2);
-
-	// lodColor = mix(rock, lodColor, smoothstep(0.25, 1.0, normal.y));
-	// lodColor = mix(sand, lodColor, smoothstep(-2.0, 25.0, height));
-	// lodColor = mix(lodColor, snow, smoothstep(2500.0, 4000.0, height));
-
-	// if (height < 0.0) {
-	// 	float depth = -height;
-	// 	vec3  wetSand = vec3(0.75, 0.70, 0.52);
-	// 	vec3  shallowReef = vec3(0.40, 0.9, 0.7);
-	// 	vec3  deepOceanBed = vec3(0.08, 0.16, 0.22);
-	// 	vec3  seafloorRock = vec3(0.18, 0.18, 0.20);
-
-	// 	vec3 seafloorColor = mix(wetSand, shallowReef, smoothstep(0.5, 5.0, depth));
-	// 	seafloorColor = mix(seafloorColor, deepOceanBed, smoothstep(12.0, 45.0, depth));
-	// 	seafloorColor = mix(seafloorRock, seafloorColor, smoothstep(0.3, 0.85, normal.y));
-
-	// 	lodColor = seafloorColor;
-	// }
-
-	// float warp = psrdnoise(morphedWorldXZ / texelSize(lodLevel));
-	// float shift = psrdnoise((texelSize(lodLevel) * warp + morphedWorldXZ) / texelSize(lodLevel));
-	// lodColor = hueShift(lodColor, shift);
-
-	vec3 debugColors[8] = vec3[](
-		vec3(1.0, 0.0, 0.0), // LOD 0: Red
-		vec3(1.0, 0.5, 0.0), // LOD 1: Orange
-		vec3(1.0, 1.0, 0.0), // LOD 2: Yellow
-		vec3(0.0, 1.0, 0.0), // LOD 3: Green
-		vec3(0.0, 1.0, 1.0), // LOD 4: Cyan
-		vec3(0.0, 0.0, 1.0), // LOD 5: Blue
-		vec3(0.5, 0.0, 1.0), // LOD 6: Purple
-		vec3(1.0, 0.0, 1.0)  // LOD 7: Magenta
-	);
-
-	// Modulo ensures safety if LODs exceed the array bounds
-	// vec3 lodColor = debugColors[lodLevel % 8u];
 
 	vec3 absWorldPos = uCameraPosition.xyz + relWorldPos;
 
