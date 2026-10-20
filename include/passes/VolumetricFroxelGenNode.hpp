@@ -22,12 +22,6 @@
 
 namespace brassica {
 
-	struct VolumetricNoiseGenPushConstants {
-		std::uint32_t noiseStorageIdx{0xFFFFFFFFu};
-		float         time{0.0f};
-		float         _pad[2]{0.0f, 0.0f};
-	};
-
 	struct VolumetricFroxelGenPushConstants {
 		alignas(16) glm::vec4 cameraPos{0.0f};                     // xyz = cameraPos, w = time
 		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 1.0f}; // xyz = camForward, w = tanHalfFov
@@ -37,7 +31,7 @@ namespace brassica {
 		alignas(
 			16
 		) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 1024.0f}; // x = density, y = falloff, z = base, w = gridTextureDim
-		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu}; // x = scat0|1, y = scat2|ext0, z = ext1|2, w = noise|skyView
+		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu}; // x = scat0|1, y = scat2|ext0, z = ext1|2, w = unused|skyView
 		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu}; // x = clipmap|minMax, y = cloudShadow, z = 0, w = 0
 	};
 
@@ -52,17 +46,14 @@ namespace brassica {
 	// placement was redundant.
 	struct VolumetricFroxelGenNode: render::NodeRegistrar<VolumetricFroxelGenNode> {
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
-		ComputeShader                    noiseShader;
 		ComputeShader                    genShader;
-		VolumetricNoiseGenPushConstants  noisePush{};
 		VolumetricFroxelGenPushConstants genPush{};
 		glm::vec3                        cameraPos{0.0f};
 		float                            time{0.0f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			if (!noiseShader.CompileComputeFromFile(services.device, "shaders/volumetric_noise_gen.comp") ||
-			    !genShader.CompileComputeFromFile(services.device, "shaders/volumetric_froxel_gen.comp")) {
+			if (!genShader.CompileComputeFromFile(services.device, "shaders/volumetric_froxel_gen.comp")) {
 				spdlog::critical("VolumetricFroxelGenNode shader compilation failed.");
 				throw std::runtime_error("VolumetricFroxelGenNode shader compilation failed.");
 			}
@@ -77,17 +68,14 @@ namespace brassica {
 				catalog.Get<VolumetricCascade1Extinction>();
 				catalog.Get<VolumetricCascade2Scattering>();
 				catalog.Get<VolumetricCascade2Extinction>();
-				catalog.Get<VolumetricNoiseTexture>();
 			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-			watcher.RegisterShader(&noiseShader);
 			watcher.RegisterShader(&genShader);
 		}
 
 		void Destroy(vk::Device device) {
-			noiseShader.Destroy(device);
 			genShader.Destroy(device);
 		}
 
@@ -123,7 +111,6 @@ namespace brassica {
 			r.Create<VolumetricCascade1Extinction>();
 			r.Create<VolumetricCascade2Scattering>();
 			r.Create<VolumetricCascade2Extinction>();
-			r.Create<VolumetricNoiseTexture>();
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
@@ -132,17 +119,6 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
-			// 1. Generate 2D noise map
-			noisePush.noiseStorageIdx = ctx.StorageIndex<VolumetricNoiseTexture>();
-			noisePush.time = time;
-
-			render::ResolvedPipeline noiseResolved = render::BindCompute(ctx, *pipelineLibrary, noiseShader, noisePush);
-			if (noiseResolved.pipeline) {
-				// 512 / 16 = 32
-				vkCmd.dispatch(32, 32, 1);
-			}
-
-			// 2. Generate froxel cascade volumes
 			auto pack16 = [](std::uint32_t low, std::uint32_t high) -> std::uint32_t {
 				return (low & 0xFFFFu) | ((high & 0xFFFFu) << 16u);
 			};
@@ -155,7 +131,6 @@ namespace brassica {
 			std::uint32_t ext1 = ctx.StorageIndex<VolumetricCascade1Extinction>();
 			std::uint32_t ext2 = ctx.StorageIndex<VolumetricCascade2Extinction>();
 
-			std::uint32_t noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
 			std::uint32_t skyViewIndex = ctx.Index<SkyViewLUT>();
 			std::uint32_t clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			std::uint32_t minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
@@ -165,7 +140,7 @@ namespace brassica {
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
 			genPush.indices0.z = pack16(ext1, ext2);
-			genPush.indices0.w = pack16(noiseTextureIdx, skyViewIndex);
+			genPush.indices0.w = pack16(0u, skyViewIndex);
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
@@ -174,8 +149,8 @@ namespace brassica {
 
 			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {
-				// 64 / 8 = 8 workgroups per dimension x and y (z is integrated in shader column)
-				vkCmd.dispatch(8, 8, 1);
+				// 160 / 16 = 10 workgroups for X, 90 / 9 = 10 workgroups for Y
+				vkCmd.dispatch(10, 10, 1);
 			}
 		}
 	};

@@ -9,7 +9,7 @@
 #include "terrain.glsl"
 #include "atmosphere/common.glsl"
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(local_size_x = 16, local_size_y = 9, local_size_z = 1) in;
 
 layout(push_constant) uniform VolumetricFroxelGenPushConstants {
 	vec4  cameraPos;   // xyz = camera position, w = time
@@ -18,7 +18,7 @@ layout(push_constant) uniform VolumetricFroxelGenPushConstants {
 	vec4  sunDir;      // xyz = sun direction, w = sun intensity
 	vec4  sunColor;    // rgb = sun color/radiance, w = phase anisotropy g
 	vec4  fogParams;   // x = fog density, y = fog height falloff, z = fog base height, w = gridTextureDim
-	uvec4 indices0;    // x = scat0|scat1, y = scat2|ext0, z = ext1|ext2, w = noise|skyView
+	uvec4 indices0;    // x = scat0|scat1, y = scat2|ext0, z = ext1|ext2, w = unused|skyView
 	uvec4 indices1;    // x = clipmap|minMax, y = cloudShadow
 } push;
 
@@ -53,12 +53,12 @@ float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMax
 	);
 
 	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 12800.0, 12.0);
-	return mix(0.15, 1.0, softVal);
+	return softVal;
 }
 
 void main() {
 	uvec2 xy = gl_GlobalInvocationID.xy;
-	if (xy.x >= 64 || xy.y >= 64) return;
+	if (xy.x >= 160 || xy.y >= 90) return;
 
 	uint scat0 = unpackLow16(push.indices0.x);
 	uint scat1 = unpackHigh16(push.indices0.x);
@@ -66,7 +66,6 @@ void main() {
 	uint ext0  = unpackHigh16(push.indices0.y);
 	uint ext1  = unpackLow16(push.indices0.z);
 	uint ext2  = unpackHigh16(push.indices0.z);
-	uint noiseTextureIdx = unpackLow16(push.indices0.w);
 	uint skyViewIndex    = unpackHigh16(push.indices0.w);
 	uint clipmapIndex      = unpackLow16(push.indices1.x);
 	uint minMaxIndex       = unpackHigh16(push.indices1.x);
@@ -78,8 +77,8 @@ void main() {
 
 	vec3 camRight = normalize(cross(push.camForward.xyz, push.camUp.xyz));
 
-	float ndcX = (((float(xy.x) + 0.5) / 64.0) * 2.0 - 1.0);
-	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 64.0) * 2.0);
+	float ndcX = (((float(xy.x) + 0.5) / 160.0) * 2.0 - 1.0);
+	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 90.0) * 2.0);
 
 	float tanHalfFov = push.camForward.w;
 	float aspect = push.camUp.w;
@@ -91,6 +90,7 @@ void main() {
 	);
 
 	float cascadeRanges[3] = float[3](200.0, 1600.0, 12800.0);
+	float cascadeNears[3]  = float[3](0.1, 1.0, 10.0);
 
 	for (int c = 0; c < 3; ++c) {
 		uint scatIdx = cascadeScatteringIdx[c];
@@ -98,32 +98,24 @@ void main() {
 		if (scatIdx == 0xFFFFu || extIdx == 0xFFFFu) continue;
 
 		float maxDist = cascadeRanges[c];
-		float voxelSizeZ = maxDist / 64.0;
+		float nearZ   = cascadeNears[c];
 
 		vec3 accumulatedScattering = vec3(0.0);
 		float accumulatedTransmittance = 1.0;
 
-		for (int z = 0; z < 64; ++z) {
+		for (int z = 0; z < 128; ++z) {
 			ivec3 vox = ivec3(xy.x, xy.y, z);
 
-			float dist = ((float(z) + 0.5) / 64.0) * maxDist;
+			float tCenter = (float(z) + 0.5) / 128.0;
+			float tFront  = float(z) / 128.0;
+			float tBack   = float(z + 1) / 128.0;
+
+			float dist = nearZ * exp(tCenter * log(maxDist / nearZ));
+			float dFront = nearZ * exp(tFront * log(maxDist / nearZ));
+			float dBack  = nearZ * exp(tBack * log(maxDist / nearZ));
+			float voxelSizeZ = dBack - dFront;
+
 			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist;
-
-			float noiseScale = 0.018 / pow(2.5, float(c));
-			vec2 noiseUV = worldPos.xz * noiseScale;
-			vec4 noiseVal = vec4(0.5);
-			if (noiseTextureIdx != 0xFFFFu && noiseTextureIdx != 0u) {
-				noiseVal = textureLod(sampler2D(uTextures2D[nonuniformEXT(noiseTextureIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), noiseUV, 0.0);
-			}
-
-			float noiseMod = 0.5;
-			if (c == 0) {
-				noiseMod = noiseVal.r * 0.15 + noiseVal.g * 0.25 + noiseVal.b * 0.35 + noiseVal.a * 0.25;
-			} else if (c == 1) {
-				noiseMod = noiseVal.r * 0.30 + noiseVal.g * 0.40 + noiseVal.b * 0.20 + noiseVal.a * 0.10;
-			} else {
-				noiseMod = noiseVal.r * 0.60 + noiseVal.g * 0.30 + noiseVal.b * 0.10;
-			}
 
 			// Sample weather map at worldPos XZ
 			float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
@@ -148,7 +140,7 @@ void main() {
 			float densityMult = mix(1.0, 2.5, rainFactor);
 
 			float heightDiff = max(0.0, worldPos.y - fogBase);
-			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff) * clamp(noiseMod * 1.5, 0.2, 2.0);
+			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff);
 
 			// Rain optical properties: neutral spectral scattering and higher extinction
 			vec3 baseScatteringCoeff = vec3(0.92, 0.95, 1.0);

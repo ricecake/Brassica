@@ -22,7 +22,9 @@ layout(push_constant) uniform VolumetricRenderPushConstants {
 
 vec4 sampleFroxelCascade(int c, vec3 relPos, out float outTransmittance) {
 	float cascadeRanges[3] = float[3](200.0, 1600.0, 12800.0);
+	float cascadeNears[3]  = float[3](0.1, 1.0, 10.0);
 	float maxDist = cascadeRanges[c];
+	float nearZ   = cascadeNears[c];
 
 	uint scatIdx = push.cascadeScatteringIdx[c];
 	uint extIdx = push.cascadeExtinctionIdx[c];
@@ -48,10 +50,16 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, out float outTransmittance) {
 	float frustumWidthAtZ = 2.0 * viewZ * aspect * tanHalfFov;
 	float frustumHeightAtZ = 2.0 * viewZ * tanHalfFov;
 
+	float rayDist = length(relPos);
+	float zSlice = 0.0;
+	if (rayDist > nearZ) {
+		zSlice = clamp((log(rayDist) - log(nearZ)) / (log(maxDist) - log(nearZ)), 0.0, 1.0);
+	}
+
 	vec3 uv3d = vec3(
 		clamp(viewX / frustumWidthAtZ + 0.5, 0.0, 1.0),
 		clamp(0.5 - viewY / frustumHeightAtZ, 0.0, 1.0),
-		clamp(length(relPos) / maxDist, 0.0, 1.0)
+		zSlice
 	);
 
 	vec4 scatSample = textureLod(sampler3D(uTextures3D[nonuniformEXT(scatIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv3d, 0.0);
