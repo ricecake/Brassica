@@ -101,13 +101,17 @@ namespace brassica {
 
 		// Reads every GBuffer key (genuinely, unlike AtmosphereCompositeNode/CirrusNode/
 		// CloudRenderNode/VolumetricRenderNode below -- this is the one real exception lesson
-		// #2's writeup calls out). No Read<AtmosphereRadiance>() or Read<TerrainTLAS>(): neither
-		// is catalog-converted, and AtmosphereRadiance's producer (SkyBackgroundNode) schedules
-		// after DeferredShading anyway (there's no real edge to restore). This node's own
-		// Resources never declared TerrainTLAS as anything but a Read either, so dropping it
-		// costs nothing today; see TerrainGenNode.hpp's SetupBuilder::AccessHandle::Desc comment
-		// for why an AccelerationStructure-kind key needs that escape hatch on *every* toucher,
-		// not just its producer, if it's ever read through the builder instead of omitted.
+		// #2's writeup calls out). Read<AtmosphereRadiance>() and Read<TerrainTLAS>() are both
+		// declared below despite neither being catalog-converted: PhysicalRegistry.hpp's
+		// Provision() ignores an empty-desc realization for provisioning purposes regardless of
+		// schedule order, so this reader's own (un-Desc()'d) Read<AtmosphereRadiance>() can never
+		// stomp SkyBackgroundNode's real one -- the older "empty-desc wins via lesson #10" hazard
+		// that justified omitting it no longer applies once that guard exists. TerrainTLAS is a
+		// different story: an AccelerationStructure-kind key needs SetupBuilder::AccessHandle::
+		// Desc()'s escape hatch on *every* toucher, not just its producer (Provision() switches
+		// on desc.kind before any catalog lookup runs; omit it and this would be silently treated
+		// as an empty Image2D instead) -- so this one DOES chain .Desc(AccelerationStructureDesc())
+		// below, matching TerrainGenNode.hpp's own Modify<TerrainTLAS>().
 		// Read<TerrainWeatherBiomeTexture>() restored (S4): catalog-converted since batch 5, so
 		// the lesson #10 hazard that justified omitting it is gone -- this was simply never
 		// re-added when that batch landed, found and fixed empirically while migrating this
@@ -137,6 +141,8 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<GTAOTexture>();
 			r.Read<CloudShadowMap>();
+			r.Read<AtmosphereRadiance>();
+			r.Read<TerrainTLAS>().Desc(graph::AccelerationStructureDesc());
 			r.Create<HdrColor>();
 		}
 

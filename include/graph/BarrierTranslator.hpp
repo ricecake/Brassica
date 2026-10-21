@@ -229,6 +229,20 @@ namespace brassica::graph {
 			// eAllCommands/no-access-bits here just orders this barrier after currentQueue's own
 			// prior work (trivially true if there is none yet) without claiming a src scope this
 			// queue never actually produced.
+			//
+			// eNone, not eTopOfPipe, for the "never touched" fallback (tex.GetLastStage() empty
+			// -- a fresh Import<K>, most commonly the swapchain, whose first-ever touch this is).
+			// This is a best-effort fix, not yet confirmed on real hardware: sgreenhusted's own
+			// aggressive-validation logs show a WRITE_AFTER_READ hazard against
+			// vkAcquireNextImageKHR on every single frame's swapchain image, reproduced
+			// identically under GraphicsOnly and Heft (so unrelated to queue placement -- this
+			// fallback predates that work entirely). TOP_OF_PIPE is a real, if degenerate, point
+			// in the pipeline that the Vulkan spec's own synchronization chapter documents as
+			// deprecated in favor of NONE for exactly this "nothing to synchronize against" case;
+			// the theory is that sync validation's hazard tracker doesn't credit TOP_OF_PIPE as
+			// "no real dependency" the way it credits NONE, so it can't see this barrier's write
+			// as properly ordered after the semaphore wait gating the image's first use. Needs a
+			// re-run with aggressive validation to actually confirm.
 			const bool crossQueue = IsCrossQueue(tex.GetQueueTouchMask(), currentQueue);
 
 			const auto& desc = tex.GetDesc();
@@ -236,7 +250,7 @@ namespace brassica::graph {
 			out.push_back(
 				vk::ImageMemoryBarrier2{
 					crossQueue ? vk::PipelineStageFlagBits2::eAllCommands
-							   : (tex.GetLastStage() ? tex.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe),
+							   : (tex.GetLastStage() ? tex.GetLastStage() : vk::PipelineStageFlagBits2::eNone),
 					crossQueue ? vk::AccessFlags2{} : tex.GetLastAccess(),
 					dstStage,
 					dstAccess,
@@ -285,7 +299,7 @@ namespace brassica::graph {
 			out.push_back(
 				vk::BufferMemoryBarrier2{
 					crossQueue ? vk::PipelineStageFlagBits2::eAllCommands
-							   : (buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe),
+							   : (buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eNone),
 					crossQueue ? vk::AccessFlags2{} : buf.GetLastAccess(),
 					dstStage,
 					dstAccess,
@@ -329,7 +343,7 @@ namespace brassica::graph {
 			out.push_back(
 				vk::MemoryBarrier2{
 					crossQueue ? vk::PipelineStageFlagBits2::eAllCommands
-							   : (as.GetLastStage() ? as.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe),
+							   : (as.GetLastStage() ? as.GetLastStage() : vk::PipelineStageFlagBits2::eNone),
 					crossQueue ? vk::AccessFlags2{} : as.GetLastAccess(),
 					dstStage,
 					dstAccess,
@@ -484,7 +498,8 @@ namespace brassica::graph {
 			if (srcStage || srcAccess) {
 				memoryBarriers.push_back(
 					vk::MemoryBarrier2{
-						srcStage ? srcStage : vk::PipelineStageFlagBits2::eTopOfPipe,
+						// eNone, not eTopOfPipe -- see EmitImageBarrier's comment above.
+						srcStage ? srcStage : vk::PipelineStageFlagBits2::eNone,
 						srcAccess,
 						vk::PipelineStageFlagBits2::eAllCommands,
 						vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,

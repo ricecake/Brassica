@@ -156,14 +156,16 @@ namespace brassica {
 		// (HiZTextureDesc(ctx.width, ctx.height)) now that HiZTexture is catalog-converted (S1) --
 		// the catalog is the real fix for lesson #9's "reader must get the desc right" trap, this
 		// node was just the first one it was found on. Read<TerrainClipmapTexture/MinMaxTexture/
-		// BiomeTexture/WeatherBiomeTexture>() are all safe now (the last one restored in S4 --
-		// catalog-converted since batch 5, just never re-added then). Read<
-		// FoliageBiomeTableTexture>() stays omitted -- not catalog-converted, and its producer
-		// (a host-write node) schedules before this one, so an empty-desc realization here would
-		// win via lesson #10 (see GTAONode.hpp's identical reasoning). AnyOrder() on all four GBuffer
-		// keys here, matching EntityNode's own identical reasoning (see its Setup()'s comment) --
-		// both nodes Modify these same four keys with nothing else ordering them, which the
-		// relational compiler (S3) treats as a hard ambiguity error unless both sides opt in.
+		// BiomeTexture/WeatherBiomeTexture/FoliageBiomeTableTexture>() are all safe despite none
+		// of the last one being catalog-converted: PhysicalRegistry.hpp's Provision() ignores an
+		// empty-desc realization for provisioning purposes regardless of schedule order (an
+		// un-Desc()'d Read<>() carries one by construction), so this reader can never stomp the
+		// real producer's own desc no matter which one schedules later -- the older "empty-desc
+		// wins via lesson #10" hazard that justified omitting FoliageBiomeTableTexture here no
+		// longer applies once that guard exists. AnyOrder() on all four GBuffer keys here,
+		// matching EntityNode's own identical reasoning (see its Setup()'s comment) -- both nodes
+		// Modify these same four keys with nothing else ordering them, which the relational
+		// compiler (S3) treats as a hard ambiguity error unless both sides opt in.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics).Active(enabled);
 			r.Modify<GBufferPosition>().AnyOrder();
@@ -175,6 +177,7 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<FoliageBiomeTableTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
