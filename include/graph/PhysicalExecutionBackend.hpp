@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 #include "graph/BarrierTranslator.hpp"
@@ -250,7 +251,8 @@ namespace brassica::graph {
 		vk::CommandBuffer cmd,
 		PhysicalTexture&  tex,
 		AccessKind        access,
-		ExecutionDomain   domain
+		ExecutionDomain   domain,
+		ResourceId        key = nullptr
 	) {
 		const auto& desc = tex.GetDesc();
 
@@ -263,14 +265,18 @@ namespace brassica::graph {
 		// degrades to "reads stale/undefined content" (the pre-S5 behavior) instead of a
 		// validation error.
 		if (!(desc.usageMask & static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eTransferDst))) {
-			static bool warned = false;
-			if (!warned) {
+			// Logs every distinct key this hits, not just the first (a plain "warned once"
+			// static bool used to swallow the name of whichever key actually hit this,
+			// leaving no way to tell which Desc() needs fixing without a debugger) -- still
+			// only once per key, so a steady-state frame doesn't spam this every frame.
+			static std::unordered_set<ResourceId> warnedKeys;
+			if (key == nullptr || warnedKeys.insert(key).second) {
 				spdlog::warn(
-					"ClearImageToZero: skipping zero-init clear for a texture whose desc lacks "
+					"ClearImageToZero: skipping zero-init clear for '{}', whose desc lacks "
 					"eTransferDst usage -- add it to this key's Desc() to fix (see "
-					"GTAOTextureDesc for the pattern)."
+					"GTAOTextureDesc for the pattern).",
+					key ? key->name : "<unknown key>"
 				);
-				warned = true;
 			}
 			return;
 		}
@@ -435,7 +441,7 @@ namespace brassica::graph {
 					continue;
 				}
 
-				ClearImageToZero(cmd, *tex, r.access, recipe.domain);
+				ClearImageToZero(cmd, *tex, r.access, recipe.domain, r.key);
 			}
 		}
 	}
@@ -497,7 +503,7 @@ namespace brassica::graph {
 			if (!tex) {
 				continue;
 			}
-			ClearImageToZero(cmd, *tex, realization->access, recipe.domain);
+			ClearImageToZero(cmd, *tex, realization->access, recipe.domain, key);
 		}
 	}
 

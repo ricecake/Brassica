@@ -1747,7 +1747,15 @@ namespace brassica {
 
 				graph::ExternalGraphicsSync externalSync{};
 				externalSync.waitSemaphore = frame.swapchainSemaphore;
-				externalSync.waitStage = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+				// eAllCommands, not eColorAttachmentOutput (unverified attempt #2 at a real
+				// hardware WRITE_AFTER_READ-against-vkAcquireNextImageKHR hazard, reported every
+				// frame under both GraphicsOnly and Heft -- attempt #1, swapping BarrierTranslator's
+				// first-touch src fallback from eTopOfPipe to eNone, made no observable difference
+				// at all, confirming the issue isn't on that side). Strictly safer than a narrower
+				// mask regardless of whether it's the actual fix: broadening a wait can only add
+				// synchronization, never remove any, so every batch's own real dependency on this
+				// semaphore still holds either way.
+				externalSync.waitStage = vk::PipelineStageFlagBits2::eAllCommands;
 				externalSync.signalSemaphore = swapchainRenderSemaphores[swapchainImageIndex];
 				externalSync.signalStage = vk::PipelineStageFlagBits2::eAllCommands;
 				externalSync.beforeClose = recordPresentBarrier;
@@ -1783,7 +1791,7 @@ namespace brassica {
 				// (only) the Graphics lane's own timeline, present nothing -- design plan's S4
 				// catch path. See QueueRecorder::AbandonFrame's own comment for why nothing any
 				// lane partially recorded this frame is ever submitted.
-				queueRecorder.AbandonFrame(frame.swapchainSemaphore, vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+				queueRecorder.AbandonFrame(frame.swapchainSemaphore, vk::PipelineStageFlagBits2::eAllCommands);
 			} else {
 				frame.commandBuffer.end();
 
@@ -1802,7 +1810,7 @@ namespace brassica {
 
 				vk::SemaphoreSubmitInfo waitInfo{};
 				waitInfo.setSemaphore(frame.swapchainSemaphore);
-				waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+				waitInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 
 				vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
 				frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
@@ -1848,9 +1856,13 @@ namespace brassica {
 
 			std::vector<vk::SemaphoreSubmitInfo> waitInfos;
 
+			// eAllCommands, not eColorAttachmentOutput -- see the matching comment on
+			// externalSync.waitStage above for why (unverified attempt #2 at a real-hardware
+			// WRITE_AFTER_READ hazard against vkAcquireNextImageKHR, reported under both
+			// GraphicsOnly and Heft equally; this is GraphicsOnly's own copy of that same wait).
 			vk::SemaphoreSubmitInfo waitInfo{};
 			waitInfo.setSemaphore(frame.swapchainSemaphore);
-			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 
 			waitInfos.push_back(waitInfo);
 
