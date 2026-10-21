@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "vulkan/vulkan.hpp"
@@ -68,11 +69,18 @@ namespace brassica {
 			baseTexelSize = state.baseTexelSize;
 		}
 
+		// concurrentFamilies: forwarded straight to the readback staging buffer's VkBufferCreateInfo
+		// (TerrainManager.cpp) -- this buffer is out-of-registry (TerrainReadbackStaging is only
+		// ever RegisterImportedBuffer'd, never provisioned), so it doesn't pick up
+		// PhysicalResourceRegistry's own CONCURRENT handling automatically. See the design plan's
+		// S4 "Queue-family ownership": a Transfer-domain TerrainReadbackNode writes it, the CPU
+		// reads it, and neither this engine has a real ownership-transfer barrier to give it.
 		void Init(
-			vk::Device   device,
-			VmaAllocator allocator,
-			uint32_t     numLODs = constants::Class::Terrain::DefaultMaxLODs,
-			float        baseTexelSize = constants::Class::Terrain::BaseTexelSize
+			vk::Device                     device,
+			VmaAllocator                   allocator,
+			uint32_t                       numLODs = constants::Class::Terrain::DefaultMaxLODs,
+			float                          baseTexelSize = constants::Class::Terrain::BaseTexelSize,
+			std::span<const std::uint32_t> concurrentFamilies = {}
 		);
 		void Cleanup();
 
@@ -105,19 +113,43 @@ namespace brassica {
 
 		[[nodiscard]] const TerrainReadbackRegion& GetPendingReadback() const { return pendingRegion; }
 
-		// Called by TerrainReadbackNode::Execute once it has actually recorded the copy --
-		// frameIndex is Engine's own frame number (FrameContext::frameIndex), which
-		// PollReadbackData compares against frameTimelineSemaphore's completed value (that
-		// value reaches frameIndex+1 exactly when this frame's own submission completes --
-		// Engine.cpp's frameTimelineSignalInfo.setValue(frameNumber + 1)) instead of a
-		// dedicated semaphore.
-		void MarkReadbackSubmitted(uint64_t frameIndex) {
-			pendingReadbackFrameIndex = frameIndex;
-			readbackInFlight = true;
+		// Called by TerrainReadbackNode::Execute once it has actually recorded the copy, with
+		// NodeContext::placedQueue -- which real GPU queue's timeline will eventually carry this
+		// copy's completion. Under PhysicalExecutionBackend that's always Graphics; under
+		// MultiQueueExecutionBackend it's whichever queue ForceDomain/Heft actually placed this
+		// Transfer-domain node on, which the two can disagree about. The real (semaphore, value)
+		// pair isn't knowable yet at record time (QueueLane's timeline value is only assigned
+		// when a segment actually closes, which can happen more than once per frame) -- see
+		// CaptureReadbackCompletion, which Engine calls once it is, right after this frame's
+		// backend Execute() call returns.
+		void MarkReadbackSubmitted(graph::ExecutionDomain placedQueue) {
+			pendingReadbackQueue = placedQueue;
+			awaitingCompletionCapture = true;
 			hasPendingReadback = false;
 		}
 
-		void PollReadbackData(vk::Device device, vk::Semaphore frameTimelineSemaphore);
+		[[nodiscard]] bool HasPendingCompletionCapture() const { return awaitingCompletionCapture; }
+
+		[[nodiscard]] graph::ExecutionDomain PendingReadbackQueue() const { return pendingReadbackQueue; }
+
+		// Called by Engine.cpp immediately after this frame's backend Execute() returns, only
+		// when HasPendingCompletionCapture() -- by then the real completion (semaphore, value)
+		// pair for whichever queue actually ran the readback this frame is known: Engine's own
+		// frameTimelineSemaphore + frameIndex+1 under GraphicsOnly (TerrainReadbackNode always
+		// lands on Graphics there, which signals that value exactly once per frame), or
+		// PendingReadbackQueue()'s own QueueLane::Timeline() + LastSubmittedValue() under
+		// ForceDomain/Heft.
+		void CaptureReadbackCompletion(vk::Semaphore completionSemaphore, uint64_t completionValue) {
+			if (!awaitingCompletionCapture) {
+				return;
+			}
+			awaitingCompletionCapture = false;
+			pendingCompletionSemaphore = completionSemaphore;
+			pendingCompletionValue = completionValue;
+			readbackInFlight = true;
+		}
+
+		void PollReadbackData(vk::Device device);
 
 		// Evaluates 2D bilinear height interpolation across the cached terrain height readback grid.
 		float GetInterpolatedGroundHeight(glm::vec2 worldXZ, float fallback) const;
@@ -154,8 +186,11 @@ namespace brassica {
 		bool                  hasPendingReadback{false};
 		TerrainReadbackRegion pendingRegion{};
 
-		uint64_t pendingReadbackFrameIndex{0};
-		bool     readbackInFlight{false};
+		graph::ExecutionDomain pendingReadbackQueue{graph::ExecutionDomain::Graphics};
+		bool                   awaitingCompletionCapture{false};
+		vk::Semaphore          pendingCompletionSemaphore{nullptr};
+		uint64_t               pendingCompletionValue{0};
+		bool                   readbackInFlight{false};
 
 		std::vector<glm::vec4> cachedReadbackData;
 		uint32_t               cachedReadbackWidth{0};

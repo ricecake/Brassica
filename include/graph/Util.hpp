@@ -87,7 +87,7 @@ namespace brassica::graph {
 			if (finalDesc.byteSize == 0) {
 				finalDesc = StorageBufferDesc(sizeBytes);
 			}
-			destBuffer = std::make_shared<PhysicalBuffer>(device, allocator, finalDesc);
+			destBuffer = std::make_shared<PhysicalBuffer>(device, allocator, finalDesc, 1, 16, m_concurrentFamilies);
 			m_buffers[resolvedId] = destBuffer;
 		}
 		destBuffer->SetHasDefinedContents(true);
@@ -155,7 +155,7 @@ namespace brassica::graph {
 					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
 				);
 			}
-			destTexture = std::make_shared<PhysicalTexture>(device, allocator, texDesc);
+			destTexture = std::make_shared<PhysicalTexture>(device, allocator, texDesc, m_concurrentFamilies);
 			AssignAndWriteBindlessIndices(*destTexture);
 			m_textures[resolvedId] = destTexture;
 		} else {
@@ -321,8 +321,7 @@ namespace brassica::graph {
 			if (domain != ExecutionDomain::Transfer) {
 				throw std::runtime_error(
 					"BeginHostWrite: a Staged write to '" + std::string(resolvedId->name) +
-					"' was attempted from a node whose domain (index " +
-					std::to_string(static_cast<int>(domain)) +
+					"' was attempted from a node whose domain (index " + std::to_string(static_cast<int>(domain)) +
 					" into ExecutionDomain -- Graphics=0/Compute=1/Transfer=2/Host=3) isn't "
 					"Transfer. Staged writes are only correct from Transfer-domain nodes. Use "
 					"HostAccess::Mapped instead, or move this node to Domain(Transfer)."

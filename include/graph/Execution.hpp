@@ -38,8 +38,8 @@ namespace brassica::graph {
 	// queue-touch mask starts from (PhysicalResource.hpp), matching the existing "assume
 	// eAllCommands already touched it" reasoning the Aliased-memory-reused and Imported-with-
 	// defined-contents constructors already use for lastStage/lastAccess.
-	inline constexpr std::uint8_t kAllQueuesTouchMask =
-		QueueBit(ExecutionDomain::Graphics) | QueueBit(ExecutionDomain::Compute) | QueueBit(ExecutionDomain::Transfer);
+	inline constexpr std::uint8_t kAllQueuesTouchMask = QueueBit(ExecutionDomain::Graphics) |
+		QueueBit(ExecutionDomain::Compute) | QueueBit(ExecutionDomain::Transfer);
 
 	inline constexpr std::uint32_t kQueueFamilyIgnored = 0xFFFFFFFFu;
 
@@ -53,6 +53,23 @@ namespace brassica::graph {
 		QueueInfo compute{};
 		QueueInfo transfer{};
 	};
+
+	// Every distinct, valid (!= kQueueFamilyIgnored) family index this QueueSet's three GPU
+	// queues map to. Size <= 1 means every queue the engine can schedule onto shares one real
+	// family -- VK_SHARING_MODE_CONCURRENT would be legal but pointless there (the spec requires
+	// queueFamilyIndexCount > 1), so every CONCURRENT-vs-EXCLUSIVE call site in the registry and
+	// the handful of out-of-registry resources treats this exact result as "stay EXCLUSIVE."
+	inline std::vector<std::uint32_t> DistinctQueueFamilies(const QueueSet& queues) {
+		std::vector<std::uint32_t> families;
+		for (std::uint32_t family :
+		     {queues.graphics.familyIndex, queues.compute.familyIndex, queues.transfer.familyIndex}) {
+			if (family != kQueueFamilyIgnored &&
+			    std::find(families.begin(), families.end(), family) == families.end()) {
+				families.push_back(family);
+			}
+		}
+		return families;
+	}
 
 	enum class AccessKind : std::uint8_t { Read, Write, ReadWrite };
 
@@ -292,6 +309,15 @@ namespace brassica::graph {
 		// CheckDeclared below needs to decide throw-vs-warn.
 		ExecutionDomain domain = ExecutionDomain::Graphics;
 
+		// Which real GPU queue actually recorded this node this frame -- PhysicalExecutionBackend
+		// always sets this to Graphics (the only queue it ever uses); MultiQueueExecutionBackend
+		// sets it to the stage's placed queue (ScheduleStage::queue, Graph.hpp), which can differ
+		// from `domain` once HEFT places a Compute/Transfer-domain node onto Graphics. A node
+		// that needs to know which queue's timeline will eventually carry its own completion
+		// (TerrainReadbackNode, so TerrainManager can poll the right semaphore) reads this, not
+		// `domain` -- design plan's S4 TerrainManager completion hookup.
+		ExecutionDomain placedQueue = ExecutionDomain::Graphics;
+
 		// This node's own Recipe::realizations for the current frame (set by
 		// PhysicalExecutionBackend::RunSchedule/MultiQueueExecutionBackend::RunQueueBatch, same
 		// place as domain above) -- the undeclared-access guard's source of truth for "did
@@ -326,8 +352,7 @@ namespace brassica::graph {
 			}
 			if (domain == ExecutionDomain::Compute || domain == ExecutionDomain::Transfer) {
 				throw std::runtime_error(
-					std::string("NodeContext::") + accessor + ": undeclared access to '" +
-					std::string(id->name) +
+					std::string("NodeContext::") + accessor + ": undeclared access to '" + std::string(id->name) +
 					"' from a Compute/Transfer-domain node -- declare it via Read<>/Create<>/"
 					"Modify<>() in Setup(), or this node's queue placement could silently change "
 					"correctness."
@@ -371,8 +396,8 @@ namespace brassica::graph {
 			if (!resources) {
 				return;
 			}
-			std::span<std::byte> dst =
-				resources->BeginHostWrite(IdOf<K>(), sizeBytes, frameIndex, insideRendering, domain);
+			std::span<std::byte> dst = resources
+										   ->BeginHostWrite(IdOf<K>(), sizeBytes, frameIndex, insideRendering, domain);
 			if (dst.empty()) {
 				return;
 			}

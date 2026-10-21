@@ -24,6 +24,7 @@
 // tests from the barrier-derivation table's domain-specific stage/access rules, which
 // test_resource_state.cpp already covers exhaustively and Vulkan-free.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -157,7 +158,7 @@ namespace {
 				device.GetQueueFamily(),
 				device.GetQueueFamily()
 			};
-			recorder.Init(device.GetDevice(), queues, families);
+			recorder.Init(device.GetDevice(), device.GetPhysicalDevice(), queues, families);
 			pool = device.GetDevice().createCommandPool(
 				vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eResetCommandBuffer, device.GetQueueFamily()}
 			);
@@ -553,6 +554,50 @@ namespace {
 		CHECK(rig.device.GetValidationErrorCount() == 0);
 	}
 
+	TEST_CASE("Multi-queue: real GPU timestamps actually feed a measured node weight") {
+		// Design plan's S5: QueueRecorder's per-batch vkCmdWriteTimestamp2 + readback + EMA
+		// (MultiQueueExecutionBackend.hpp). Runs enough frames to guarantee at least one full
+		// FRAME_OVERLAP readback cycle, then checks the *presence* of a measured entry for
+		// "CaseE_Writer" -- not a specific value, since real GPU timing is hardware-dependent
+		// and nondeterministic frame to frame, but presence alone proves the whole pipeline
+		// (query pool creation, reset, write, confirmed-complete readback, EMA update, all keyed
+		// correctly by name) actually ran end to end on real Vulkan, not just compiled.
+		Rig rig;
+		if (!rig.device.IsValid()) {
+			MESSAGE("Vulkan physical device not available in this environment; skipping.");
+			return;
+		}
+
+		ExecutionDomain domain = ExecutionDomain::Graphics;
+		std::uint32_t   pattern = 0;
+
+		Graph graph;
+		graph.Register<CaseE_Writer>(CaseE_Writer{.registry = &rig.registry, .domain = &domain, .pattern = &pattern});
+
+		NodeContext nodeCtx{};
+		nodeCtx.resources = &rig.registry;
+
+		constexpr std::uint64_t kFrameCount = brassica::FRAME_OVERLAP + 2;
+		for (std::uint64_t frameIndex = 0; frameIndex < kFrameCount; ++frameIndex) {
+			pattern = 0x30000000u + static_cast<std::uint32_t>(frameIndex);
+			FrameContext ctx{.width = 4, .height = 4, .frameIndex = frameIndex};
+			rig.recorder.BeginFrame(frameIndex);
+			CHECK_NOTHROW(rig.recorder.Execute(graph, ctx, rig.registry, nodeCtx));
+		}
+
+		CHECK(rig.device.GetValidationErrorCount() == 0);
+
+		// TypeName<T>() (ResourceKey.hpp) returns a fully-qualified name whose exact
+		// qualification (anonymous-namespace wrapping, etc.) is compiler-specific -- search for
+		// the substring rather than assuming an exact "CaseE_Writer" key.
+		const auto& weights = rig.recorder.Weights().node_execution_weights;
+		auto        it = std::find_if(weights.begin(), weights.end(), [](const auto& entry) {
+			return entry.first.find("CaseE_Writer") != std::string::npos;
+		});
+		REQUIRE(it != weights.end());
+		CHECK(it->second > 0);
+	}
+
 	// ================================================================================
 	// Case (f): T copies an image G samples. G writes, then G itself reads (samples) it --
 	// same queue, ordinary barrier, no wait. Then T reads it too: same layout G's read already
@@ -702,6 +747,73 @@ namespace {
 			CHECK(word == 0x33333333u);
 		}
 
+		CHECK(rig.device.GetValidationErrorCount() == 0);
+	}
+
+	// ================================================================================
+	// Case (h), S5: producer-side pre-transition. G writes (leaving the image in
+	// eColorAttachmentOptimal), then *two* cross-domain readers -- Compute and Transfer -- each
+	// need a real layout change to eShaderReadOnlyOptimal. Without the optimization, each
+	// reader's own acquire-phase barrier would perform that transition independently, and the
+	// hazard table treats a layout-changing access as write-shaped -- so whichever reader
+	// records second would ALSO need to wait on the first reader's queue, not just the
+	// producer's (the exact "S1(b)-style serializing wait" the design plan's S5 exists to
+	// remove). With it, BarrierTranslator::DispatchRelease performs the one transition on G's
+	// own release, so both readers see an already-correct layout (no layout change at all) and
+	// each only waits on the producer -- never on each other.
+	// ================================================================================
+	struct CaseHImg {};
+
+	struct CaseH_Writer {
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<CaseHImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct CaseH_ComputeReader {
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<CaseHImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	struct CaseH_TransferReader {
+		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+			r.Domain(ExecutionDomain::Transfer);
+			r.Read<CaseHImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	TEST_CASE("Multi-queue: producer-side pre-transition means two cross-queue readers never wait on each other") {
+		Rig rig;
+		if (!rig.device.IsValid()) {
+			MESSAGE("Vulkan physical device not available in this environment; skipping.");
+			return;
+		}
+
+		Graph graph;
+		graph.Register<CaseH_Writer>();
+		graph.Register<CaseH_ComputeReader>();
+		graph.Register<CaseH_TransferReader>();
+
+		FrameContext ctx{.width = 4, .height = 4};
+		NodeContext  nodeCtx{};
+		nodeCtx.resources = &rig.registry;
+
+		rig.recorder.BeginFrame(0);
+		CHECK_NOTHROW(rig.recorder.Execute(graph, ctx, rig.registry, nodeCtx));
+
+		// Exactly one wait per reader against the producer (Compute-on-Graphics,
+		// Transfer-on-Graphics) -- never a third wait between the two readers themselves, which
+		// is precisely what the pre-transition exists to avoid.
+		CHECK(rig.recorder.TotalWaitsInserted() == 2);
 		CHECK(rig.device.GetValidationErrorCount() == 0);
 	}
 

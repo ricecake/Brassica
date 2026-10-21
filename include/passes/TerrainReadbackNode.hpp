@@ -134,7 +134,7 @@ namespace brassica {
 			vkCmd.pipelineBarrier2(dep2);
 			buf->SetLastStageAccess(vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
 
-			terrainManager->MarkReadbackSubmitted(ctx.frameIndex);
+			terrainManager->MarkReadbackSubmitted(ctx.placedQueue);
 		}
 	};
 

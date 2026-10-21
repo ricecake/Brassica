@@ -45,12 +45,19 @@ namespace brassica::graph {
 		return ExecutionDomain::Graphics;
 	}
 
+	// Keyed by stable node name (NodeDescriptor::name -- a compile-time per-type string, one
+	// instance per node type by this engine's own convention), not node index: a node's dense
+	// active-only index (Graph::Compile's activeIndices remap) shifts frame to frame as other
+	// nodes' Active() flags change, but an EMA accumulated across many frames (design plan's S5)
+	// needs a key that means the same node every frame. std::string, not string_view: this
+	// struct is meant to persist across frames (Engine owns one, long-lived), so its keys must
+	// own their own storage rather than view into a transient per-frame NodeDescriptor span.
 	struct DynamicWeights {
-		std::unordered_map<std::size_t, int>                                  node_execution_weights;
-		std::unordered_map<std::size_t, std::unordered_map<std::size_t, int>> edge_latencies;
+		std::unordered_map<std::string, int>                                  node_execution_weights;
+		std::unordered_map<std::string, std::unordered_map<std::string, int>> edge_latencies;
 
-		[[nodiscard]] int GetNodeWeight(std::size_t nodeIndex, ExecutionDomain domain) const {
-			auto it = node_execution_weights.find(nodeIndex);
+		[[nodiscard]] int GetNodeWeight(std::string_view name, ExecutionDomain domain) const {
+			auto it = node_execution_weights.find(std::string(name));
 			if (it != node_execution_weights.end()) {
 				return it->second;
 			}
@@ -67,19 +74,41 @@ namespace brassica::graph {
 			return 10;
 		}
 
-		[[nodiscard]] int
-		GetEdgeLatency(std::size_t from, std::size_t to, ExecutionDomain srcDomain, ExecutionDomain dstDomain) const {
+		[[nodiscard]] int GetEdgeLatency(
+			std::string_view fromName,
+			std::string_view toName,
+			ExecutionDomain  srcDomain,
+			ExecutionDomain  dstDomain
+		) const {
 			if (srcDomain == dstDomain) {
 				return 0;
 			}
-			auto itFrom = edge_latencies.find(from);
+			auto itFrom = edge_latencies.find(std::string(fromName));
 			if (itFrom != edge_latencies.end()) {
-				auto itTo = itFrom->second.find(to);
+				auto itTo = itFrom->second.find(std::string(toName));
 				if (itTo != itFrom->second.end()) {
 					return itTo->second;
 				}
 			}
 			return 5;
+		}
+
+		// Design plan's S5: feeds a real GPU-measured duration (QueueRecorder's own per-batch
+		// vkCmdWriteTimestamp2 readback, converted to microseconds and treated numerically as a
+		// weight unit -- an explicit, uncalibrated guess, not a validated conversion; these
+		// default weights were always dimensionless placeholders, so "microseconds" is simply
+		// the least-arbitrary scale to adopt until the plan's own capture-comparison step
+		// justifies something better) into this node's weight. The first measurement for a name
+		// is adopted directly, not blended against the meaningless zero a brand-new map entry
+		// would otherwise start from; every measurement after that is a standard EMA.
+		void UpdateNodeWeight(std::string_view name, int measured, float emaAlpha = 0.2f) {
+			const std::string key(name);
+			auto              it = node_execution_weights.find(key);
+			if (it == node_execution_weights.end()) {
+				node_execution_weights[key] = measured;
+				return;
+			}
+			it->second = static_cast<int>(emaAlpha * static_cast<float>(measured) + (1.0f - emaAlpha) * static_cast<float>(it->second));
 		}
 	};
 
@@ -91,6 +120,15 @@ namespace brassica::graph {
 		std::size_t     queue_id;
 	};
 
+	// `names[index]` if present, else empty -- every DynamicWeights lookup below goes through
+	// this instead of indexing `names` directly, so a caller with no stable names to offer yet
+	// (every pre-S5 test, which only ever queries a default-constructed DynamicWeights{} and so
+	// never actually looks anything up by key) can simply pass an empty span and get identical
+	// behavior to before names existed.
+	inline std::string_view NodeName(std::span<const std::string_view> names, std::size_t index) {
+		return index < names.size() ? names[index] : std::string_view{};
+	}
+
 	inline int CalculateUpwardRank(
 		std::size_t                                  nodeIndex,
 		std::size_t                                  totalNodes,
@@ -99,7 +137,8 @@ namespace brassica::graph {
 		const DynamicWeights&                        weights,
 		std::vector<int>&                            ranks,
 		std::vector<bool>&                           visited,
-		std::vector<bool>&                           inStack
+		std::vector<bool>&                           inStack,
+		std::span<const std::string_view>            names = {}
 	) {
 		if (visited[nodeIndex]) {
 			return ranks[nodeIndex];
@@ -113,14 +152,15 @@ namespace brassica::graph {
 		int                   maxSuccessorCost = 0;
 		const ExecutionDomain currDomain = (nodeIndex < domains.size()) ? domains[nodeIndex]
 																		: ExecutionDomain::Graphics;
-		const int             currWeight = weights.GetNodeWeight(nodeIndex, currDomain);
+		const int             currWeight = weights.GetNodeWeight(NodeName(names, nodeIndex), currDomain);
 
 		if (nodeIndex < successors.size()) {
 			for (std::size_t succ : successors[nodeIndex]) {
 				const ExecutionDomain succDomain = (succ < domains.size()) ? domains[succ] : ExecutionDomain::Graphics;
-				int                   commOverhead = weights.GetEdgeLatency(nodeIndex, succ, currDomain, succDomain);
-				int                   succRank =
-					CalculateUpwardRank(succ, totalNodes, domains, successors, weights, ranks, visited, inStack);
+				int                   commOverhead =
+					weights.GetEdgeLatency(NodeName(names, nodeIndex), NodeName(names, succ), currDomain, succDomain);
+				int succRank =
+					CalculateUpwardRank(succ, totalNodes, domains, successors, weights, ranks, visited, inStack, names);
 				maxSuccessorCost = std::max(maxSuccessorCost, commOverhead + succRank);
 			}
 		}
@@ -136,13 +176,14 @@ namespace brassica::graph {
 		std::size_t                                  totalNodes,
 		const std::vector<ExecutionDomain>&          domains,
 		const std::vector<std::vector<std::size_t>>& successors,
-		const DynamicWeights&                        weights = {}
+		const DynamicWeights&                        weights = {},
+		std::span<const std::string_view>            names = {}
 	) {
 		std::vector<int>  ranks(totalNodes, 0);
 		std::vector<bool> visited(totalNodes, false);
 		std::vector<bool> inStack(totalNodes, false);
 		for (std::size_t i = 0; i < totalNodes; ++i) {
-			CalculateUpwardRank(i, totalNodes, domains, successors, weights, ranks, visited, inStack);
+			CalculateUpwardRank(i, totalNodes, domains, successors, weights, ranks, visited, inStack, names);
 		}
 		return ranks;
 	}
@@ -262,6 +303,62 @@ namespace brassica::graph {
 		std::vector<int>            finish;  // per node
 	};
 
+	// Per-node (by name) placement memory across frames -- design plan's S5 "placement
+	// hysteresis": a node only actually switches queues after `requiredGainFrames` consecutive
+	// frames where the naive EFT-minimizing choice beats its current ("sticky") queue by at
+	// least `thresholdPercent`. Without this, small measurement noise in a real (S5) EMA could
+	// thrash a node between queues frame to frame -- each switch costs a real barrier/semaphore
+	// hop PlaceNodes' own per-frame EFT comparison has no way to see ahead of time, so flapping
+	// could cost more than it ever saves. Keyed by name for the same reason DynamicWeights is.
+	// An instance with no entries yet (freshly constructed) just adopts whatever the naive
+	// choice is the first time each node is seen -- there's nothing to hold hysteresis against
+	// before a node has a sticky queue at all.
+	struct PlacementHysteresis {
+		struct Entry {
+			ExecutionDomain stickyQueue{ExecutionDomain::Graphics};
+			int             consecutiveGainFrames = 0;
+			bool            hasSticky = false;
+		};
+		std::unordered_map<std::string, Entry> entries;
+
+		// naiveBestQueue/naiveBestFinish: PlaceNodes' own unconstrained EFT-minimizing answer for
+		// this frame. stickyFinish: what EFT this node would get if forced to stay on its
+		// current sticky queue (0 cost only in the Host edge case, never produced for a node that
+		// reaches here). Returns the queue PlaceNodes should actually place this node on this
+		// frame -- which still updates result.start/finish to match whichever queue this returns,
+		// not naiveBestQueue's own numbers, when the two differ.
+		ExecutionDomain Decide(
+			std::string_view name,
+			ExecutionDomain  naiveBestQueue,
+			int              naiveBestFinish,
+			int              stickyFinish,
+			int              thresholdPercent,
+			int              requiredGainFrames
+		) {
+			Entry& entry = entries[std::string(name)];
+			if (!entry.hasSticky) {
+				entry.hasSticky = true;
+				entry.stickyQueue = naiveBestQueue;
+				return entry.stickyQueue;
+			}
+			if (naiveBestQueue == entry.stickyQueue) {
+				entry.consecutiveGainFrames = 0;
+				return entry.stickyQueue;
+			}
+			const bool isGainFrame =
+				stickyFinish > 0 && naiveBestFinish <= stickyFinish - (stickyFinish * thresholdPercent) / 100;
+			if (!isGainFrame) {
+				entry.consecutiveGainFrames = 0;
+				return entry.stickyQueue;
+			}
+			if (++entry.consecutiveGainFrames >= requiredGainFrames) {
+				entry.stickyQueue = naiveBestQueue;
+				entry.consecutiveGainFrames = 0;
+			}
+			return entry.stickyQueue;
+		}
+	};
+
 	// Append-only HEFT (design plan's §Compiler step 2 -- "why append-only rather than
 	// insertion-based" explains the choice): processes nodes in rank order (strictly decreasing
 	// along every edge, real or order-only, so every real predecessor of a node is already
@@ -272,8 +369,21 @@ namespace brassica::graph {
 	// deterministically, via EligibleQueues' iteration order (Graphics always checked first) --
 	// no separate tie-break needed. Host nodes are never placed on a queue at all: zero weight,
 	// start/finish both 0, matching "a Host node never gets a GPU wait."
-	inline PlacementResult
-	PlaceNodes(std::size_t n, const std::vector<ExecutionDomain>& domains, std::span<const SchedulingEdge> edges, const DynamicWeights& weights, QueuePlacementMode mode) {
+	// hysteresis: nullptr (every existing call site) means the literal naive-EFT-minimizing
+	// placement, unchanged from before this parameter existed. A caller that owns a persistent
+	// PlacementHysteresis across frames gets queue switches damped by thresholdPercent/
+	// requiredGainFrames instead -- see that struct's own comment.
+	inline PlacementResult PlaceNodes(
+		std::size_t                          n,
+		const std::vector<ExecutionDomain>&  domains,
+		std::span<const SchedulingEdge>      edges,
+		const DynamicWeights&                weights,
+		QueuePlacementMode                   mode,
+		std::span<const std::string_view>    names = {},
+		PlacementHysteresis*                 hysteresis = nullptr,
+		int                                  thresholdPercent = 20,
+		int                                  requiredGainFrames = 3
+	) {
 		// Rank: every edge contributes (keeps same-queue phase order's priority signal intact,
 		// matching today's leveling, which also levels over the whole contracted edge set) --
 		// but comm cost (GetEdgeLatency's domain-mismatch default) only applies to real edges;
@@ -284,10 +394,10 @@ namespace brassica::graph {
 		for (const auto& e : edges) {
 			successors[e.from].push_back(e.to);
 			if (!e.real) {
-				rankWeights.edge_latencies[e.from][e.to] = 0;
+				rankWeights.edge_latencies[std::string(NodeName(names, e.from))][std::string(NodeName(names, e.to))] = 0;
 			}
 		}
-		std::vector<int> rank = CalculateAllUpwardRanks(n, domains, successors, rankWeights);
+		std::vector<int> rank = CalculateAllUpwardRanks(n, domains, successors, rankWeights, names);
 
 		std::vector<std::vector<bool>> ancestors = ComputeAncestors(n, edges);
 
@@ -321,6 +431,11 @@ namespace brassica::graph {
 			ExecutionDomain                    bestQueue = ExecutionDomain::Graphics;
 			int                                bestReady = 0;
 			int                                bestFinish = -1;
+			// Only populated (and only consulted) when hysteresis != nullptr -- per-candidate
+			// (ready, finish), so a sticky queue that isn't the naive best still has its own real
+			// numbers available after the loop, rather than only ever knowing the winner's.
+			std::array<int, kNumExecutionDomains> candidateReady{};
+			std::array<int, kNumExecutionDomains> candidateFinish{-1, -1, -1, -1};
 
 			for (ExecutionDomain candidate : eligible) {
 				int ready = 0;
@@ -337,7 +452,7 @@ namespace brassica::graph {
 					const ExecutionDomain predQueue = result.queue[p];
 					const int             comm = (predQueue == ExecutionDomain::Host || predQueue == candidate)
 						? 0
-						: weights.GetEdgeLatency(p, node, predQueue, candidate);
+						: weights.GetEdgeLatency(NodeName(names, p), NodeName(names, node), predQueue, candidate);
 					ready = std::max(ready, result.finish[p] + comm);
 				}
 				for (const auto& [placedNode, placedFinish] : placedOnQueue[DomainToLane(candidate)]) {
@@ -345,7 +460,9 @@ namespace brassica::graph {
 						ready = std::max(ready, placedFinish);
 					}
 				}
-				const int finish = ready + weights.GetNodeWeight(node, candidate);
+				const int finish = ready + weights.GetNodeWeight(NodeName(names, node), candidate);
+				candidateReady[DomainToLane(candidate)] = ready;
+				candidateFinish[DomainToLane(candidate)] = finish;
 				if (bestFinish < 0 || finish < bestFinish) {
 					bestFinish = finish;
 					bestReady = ready;
@@ -353,10 +470,47 @@ namespace brassica::graph {
 				}
 			}
 
-			result.queue[node] = bestQueue;
-			result.start[node] = bestReady;
-			result.finish[node] = bestFinish < 0 ? 0 : bestFinish;
-			placedOnQueue[DomainToLane(bestQueue)].push_back({node, result.finish[node]});
+			ExecutionDomain chosenQueue = bestQueue;
+			if (hysteresis != nullptr) {
+				const std::string nodeName = std::string(NodeName(names, node));
+				auto              existing = hysteresis->entries.find(nodeName);
+				// A sticky queue only means something if it's actually one of *this* node's real
+				// candidates this round (candidateFinish[...] >= 0 iff it was in `eligible`
+				// above). It won't be if this name's own eligible set changed since the entry was
+				// last written -- the same node *type* instantiated more than once with a
+				// different runtime domain (test_multiqueue_sync.cpp's CaseA_Writer: two
+				// instances, one Graphics, one Compute, same type name), or one instance whose
+				// domain genuinely varies frame to frame (that same file's CaseE_Writer). Treating
+				// a stale, no-longer-eligible sticky queue as real corrupts placement outright --
+				// result.queue[node] could end up holding a queue EligibleQueues never offered
+				// this node at all. Reseed from the naive best instead, exactly like first sight.
+				const bool hasUsableSticky =
+					existing != hysteresis->entries.end() && candidateFinish[DomainToLane(existing->second.stickyQueue)] >= 0;
+				if (hasUsableSticky) {
+					const std::size_t stickyLane = DomainToLane(existing->second.stickyQueue);
+					chosenQueue = hysteresis->Decide(
+						nodeName,
+						bestQueue,
+						bestFinish,
+						candidateFinish[stickyLane],
+						thresholdPercent,
+						requiredGainFrames
+					);
+				} else {
+					chosenQueue = bestQueue;
+					PlacementHysteresis::Entry& entry = hysteresis->entries[nodeName];
+					entry.hasSticky = true;
+					entry.stickyQueue = bestQueue;
+					entry.consecutiveGainFrames = 0;
+				}
+			}
+
+			const std::size_t chosenLane = DomainToLane(chosenQueue);
+			result.queue[node] = chosenQueue;
+			result.start[node] = candidateFinish[chosenLane] < 0 ? bestReady : candidateReady[chosenLane];
+			result.finish[node] = candidateFinish[chosenLane] < 0 ? (bestFinish < 0 ? 0 : bestFinish)
+																   : candidateFinish[chosenLane];
+			placedOnQueue[DomainToLane(chosenQueue)].push_back({node, result.finish[node]});
 		}
 
 		return result;
@@ -493,7 +647,8 @@ namespace brassica::graph {
 		const std::vector<ExecutionDomain>&  domains,
 		std::span<const SchedulingEdge>      edges,
 		const DynamicWeights&                weights,
-		const PlacementResult&               placement
+		const PlacementResult&               placement,
+		std::span<const std::string_view>    names = {}
 	) {
 		ScheduleSlackInfo info;
 		info.latestStart.assign(n, 0);
@@ -522,7 +677,7 @@ namespace brassica::graph {
 		// decreases along every edge -- the same property PlaceNodes relies on, just walked in
 		// the opposite direction here), so each node's successors already have a final
 		// latestStart by the time this reads it.
-		std::vector<int> rank = CalculateAllUpwardRanks(n, domains, allSuccessors, weights);
+		std::vector<int> rank = CalculateAllUpwardRanks(n, domains, allSuccessors, weights, names);
 		std::vector<std::size_t> order(n);
 		for (std::size_t i = 0; i < n; ++i) {
 			order[i] = i;
@@ -535,11 +690,12 @@ namespace brassica::graph {
 				// see its comment.
 				const int comm = (placement.queue[node] == ExecutionDomain::Host || placement.queue[node] == placement.queue[succ])
 					? 0
-					: weights.GetEdgeLatency(node, succ, placement.queue[node], placement.queue[succ]);
+					: weights.GetEdgeLatency(NodeName(names, node), NodeName(names, succ), placement.queue[node], placement.queue[succ]);
 				info.latestFinish[node] = std::min(info.latestFinish[node], info.latestStart[succ] - comm);
 			}
-			const int weight =
-				(domains[node] == ExecutionDomain::Host) ? 0 : weights.GetNodeWeight(node, placement.queue[node]);
+			const int weight = (domains[node] == ExecutionDomain::Host)
+				? 0
+				: weights.GetNodeWeight(NodeName(names, node), placement.queue[node]);
 			info.latestStart[node] = info.latestFinish[node] - weight;
 			info.slack[node] = info.latestStart[node] - placement.start[node];
 		}

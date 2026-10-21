@@ -7,7 +7,8 @@
 
 namespace {
 	inline glm::vec2 octWrap(glm::vec2 v) {
-		return (glm::vec2(1.0f) - glm::abs(glm::vec2(v.y, v.x))) * glm::vec2(v.x >= 0.0f ? 1.0f : -1.0f, v.y >= 0.0f ? 1.0f : -1.0f);
+		return (glm::vec2(1.0f) - glm::abs(glm::vec2(v.y, v.x))) *
+			glm::vec2(v.x >= 0.0f ? 1.0f : -1.0f, v.y >= 0.0f ? 1.0f : -1.0f);
 	}
 
 	inline glm::vec3 octahedralUVToDirection(glm::vec2 uv) {
@@ -25,7 +26,13 @@ namespace {
 
 namespace brassica {
 
-	void TerrainManager::Init(vk::Device dev, VmaAllocator alloc, uint32_t lods, float baseTexel) {
+	void TerrainManager::Init(
+		vk::Device                     dev,
+		VmaAllocator                   alloc,
+		uint32_t                       lods,
+		float                          baseTexel,
+		std::span<const std::uint32_t> concurrentFamilies
+	) {
 		device = dev;
 		allocator = alloc;
 		numLODs = lods;
@@ -42,6 +49,11 @@ namespace brassica {
 		bufferInfo.size = kReadbackStagingBytes;
 		bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		if (concurrentFamilies.size() > 1) {
+			bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+			bufferInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(concurrentFamilies.size());
+			bufferInfo.pQueueFamilyIndices = concurrentFamilies.data();
+		}
 
 		VmaAllocationCreateInfo allocCreateInfo{};
 		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
@@ -136,13 +148,13 @@ namespace brassica {
 		hasPendingReadback = true;
 	}
 
-	void TerrainManager::PollReadbackData(vk::Device dev, vk::Semaphore frameTimelineSemaphore) {
-		if (!readbackInFlight || !frameTimelineSemaphore) {
+	void TerrainManager::PollReadbackData(vk::Device dev) {
+		if (!readbackInFlight || !pendingCompletionSemaphore) {
 			return;
 		}
 
-		uint64_t currentValue = dev.getSemaphoreCounterValue(frameTimelineSemaphore);
-		if (currentValue >= pendingReadbackFrameIndex + 1) {
+		uint64_t currentValue = dev.getSemaphoreCounterValue(pendingCompletionSemaphore);
+		if (currentValue >= pendingCompletionValue) {
 			readbackInFlight = false;
 
 			cachedReadbackWidth = pendingRegion.extent.width;

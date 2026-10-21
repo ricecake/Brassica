@@ -1,7 +1,10 @@
 #pragma once
+#include <algorithm>
 #include <array>
+#include <functional>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "EngineConstants.hpp"
@@ -72,7 +75,13 @@ namespace brassica::graph {
 		QueueLane(const QueueLane&) = delete;
 		QueueLane& operator=(const QueueLane&) = delete;
 
-		void Init(vk::Device device, vk::Queue queue, std::uint32_t queueFamily) {
+		// physicalDevice: only needed to query timestamp support (design plan's S5) -- the plan's
+		// own "T may lack it" warning is real, so this checks queueFamily's actual
+		// timestampValidBits rather than assuming every family supports it. A family that
+		// doesn't gets m_timestampsSupported=false and no query pool at all: every
+		// BeginBatchTimestamp call becomes a no-op (nullopt) rather than recording a query no
+		// result from it could ever be trusted.
+		void Init(vk::Device device, vk::PhysicalDevice physicalDevice, vk::Queue queue, std::uint32_t queueFamily) {
 			m_device = device;
 			m_queue = queue;
 
@@ -89,9 +98,23 @@ namespace brassica::graph {
 			vk::SemaphoreCreateInfo semInfo{};
 			semInfo.setPNext(&typeInfo);
 			m_timeline = device.createSemaphore(semInfo);
+
+			auto familyProps = physicalDevice.getQueueFamilyProperties();
+			m_timestampsSupported = queueFamily < familyProps.size() && familyProps[queueFamily].timestampValidBits > 0;
+			if (m_timestampsSupported) {
+				m_timestampPeriodNs = physicalDevice.getProperties().limits.timestampPeriod;
+				vk::QueryPoolCreateInfo queryInfo{};
+				queryInfo.setQueryType(vk::QueryType::eTimestamp);
+				queryInfo.setQueryCount(static_cast<std::uint32_t>(FRAME_OVERLAP * kMaxBatchesPerFrame * 2));
+				m_queryPool = device.createQueryPool(queryInfo);
+			}
 		}
 
 		void Destroy() {
+			if (m_queryPool) {
+				m_device.destroyQueryPool(m_queryPool);
+				m_queryPool = nullptr;
+			}
 			if (m_timeline) {
 				m_device.destroySemaphore(m_timeline);
 				m_timeline = nullptr;
@@ -142,6 +165,83 @@ namespace brassica::graph {
 			m_nextFrameLocalIndex = 0;
 			m_openBufferIndex.reset();
 			m_pendingWaits.clear();
+			m_queryPoolResetThisFrame = false;
+		}
+
+		[[nodiscard]] std::size_t ActiveSlot() const { return m_activeSlot; }
+
+		[[nodiscard]] bool SupportsTimestamps() const { return m_timestampsSupported; }
+
+		// Writes a start timestamp for one batch (design plan's S5: "per-batch
+		// vkCmdWriteTimestamp2") into this frame's active slot's query range, resetting that
+		// range first if this is the first batch recorded into it this frame -- a query must be
+		// reset before every write, including its very first one after pool creation. Returns
+		// the batch index to pass to EndBatchTimestamp, or nullopt if timestamps aren't
+		// supported on this lane's queue family or this frame's fixed batch budget
+		// (kMaxBatchesPerFrame) is exhausted -- either way the caller just skips timestamping
+		// that batch; this is diagnostic/measurement infrastructure, never something a missing
+		// capability or an unusually batch-heavy frame should make fatal.
+		std::optional<std::uint32_t> BeginBatchTimestamp(vk::CommandBuffer cmd) {
+			if (!m_timestampsSupported || m_batchCountInSlot[m_activeSlot] >= kMaxBatchesPerFrame) {
+				return std::nullopt;
+			}
+			if (!m_queryPoolResetThisFrame) {
+				const std::uint32_t slotBase = static_cast<std::uint32_t>(m_activeSlot) * kMaxBatchesPerFrame * 2;
+				cmd.resetQueryPool(m_queryPool, slotBase, kMaxBatchesPerFrame * 2);
+				m_queryPoolResetThisFrame = true;
+			}
+			const std::uint32_t batchIndex = m_batchCountInSlot[m_activeSlot]++;
+			const std::uint32_t queryIndex =
+				static_cast<std::uint32_t>(m_activeSlot) * kMaxBatchesPerFrame * 2 + batchIndex * 2;
+			cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands, m_queryPool, queryIndex);
+			return batchIndex;
+		}
+
+		void EndBatchTimestamp(vk::CommandBuffer cmd, std::uint32_t batchIndex) {
+			const std::uint32_t queryIndex =
+				static_cast<std::uint32_t>(m_activeSlot) * kMaxBatchesPerFrame * 2 + batchIndex * 2 + 1;
+			cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands, m_queryPool, queryIndex);
+		}
+
+		// Called once per frame, right after BeginFrame has rotated into this slot (and, once
+		// the queue has run at least FRAME_OVERLAP frames, waited for that slot's own prior use
+		// to finish on the GPU) -- which is exactly the guarantee that makes it safe to read this
+		// slot's query results now: whatever batches were recorded into it last time are
+		// confirmed complete. Returns (batchIndex, durationMicroseconds) pairs for however many
+		// batches were actually timestamped that time, and resets this slot's own batch count to
+		// 0 so BeginBatchTimestamp starts fresh for the frame about to record -- empty if
+		// timestamps aren't supported, or this is one of the first FRAME_OVERLAP frames (nothing
+		// in this slot yet to read back).
+		std::vector<std::pair<std::uint32_t, double>> CollectBatchDurationsMicroseconds(std::uint64_t frameIndex) {
+			std::vector<std::pair<std::uint32_t, double>> results;
+			const std::uint32_t                            oldCount = m_batchCountInSlot[m_activeSlot];
+			m_batchCountInSlot[m_activeSlot] = 0;
+			if (!m_timestampsSupported || frameIndex < FRAME_OVERLAP || oldCount == 0) {
+				return results;
+			}
+
+			const std::uint32_t      base = static_cast<std::uint32_t>(m_activeSlot) * kMaxBatchesPerFrame * 2;
+			std::vector<std::uint64_t> raw(static_cast<std::size_t>(oldCount) * 2);
+			const vk::Result getResult = m_device.getQueryPoolResults(
+				m_queryPool,
+				base,
+				oldCount * 2,
+				raw.size() * sizeof(std::uint64_t),
+				raw.data(),
+				sizeof(std::uint64_t),
+				vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait
+			);
+			if (getResult != vk::Result::eSuccess) {
+				return results; // defensive -- a readback failure just means no measurement this round
+			}
+
+			results.reserve(oldCount);
+			for (std::uint32_t i = 0; i < oldCount; ++i) {
+				const std::uint64_t ticks = raw[static_cast<std::size_t>(i) * 2 + 1] - raw[static_cast<std::size_t>(i) * 2];
+				const double micros = (static_cast<double>(ticks) * static_cast<double>(m_timestampPeriodNs)) / 1000.0;
+				results.emplace_back(i, micros);
+			}
+			return results;
 		}
 
 		// Opens a fresh segment if none is currently open (begins recording); returns the open
@@ -183,7 +283,18 @@ namespace brassica::graph {
 		// Ends and submits the open segment, if any -- no-op (returns nullopt) otherwise.
 		// Returns the frame-local index of the segment just closed, same value
 		// LastClosedFrameLocalIndex() reads back afterward.
-		std::optional<std::uint32_t> CloseAndSubmit() {
+		//
+		// extraSignal: an additional (typically binary, e.g. Engine's swapchain present-wait)
+		// semaphore to signal in the same submit2 alongside this lane's own timeline value --
+		// used only for the Graphics lane's last segment of a frame that touches the swapchain
+		// (design plan's S4 Submission section: "Render-finished is signalled on the last G
+		// segment"). nullopt for every other call, including every call this file's own test
+		// suite makes, which keeps the single-signal submit identical to before this param
+		// existed.
+		std::optional<std::uint32_t> CloseAndSubmit(
+			std::optional<vk::Semaphore> extraSignal = std::nullopt,
+			vk::PipelineStageFlags2      extraSignalStage = vk::PipelineStageFlagBits2::eAllCommands
+		) {
 			if (!m_openBufferIndex.has_value()) {
 				return std::nullopt;
 			}
@@ -200,10 +311,18 @@ namespace brassica::graph {
 			signalInfo.setValue(signalValue);
 			signalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 
+			std::vector<vk::SemaphoreSubmitInfo> signalInfos{signalInfo};
+			if (extraSignal.has_value()) {
+				vk::SemaphoreSubmitInfo extra{};
+				extra.setSemaphore(*extraSignal);
+				extra.setStageMask(extraSignalStage);
+				signalInfos.push_back(extra);
+			}
+
 			vk::SubmitInfo2 submit{};
 			submit.setCommandBufferInfos(cmdInfo);
 			submit.setWaitSemaphoreInfos(m_pendingWaits);
-			submit.setSignalSemaphoreInfos(signalInfo);
+			submit.setSignalSemaphoreInfos(signalInfos);
 			m_queue.submit2(submit, nullptr);
 
 			m_lastSubmittedValue = signalValue;
@@ -212,6 +331,22 @@ namespace brassica::graph {
 			m_openBufferIndex.reset();
 			m_pendingWaits.clear();
 			return frameLocalIndex;
+		}
+
+		// Ends (but never submits) the open segment, if any -- the exception-path counterpart to
+		// CloseAndSubmit, design plan's S4 catch path: "never submit partially recorded buffers."
+		// Consumes no timeline value (m_nextTimelineValue is untouched), so this segment's
+		// would-be signal never happens and nothing downstream can be waiting on it (nothing can
+		// wait on a value that was never promised). The command buffer itself is left in the
+		// ended state; the next time this slot index is reused, OpenIfNeeded's own cmd.reset()
+		// handles an abandoned buffer identically to a submitted one.
+		void Abandon() {
+			if (!m_openBufferIndex.has_value()) {
+				return;
+			}
+			m_buffers[m_activeSlot][*m_openBufferIndex].end();
+			m_openBufferIndex.reset();
+			m_pendingWaits.clear();
 		}
 
 	private:
@@ -232,6 +367,37 @@ namespace brassica::graph {
 		std::uint32_t                        m_nextFrameLocalIndex = 0;
 		std::uint32_t                        m_lastClosedFrameLocalIndex = 0;
 		std::vector<vk::SemaphoreSubmitInfo> m_pendingWaits;
+
+		// Design plan's S5 timestamp capture. kMaxBatchesPerFrame is a fixed budget (query pools
+		// can't be resized after creation) -- generous for any realistic per-frame batch count on
+		// one queue; BeginBatchTimestamp just stops timestamping (returns nullopt) past it rather
+		// than throwing.
+		static constexpr std::uint32_t    kMaxBatchesPerFrame = 32;
+		vk::QueryPool                     m_queryPool{};
+		bool                              m_timestampsSupported = false;
+		float                             m_timestampPeriodNs = 1.0f;
+		std::array<std::uint32_t, FRAME_OVERLAP> m_batchCountInSlot{};
+		bool                              m_queryPoolResetThisFrame = false;
+	};
+
+	// External (non-graph) synchronization Execute() threads onto the Graphics lane for a frame
+	// that also has to satisfy a swapchain's own semaphore contract -- design plan's S4
+	// Submission section: "The acquire wait goes on the first G segment that touches Swapchain
+	// ... Render-finished is signalled on the last G segment, which also holds Engine's present
+	// barrier." Every field defaults to "nothing external to do," so a caller that never
+	// constructs one of these (every existing test) gets byte-identical behavior to before this
+	// struct existed.
+	struct ExternalGraphicsSync {
+		std::optional<vk::Semaphore> waitSemaphore;
+		vk::PipelineStageFlags2      waitStage = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+		std::optional<vk::Semaphore> signalSemaphore;
+		vk::PipelineStageFlags2      signalStage = vk::PipelineStageFlagBits2::eAllCommands;
+
+		// Called with the Graphics lane's final command buffer for the frame, after every graph
+		// node has recorded into it but before it closes -- Engine's hook for appending the
+		// swapchain present-layout-transition barrier, which is manual, non-graph recording the
+		// same way it is under PhysicalExecutionBackend's single-queue path.
+		std::function<void(vk::CommandBuffer)> beforeClose;
 	};
 
 	// Drives three QueueLanes plus a QueueHazardTracker through a Graph's existing Schedule
@@ -242,11 +408,12 @@ namespace brassica::graph {
 	public:
 		void Init(
 			vk::Device                                device,
+			vk::PhysicalDevice                         physicalDevice,
 			const std::array<vk::Queue, kNumGpuQueues>& queues,
 			const std::array<std::uint32_t, kNumGpuQueues>& families
 		) {
 			for (std::size_t i = 0; i < kNumGpuQueues; ++i) {
-				m_lanes[i].Init(device, queues[i], families[i]);
+				m_lanes[i].Init(device, physicalDevice, queues[i], families[i]);
 			}
 		}
 
@@ -260,14 +427,37 @@ namespace brassica::graph {
 
 		// frameIndex must be the same value the caller is about to pass as FrameContext::frameIndex
 		// -- each lane's own BeginFrame uses it to rotate FRAME_OVERLAP-bounded command pools and
-		// wait, if needed, for this slot's own last use to finish on the GPU.
+		// wait, if needed, for this slot's own last use to finish on the GPU. That same wait is
+		// what makes it safe to read back whatever that slot's query pool holds right here
+		// (design plan's S5): the batches that wrote those timestamps are now confirmed complete.
 		void BeginFrame(std::uint64_t frameIndex) {
 			m_hazards.BeginFrame();
 			m_joinedThisFrame.fill(false);
-			for (auto& lane : m_lanes) {
-				lane.BeginFrame(frameIndex);
+			for (std::size_t i = 0; i < kNumGpuQueues; ++i) {
+				m_lanes[i].BeginFrame(frameIndex);
+				auto  durations = m_lanes[i].CollectBatchDurationsMicroseconds(frameIndex);
+				auto& namesForSlot = m_batchNames[i][m_lanes[i].ActiveSlot()];
+				for (const auto& [batchIndex, micros] : durations) {
+					if (batchIndex >= namesForSlot.size() || namesForSlot[batchIndex].empty()) {
+						continue;
+					}
+					// Split one batch's measured duration evenly across its member nodes --
+					// several nodes sharing a batch have no relative order/barrier between them
+					// (BuildBatches' own grouping rule), so there's no finer-grained real
+					// measurement available than the batch's own total.
+					const double perNode =
+						micros / static_cast<double>(namesForSlot[batchIndex].size());
+					for (const auto& name : namesForSlot[batchIndex]) {
+						m_weights.UpdateNodeWeight(name, std::max(1, static_cast<int>(perNode)));
+					}
+				}
+				namesForSlot.clear();
 			}
 		}
+
+		[[nodiscard]] const DynamicWeights& Weights() const { return m_weights; }
+
+		[[nodiscard]] PlacementHysteresis& Hysteresis() { return m_hysteresis; }
 
 		// Test observability only: how many times CutAndWait has actually cut a segment and
 		// inserted a real cross-queue wait, cumulative across the recorder's whole lifetime. Lets
@@ -290,14 +480,15 @@ namespace brassica::graph {
 		// caller that wants GraphicsOnly behavior should use PhysicalExecutionBackend instead,
 		// which never pays this class's segment/hazard-tracking overhead at all.
 		void Execute(
-			Graph&                    graph,
-			const FrameContext&       ctx,
-			PhysicalResourceRegistry& registry,
-			NodeContext&              nodeCtx,
-			QueuePlacementMode        mode = QueuePlacementMode::ForceDomain
+			Graph&                       graph,
+			const FrameContext&          ctx,
+			PhysicalResourceRegistry&    registry,
+			NodeContext&                 nodeCtx,
+			QueuePlacementMode           mode = QueuePlacementMode::ForceDomain,
+			const ExternalGraphicsSync&  externalSync = {}
 		) {
 			graph.Setup(ctx);
-			if (auto compileRes = graph.Compile(mode); !compileRes) {
+			if (auto compileRes = graph.Compile(mode, m_weights, &m_hysteresis); !compileRes) {
 				throw std::runtime_error("Graph compilation failed: " + compileRes.error().message);
 			}
 			registry.Provision(graph.GetSchedule(), graph.Recipes(), ctx.frameIndex, /*enableAliasing=*/false, graph.Nodes(), ctx);
@@ -305,8 +496,13 @@ namespace brassica::graph {
 			// Zero-init clears always land on the graphics lane (design plan: "Recorded as
 			// graphics writes in a virtual batch at the start of G's first segment") -- open it
 			// explicitly before anything else touches anything, so a clear's barrier chains off
-			// a real segment and the hazard table sees it as a genuine Graphics-lane write.
+			// a real segment and the hazard table sees it as a genuine Graphics-lane write. The
+			// external wait (if any) goes right here too -- nothing has been recorded into this
+			// segment yet, which is the one and only window AddWait accepts (its own comment).
 			vk::CommandBuffer graphicsCmd = Lane(ExecutionDomain::Graphics).OpenIfNeeded();
+			if (externalSync.waitSemaphore.has_value()) {
+				Lane(ExecutionDomain::Graphics).AddWait(*externalSync.waitSemaphore, 0, externalSync.waitStage);
+			}
 			EnsureJoined(ExecutionDomain::Graphics);
 			ZeroInitializeUndefinedReads(graphicsCmd, registry, graph);
 			ZeroInitializeInactiveReads(graphicsCmd, registry, graph);
@@ -321,9 +517,42 @@ namespace brassica::graph {
 
 			RunSchedule(graph, nodeCtx, registry);
 
-			for (auto& lane : m_lanes) {
-				lane.CloseAndSubmit();
+			// The Graphics lane's beforeClose hook (Engine's present-layout-transition barrier)
+			// runs on whatever its current segment is -- opening a fresh one if RunSchedule
+			// happened not to leave one open (no Graphics-placed work this frame is legal, if
+			// unusual) is correct either way: a segment with nothing but this one barrier in it
+			// is still a valid, if minimal, submission.
+			if (externalSync.beforeClose) {
+				externalSync.beforeClose(Lane(ExecutionDomain::Graphics).OpenIfNeeded());
 			}
+
+			for (std::size_t i = 0; i < kNumGpuQueues; ++i) {
+				if (i == GpuQueueIndex(ExecutionDomain::Graphics)) {
+					m_lanes[i].CloseAndSubmit(externalSync.signalSemaphore, externalSync.signalStage);
+				} else {
+					m_lanes[i].CloseAndSubmit();
+				}
+			}
+		}
+
+		// Exception path, mirroring PhysicalExecutionBackend::Execute's single-queue catch block
+		// (Engine.cpp's DrawFrame): abandons whatever any lane had partially recorded this frame
+		// (design plan's S4 catch path, "never submit partially recorded buffers"), then does one
+		// empty Graphics submission purely to consume the external wait semaphore (so it isn't
+		// left signaled for the next acquire that reuses it) and advance the Graphics lane's own
+		// timeline by exactly one value, matching "signals G's next value." Never signals
+		// signalSemaphore and never touches Compute/Transfer again this frame -- this frame is
+		// being dropped, not shown, same as the single-queue path's own recovery submit.
+		void AbandonFrame(std::optional<vk::Semaphore> waitSemaphore, vk::PipelineStageFlags2 waitStage) {
+			for (auto& lane : m_lanes) {
+				lane.Abandon();
+			}
+			QueueLane& g = Lane(ExecutionDomain::Graphics);
+			g.OpenIfNeeded();
+			if (waitSemaphore.has_value()) {
+				g.AddWait(*waitSemaphore, 0, waitStage);
+			}
+			g.CloseAndSubmit();
 		}
 
 	private:
@@ -436,6 +665,7 @@ namespace brassica::graph {
 						nodeCtx.cmd = CommandBuffer{};
 						nodeCtx.insideRendering = false;
 						nodeCtx.domain = ExecutionDomain::Host;
+						nodeCtx.placedQueue = ExecutionDomain::Host;
 						nodeCtx.declared = recipes[nodeIndex].realizations;
 						graph.ExecuteNode(nodeIndex, nodeCtx);
 					}
@@ -500,12 +730,32 @@ namespace brassica::graph {
 				m_hazards.RecordTouch(resolved, queue, writeish, segmentIndex);
 			}
 
+			// Design plan's S5: brackets just this batch's node-execution work (not the acquire
+			// barriers just emitted above, nor the release barriers below) so the measured
+			// duration reflects real GPU work, not synchronization overhead. Records which node
+			// names are in this batch alongside it -- BeginFrame reads both back together once
+			// this slot's prior use is confirmed complete, feeding the EMA (design plan's S5,
+			// "readback ... then an EMA keyed by node name").
+			const std::optional<std::uint32_t> timestampBatchIndex = Lane(queue).BeginBatchTimestamp(cmd);
+			if (timestampBatchIndex.has_value()) {
+				auto& namesForSlot = m_batchNames[GpuQueueIndex(queue)][Lane(queue).ActiveSlot()];
+				if (*timestampBatchIndex >= namesForSlot.size()) {
+					namesForSlot.resize(*timestampBatchIndex + 1);
+				}
+				auto& namesThisBatch = namesForSlot[*timestampBatchIndex];
+				const auto nodes = graph.Nodes();
+				for (std::size_t nodeIndex : stage.nodes) {
+					namesThisBatch.emplace_back(nodes[nodeIndex].Descriptor().name);
+				}
+			}
+
 			for (std::size_t nodeIndex : stage.nodes) {
 				const auto& recipe = recipes[nodeIndex];
 				const bool  activeRendering = DynamicRenderingWrapper::Begin(cmd, registry, recipe);
 				nodeCtx.cmd = CommandBuffer{static_cast<void*>(static_cast<VkCommandBuffer>(cmd))};
 				nodeCtx.insideRendering = activeRendering;
 				nodeCtx.domain = recipe.domain;
+				nodeCtx.placedQueue = queue; // stage.queue -- may differ from recipe.domain under Heft
 				nodeCtx.declared = recipe.realizations;
 				graph.ExecuteNode(nodeIndex, nodeCtx);
 				if (activeRendering) {
@@ -525,14 +775,26 @@ namespace brassica::graph {
 				}
 			}
 
+			if (timestampBatchIndex.has_value()) {
+				Lane(queue).EndBatchTimestamp(cmd, *timestampBatchIndex);
+			}
+
 			BarrierTranslator::TranslateAndDispatch(cmd, registry, stage.postBarriers, BarrierPhase::Release);
 		}
 
-		std::array<QueueLane, kNumGpuQueues> m_lanes;
-		QueueHazardTracker                   m_hazards;
-		std::array<bool, kNumGpuQueues>      m_joinedThisFrame{};
-		std::uint32_t                        m_totalWaitsInserted = 0;
-		std::uint32_t                        m_totalJoinWaitsInserted = 0;
+		std::array<QueueLane, kNumGpuQueues>                                              m_lanes;
+		QueueHazardTracker                                                                m_hazards;
+		std::array<bool, kNumGpuQueues>                                                   m_joinedThisFrame{};
+		std::uint32_t                                                                     m_totalWaitsInserted = 0;
+		std::uint32_t                                                                     m_totalJoinWaitsInserted = 0;
+
+		// Design plan's S5 timestamp/EMA feedback loop. m_batchNames[lane][slot][batchIndex] =
+		// node names recorded into that (queue, frame-slot, batch) triple -- cleared and
+		// refilled each time BeginFrame rotates back into that slot, right after reading back
+		// (and attributing to m_weights) whatever was recorded into it last time.
+		std::array<std::array<std::vector<std::vector<std::string>>, FRAME_OVERLAP>, kNumGpuQueues> m_batchNames;
+		DynamicWeights      m_weights;
+		PlacementHysteresis m_hysteresis;
 	};
 
 } // namespace brassica::graph

@@ -617,6 +617,7 @@ namespace brassica::graph {
 					bool activeRendering = DynamicRenderingWrapper::Begin(vkCmd, m_registry, recipe);
 					nodeCtx.insideRendering = activeRendering;
 					nodeCtx.domain = recipe.domain;
+					nodeCtx.placedQueue = ExecutionDomain::Graphics; // the only queue this backend ever uses
 					nodeCtx.declared = recipe.realizations;
 					graph.ExecuteNode(nodeIndex, nodeCtx);
 					if (activeRendering) {

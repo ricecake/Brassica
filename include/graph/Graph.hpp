@@ -4,6 +4,7 @@
 #include <expected>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -170,7 +171,24 @@ namespace brassica::graph {
 		// relation does, not a hard partition -- a "later phase" producer for an "earlier phase"
 		// reader is either a real ambiguity, caught by CompileRelational's own ambiguity check,
 		// or legitimately fine, caught by nothing because it no longer needs special-casing).
-		std::expected<void, ValidationError> Compile(QueuePlacementMode mode = QueuePlacementMode::GraphicsOnly) {
+		// weights: default-constructed (empty) means structural-only placement, same as before
+		// this parameter existed -- GraphicsOnly never reads it at all (PlaceNodes/BuildBatches
+		// are skipped entirely for that mode), and the HEFT branch falls back to EligibleQueues'
+		// first-checked-wins/default-domain-weight behavior when nothing measured is recorded
+		// yet. A caller that wants cost-based placement (design plan's S5) owns a persistent
+		// DynamicWeights across frames and passes the same instance in every Compile() call, so
+		// an EMA fed by real timestamp readbacks (keyed by node name, not index -- see
+		// DynamicWeights' own comment) actually accumulates.
+		// hysteresis: nullptr (default) means the literal naive-EFT-minimizing placement, same as
+		// before this parameter existed -- see PlacementHysteresis's own comment (Scheduler.hpp)
+		// for what passing a real, persistent instance changes.
+		std::expected<void, ValidationError> Compile(
+			QueuePlacementMode    mode = QueuePlacementMode::GraphicsOnly,
+			const DynamicWeights& weights = {},
+			PlacementHysteresis*  hysteresis = nullptr,
+			int                   thresholdPercent = 20,
+			int                   requiredGainFrames = 3
+		) {
 			std::vector<NodeDescriptor> descriptors;
 			descriptors.reserve(m_nodes.size());
 			for (const auto& node : m_nodes) {
@@ -249,8 +267,10 @@ namespace brassica::graph {
 				const std::size_t activeN = activeIndices.size();
 
 				std::vector<ExecutionDomain> nodeDomains(activeN);
+				std::vector<std::string_view> nodeNames(activeN);
 				for (std::size_t i = 0; i < activeN; ++i) {
 					nodeDomains[i] = m_recipes[activeIndices[i]].domain;
+					nodeNames[i] = descriptors[activeIndices[i]].name;
 				}
 				// SchedulingEdge is built straight from rel.edges -- e.key != nullptr is exactly
 				// "real" (a RAW/WAR/WAW resource edge or an explicit relation) vs "order-only" (a
@@ -266,10 +286,17 @@ namespace brassica::graph {
 					edges.push_back(SchedulingEdge{toActive[e.from], toActive[e.to], e.key != nullptr});
 				}
 
-				// Default weights only -- no measured-timestamp infrastructure exists yet
-				// (design plan's S5). Placement under Heft mode is therefore structural, not
-				// cost-based, until that lands.
-				PlacementResult placement = PlaceNodes(activeN, nodeDomains, edges, DynamicWeights{}, mode);
+				PlacementResult placement = PlaceNodes(
+					activeN,
+					nodeDomains,
+					edges,
+					weights,
+					mode,
+					nodeNames,
+					hysteresis,
+					thresholdPercent,
+					requiredGainFrames
+				);
 				std::vector<ScheduleBatchPlan> batches = BuildBatches(activeN, nodeDomains, edges, placement);
 
 				for (auto& batch : batches) {
@@ -367,8 +394,8 @@ namespace brassica::graph {
 		}
 
 		// Every edge CollectEdges finds has, by construction, a producer that writes the key
-		// (that's what made it a producer) -- so producerAccess is never pure Read, and there
-		// is no read-after-read case to special-case away here. Two readers of an
+		// (that's what made it a producer) -- so the producer's own access is never pure Read,
+		// and there is no read-after-read case to special-case away here. Two readers of an
 		// already-settled resource simply never edge each other: each gets its own
 		// producer->reader edge instead, and BarrierBatch::Add already merges those into one
 		// entry when they land in the same stage.
@@ -377,7 +404,6 @@ namespace brassica::graph {
 			const std::vector<std::size_t>&    nodeStage,
 			const Edge&                        edge
 		) {
-			const AccessKind producerAccess = AccessOf(descriptors[edge.producer], edge.key);
 			const AccessKind consumerAccess = AccessOf(descriptors[edge.consumer], edge.key);
 
 			const ExecutionDomain producerDomain = m_recipes[edge.producer].domain;
@@ -397,10 +423,22 @@ namespace brassica::graph {
 				return;
 			}
 
+			// .access = consumerAccess, not producerAccess, on this post-barrier entry: today's
+			// generic DispatchRelease (BarrierTranslator.hpp) never reads a MemoryBarrier's
+			// .access field at all (it derives everything from tracked producer state), so this
+			// is a free behavior change for every existing case. It exists for the design plan's
+			// S5 "producer-side pre-transition": DispatchRelease groups post-barrier entries by
+			// resource and, when every one of them is a plain Read, may derive and perform one
+			// real layout transition here (on the producer's own queue) instead of leaving each
+			// consumer's own acquire-phase barrier to transition independently -- which is what
+			// forces them to serialize against each other cross-queue (test_multiqueue_sync.cpp's
+			// case (b)). Carrying producerAccess here would make that grouping blind to what
+			// consumers actually want; this is the one piece of information DispatchRelease
+			// cannot otherwise reconstruct from a producer-only release batch.
 			m_schedule.stages[producerStage].postBarriers.Add(
 				MemoryBarrier{
 					.resource = edge.key,
-					.access = producerAccess,
+					.access = consumerAccess,
 					.srcDomain = producerDomain,
 					.dstDomain = consumerDomain,
 				}

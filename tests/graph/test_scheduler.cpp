@@ -275,3 +275,129 @@ TEST_CASE("DumpSchedule runs without throwing on a small real-ish plan") {
 	// The longest chain (0 -> 1 -> 2) should have zero slack throughout -- it's the makespan.
 	CHECK(slack.slack[0] == 0);
 }
+
+TEST_CASE("Named weights actually drive placement, not just domain defaults") {
+	// Same sandwiched-compute-chain shape as "under default weights" above (same edges, same
+	// domains), but this time a named DynamicWeights override zeroes the Graphics->Compute hop
+	// cost -- every other test so far only ever passes DynamicWeights{} (empty), so none of them
+	// actually exercise GetNodeWeight/GetEdgeLatency's by-name lookup at all. Design plan's S5:
+	// this is the lookup path a real timestamp-fed EMA (keyed by node name, since a node's dense
+	// active-only index shifts frame to frame) would actually go through.
+	constexpr std::size_t n = 3;
+	const std::vector<SchedulingEdge> edges{{0, 1, true}, {1, 2, true}};
+	const std::vector<ExecutionDomain> domains{
+		ExecutionDomain::Graphics,
+		ExecutionDomain::Compute,
+		ExecutionDomain::Graphics,
+	};
+	const std::vector<std::string_view> names{"Producer", "Middle", "Consumer"};
+
+	DynamicWeights weights;
+	weights.edge_latencies["Producer"]["Middle"] = 0;
+
+	PlacementResult placement = PlaceNodes(n, domains, edges, weights, QueuePlacementMode::Heft, names);
+
+	// With the hop now free: Graphics costs ready(10) + its own default weight(10) = 20;
+	// Compute costs ready(10, same -- comm is overridden to 0) + its own default weight(8) = 18.
+	// Compute wins -- the opposite of the identical-shape default-weights test above, and only
+	// reachable if PlaceNodes actually looked the override up by name ("Producer"/"Middle"), not
+	// by index (0/1, which GetEdgeLatency no longer even accepts).
+	CHECK(placement.queue[1] == ExecutionDomain::Compute);
+
+	// A name absent from `names` (more nodes than names provided) must fall back to the empty
+	// string, never read out of bounds -- NodeName's own contract.
+	CHECK(NodeName(names, 99).empty());
+}
+
+TEST_CASE("Placement hysteresis delays a queue switch until N consecutive gain frames") {
+	// Same Producer(Graphics)->Middle(Compute) shape as the two tests above. Default weights:
+	// Graphics finish=20, Compute finish=23 -- Graphics naively wins frame 1, becoming Middle's
+	// sticky queue on first sight (no hysteresis delay for a node's very first placement, since
+	// there's nothing yet to hold hysteresis against). Zeroing the hop cost afterward flips the
+	// naive winner to Compute (finish=18, a 10% improvement over Graphics' 20) -- using
+	// thresholdPercent=5 so that 10% gain qualifies, and requiredGainFrames=3 so one or two
+	// qualifying frames alone must not be enough to actually switch.
+	constexpr std::size_t n = 2;
+	const std::vector<SchedulingEdge> edges{{0, 1, true}};
+	const std::vector<ExecutionDomain> domains{ExecutionDomain::Graphics, ExecutionDomain::Compute};
+	const std::vector<std::string_view> names{"Producer", "Middle"};
+
+	PlacementHysteresis hysteresis;
+	DynamicWeights       noOverride;
+	DynamicWeights       zeroHop;
+	zeroHop.edge_latencies["Producer"]["Middle"] = 0;
+
+	// Frame 1: first sighting -- adopts the naive best (Graphics) immediately.
+	PlacementResult p1 = PlaceNodes(n, domains, edges, noOverride, QueuePlacementMode::Heft, names, &hysteresis, 5, 3);
+	CHECK(p1.queue[1] == ExecutionDomain::Graphics);
+
+	// Frames 2 and 3: the hop is now free (Compute naively wins), but that's only 1 and 2
+	// consecutive gain frames respectively -- still short of requiredGainFrames=3, so the sticky
+	// queue must not have moved yet.
+	PlacementResult p2 = PlaceNodes(n, domains, edges, zeroHop, QueuePlacementMode::Heft, names, &hysteresis, 5, 3);
+	CHECK(p2.queue[1] == ExecutionDomain::Graphics);
+	PlacementResult p3 = PlaceNodes(n, domains, edges, zeroHop, QueuePlacementMode::Heft, names, &hysteresis, 5, 3);
+	CHECK(p3.queue[1] == ExecutionDomain::Graphics);
+
+	// Frame 4: the third consecutive gain frame -- now it actually switches, and result.finish
+	// must match Compute's own real numbers (18), not Graphics' stale ones.
+	PlacementResult p4 = PlaceNodes(n, domains, edges, zeroHop, QueuePlacementMode::Heft, names, &hysteresis, 5, 3);
+	CHECK(p4.queue[1] == ExecutionDomain::Compute);
+	CHECK(p4.finish[1] == 18);
+
+	// A fresh PlacementHysteresis (no memory of the frames above) must require the full count
+	// again -- one qualifying frame is never enough regardless of history elsewhere.
+	PlacementHysteresis fresh;
+	PlacementResult p1b = PlaceNodes(n, domains, edges, noOverride, QueuePlacementMode::Heft, names, &fresh, 5, 3);
+	CHECK(p1b.queue[1] == ExecutionDomain::Graphics);
+	PlacementResult p2b = PlaceNodes(n, domains, edges, zeroHop, QueuePlacementMode::Heft, names, &fresh, 5, 3);
+	CHECK(p2b.queue[1] == ExecutionDomain::Graphics);
+}
+
+TEST_CASE("Hysteresis never corrupts placement when one name's eligible set changes") {
+	// Regression test for a real bug found via test_multiqueue_sync.cpp's CaseA_Writer (a
+	// template-free test fixture with `domain` as a *runtime field*, instantiated twice -- once
+	// Graphics, once Compute -- so both instances share one type name). Under ForceDomain mode,
+	// EligibleQueues(domain, ForceDomain) == {domain} always: exactly one candidate, no
+	// placement choice at all. Hysteresis must never override that with a stale sticky queue
+	// from an earlier node (or an earlier frame) that happened to share this name but a
+	// *different* domain -- EligibleQueues never offered that queue to this node at all.
+	constexpr std::size_t n = 2;
+	const std::vector<SchedulingEdge> noEdges{};
+	const std::vector<ExecutionDomain> domains{ExecutionDomain::Graphics, ExecutionDomain::Compute};
+	// Same name for both -- the exact shape of CaseA_Writer's two instances.
+	const std::vector<std::string_view> sameName{"Writer", "Writer"};
+
+	PlacementHysteresis hysteresis;
+	PlacementResult placement =
+		PlaceNodes(n, domains, noEdges, DynamicWeights{}, QueuePlacementMode::ForceDomain, sameName, &hysteresis);
+
+	// Node 0 (Graphics) is processed first in rank order (both have equal rank here, stable
+	// sort keeps index order) and seeds the "Writer" sticky entry to Graphics. Node 1 (Compute)
+	// must still land on Compute -- its only real candidate -- not get dragged onto Graphics by
+	// that stale entry.
+	CHECK(placement.queue[0] == ExecutionDomain::Graphics);
+	CHECK(placement.queue[1] == ExecutionDomain::Compute);
+}
+
+TEST_CASE("Hysteresis never corrupts placement when the same node's domain changes between frames") {
+	// Regression test for the same bug, found via test_multiqueue_sync.cpp's CaseE_Writer: one
+	// node instance whose own domain genuinely varies frame to frame (a Compute write in frame
+	// N, a Graphics write in frame N+1). A persistent PlacementHysteresis must not drag frame
+	// N+1's placement back onto frame N's now-ineligible sticky queue.
+	constexpr std::size_t n = 1;
+	const std::vector<SchedulingEdge> noEdges{};
+	const std::vector<std::string_view> name{"Writer"};
+
+	PlacementHysteresis hysteresis;
+
+	const std::vector<ExecutionDomain> computeDomain{ExecutionDomain::Compute};
+	PlacementResult frameN =
+		PlaceNodes(n, computeDomain, noEdges, DynamicWeights{}, QueuePlacementMode::ForceDomain, name, &hysteresis);
+	CHECK(frameN.queue[0] == ExecutionDomain::Compute);
+
+	const std::vector<ExecutionDomain> graphicsDomain{ExecutionDomain::Graphics};
+	PlacementResult frameN1 =
+		PlaceNodes(n, graphicsDomain, noEdges, DynamicWeights{}, QueuePlacementMode::ForceDomain, name, &hysteresis);
+	CHECK(frameN1.queue[0] == ExecutionDomain::Graphics);
+}

@@ -342,16 +342,30 @@ namespace brassica::graph {
 		}
 
 		// The producer side of a cross-domain edge (Graph.hpp's SynthesizeBarrier posts these to
-		// the producer's own stage). Deriving a layout here would be meaningless -- it would come
-		// from the producer's access and the *consumer's* domain, which describes neither side
-		// correctly -- and it would double-transition the resource, since the edge's Acquire-
-		// phase entry in the consumer's stage already performs the real transition. Worse. one
-		// of these can legitimately fire while a resource is still eUndefined: Import<K> nodes
-		// run in ExecutionDomain::Host with no realizations of their own (Node.hpp), so a
-		// Graphics consumer of an imported key produces a Host->Graphics edge whose release half
-		// sits in the Host stage before anything has touched the resource. A per-image barrier
-		// there would be newLayout=eUndefined -- exactly Bug 1 this rewrite exists to fix. A
-		// single global memory barrier has no layout to get wrong.
+		// the producer's own stage). For most resources deriving a layout here would be
+		// meaningless -- it would come from the producer's access and the *consumer's* domain,
+		// which describes neither side correctly -- and it would double-transition the resource,
+		// since the edge's Acquire-phase entry in the consumer's stage already performs the real
+		// transition. Worse, one of these can legitimately fire while a resource is still
+		// eUndefined: Import<K> nodes run in ExecutionDomain::Host with no realizations of their
+		// own (Node.hpp), so a Graphics consumer of an imported key produces a Host->Graphics
+		// edge whose release half sits in the Host stage before anything has touched the
+		// resource. A per-image barrier there would be newLayout=eUndefined -- exactly Bug 1 this
+		// rewrite exists to fix. A single global memory barrier has no layout to get wrong, which
+		// is why that stays the default for everything below.
+		//
+		// The one exception (design plan's S5, "producer-side pre-transition"): when every real
+		// consumer of a given (producer, resource) pair is a plain Read, and every one of those
+		// consumers' own domains derives the *same* target layout (checked below by actually
+		// deriving it per domain, never assumed), this resource's transition can happen exactly
+		// once, right here, instead of once per consumer's own acquire-phase barrier -- which is
+		// what forces N independent consumers on N different queues to serialize against each
+		// other over who performs that same transition first (test_multiqueue_sync.cpp's case
+		// (b)). Graph.hpp's SynthesizeBarrier stores the *consumer's* access (not the producer's)
+		// in each post-barrier entry specifically so this grouping can tell; see its own comment.
+		// Still guarded by GetLastStage() being non-empty -- the exact same "never touched yet"
+		// signal that rules out the Import<K>/eUndefined case above, since a real per-resource
+		// transition is exactly the thing that case must never get.
 		//
 		// There is also no real queue-family ownership transfer happening here to "release":
 		// VK_QUEUE_FAMILY_IGNORED everywhere, one graphicsQueue in the whole engine. This is
@@ -361,10 +375,26 @@ namespace brassica::graph {
 			vk::PipelineStageFlags2 srcStage{};
 			vk::AccessFlags2        srcAccess{};
 
+			// Grouped by resolved resource, not iterated per-entry directly: a resource read by
+			// more than one distinct consumer domain (e.g. both a Compute and a Transfer reader)
+			// posts one post-barrier entry per distinct (resource, dstDomain) pair (BarrierBatch::
+			// Add's own dedup key) -- the pre-transition decision needs every one of those
+			// domains together, not just whichever entry is seen first.
+			struct ImageReleaseGroup {
+				std::shared_ptr<PhysicalTexture> tex;
+				std::vector<ExecutionDomain>     consumerDomains;
+				bool                             allRead = true;
+			};
+			std::unordered_map<ResourceId, ImageReleaseGroup> imageGroups;
+
 			for (const auto& mb : batch.Items()) {
 				if (auto tex = registry.GetTexture(mb.resource)) {
-					srcStage |= tex->GetLastStage();
-					srcAccess |= tex->GetLastAccess();
+					auto& group = imageGroups[registry.ResolveId(mb.resource)];
+					group.tex = tex;
+					group.consumerDomains.push_back(mb.dstDomain);
+					if (mb.access != AccessKind::Read) {
+						group.allRead = false;
+					}
 					continue;
 				}
 				if (auto buf = registry.GetBuffer(mb.resource)) {
@@ -377,18 +407,94 @@ namespace brassica::graph {
 				// batch already throws on this exact case.
 			}
 
-			if (!srcStage && !srcAccess) {
+			std::vector<vk::ImageMemoryBarrier2> preTransitionBarriers;
+			for (auto& [resolved, group] : imageGroups) {
+				PhysicalTexture& tex = *group.tex;
+				if (!group.allRead || !tex.GetLastStage()) {
+					srcStage |= tex.GetLastStage();
+					srcAccess |= tex.GetLastAccess();
+					continue;
+				}
+
+				const auto&               desc = tex.GetDesc();
+				const vk::ImageUsageFlags usage =
+					desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{};
+				const vk::Format format = static_cast<vk::Format>(desc.formatCode);
+
+				const vk::ImageLayout agreedLayout =
+					DeriveImageState(AccessKind::Read, group.consumerDomains.front(), usage, format).layout;
+				vk::AccessFlags2 dstAccess{};
+				bool             allAgree = true;
+				for (ExecutionDomain d : group.consumerDomains) {
+					const ResourceState derived = DeriveImageState(AccessKind::Read, d, usage, format);
+					if (derived.layout != agreedLayout) {
+						allAgree = false;
+						break;
+					}
+					dstAccess |= derived.access;
+				}
+				if (!allAgree) {
+					srcStage |= tex.GetLastStage();
+					srcAccess |= tex.GetLastAccess();
+					continue;
+				}
+
+				// dstStage is eAllCommands unconditionally here, not each consumer domain's own
+				// derived (and OR'd) stage: DeriveImageState's per-domain stage is only ever
+				// meant to pair with that *same* domain's own derived access in one real barrier
+				// (e.g. a Transfer-domain Sampled-Read derives ShaderStageForDomain(Transfer)
+				// paired with eShaderSampledRead -- individually harmless under the ordinary RAR-
+				// skip path, which never builds a real barrier from it, but combining several
+				// domains' stages and access bits together here can produce a real, spec-invalid
+				// pairing no single domain would ever actually hit on its own). eAllCommands is
+				// always a valid dstStage for any access mask the Vulkan spec defines, and this
+				// barrier's only real job is the layout transition itself, not minimal stage
+				// scoping.
+				const vk::PipelineStageFlags2 dstStage = vk::PipelineStageFlagBits2::eAllCommands;
+
+				preTransitionBarriers.push_back(
+					vk::ImageMemoryBarrier2{
+						tex.GetLastStage(),
+						tex.GetLastAccess(),
+						dstStage,
+						dstAccess,
+						tex.GetCurrentLayout(),
+						agreedLayout,
+						VK_QUEUE_FAMILY_IGNORED,
+						VK_QUEUE_FAMILY_IGNORED,
+						tex.GetImage(),
+						vk::ImageSubresourceRange(
+							AspectFor(format),
+							0,
+							desc.mips ? desc.mips : 1,
+							0,
+							desc.layers ? desc.layers : 1
+						),
+					}
+				);
+				tex.SetCurrentLayout(agreedLayout);
+				tex.SetLastStageAccess(dstStage, dstAccess);
+			}
+
+			if (!srcStage && !srcAccess && preTransitionBarriers.empty()) {
 				return;
 			}
 
-			vk::MemoryBarrier2 mb2{
-				srcStage ? srcStage : vk::PipelineStageFlagBits2::eTopOfPipe,
-				srcAccess,
-				vk::PipelineStageFlagBits2::eAllCommands,
-				vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-			};
+			std::vector<vk::MemoryBarrier2> memoryBarriers;
+			if (srcStage || srcAccess) {
+				memoryBarriers.push_back(
+					vk::MemoryBarrier2{
+						srcStage ? srcStage : vk::PipelineStageFlagBits2::eTopOfPipe,
+						srcAccess,
+						vk::PipelineStageFlagBits2::eAllCommands,
+						vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+					}
+				);
+			}
+
 			vk::DependencyInfo depInfo{};
-			depInfo.setMemoryBarriers(mb2);
+			depInfo.setMemoryBarriers(memoryBarriers);
+			depInfo.setImageMemoryBarriers(preTransitionBarriers);
 			cmd.pipelineBarrier2(depInfo);
 		}
 

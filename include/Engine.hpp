@@ -14,6 +14,7 @@
 #include "EngineConstants.hpp"
 #include "foliage/FoliageManager.hpp"
 #include "GLFW/glfw3.h"
+#include "graph/MultiQueueExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
@@ -52,6 +53,21 @@ namespace brassica {
 		bool        aggressiveValidation{false};
 		bool        printRenderGraph{false};
 
+		// Design plan's S4: which queue(s) DrawFrame's per-frame graph compiles/executes onto.
+		// GraphicsOnly (the default) is the literal pre-existing single-queue path
+		// (PhysicalExecutionBackend) -- every other mode runs through MultiQueueExecutionBackend's
+		// QueueRecorder instead, which this Mac's single real queue family makes pointless for
+		// actual overlap but still exercises for real (segments, timelines, barriers).
+		graph::QueuePlacementMode queuePlacement{graph::QueuePlacementMode::GraphicsOnly};
+
+		// When queuePlacement != GraphicsOnly but the device's queueSet collapses to a single
+		// real queue family (DistinctQueueFamilies, Execution.hpp -- this Mac's MoltenVK today),
+		// ForceDomain/Heft buy zero actual overlap and only add overhead (extra barriers,
+		// same-queue semaphore waits that are trivially satisfied but still cost a wait). Engine
+		// silently downgrades to GraphicsOnly in that case unless this is set -- it exists purely
+		// to let this Mac still exercise QueueRecorder's segment-splitting machinery on request.
+		bool splitAliasedQueues{false};
+
 		static EngineOptions FromArgs(int argc, char** argv) {
 			ArgparseManager argManager;
 			argManager.Initialize();
@@ -66,6 +82,8 @@ namespace brassica {
 			opts.terrainMapPath = argManager.GetTerrainMapPath();
 			opts.aggressiveValidation = argManager.GetAggressiveValidation();
 			opts.printRenderGraph = argManager.GetPrintRenderGraph();
+			opts.queuePlacement = argManager.GetQueuePlacement();
+			opts.splitAliasedQueues = argManager.GetSplitAliasedQueues();
 			if (opts.renderTerrainMap || opts.printRenderGraph) {
 				opts.headless = true;
 			}
@@ -246,6 +264,13 @@ namespace brassica {
 		void RecreateSwapchain();
 		void DrawFrame();
 
+		// options.queuePlacement, downgraded to GraphicsOnly when the device's queue families
+		// collapse to one real queue and options.splitAliasedQueues wasn't set to override that
+		// -- see EngineOptions::splitAliasedQueues' own comment. Computed fresh each call rather
+		// than cached: queueSet never changes after InitVulkan, so this is cheap and avoids a
+		// second piece of state that could drift from options.queuePlacement itself.
+		[[nodiscard]] graph::QueuePlacementMode EffectiveQueuePlacement() const;
+
 		GLFWwindow* window{nullptr};
 		uint32_t    frameNumber{0};
 		FrameData   frames[FRAME_OVERLAP]; // brassica::FRAME_OVERLAP, EngineConstants.hpp
@@ -357,6 +382,13 @@ namespace brassica {
 
 		graph::PhysicalResourceRegistry physicalRegistry;
 		render::PipelineLibrary         pipelineLibrary;
+
+		// Only Init()'d/used once options.queuePlacement != GraphicsOnly actually takes effect
+		// (EffectiveQueuePlacement(), Engine.cpp) -- GraphicsOnly's PhysicalExecutionBackend path
+		// never reads this at all. Persistent across frames by design: its three QueueLanes each
+		// own FRAME_OVERLAP-bounded pools and one globally-monotonic timeline that must survive
+		// frame-to-frame, unlike physicalRegistry's per-frame Provision() calls.
+		graph::QueueRecorder queueRecorder;
 
 		ImGuiManager        imguiManager;
 		ServiceLocator      serviceLocator;
