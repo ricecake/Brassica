@@ -1,0 +1,17 @@
+const float FAKE_PLANET_RADIUS = 600000.0; // 600km radius (1/10th scale planet)
+const float PI = 3.14159265359;
+const float PHI = 1.618033988749894848204586834;
+const float TAU = 2.0 * PI;
+
+const mat3 GOLD = mat3(
+	-0.571464913,
+	+0.814921382,
+	+0.096597072,
+	-0.278044873,
+	-0.303026659,
+	+0.911518454,
+	+0.772087367,
+	+0.494042493,
+	+0.399753815
+);
+
