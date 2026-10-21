@@ -490,6 +490,17 @@ namespace brassica::graph {
 				if (!buf) {
 					continue;
 				}
+				// A persistent resource (ResourceDesc::persistent) exists specifically to survive
+				// frames its producer is inactive -- see that flag's own comment (Execution.hpp).
+				// Once it has real content, an inactive-producer frame reading it is the intended
+				// use, not an undefined gap: zeroing it here on every such frame would permanently
+				// defeat the entire reason it is marked persistent. Confirmed as a real bug, not
+				// hypothetical: FoliageBiomeTableTexture (a PredefinedTextureNode, Active only when
+				// its data actually changes) read back as all-zero every frame after the first --
+				// every biome's enabled flag reads false, so foliage renders nowhere.
+				if (buf->GetDesc().persistent && buf->HasDefinedContents()) {
+					continue;
+				}
 				ClearBufferToZero(cmd, *buf, realization->access, recipe.domain);
 				continue;
 			}
@@ -501,6 +512,10 @@ namespace brassica::graph {
 
 			auto tex = registry.GetTexture(key);
 			if (!tex) {
+				continue;
+			}
+			// Same persistent-resource exemption as the buffer branch above.
+			if (tex->GetDesc().persistent && tex->HasDefinedContents()) {
 				continue;
 			}
 			ClearImageToZero(cmd, *tex, realization->access, recipe.domain, key);

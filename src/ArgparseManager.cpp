@@ -57,8 +57,8 @@ namespace brassica {
 			.implicit_value(true);
 
 		m_parser.add_argument("--queue-placement")
-			.help("Render graph queue placement: graphics-only (default), force-domain, or heft")
-			.default_value(std::string("graphics-only"));
+			.help("Render graph queue placement: graphics-only, force-domain, or heft (default)")
+			.default_value(std::string("heft"));
 
 		m_parser.add_argument("--split-aliased-queues")
 			.help(
@@ -180,19 +180,19 @@ namespace brassica {
 
 	graph::QueuePlacementMode ArgparseManager::GetQueuePlacement() const {
 		if (!m_argsParsed) {
-			return graph::QueuePlacementMode::GraphicsOnly;
+			return graph::QueuePlacementMode::Heft;
 		}
 		const std::string value = m_parser.get<std::string>("--queue-placement");
+		if (value == "graphics-only") {
+			return graph::QueuePlacementMode::GraphicsOnly;
+		}
 		if (value == "force-domain") {
 			return graph::QueuePlacementMode::ForceDomain;
 		}
-		if (value == "heft") {
-			return graph::QueuePlacementMode::Heft;
+		if (value != "heft") {
+			spdlog::warn("ArgparseManager: unrecognized --queue-placement '{}', defaulting to heft", value);
 		}
-		if (value != "graphics-only") {
-			spdlog::warn("ArgparseManager: unrecognized --queue-placement '{}', defaulting to graphics-only", value);
-		}
-		return graph::QueuePlacementMode::GraphicsOnly;
+		return graph::QueuePlacementMode::Heft;
 	}
 
 	bool ArgparseManager::GetSplitAliasedQueues() const {
