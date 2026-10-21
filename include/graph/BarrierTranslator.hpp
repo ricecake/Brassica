@@ -232,17 +232,17 @@ namespace brassica::graph {
 			//
 			// eNone, not eTopOfPipe, for the "never touched" fallback (tex.GetLastStage() empty
 			// -- a fresh Import<K>, most commonly the swapchain, whose first-ever touch this is).
-			// This is a best-effort fix, not yet confirmed on real hardware: sgreenhusted's own
-			// aggressive-validation logs show a WRITE_AFTER_READ hazard against
-			// vkAcquireNextImageKHR on every single frame's swapchain image, reproduced
-			// identically under GraphicsOnly and Heft (so unrelated to queue placement -- this
-			// fallback predates that work entirely). TOP_OF_PIPE is a real, if degenerate, point
-			// in the pipeline that the Vulkan spec's own synchronization chapter documents as
-			// deprecated in favor of NONE for exactly this "nothing to synchronize against" case;
-			// the theory is that sync validation's hazard tracker doesn't credit TOP_OF_PIPE as
-			// "no real dependency" the way it credits NONE, so it can't see this barrier's write
-			// as properly ordered after the semaphore wait gating the image's first use. Needs a
-			// re-run with aggressive validation to actually confirm.
+			// TOP_OF_PIPE is a real, if degenerate, point in the pipeline that the Vulkan spec's
+			// own synchronization chapter documents as deprecated in favor of NONE for exactly
+			// this "nothing to synchronize against" case -- a legitimate Sync2 idiom improvement
+			// on its own, kept for that reason. It was NOT what fixed the real-hardware
+			// WRITE_AFTER_READ hazard against vkAcquireNextImageKHR seen on every frame's
+			// swapchain image under both GraphicsOnly and Heft: sgreenhusted re-tested after this
+			// change landed and the hazard was still there, byte-identical, 10 occurrences either
+			// way. It touches this barrier's src side; the hazard was on the dst side of the
+			// swapchain acquire wait, which this can't affect. The actual fix was broadening every
+			// wait on frame.swapchainSemaphore from eColorAttachmentOutput to eAllCommands
+			// (Engine.cpp) -- confirmed fixed, 10 -> 0 occurrences in both modes.
 			const bool crossQueue = IsCrossQueue(tex.GetQueueTouchMask(), currentQueue);
 
 			const auto& desc = tex.GetDesc();

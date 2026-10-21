@@ -54,11 +54,15 @@ namespace brassica {
 		bool        printRenderGraph{false};
 
 		// Design plan's S4: which queue(s) DrawFrame's per-frame graph compiles/executes onto.
-		// GraphicsOnly (the default) is the literal pre-existing single-queue path
-		// (PhysicalExecutionBackend) -- every other mode runs through MultiQueueExecutionBackend's
-		// QueueRecorder instead, which this Mac's single real queue family makes pointless for
-		// actual overlap but still exercises for real (segments, timelines, barriers).
-		graph::QueuePlacementMode queuePlacement{graph::QueuePlacementMode::GraphicsOnly};
+		// GraphicsOnly is the literal pre-existing single-queue path (PhysicalExecutionBackend);
+		// ForceDomain/Heft run through MultiQueueExecutionBackend's QueueRecorder instead. Default
+		// is Heft as of the plan's S5 capture comparison (2026-10-21, real hardware: higher
+		// framerate than GraphicsOnly, clean validation/syncval after the acquire-wait and
+		// ClearImageToZero/Provision fixes). EffectiveQueuePlacement() still silently downgrades
+		// to GraphicsOnly on a device whose
+		// queueSet collapses to one real queue family (this Mac's MoltenVK today), where Heft buys
+		// zero actual overlap and only adds overhead.
+		graph::QueuePlacementMode queuePlacement{graph::QueuePlacementMode::Heft};
 
 		// When queuePlacement != GraphicsOnly but the device's queueSet collapses to a single
 		// real queue family (DistinctQueueFamilies, Execution.hpp -- this Mac's MoltenVK today),

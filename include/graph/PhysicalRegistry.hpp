@@ -669,11 +669,12 @@ namespace brassica::graph {
 							effective.desc = *catalogDesc;
 						}
 
+						const bool currEmpty = DescsFullyMatch(effective.desc, ResourceDesc{});
+
 						if (auto prevIt = realizationsToProvision.find(resolvedKey);
 						    prevIt != realizationsToProvision.end() &&
 						    !DescsFullyMatch(prevIt->second.desc, effective.desc)) {
 							const bool prevEmpty = DescsFullyMatch(prevIt->second.desc, ResourceDesc{});
-							const bool currEmpty = DescsFullyMatch(effective.desc, ResourceDesc{});
 							// A builder node's Read<K>()/Modify<K>() on a key with no catalog entry
 							// (not yet converted, or converted but nothing registered it in THIS
 							// run -- an isolated test with a fake producer, most likely) carries an
@@ -700,6 +701,22 @@ namespace brassica::graph {
 							if (currEmpty && !prevEmpty) {
 								continue; // keep the existing non-empty entry
 							}
+						} else if (currEmpty && prevIt == realizationsToProvision.end()) {
+							// Same "an empty desc is simply ignored for provisioning purposes" rule
+							// as above, but for the case the comment there didn't cover: this key's
+							// *only* realization so far this frame is this empty one -- there is no
+							// non-empty prevIt to lose to. Falling through used to insert the empty
+							// desc anyway, and ProvisionTexture/Buffer's ImageDescMatches would then
+							// see it mismatch against whatever real desc is already physically
+							// allocated (width/format/usage all zero) and destroy+recreate the
+							// resource from garbage. Confirmed as a real bug, not hypothetical:
+							// FoliageBiomeTableTexture's producer (a PredefinedTextureNode) is only
+							// Active on the frame its data actually changes, so on every other frame
+							// FoliageNode's bare Read<FoliageBiomeTableTexture>() (no .Desc(), and
+							// this key isn't catalog-converted) was the sole realization reaching
+							// here -- silently wiping the texture's real eTransferDst usage down to
+							// 0 the very next frame. Leave whatever's already provisioned alone.
+							continue;
 						}
 
 						realizationsToProvision[resolvedKey] = effective;
