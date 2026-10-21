@@ -98,24 +98,36 @@ void main() {
 	// Remove REST_FRAMES. A continuous rolling wave is better for EMA.
 	const uint CYCLE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
 
-	uint cycleFrame = (uFrameIndex/3) % CYCLE_FRAMES;
-
-	// Use a continuous fractional time instead of integer leaps
-	float evolutionSpeed = 0.05; // Adjust this to control how fast the clouds morph
-	float continuousTime = float(int((uFrameIndex/3)/CYCLE_FRAMES) * evolutionSpeed);
-
-
 	// uint mCode = bayer3D(vox);
-	uint mCode = encodeMorton3D(vox);
-	uint chunkId = ((mCode >> 20u) & 15u);
+	// uint mCode = encodeMorton3D(vox);
+	// uint chunkId = ((mCode >> 20u) & 15u);
 
 	// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
-	uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
+	// uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
 
 	// 3. Exact target frame for this specific voxel
-	uint voxelUpdateFrame = ((chunkId * STAGGER_FRAMES) + ditherStep)%CYCLE_FRAMES;
+	// uint voxelUpdateFrame = ((chunkId * STAGGER_FRAMES) + ditherStep)%CYCLE_FRAMES;
 	// uint voxelUpdateFrame = mCode % CYCLE_FRAMES;
+	// uint voxelUpdateFrame = (owenScrambleBase4(encodeMorton3D(vox), uGlobalSeed) & ~3u) % CYCLE_FRAMES;
+	// uint voxelUpdateFrame = (bayer3D(vox)^encodeMorton3D(vox)) % CYCLE_FRAMES;
+	// uint voxelUpdateFrame = (encodeMorton3D(vox*uvec3(1,3,2))) % CYCLE_FRAMES;
+	// uint voxelUpdateFrame = (bayer3D(vox)) % CYCLE_FRAMES;
 
+
+	uint cycleFrame = (uFrameIndex) % CYCLE_FRAMES;
+
+	float evolutionSpeed = 0.05; // Adjust this to control how fast the clouds morph
+	float continuousTime = float(int((uFrameIndex)/CYCLE_FRAMES) * evolutionSpeed);
+	// float continuousTime = float(uFrameIndex) * (evolutionSpeed / float(CYCLE_FRAMES));
+
+	uvec3 macroPos = vox / 4u;
+	uvec3 microPos = vox % 4u;
+
+	uint h = fastVec3ToUint(macroPos);
+	uint localSeq = encodeMorton3D(microPos);
+	if (localSeq % 2 == 0) localSeq = bitfieldReverse(localSeq);
+
+	uint voxelUpdateFrame = (h + localSeq) % CYCLE_FRAMES;
 
 
 	vec3 rawDelta = uCameraPosition.xyz - uPreviousCameraPosition.xyz;

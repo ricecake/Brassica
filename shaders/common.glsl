@@ -66,6 +66,18 @@ uint hash(uint x) {
 	return x;
 }
 
+uint fastVec3ToUint(vec3 p) {
+    uvec3 x = floatBitsToUint(p);
+    const uint q = 1103515245u; // Standard LCG multiplier
+
+    x = ((x >> 8u) ^ x.yzx) * q;
+    x = ((x >> 8u) ^ x.yzx) * q;
+    x = ((x >> 8u) ^ x.yzx) * q;
+
+    return x.x ^ x.y ^ x.z;
+}
+
+
 float clamp01(float t) {
 	return clamp(t, 0.0, 1.0);
 }
@@ -881,6 +893,20 @@ HierarchicalWorleyData2D hierarchicalWorleyTiled(in vec2 p, in float period) {
     }
 
     return HierarchicalWorleyData2D(sqrt(f1_dist), sqrt(f2_dist), f1_pos, f2_pos, f1_level, f2_level, f1_id, f2_id, p);
+}
+
+// Generates a 3D Bayer value in [0, 1) directly from coordinates
+uint bayer3D(uvec3 pos) {
+    // Interleave the bits of x, y, z to form the 3D Morton code
+    uint morton = (expandBits3D(pos.z) << 2) |
+                  (expandBits3D(pos.y) << 1) |
+                   expandBits3D(pos.x);
+
+    // Reverse all 32 bits
+    uint reversed = bitfieldReverse(morton);
+	return reversed;
+    // // Normalize to [0, 1) by dividing by 2^32
+    // return float(reversed) * 2.3283064365386963e-10;
 }
 
 vec3 get_curl(mat3 J) {
