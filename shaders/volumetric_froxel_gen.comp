@@ -41,6 +41,11 @@ float dualHenyeyGreenstein(float cosTheta, float g) {
 	return mix(hg2, hg1, alpha);
 }
 
+// Maps normalized slice coordinate [0..1] to ray distance exponentially
+float froxelNormToDist(float zNorm, float maxDist, float alpha) {
+	return maxDist * (exp(alpha * zNorm) - 1.0) / (exp(alpha) - 1.0);
+}
+
 // Calculates terrain volumetric shadowing (god rays) using hierarchical min-max ray clearance
 float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMaxIndex, uint gridDim) {
 	if (minMaxIndex == 0xFFFFu || minMaxIndex == 0u) return 1.0;
@@ -52,7 +57,7 @@ float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMax
 		0.0
 	);
 
-	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 12800.0, 12.0);
+	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 100000.0, 12.0);
 	return mix(0.15, 1.0, softVal);
 }
 
@@ -90,7 +95,8 @@ void main() {
 		push.camForward.xyz
 	);
 
-	float cascadeRanges[3] = float[3](200.0, 1600.0, 12800.0);
+	float cascadeRanges[3] = float[3](300.0, 3000.0, 100000.0);
+	const float kExpAlpha = 3.5;
 
 	for (int c = 0; c < 3; ++c) {
 		uint scatIdx = cascadeScatteringIdx[c];
@@ -98,15 +104,22 @@ void main() {
 		if (scatIdx == 0xFFFFu || extIdx == 0xFFFFu) continue;
 
 		float maxDist = cascadeRanges[c];
-		float voxelSizeZ = maxDist / 64.0;
 
 		vec3 accumulatedScattering = vec3(0.0);
-		float accumulatedTransmittance = 1.0;
+		vec3 accumulatedTransmittance = vec3(1.0);
 
 		for (int z = 0; z < 64; ++z) {
 			ivec3 vox = ivec3(xy.x, xy.y, z);
 
-			float dist = ((float(z) + 0.5) / 64.0) * maxDist;
+			float zNearNorm = float(z) / 64.0;
+			float zFarNorm = float(z + 1) / 64.0;
+			float zCenterNorm = (float(z) + 0.5) / 64.0;
+
+			float distNear = froxelNormToDist(zNearNorm, maxDist, kExpAlpha);
+			float distFar = froxelNormToDist(zFarNorm, maxDist, kExpAlpha);
+			float dist = froxelNormToDist(zCenterNorm, maxDist, kExpAlpha);
+			float voxelSizeZ = max(0.001, distFar - distNear);
+
 			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist;
 
 			float noiseScale = 0.018 / pow(2.5, float(c));
@@ -153,18 +166,28 @@ void main() {
 			// Rain optical properties: neutral spectral scattering and higher extinction
 			vec3 baseScatteringCoeff = vec3(0.92, 0.95, 1.0);
 			vec3 rainScatteringCoeff = vec3(0.98, 0.99, 1.0);
-			vec3 scatteringCoeff = density * mix(baseScatteringCoeff, rainScatteringCoeff, rainFactor);
-
-			float extinctionCoeff = density * mix(1.0, 1.8, rainFactor);
+			vec3 fogScatCoeff = density * mix(baseScatteringCoeff, rainScatteringCoeff, rainFactor);
+			vec3 fogExtCoeff = vec3(density * mix(1.0, 1.8, rainFactor));
 			float emissivity = 0.01 * density;
+
+			// Atmospheric Rayleigh and Mie scattering coefficients
+			float heightM = max(0.0, worldPos.y);
+			float rayleighDensity = exp(-heightM / 8000.0);
+			vec3 rayleighScat = vec3(5.8e-6, 1.35e-5, 3.31e-5) * rayleighDensity;
+			vec3 rayleighExt = rayleighScat;
+
+			float mieDensity = exp(-heightM / 1200.0);
+			vec3 mieScat = vec3(3.996e-6) * mieDensity;
+			vec3 mieExt = vec3(3.996e-6 + 4.4e-6) * mieDensity;
+
+			vec3 totalScatCoeff = fogScatCoeff + rayleighScat + mieScat;
+			vec3 totalExtCoeff = fogExtCoeff + rayleighExt + mieExt;
 
 			// Low sun elevation godray boost and anisotropy
 			float sunElevation = max(0.0, push.sunDir.y);
 			float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
 			float directSunScatteringBoost = 1.0 + lowSunFactor * 1.5;
 			float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
-
-			// Rain drops exhibit strong forward diffraction scattering
 			float effectiveG = mix(sunAnisotropyG, 0.88, rainFactor);
 
 			uint gridDim = uint(push.fogParams.w);
@@ -179,9 +202,11 @@ void main() {
 			}
 
 			float cosTheta = dot(viewRayDir, push.sunDir.xyz);
-			float phase = dualHenyeyGreenstein(cosTheta, effectiveG);
+			float rayleighPhase = (3.0 / (16.0 * PI)) * (1.0 + cosTheta * cosTheta);
+			float miePhase = dualHenyeyGreenstein(cosTheta, effectiveG);
 
-			vec3 directSun = push.sunColor.rgb * push.sunDir.w * phase * shadowTerm * directSunScatteringBoost;
+			vec3 sunScat = push.sunColor.rgb * push.sunDir.w * shadowTerm * directSunScatteringBoost;
+			vec3 directSun = (fogScatCoeff * miePhase + rayleighScat * rayleighPhase + mieScat * miePhase) * sunScat;
 
 			vec3 skyAmbient = vec3(0.20, 0.35, 0.55) * max(0.2, push.sunDir.y) + vec3(0.05, 0.08, 0.12);
 			if (skyViewIndex != 0xFFFFu && skyViewIndex != 0u) {
@@ -189,8 +214,8 @@ void main() {
 				vec3 viewSky = sampleSkyView(skyViewIndex, viewRayDir);
 				skyAmbient = mix(zenithSky, viewSky, 0.5);
 			}
-			// Darken ambient scattering in cloud-shadowed volume columns
 			skyAmbient *= mix(0.4, 1.0, cloudTransmittance);
+			vec3 ambientScat = totalScatCoeff * skyAmbient;
 
 			vec3 localLightScattering = vec3(0.0);
 			uint maxLightsToSample = min(uLightCount, 32u);
@@ -224,11 +249,10 @@ void main() {
 				localLightScattering += uLights[li].color * uLights[li].intensity * attenuation * localPhase;
 			}
 
-			vec3 totalIllumination = directSun + skyAmbient + localLightScattering;
-			vec3 cellScattering = scatteringCoeff * totalIllumination + vec3(emissivity);
+			vec3 cellScattering = directSun + ambientScat + localLightScattering + vec3(emissivity);
 
-			float sliceTransmittance = exp(-extinctionCoeff * voxelSizeZ);
-			vec3 integratedScattering = cellScattering * (1.0 - sliceTransmittance) / max(0.00001, extinctionCoeff);
+			vec3 sliceTransmittance = exp(-totalExtCoeff * voxelSizeZ);
+			vec3 integratedScattering = cellScattering * (vec3(1.0) - sliceTransmittance) / max(vec3(0.00001), totalExtCoeff);
 
 			accumulatedScattering += integratedScattering * accumulatedTransmittance;
 			accumulatedTransmittance *= sliceTransmittance;
@@ -242,7 +266,7 @@ void main() {
 			imageStore(
 				uImages3DGenericWrite[nonuniformEXT(extIdx)],
 				vox,
-				vec4(vec3(accumulatedTransmittance), 1.0)
+				vec4(accumulatedTransmittance, 1.0)
 			);
 		}
 	}
