@@ -63,7 +63,7 @@ float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMax
 
 void main() {
 	uvec2 xy = gl_GlobalInvocationID.xy;
-	if (xy.x >= 64 || xy.y >= 64) return;
+	if (xy.x >= 128 || xy.y >= 96) return;
 
 	uint scat0 = unpackLow16(push.indices0.x);
 	uint scat1 = unpackHigh16(push.indices0.x);
@@ -83,8 +83,8 @@ void main() {
 
 	vec3 camRight = normalize(cross(push.camForward.xyz, push.camUp.xyz));
 
-	float ndcX = (((float(xy.x) + 0.5) / 64.0) * 2.0 - 1.0);
-	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 64.0) * 2.0);
+	float ndcX = (((float(xy.x) + 0.5) / 128.0) * 2.0 - 1.0);
+	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 96.0) * 2.0);
 
 	float tanHalfFov = push.camForward.w;
 	float aspect = push.camUp.w;
@@ -107,6 +107,7 @@ void main() {
 
 		vec3 accumulatedScattering = vec3(0.0);
 		vec3 accumulatedTransmittance = vec3(1.0);
+		bool hasOccluded = false;
 
 		for (int z = 0; z < 64; ++z) {
 			ivec3 vox = ivec3(xy.x, xy.y, z);
@@ -186,23 +187,16 @@ void main() {
 			uint gridDim = uint(push.fogParams.w);
 
 			// Check if the current voxel sample point is underground (inside solid terrain earth)
-			bool isUnderground = false;
-			if (clipmapIndex > 0u && clipmapIndex != 0xFFFFu) {
+			if (!hasOccluded && clipmapIndex > 0u && clipmapIndex != 0xFFFFu) {
 				uint lodLevel = terrainClipmapLevelFor(worldPos.xz, gridDim, 8u);
 				float rawTerrainHeight = sampleTerrainClipmap(clipmapIndex, worldPos.xz, min(lodLevel, 7u), gridDim).r;
 				float renderTerrainHeight = rawTerrainHeight - terrainDropOff(worldPos.xz);
 				if (worldPos.y <= renderTerrainHeight) {
-					isUnderground = true;
+					hasOccluded = true;
 				}
 			}
 
-			if (isUnderground) {
-				fogScatCoeff = vec3(0.0);
-				fogExtCoeff = vec3(0.0);
-				rayleighScat = vec3(0.0);
-				rayleighExt = vec3(0.0);
-				mieScat = vec3(0.0);
-				mieExt = vec3(0.0);
+			if (hasOccluded) {
 				totalScatCoeff = vec3(0.0);
 				totalExtCoeff = vec3(0.0);
 				emissivity = 0.0;
@@ -275,7 +269,7 @@ void main() {
 
 			vec3 cellScattering = directSun + ambientScat + localLightScattering + vec3(emissivity);
 
-			vec3 sliceTransmittance = exp(-totalExtCoeff * voxelSizeZ);
+			vec3 sliceTransmittance = hasOccluded ? vec3(0.0) : exp(-totalExtCoeff * voxelSizeZ);
 			vec3 integratedScattering = cellScattering * (vec3(1.0) - sliceTransmittance) / max(vec3(0.00001), totalExtCoeff);
 
 			accumulatedScattering += integratedScattering * accumulatedTransmittance;

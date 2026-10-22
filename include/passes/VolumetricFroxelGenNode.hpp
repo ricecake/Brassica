@@ -174,8 +174,8 @@ namespace brassica {
 
 			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {
-				// 64 / 8 = 8 workgroups per dimension x and y (z is integrated in shader column)
-				vkCmd.dispatch(8, 8, 1);
+				// 128 / 8 = 16, 96 / 8 = 12 workgroups (z is integrated in shader column)
+				vkCmd.dispatch(16, 12, 1);
 			}
 		}
 	};
