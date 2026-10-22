@@ -183,6 +183,31 @@ void main() {
 			vec3 totalScatCoeff = fogScatCoeff + rayleighScat + mieScat;
 			vec3 totalExtCoeff = fogExtCoeff + rayleighExt + mieExt;
 
+			uint gridDim = uint(push.fogParams.w);
+
+			// Check if the current voxel sample point is underground (inside solid terrain earth)
+			bool isUnderground = false;
+			if (clipmapIndex > 0u && clipmapIndex != 0xFFFFu) {
+				uint lodLevel = terrainClipmapLevelFor(worldPos.xz, gridDim, 8u);
+				float rawTerrainHeight = sampleTerrainClipmap(clipmapIndex, worldPos.xz, min(lodLevel, 7u), gridDim).r;
+				float renderTerrainHeight = rawTerrainHeight - terrainDropOff(worldPos.xz);
+				if (worldPos.y <= renderTerrainHeight) {
+					isUnderground = true;
+				}
+			}
+
+			if (isUnderground) {
+				fogScatCoeff = vec3(0.0);
+				fogExtCoeff = vec3(0.0);
+				rayleighScat = vec3(0.0);
+				rayleighExt = vec3(0.0);
+				mieScat = vec3(0.0);
+				mieExt = vec3(0.0);
+				totalScatCoeff = vec3(0.0);
+				totalExtCoeff = vec3(0.0);
+				emissivity = 0.0;
+			}
+
 			// Low sun elevation godray boost and anisotropy
 			float sunElevation = max(0.0, push.sunDir.y);
 			float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
@@ -190,7 +215,6 @@ void main() {
 			float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
 			float effectiveG = mix(sunAnisotropyG, 0.88, rainFactor);
 
-			uint gridDim = uint(push.fogParams.w);
 			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, minMaxIndex, gridDim);
 
 			// Emphasize cloud shadow contrast
