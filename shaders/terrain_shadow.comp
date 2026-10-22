@@ -1,0 +1,79 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform TerrainShadowPushConstants {
+	vec4  cameraPos;   // xyz = camera position, w = time
+	vec4  sunDir;      // xyz = sun direction, w = sun intensity
+	uvec4 gridParams;  // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = mapDim
+	uvec4 indices;     // x = minMaxIndex, y = clipmapIndex, z = shadowMapStorageIdx, w = unused
+	uvec4 cascadeLODs; // x = cascade 0 LOD (1), y = cascade 1 LOD (3), z = cascade 2 LOD (6), w = unused
+} push;
+
+void main() {
+	uvec2 xy = gl_GlobalInvocationID.xy;
+	uint  cascade = gl_GlobalInvocationID.z;
+
+	uint mapDim = (push.gridParams.w > 0u) ? push.gridParams.w : 1024u;
+	if (xy.x >= mapDim || xy.y >= mapDim || cascade >= 3u) return;
+
+	uint minMaxIndex = push.indices.x;
+	uint clipmapIndex = push.indices.y;
+	uint shadowMapStorageIdx = push.indices.z;
+
+	if (shadowMapStorageIdx == 0u || shadowMapStorageIdx == 0xFFFFFFFFu) return;
+
+	uint cascadeLOD = (cascade == 0u) ? push.cascadeLODs.x : ((cascade == 1u) ? push.cascadeLODs.y : push.cascadeLODs.z);
+
+	float cascadeExtent = float(mapDim) * texelSize(cascadeLOD);
+	vec2 uv = (vec2(xy) + 0.5) / float(mapDim);
+	vec2 offsetFromCam = (uv - 0.5) * cascadeExtent;
+	vec2 worldXZ = uCameraPosition.xz + offsetFromCam;
+
+	float terrainHeight = 0.0;
+	if (clipmapIndex > 0u && clipmapIndex != 0xFFFFFFFFu) {
+		terrainHeight = sampleTerrainClipmap(clipmapIndex, worldXZ, cascadeLOD, mapDim).r;
+	}
+
+	vec3 lightDir = normalize(push.sunDir.xyz);
+	if (push.sunDir.w <= 0.0 || lightDir.y <= 0.0) {
+		imageStore(
+			uImages2DArrayStorageWrite[nonuniformEXT(shadowMapStorageIdx)],
+			ivec3(xy, cascade),
+			vec4(terrainHeight, terrainHeight - 1000.0, 10000.0, 1.0)
+		);
+		return;
+	}
+
+	float dropOff = terrainDropOff(worldXZ);
+	vec3 rayOrigin = vec3(worldXZ.x, terrainHeight - dropOff + 0.2, worldXZ.y);
+
+	TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
+		minMaxIndex,
+		mapDim,
+		push.gridParams.x,
+		0.0
+	);
+
+	float maxDist = (cascade == 0u) ? 2000.0 : ((cascade == 1u) ? 8000.0 : 25000.0);
+	const float kPenumbra = 8.0;
+
+	float hitDist = maxDist;
+	bool isOccluded = traceTerrainOcclusion(occCtx, rayOrigin, lightDir, maxDist, hitDist);
+
+	float softShadow = calculateTerrainSoftShadow(occCtx, rayOrigin, lightDir, maxDist, kPenumbra);
+
+	float occlusionHeight = (isOccluded) ? (rayOrigin.y + lightDir.y * hitDist + dropOff) : (terrainHeight - 1000.0);
+	float occlusionDist = (isOccluded) ? hitDist : maxDist;
+
+	imageStore(
+		uImages2DArrayStorageWrite[nonuniformEXT(shadowMapStorageIdx)],
+		ivec3(xy, cascade),
+		vec4(terrainHeight, occlusionHeight, occlusionDist, softShadow)
+	);
+}

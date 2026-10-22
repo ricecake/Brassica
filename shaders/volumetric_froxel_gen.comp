@@ -41,18 +41,11 @@ float dualHenyeyGreenstein(float cosTheta, float g) {
 	return mix(hg2, hg1, alpha);
 }
 
-// Calculates terrain volumetric shadowing (god rays) using hierarchical min-max ray clearance
-float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMaxIndex, uint gridDim) {
-	if (minMaxIndex == 0xFFFFu || minMaxIndex == 0u) return 1.0;
+// Calculates terrain volumetric shadowing (god rays) using precalculated 2D terrain shadow map
+float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint shadowMapIndex, uint gridDim) {
+	if (shadowMapIndex == 0xFFFFu || shadowMapIndex == 0u) return 1.0;
 
-	TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-		minMaxIndex,
-		gridDim > 0u ? gridDim : 1024u,
-		8u,
-		0.0
-	);
-
-	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 12800.0, 12.0);
+	float softVal = evaluateTerrainShadowFromMap(shadowMapIndex, worldPos, lightDir, gridDim);
 	return mix(0.15, 1.0, softVal);
 }
 
@@ -72,6 +65,7 @@ void main() {
 	uint minMaxIndex       = unpackHigh16(push.indices1.x);
 	uint cloudShadowIndex  = unpackLow16(push.indices1.y);
 	uint weatherBiomeIndex = unpackHigh16(push.indices1.y);
+	uint shadowMapIndex    = unpackLow16(push.indices1.z);
 
 	uint cascadeScatteringIdx[3] = uint[3](scat0, scat1, scat2);
 	uint cascadeExtinctionIdx[3] = uint[3](ext0, ext1, ext2);
@@ -168,7 +162,7 @@ void main() {
 			float effectiveG = mix(sunAnisotropyG, 0.88, rainFactor);
 
 			uint gridDim = uint(push.fogParams.w);
-			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, minMaxIndex, gridDim);
+			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, shadowMapIndex, gridDim);
 
 			// Emphasize cloud shadow contrast
 			float cloudTransmittance = 1.0;
