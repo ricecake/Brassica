@@ -16,11 +16,17 @@ layout(push_constant) uniform TerrainShadowPushConstants {
 } push;
 
 void main() {
-	uvec2 xy = gl_GlobalInvocationID.xy;
+	uvec2 subXY = gl_GlobalInvocationID.xy;
 	uint  cascade = gl_GlobalInvocationID.z;
 
 	uint mapDim = (push.gridParams.w > 0u) ? push.gridParams.w : 1024u;
-	if (xy.x >= mapDim || xy.y >= mapDim || cascade >= 3u) return;
+	uint halfDim = mapDim / 2u;
+	if (subXY.x >= halfDim || subXY.y >= halfDim || cascade >= 3u) return;
+
+	// Evaluate 1/4 of pixels per frame on a 2x2 interleaved subpixel grid
+	uint frameOffsetIndex = uFrameIndex % 4u;
+	uvec2 subOffset = uvec2(frameOffsetIndex % 2u, frameOffsetIndex / 2u);
+	uvec2 xy = subXY * 2u + subOffset;
 
 	uint minMaxIndex = push.indices.x;
 	uint clipmapIndex = push.indices.y;
@@ -45,7 +51,7 @@ void main() {
 		imageStore(
 			uImageArraysGenericWrite[nonuniformEXT(shadowMapStorageIdx)],
 			ivec3(xy, cascade),
-			vec4(terrainHeight, terrainHeight - 1000.0, 10000.0, 1.0)
+			vec4(terrainHeight, 0.0, 10000.0, 1.0)
 		);
 		return;
 	}
@@ -68,12 +74,19 @@ void main() {
 
 	float softShadow = calculateTerrainSoftShadow(occCtx, rayOrigin, lightDir, maxDist, kPenumbra);
 
-	float occlusionHeight = (isOccluded) ? (rayOrigin.y + lightDir.y * hitDist + dropOff) : (terrainHeight - 1000.0);
+	// Max occlusion depth: height above ground required for a parallel sun ray to clear all occluders
+	float occlusionDepth = 0.0;
+	if (isOccluded) {
+		float occluderRenderY = rayOrigin.y + lightDir.y * hitDist;
+		float occluderWorldY = occluderRenderY + dropOff;
+		occlusionDepth = max(0.0, (occluderWorldY - terrainHeight) + 1.0);
+	}
+
 	float occlusionDist = (isOccluded) ? hitDist : maxDist;
 
 	imageStore(
 		uImageArraysGenericWrite[nonuniformEXT(shadowMapStorageIdx)],
 		ivec3(xy, cascade),
-		vec4(terrainHeight, occlusionHeight, occlusionDist, softShadow)
+		vec4(terrainHeight, occlusionDepth, occlusionDist, softShadow)
 	);
 }

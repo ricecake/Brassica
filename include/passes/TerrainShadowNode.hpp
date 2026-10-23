@@ -84,8 +84,8 @@ namespace brassica {
 			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			// Dispatch 1024 / 16 = 64 workgroups in x and y, 3 in z (for 3 cascades)
-			vkCmd.dispatch(64, 64, 3);
+			// Dispatch 512 / 16 = 32 workgroups in x and y (evaluating 1/4 of 1024x1024 pixels per frame), 3 in z
+			vkCmd.dispatch(32, 32, 3);
 		}
 	};
 

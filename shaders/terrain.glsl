@@ -590,8 +590,7 @@ float evaluateTerrainShadowFromMap(
 	vec4 shadowData = SAMPLE_ARRAY_CLAMP(shadowMapIndex, vec3(shadowUV, float(cascade)));
 
 	float terrainHeight = shadowData.r;
-	float occlusionHeight = shadowData.g;
-	float occlusionDist = shadowData.b;
+	float occlusionDepth = shadowData.g;
 	float groundShadow = shadowData.a;
 
 	if (groundShadow >= 0.99) return 1.0;
@@ -599,17 +598,19 @@ float evaluateTerrainShadowFromMap(
 	float dropOff = terrainDropOff(worldPos.xz);
 	float renderTerrainH = terrainHeight - dropOff;
 
-	if (worldPos.y <= renderTerrainH + 0.2) {
+	float heightAboveGround = worldPos.y - renderTerrainH;
+
+	// Ground surface and points below occlusion depth remain shadowed
+	if (occlusionDepth <= 0.001 || heightAboveGround <= 0.0) {
 		return groundShadow;
 	}
 
-	float shadowTop = occlusionHeight - occlusionDist * lightDir.y;
-	if (worldPos.y >= shadowTop) {
+	if (heightAboveGround >= occlusionDepth) {
 		return 1.0;
 	}
 
-	float heightFraction = clamp((worldPos.y - renderTerrainH) / max(0.1, shadowTop - renderTerrainH), 0.0, 1.0);
-	return mix(groundShadow, 1.0, heightFraction);
+	float clearFraction = clamp(heightAboveGround / occlusionDepth, 0.0, 1.0);
+	return mix(groundShadow, 1.0, clearFraction);
 }
 
 // Shared by isAABBOccludedByTerrain's three rays: traces from `from` toward `target` (both
