@@ -28,7 +28,7 @@ float froxelDistToNorm(float dist, float maxDist, float alpha) {
 	return log(1.0 + normDist * (exp(alpha) - 1.0)) / alpha;
 }
 
-vec4 sampleFroxelCascade(int c, vec3 relPos, out vec3 outTransmittance) {
+vec4 sampleFroxelCascade(int c, vec3 relPos, float dither, out vec3 outTransmittance) {
 	float cascadeRanges[3] = float[3](300.0, 3000.0, 100000.0);
 	float maxDist = cascadeRanges[c];
 
@@ -58,6 +58,7 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, out vec3 outTransmittance) {
 
 	float rayLen = length(relPos);
 	float zNorm = froxelDistToNorm(rayLen, maxDist, 3.5);
+	zNorm = clamp(zNorm + dither, 0.0, 1.0);
 
 	vec3 uv3d = vec3(
 		clamp(viewX / frustumWidthAtZ + 0.5, 0.0, 1.0),
@@ -73,6 +74,7 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, out vec3 outTransmittance) {
 }
 
 void main() {
+	float ditherOffset = (getBayer8x8Dither(ivec2(gl_FragCoord.xy)) - 0.5) / 64.0;
 	vec4 currentHdr = SAMPLE_NEAREST(push.hdrColorIndex, inUV);
 	vec4 posSample = SAMPLE_NEAREST(push.gPositionIndex, inUV);
 
@@ -102,22 +104,22 @@ void main() {
 
 	if (rayDist <= cascadeRanges[0]) {
 		vec3 t0 = vec3(1.0);
-		vec4 s0 = sampleFroxelCascade(0, relPos, t0);
+		vec4 s0 = sampleFroxelCascade(0, relPos, ditherOffset, t0);
 		fogScattering = s0.rgb;
 		fogTransmittance = t0;
 	} else if (rayDist <= cascadeRanges[1]) {
 		float blend = smoothstep(cascadeRanges[0] * 0.7, cascadeRanges[0], rayDist);
 		vec3 t0 = vec3(1.0), t1 = vec3(1.0);
-		vec4 s0 = sampleFroxelCascade(0, relPos, t0);
-		vec4 s1 = sampleFroxelCascade(1, relPos, t1);
+		vec4 s0 = sampleFroxelCascade(0, relPos, ditherOffset, t0);
+		vec4 s1 = sampleFroxelCascade(1, relPos, ditherOffset, t1);
 
 		fogScattering = mix(s0.rgb, s1.rgb, blend);
 		fogTransmittance = mix(t0, t1, blend);
 	} else {
 		float blend = smoothstep(cascadeRanges[1] * 0.7, cascadeRanges[1], rayDist);
 		vec3 t1 = vec3(1.0), t2 = vec3(1.0);
-		vec4 s1 = sampleFroxelCascade(1, relPos, t1);
-		vec4 s2 = sampleFroxelCascade(2, relPos, t2);
+		vec4 s1 = sampleFroxelCascade(1, relPos, ditherOffset, t1);
+		vec4 s2 = sampleFroxelCascade(2, relPos, ditherOffset, t2);
 
 		fogScattering = mix(s1.rgb, s2.rgb, blend);
 		fogTransmittance = mix(t1, t2, blend);
