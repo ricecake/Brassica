@@ -14,35 +14,73 @@ namespace brassica {
 	class Sound;
 
 	struct AudioManagerState {
+		// Total Output Levels
 		float masterVolume{1.0f};
 		float musicVolume{1.0f};
 		float sfxVolume{1.0f};
 		float globalPitch{1.0f};
 
-		bool enableWind{true};
-		bool enableRain{false};
-		bool enableRustle{false};
-		bool enableSpaceNoise{true};
-		bool enableSpeedWoosh{true};
+		// Wind Generator Aspects
+		bool  enableWind{true};
+		float windVolume{1.0f};
+		float windPitch{1.0f};
+		float windResonance{1.0f};
+
+		// Rain Generator Aspects
+		bool  enableRain{false};
+		float rainVolume{1.0f};
+		float rainPitch{1.0f};
+		float rainDensity{1.0f};
+
+		// Rustle Generator Aspects
+		bool  enableRustle{false};
+		float rustleVolume{1.0f};
+		float rustlePitch{1.0f};
+		float rustleModSpeed{1.0f};
+
+		// Space Generator Aspects
+		bool  enableSpaceNoise{true};
+		float spaceVolume{1.0f};
+		float spacePitch{1.0f};
+		float spaceSubFreq{35.0f};
+
+		// Speed Woosh Generator Aspects
+		bool  enableSpeedWoosh{true};
+		float speedWooshVolume{1.0f};
+		float speedWooshPitch{1.0f};
+		float speedWooshResonance{1.0f};
 
 		auto GetReflection() const {
 			return std::make_tuple(
-				MakeField(
-					"masterVolume",
-					"Master Volume",
-					&AudioManagerState::masterVolume,
-					0.0f,
-					1.0f,
-					UIHint::Slider
-				),
+				MakeField("masterVolume", "Master Volume", &AudioManagerState::masterVolume, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("musicVolume", "Music Volume", &AudioManagerState::musicVolume, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("sfxVolume", "SFX Volume", &AudioManagerState::sfxVolume, 0.0f, 1.0f, UIHint::Slider),
 				MakeField("globalPitch", "Global Pitch", &AudioManagerState::globalPitch, 0.1f, 2.0f, UIHint::Slider),
+
 				MakeField("enableWind", "Enable Wind Effect", &AudioManagerState::enableWind),
+				MakeField("windVolume", "Wind Volume", &AudioManagerState::windVolume, 0.0f, 2.0f, UIHint::Slider),
+				MakeField("windPitch", "Wind Pitch / Frequency", &AudioManagerState::windPitch, 0.1f, 3.0f, UIHint::Slider),
+				MakeField("windResonance", "Wind Resonance", &AudioManagerState::windResonance, 0.1f, 3.0f, UIHint::Slider),
+
 				MakeField("enableRain", "Enable Rain Effect", &AudioManagerState::enableRain),
+				MakeField("rainVolume", "Rain Volume", &AudioManagerState::rainVolume, 0.0f, 2.0f, UIHint::Slider),
+				MakeField("rainPitch", "Rain Pitch / Filter", &AudioManagerState::rainPitch, 0.1f, 3.0f, UIHint::Slider),
+				MakeField("rainDensity", "Rain Drop Density", &AudioManagerState::rainDensity, 0.1f, 3.0f, UIHint::Slider),
+
 				MakeField("enableRustle", "Enable Rustle Effect", &AudioManagerState::enableRustle),
+				MakeField("rustleVolume", "Rustle Volume", &AudioManagerState::rustleVolume, 0.0f, 2.0f, UIHint::Slider),
+				MakeField("rustlePitch", "Rustle Pitch / Cutoff", &AudioManagerState::rustlePitch, 0.1f, 3.0f, UIHint::Slider),
+				MakeField("rustleModSpeed", "Rustle Modulation Speed", &AudioManagerState::rustleModSpeed, 0.1f, 3.0f, UIHint::Slider),
+
 				MakeField("enableSpaceNoise", "Enable Space Noise Effect", &AudioManagerState::enableSpaceNoise),
-				MakeField("enableSpeedWoosh", "Enable Speed Woosh Effect", &AudioManagerState::enableSpeedWoosh)
+				MakeField("spaceVolume", "Space Noise Volume", &AudioManagerState::spaceVolume, 0.0f, 2.0f, UIHint::Slider),
+				MakeField("spacePitch", "Space Pitch / Cutoff", &AudioManagerState::spacePitch, 0.1f, 3.0f, UIHint::Slider),
+				MakeField("spaceSubFreq", "Space Sub-Bass Frequency (Hz)", &AudioManagerState::spaceSubFreq, 10.0f, 120.0f, UIHint::Slider),
+
+				MakeField("enableSpeedWoosh", "Enable Speed Woosh Effect", &AudioManagerState::enableSpeedWoosh),
+				MakeField("speedWooshVolume", "Speed Woosh Volume", &AudioManagerState::speedWooshVolume, 0.0f, 2.0f, UIHint::Slider),
+				MakeField("speedWooshPitch", "Speed Woosh Pitch / Sweep", &AudioManagerState::speedWooshPitch, 0.1f, 3.0f, UIHint::Slider),
+				MakeField("speedWooshResonance", "Speed Woosh Resonance", &AudioManagerState::speedWooshResonance, 0.1f, 3.0f, UIHint::Slider)
 			);
 		}
 	};

@@ -17,6 +17,7 @@ namespace brassica {
 	void SpaceAudioEffect::OnRead(float* pOutput, ma_uint64 frameCount) {
 		float gain = m_gain.load(std::memory_order_relaxed);
 		float alpha = m_cutoffAlpha.load(std::memory_order_relaxed);
+		float subFreq = m_subBassFreq.load(std::memory_order_relaxed);
 
 		if (gain <= 0.0001f) {
 			for (ma_uint64 i = 0; i < frameCount * m_channels; ++i) {
@@ -33,8 +34,8 @@ namespace brassica {
 			// Muffled low-pass filtering (sub-bass / drone)
 			m_lowPass = m_lowPass + alpha * (white - m_lowPass);
 
-			// Add a subtle low-frequency sub-oscillation (~35Hz sub-bass)
-			m_subPhase += 2.0f * 3.14159265f * 35.0f * dt;
+			// Add low-frequency sub-oscillation
+			m_subPhase += 2.0f * 3.14159265f * subFreq * dt;
 			if (m_subPhase > 2.0f * 3.14159265f) {
 				m_subPhase -= 2.0f * 3.14159265f;
 			}
@@ -55,8 +56,11 @@ namespace brassica {
 
 		m_currentAltitude += (state.altitude - m_currentAltitude) * deltaTime * 2.0f;
 
-		float gain = targetSpaceFactor * 0.4f;
-		float alpha = 0.001f + targetSpaceFactor * 0.007f;
+		float vol = m_volumeScale.load(std::memory_order_relaxed);
+		float pitch = m_pitchScale.load(std::memory_order_relaxed);
+
+		float gain = targetSpaceFactor * 0.4f * vol;
+		float alpha = std::clamp((0.001f + targetSpaceFactor * 0.007f) * pitch, 0.0001f, 0.2f);
 
 		m_gain.store(gain, std::memory_order_relaxed);
 		m_cutoffAlpha.store(alpha, std::memory_order_relaxed);

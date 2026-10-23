@@ -41,8 +41,12 @@ namespace brassica {
 
 	void RustleAudioEffect::OnUpdate(float deltaTime, const AudioState& state) {
 		float strength = std::clamp(state.windStrength, 0.0f, 1.0f);
-		float targetGain = strength * state.grassDensity * 0.25f;
-		m_timeStep += deltaTime;
+		float vol = m_volumeScale.load(std::memory_order_relaxed);
+		float pitch = m_pitchScale.load(std::memory_order_relaxed);
+		float modSpeed = m_modSpeedScale.load(std::memory_order_relaxed);
+
+		float targetGain = strength * state.grassDensity * 0.25f * vol;
+		m_timeStep += deltaTime * modSpeed;
 
 		float mod = std::sin(m_timeStep * 3.0f) * 0.25f + 0.75f;
 
@@ -50,7 +54,7 @@ namespace brassica {
 		float nextGain = currentGain + (targetGain - currentGain) * deltaTime * 2.0f * mod;
 		m_gain.store(nextGain, std::memory_order_relaxed);
 
-		float targetAlpha = 0.02f + strength * 0.1f;
+		float targetAlpha = std::clamp((0.02f + strength * 0.1f) * pitch, 0.001f, 0.5f);
 		float currentAlpha = m_lowPassAlpha.load(std::memory_order_relaxed);
 		float nextAlpha = currentAlpha + (targetAlpha - currentAlpha) * deltaTime * 1.0f;
 		m_lowPassAlpha.store(nextAlpha, std::memory_order_relaxed);

@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "ArgparseManager.hpp"
+#include "audio/IAudioManager.hpp"
 #include "ConfigManager.hpp"
 #include "IManager.hpp"
 #include "imgui.h"
@@ -31,6 +32,9 @@ namespace brassica::ui {
 
 			std::vector<IManager*> managers;
 
+			if (ServiceLocator::Instance().Has<IAudioManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<IAudioManager>().get());
+			}
 			if (ServiceLocator::Instance().Has<ILightManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ILightManager>().get());
 			}

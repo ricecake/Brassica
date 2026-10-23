@@ -38,11 +38,15 @@ namespace brassica {
 		AudioManagerState mgrState{};
 		CHECK(mgrState.masterVolume == 1.0f);
 		CHECK(mgrState.enableWind == true);
+		CHECK(mgrState.windVolume == 1.0f);
+		CHECK(mgrState.windPitch == 1.0f);
+		CHECK(mgrState.windResonance == 1.0f);
 		CHECK(mgrState.enableSpaceNoise == true);
+		CHECK(mgrState.spaceSubFreq == 35.0f);
 		CHECK(mgrState.enableSpeedWoosh == true);
 
 		auto reflection = mgrState.GetReflection();
-		CHECK(std::tuple_size<decltype(reflection)>::value == 9);
+		CHECK(std::tuple_size<decltype(reflection)>::value == 24);
 
 		ConfigManager config("TestApp");
 		config.Initialize();
@@ -52,11 +56,17 @@ namespace brassica {
 
 		mgrState.masterVolume = 0.75f;
 		mgrState.enableRain = true;
+		mgrState.windPitch = 1.5f;
+		mgrState.rainDensity = 2.0f;
+		mgrState.spaceSubFreq = 50.0f;
 		audioMgr.SetState(mgrState);
 
 		audioMgr.SaveState(config);
 		CHECK(config.GetManagerSetting<float>("AudioManager", "masterVolume", 1.0f) == 0.75f);
 		CHECK(config.GetManagerSetting<bool>("AudioManager", "enableRain", false) == true);
+		CHECK(config.GetManagerSetting<float>("AudioManager", "windPitch", 1.0f) == 1.5f);
+		CHECK(config.GetManagerSetting<float>("AudioManager", "rainDensity", 1.0f) == 2.0f);
+		CHECK(config.GetManagerSetting<float>("AudioManager", "spaceSubFreq", 35.0f) == 50.0f);
 
 		AudioManager newAudioMgr;
 		newAudioMgr.Initialize();
@@ -65,16 +75,34 @@ namespace brassica {
 		auto loadedState = newAudioMgr.GetState();
 		CHECK(loadedState.masterVolume == 0.75f);
 		CHECK(loadedState.enableRain == true);
+		CHECK(loadedState.windPitch == 1.5f);
+		CHECK(loadedState.rainDensity == 2.0f);
+		CHECK(loadedState.spaceSubFreq == 50.0f);
 	}
 
-	TEST_CASE("Procedural Audio Effects PCM Buffer Generation") {
-		SUBCASE("WindAudioEffect Buffer Output") {
+	TEST_CASE("Procedural Audio Effects Setters and Buffer Generation") {
+		SUBCASE("WindAudioEffect Pitch Scaling and Volume Control") {
 			WindAudioEffect wind;
 			AudioState      state{};
 			state.windStrength = 0.5f;
 
+			wind.SetVolumeScale(0.0f);
+			CHECK(wind.GetVolumeScale() == 0.0f);
 			wind.OnUpdate(0.016f, state);
 
+			std::vector<float> zeroBuffer(512 * 2, 1.0f);
+			wind.OnRead(zeroBuffer.data(), 512);
+			for (float sample : zeroBuffer) {
+				CHECK(sample == 0.0f);
+			}
+
+			wind.SetVolumeScale(1.0f);
+			wind.SetPitchScale(2.0f);
+			wind.SetResonanceScale(1.5f);
+			CHECK(wind.GetPitchScale() == 2.0f);
+			CHECK(wind.GetResonanceScale() == 1.5f);
+
+			wind.OnUpdate(0.016f, state);
 			std::vector<float> buffer(512 * 2, 0.0f);
 			wind.OnRead(buffer.data(), 512);
 
@@ -88,10 +116,15 @@ namespace brassica {
 			CHECK(nonZero);
 		}
 
-		SUBCASE("RainAudioEffect Buffer Output") {
+		SUBCASE("RainAudioEffect Pitch and Density Controls") {
 			RainAudioEffect rain;
 			AudioState      state{};
 			state.rainIntensity = 0.8f;
+
+			rain.SetPitchScale(1.2f);
+			rain.SetDensityScale(2.0f);
+			CHECK(rain.GetPitchScale() == 1.2f);
+			CHECK(rain.GetDensityScale() == 2.0f);
 
 			rain.OnUpdate(0.016f, state);
 
@@ -108,11 +141,16 @@ namespace brassica {
 			CHECK(nonZero);
 		}
 
-		SUBCASE("RustleAudioEffect Buffer Output") {
+		SUBCASE("RustleAudioEffect Pitch and Modulation Speed Controls") {
 			RustleAudioEffect rustle;
 			AudioState        state{};
 			state.windStrength = 0.6f;
 			state.grassDensity = 0.9f;
+
+			rustle.SetPitchScale(1.5f);
+			rustle.SetModSpeedScale(2.0f);
+			CHECK(rustle.GetPitchScale() == 1.5f);
+			CHECK(rustle.GetModSpeedScale() == 2.0f);
 
 			rustle.OnUpdate(0.016f, state);
 
@@ -129,9 +167,12 @@ namespace brassica {
 			CHECK(nonZero);
 		}
 
-		SUBCASE("SpaceAudioEffect Altitude Scaling and Buffer Output") {
+		SUBCASE("SpaceAudioEffect Altitude Scaling and Sub-Bass Frequency Control") {
 			SpaceAudioEffect space;
-			AudioState       lowAltState{};
+			space.SetSubBassFreq(50.0f);
+			CHECK(space.GetSubBassFreq() == 50.0f);
+
+			AudioState lowAltState{};
 			lowAltState.altitude = 100.0f;
 
 			space.OnUpdate(0.1f, lowAltState);
@@ -154,13 +195,17 @@ namespace brassica {
 				highEnergy += std::abs(highBuffer[i]);
 			}
 
-			// High altitude should produce significantly higher space noise rumble energy
 			CHECK(highEnergy > lowEnergy);
 		}
 
-		SUBCASE("SpeedWooshAudioEffect Speed Scaling and Buffer Output") {
+		SUBCASE("SpeedWooshAudioEffect Pitch and Resonance Controls") {
 			SpeedWooshAudioEffect woosh;
-			AudioState            lowSpeedState{};
+			woosh.SetPitchScale(1.8f);
+			woosh.SetResonanceScale(2.0f);
+			CHECK(woosh.GetPitchScale() == 1.8f);
+			CHECK(woosh.GetResonanceScale() == 2.0f);
+
+			AudioState lowSpeedState{};
 			lowSpeedState.speed = 5.0f;
 
 			woosh.OnUpdate(0.1f, lowSpeedState);
@@ -183,7 +228,6 @@ namespace brassica {
 				highEnergy += std::abs(highBuffer[i]);
 			}
 
-			// High speed camera movement should produce higher wind woosh energy
 			CHECK(highEnergy > lowEnergy);
 		}
 	}
