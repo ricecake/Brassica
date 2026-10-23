@@ -219,9 +219,19 @@ void main() {
 				skyAmbient = mix(zenithSky, horizonSky, 0.35);
 			}
 
-			// FIX: Boost ambient light based on overall moisture, not just rain.
+			// Calculate how much direct sunlight is blocked by the clouds overhead.
+			// Convert a fraction of that blocked energy into uniform ambient glow.
+			float diffusedSunEnergy = (1.0 - cloudTransmittance) * 0.15;
+
+			// Modulate by sun.y so the clouds stop glowing after sunset
+			vec3 cloudBaseIrradiance = push.sunColor.rgb * push.sunDir.w * max(0.0, push.sunDir.y) * diffusedSunEnergy;
+
+			// Add the diffused sunlight to the sky ambient, instead of artificially darkening it
+			skyAmbient += cloudBaseIrradiance;
+
+			// Apply the multiple-scattering moisture boost
 			float ambientMSBoost = 1.0 + clamp(weatherMoisture + rainFactor * 1.2, 0.0, 1.5);
-			skyAmbient *= mix(0.4, 1.0, cloudTransmittance) * ambientMSBoost;
+			skyAmbient *= ambientMSBoost;
 
 			vec3 ambientScat = (fogScatCoeff + mieScat) * skyAmbient + (rayleighScat * length(skyAmbient));
 
