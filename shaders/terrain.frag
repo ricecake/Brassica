@@ -181,13 +181,17 @@ void main() {
 
 			perturbedGradSum += forestGrad * proxyAmount;
 
-			// Gap crevice shadowing between adjacent tree crowns
-			float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
-			vec3 canopyColor = mix(leafColor * 0.55, leafColor * 1.15, crownCrevice);
+			// Gap crevice shadowing between adjacent tree crowns (very dark deep creases in canopy gaps)
+			float crownHeight = fNoise1 * 0.70 + fNoise2 * 0.30;
+			float crownCrevice = smoothstep(-0.55, 0.45, crownHeight);
+			float darkCreaseOcclusion = smoothstep(-0.80, -0.10, crownHeight);
+
+			vec3 canopyColor = mix(leafColor * 0.20, leafColor * 1.35, crownCrevice);
+			canopyColor *= mix(0.12, 1.0, darkCreaseOcclusion); // Deep dark gaps between domes
 
 			// Blend canopy color and increase surface roughness in dense forest areas
-			finalAlbedo = mix(finalAlbedo, canopyColor, proxyAmount * 0.70);
-			roughness = mix(roughness, clamp(roughness + 0.22, 0.75, 0.95), proxyAmount);
+			finalAlbedo = mix(finalAlbedo, canopyColor, proxyAmount * 0.85);
+			roughness = mix(roughness, clamp(roughness + 0.25, 0.80, 0.98), proxyAmount);
 		}
 	}
 

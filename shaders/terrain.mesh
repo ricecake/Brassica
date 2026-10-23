@@ -159,6 +159,39 @@ void main() {
 		height = (hA + hB) * 0.5;
 	}
 
+	// -------------------------------------------------------------------------
+	// Forest Canopy Proxy Geometry Physical Mesh Displacement
+	// -------------------------------------------------------------------------
+	if (params.weatherBiomeIndex > 0u && height > params.waterLevel - 0.5) {
+		vec3 approxWorldPos = vec3(morphedWorldXZ.x, height, morphedWorldXZ.y);
+		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, approxWorldPos);
+		float temp = weatherSample.g;
+		float moisture = weatherSample.b;
+
+		float forestDensity = smoothstep(0.22, 0.68, moisture) * smoothstep(0.55, 0.90, normal.y);
+		if (forestDensity > 0.01) {
+			float vertCamDist = length(vec3(relMorphedXZ.x, height - uCameraPosition.y, relMorphedXZ.y));
+			float proxyDistFade = smoothstep(20.0, 100.0, vertCamDist);
+			float proxyAmount = forestDensity * proxyDistFade;
+
+			if (proxyAmount > 0.001) {
+				vec2 g1, g2;
+				float n1 = psrdnoise(morphedWorldXZ * 0.125, vec2(0.0), 0.0, g1); // Crown dome frequency (~8m)
+				float n2 = psrdnoise(morphedWorldXZ * 0.350, vec2(0.0), 0.0, g2); // Cluster frequency (~3m)
+
+				float S = clamp((0.65 - n1) / 1.30, 0.0, 1.0);
+				float domeShape = sqrt(max(0.0, 1.0 - S * S));
+
+				float canopyDisplacement = (4.5 + 7.5 * domeShape + 1.2 * n2) * proxyAmount;
+				height += canopyDisplacement;
+
+				vec2 canopyGrad = (g1 * 6.0 + g2 * 1.2) * proxyAmount;
+				vec3 grad3D = vec3(canopyGrad.x, 0.0, canopyGrad.y);
+				normal = normalize(normal - grad3D);
+			}
+		}
+	}
+
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	vec3 relWorldPos = vec3(relMorphedXZ.x, height - dropOff - uCameraPosition.y, relMorphedXZ.y);
