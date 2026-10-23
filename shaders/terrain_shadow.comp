@@ -43,7 +43,7 @@ void main() {
 	vec3 lightDir = normalize(push.sunDir.xyz);
 	if (push.sunDir.w <= 0.0 || lightDir.y <= 0.0) {
 		imageStore(
-			uImages2DArrayStorageWrite[nonuniformEXT(shadowMapStorageIdx)],
+			uImageArraysGenericWrite[nonuniformEXT(shadowMapStorageIdx)],
 			ivec3(xy, cascade),
 			vec4(terrainHeight, terrainHeight - 1000.0, 10000.0, 1.0)
 		);
@@ -72,7 +72,7 @@ void main() {
 	float occlusionDist = (isOccluded) ? hitDist : maxDist;
 
 	imageStore(
-		uImages2DArrayStorageWrite[nonuniformEXT(shadowMapStorageIdx)],
+		uImageArraysGenericWrite[nonuniformEXT(shadowMapStorageIdx)],
 		ivec3(xy, cascade),
 		vec4(terrainHeight, occlusionHeight, occlusionDist, softShadow)
 	);

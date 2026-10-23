@@ -587,7 +587,7 @@ float evaluateTerrainShadowFromMap(
 		return 1.0;
 	}
 
-	vec4 shadowData = SAMPLE_ARRAY_LINEAR(shadowMapIndex, vec3(shadowUV, float(cascade)));
+	vec4 shadowData = SAMPLE_ARRAY_CLAMP(shadowMapIndex, vec3(shadowUV, float(cascade)));
 
 	float terrainHeight = shadowData.r;
 	float occlusionHeight = shadowData.g;
