@@ -40,9 +40,9 @@ struct Cell2 {
 const float MAX_TEMP = 35.0;        // Celsius at Equator sea-level
 const float MIN_TEMP = -20.0;       // Celsius at Pole
 const float LAPSE_RATE = 25.0;      // Temp drop per 1.0 elevation unit
-const float CONDENSATION_RATE = 0.5;
-const float DIFFUSION_RATE = 0.1;   // How fast groundwater spreads
-const float BASE_EVAPORATION = 0.05;
+const float CONDENSATION_RATE = 0.75;
+const float DIFFUSION_RATE = 0.25;   // How fast groundwater spreads
+const float BASE_EVAPORATION = 0.095;
 
 void main() {
 	ivec2 pos = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + push.cellOffset);
@@ -106,7 +106,7 @@ void main() {
 
 	float rain = 0.0;
 	if (elevationDelta > 0.0) {
-		rain = min(incomingAir, pow(elevationDelta, 1.5) * CONDENSATION_RATE * ccnBoost);
+		rain = min(incomingAir, pow(elevationDelta, 1.2) * CONDENSATION_RATE * ccnBoost);
 	} else if (incomingAir > 0.6) {
 		// Convective condensation from high humidity & aerosol
 		rain = (incomingAir - 0.6) * 0.15 * ccnBoost;

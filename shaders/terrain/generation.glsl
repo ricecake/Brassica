@@ -493,9 +493,9 @@ float evaluate_terrain_analytical(
         p_local.xz,
         heightAndSlope,
         erosionFadeTarget,
-        10*erosion_strength,
-        5*erosion_gully_weight,
-        10.0*erosion_detail,
+        7*erosion_strength,
+        2*erosion_gully_weight,
+        15.0*erosion_detail,
         erosion_rounding,                                  // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
         vec4(1.25, 1.25, 5.8, 1.5),                        // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
         normalize(vec2(dot(vel, dP_dx), dot(vel, dP_dz))), // assumedSlope
