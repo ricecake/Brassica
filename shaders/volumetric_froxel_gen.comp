@@ -149,9 +149,9 @@ void main() {
 			float densityMult = mix(1.0, 2.5, rainFactor);
 
 			float heightDiff = max(0.0, worldPos.y - fogBase);
-			vec3 warp = cross_noise_fbm(worldPos, 3, 0.125*uTime);
-			float noise = dot_noise_fbm((worldPos+warp)*0.0005, 3, 0.25*uTime);
-			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff)  * clamp(abs(noise), 0.25, 1.5);
+			vec3 warp = cross_noise_fbm(worldPos*0.005, 3, 0.5*uTime);
+			float noise = dot_noise_fbm((worldPos+100*warp)*0.0005, 3, 0.25*uTime);
+			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff)  * clamp(0.5+0.5*(noise), 0.25, 1.5);
 
 			// Rain optical properties: neutral spectral scattering
 			// Rain and moisture optical properties
