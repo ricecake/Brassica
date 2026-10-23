@@ -16,27 +16,30 @@ namespace brassica {
 
 	void RainAudioEffect::OnRead(float* pOutput, ma_uint64 frameCount) {
 		float intensity = m_intensity.load(std::memory_order_relaxed);
-		if (intensity <= 0.001f) {
+		float vol = m_volumeScale.load(std::memory_order_relaxed);
+		float pitch = m_pitchScale.load(std::memory_order_relaxed);
+		float density = m_densityScale.load(std::memory_order_relaxed);
+
+		if (intensity <= 0.001f || vol <= 0.0001f) {
 			for (ma_uint64 i = 0; i < frameCount * m_channels; ++i) {
 				pOutput[i] = 0.0f;
 			}
 			return;
 		}
 
-		float washAlpha = 0.01f;
-		float patterAlpha = 0.07f;
+		float washAlpha = std::clamp(0.01f * pitch, 0.0001f, 0.5f);
+		float patterAlpha = std::clamp(0.07f * pitch, 0.0001f, 0.5f);
+		float dropChance = std::clamp((0.0005f + intensity * 0.01f) * density, 0.0f, 1.0f);
 
 		for (ma_uint64 i = 0; i < frameCount; ++i) {
 			float white = NextWhiteNoise();
 
 			m_lowWash = m_lowWash + washAlpha * (white - m_lowWash);
-			float wash = m_lowWash * 0.05f * intensity;
+			float wash = m_lowWash * 0.05f * intensity * vol;
 
 			float drop = 0.0f;
-			float dropChance = 0.0005f + intensity * 0.01f;
-
 			if ((static_cast<float>(m_xorshiftState & 0xFFFF) / 65535.0f) < dropChance) {
-				drop = white * 0.2f * intensity;
+				drop = white * 0.2f * intensity * vol;
 			}
 
 			m_lowPatter = m_lowPatter + patterAlpha * (drop - m_lowPatter);

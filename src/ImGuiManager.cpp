@@ -13,6 +13,7 @@
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
 #include "lighting/ILightManager.hpp"
+#include "ui/AudioWidget.hpp"
 #include "ui/FoliageWidget.hpp"
 #include "ui/LightingWidget.hpp"
 #include "ui/ManagerSettingsWidget.hpp"
@@ -43,9 +44,10 @@ namespace brassica {
 
 		m_initialized = true;
 
-		// Add default Quick Settings and Manager Settings widgets
+		// Add default widgets
 		AddWidget(std::make_shared<ui::QuickSettingsWidget>());
 		AddWidget(std::make_shared<ui::ManagerSettingsWidget>());
+		AddWidget(std::make_shared<ui::AudioWidget>());
 		AddWidget(std::make_shared<ui::LightingWidget>());
 		AddWidget(std::make_shared<ui::FoliageWidget>());
 		AddWidget(std::make_shared<ui::ParticleWidget>());
