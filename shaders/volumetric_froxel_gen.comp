@@ -41,6 +41,11 @@ float dualHenyeyGreenstein(float cosTheta, float g) {
 	return mix(hg2, hg1, alpha);
 }
 
+// Maps normalized slice coordinate [0..1] to ray distance exponentially
+float froxelNormToDist(float zNorm, float maxDist, float alpha) {
+	return maxDist * (exp(alpha * zNorm) - 1.0) / (exp(alpha) - 1.0);
+}
+
 // Calculates terrain volumetric shadowing (god rays) using hierarchical min-max ray clearance
 float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMaxIndex, uint gridDim) {
 	if (minMaxIndex == 0xFFFFu || minMaxIndex == 0u) return 1.0;
@@ -52,13 +57,13 @@ float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMax
 		0.0
 	);
 
-	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 12800.0, 12.0);
+	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 100000.0, 12.0);
 	return mix(0.15, 1.0, softVal);
 }
 
 void main() {
 	uvec2 xy = gl_GlobalInvocationID.xy;
-	if (xy.x >= 64 || xy.y >= 64) return;
+	if (xy.x >= 128 || xy.y >= 96) return;
 
 	uint scat0 = unpackLow16(push.indices0.x);
 	uint scat1 = unpackHigh16(push.indices0.x);
@@ -78,8 +83,8 @@ void main() {
 
 	vec3 camRight = normalize(cross(push.camForward.xyz, push.camUp.xyz));
 
-	float ndcX = (((float(xy.x) + 0.5) / 64.0) * 2.0 - 1.0);
-	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 64.0) * 2.0);
+	float ndcX = (((float(xy.x) + 0.5) / 128.0) * 2.0 - 1.0);
+	float ndcY = 1.0 - (((float(xy.y) + 0.5) / 96.0) * 2.0);
 
 	float tanHalfFov = push.camForward.w;
 	float aspect = push.camUp.w;
@@ -90,7 +95,8 @@ void main() {
 		push.camForward.xyz
 	);
 
-	float cascadeRanges[3] = float[3](200.0, 1600.0, 12800.0);
+	float cascadeRanges[3] = float[3](300.0, 3000.0, 100000.0);
+	const float kExpAlpha = 3.5;
 
 	for (int c = 0; c < 3; ++c) {
 		uint scatIdx = cascadeScatteringIdx[c];
@@ -98,32 +104,27 @@ void main() {
 		if (scatIdx == 0xFFFFu || extIdx == 0xFFFFu) continue;
 
 		float maxDist = cascadeRanges[c];
-		float voxelSizeZ = maxDist / 64.0;
 
 		vec3 accumulatedScattering = vec3(0.0);
-		float accumulatedTransmittance = 1.0;
+		vec3 accumulatedTransmittance = vec3(1.0);
+		bool hasOccluded = false;
 
+		float jitter = InterleavedGradientNoise(vec2(xy), int(uFrameIndex));
+
+		// float jitter = mortonOwenThreshold(ivec2(floatBitsToInt(xy.x), floatBitsToInt(xy.y)), int(uFrameIndex));
 		for (int z = 0; z < 64; ++z) {
 			ivec3 vox = ivec3(xy.x, xy.y, z);
 
-			float dist = ((float(z) + 0.5) / 64.0) * maxDist;
-			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist;
+			float zNearNorm = float(z) / 64.0;
+			float zFarNorm = float(z + 1) / 64.0;
+			float zCenterNorm = (float(z) + 0.5) / 64.0;
 
-			float noiseScale = 0.018 / pow(2.5, float(c));
-			vec2 noiseUV = worldPos.xz * noiseScale;
-			vec4 noiseVal = vec4(0.5);
-			if (noiseTextureIdx != 0xFFFFu && noiseTextureIdx != 0u) {
-				noiseVal = textureLod(sampler2D(uTextures2D[nonuniformEXT(noiseTextureIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), noiseUV, 0.0);
-			}
+			float distNear = froxelNormToDist(zNearNorm, maxDist, kExpAlpha);
+			float distFar = froxelNormToDist(zFarNorm, maxDist, kExpAlpha);
+			float dist = froxelNormToDist(zCenterNorm, maxDist, kExpAlpha);
+			float voxelSizeZ = max(0.001, distFar - distNear);
 
-			float noiseMod = 0.5;
-			if (c == 0) {
-				noiseMod = noiseVal.r * 0.15 + noiseVal.g * 0.25 + noiseVal.b * 0.35 + noiseVal.a * 0.25;
-			} else if (c == 1) {
-				noiseMod = noiseVal.r * 0.30 + noiseVal.g * 0.40 + noiseVal.b * 0.20 + noiseVal.a * 0.10;
-			} else {
-				noiseMod = noiseVal.r * 0.60 + noiseVal.g * 0.30 + noiseVal.b * 0.10;
-			}
+			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist + viewRayDir*((distFar-distNear)*0.0125*jitter);
 
 			// Sample weather map at worldPos XZ
 			float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
@@ -142,55 +143,87 @@ void main() {
 			// Weather-dependent fog adjustments
 			float fogBase = push.fogParams.z;
 			float fogFalloff = push.fogParams.y * mix(1.0, 0.4, clamp(weatherMoisture * 0.6 + weatherCoverage * 0.4, 0.0, 1.0));
-			float baseDensity = push.fogParams.x * (0.8 + 1.2 * weatherMoisture + 0.8 * weatherCoverage);
+			float baseDensity =  push.fogParams.x * (0.25 + 0.125 * weatherMoisture + 0.8 * weatherCoverage);
 
 			// Rain increases fog density
 			float densityMult = mix(1.0, 2.5, rainFactor);
 
 			float heightDiff = max(0.0, worldPos.y - fogBase);
-			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff) * clamp(noiseMod * 1.5, 0.2, 2.0);
+			vec3 warp = cross_noise_fbm(worldPos, 3, 0.125*uTime);
+			float noise = dot_noise_fbm((worldPos+warp)*0.0005, 3, 0.25*uTime);
+			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff)  * clamp(abs(noise), 0.25, 1.5);
 
-			// Rain optical properties: neutral spectral scattering and higher extinction
+			// Rain optical properties: neutral spectral scattering
+			// Rain and moisture optical properties
 			vec3 baseScatteringCoeff = vec3(0.92, 0.95, 1.0);
 			vec3 rainScatteringCoeff = vec3(0.98, 0.99, 1.0);
-			vec3 scatteringCoeff = density * mix(baseScatteringCoeff, rainScatteringCoeff, rainFactor);
+			vec3 fogScatCoeff = density * mix(baseScatteringCoeff, rainScatteringCoeff, rainFactor);
 
-			float extinctionCoeff = density * mix(1.0, 1.8, rainFactor);
+			// FIX: Force ALL moisture to strictly conserve energy.
+			// Remove the arbitrary 1.8 multiplier and ensure albedo == 1.0 everywhere.
+			vec3 fogExtCoeff = fogScatCoeff;
 			float emissivity = 0.01 * density;
+
+			// Atmospheric Rayleigh and Mie scattering coefficients
+			float heightM = max(0.0, worldPos.y);
+			float rayleighDensity = exp(-heightM / 8000.0);
+			vec3 rayleighScat = vec3(5.8e-6, 1.35e-5, 3.31e-5) * rayleighDensity;
+			vec3 rayleighExt = rayleighScat;
+
+			float mieDensity = exp(-heightM / 1200.0);
+			vec3 mieScat = vec3(3.996e-6) * mieDensity;
+			vec3 mieExt = vec3(3.996e-6 + 4.4e-6) * mieDensity;
+
+			vec3 totalScatCoeff = fogScatCoeff + rayleighScat + mieScat;
+			vec3 totalExtCoeff = fogExtCoeff + rayleighExt + mieExt;
+
+			uint gridDim = uint(push.fogParams.w);
 
 			// Low sun elevation godray boost and anisotropy
 			float sunElevation = max(0.0, push.sunDir.y);
 			float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
 			float directSunScatteringBoost = 1.0 + lowSunFactor * 1.5;
 			float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
-
-			// Rain drops exhibit strong forward diffraction scattering
 			float effectiveG = mix(sunAnisotropyG, 0.88, rainFactor);
 
-			uint gridDim = uint(push.fogParams.w);
 			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, minMaxIndex, gridDim);
 
 			// Emphasize cloud shadow contrast
 			float cloudTransmittance = 1.0;
 			if (cloudShadowIndex > 0u && cloudShadowIndex != 0xFFFFu && push.sunDir.y > 0.001) {
 				vec4 cloudShadowData = sampleCloudShadow(cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
-				cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.6);
+				cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.8);
 				shadowTerm *= cloudTransmittance;
 			}
 
 			float cosTheta = dot(viewRayDir, push.sunDir.xyz);
-			float phase = dualHenyeyGreenstein(cosTheta, effectiveG);
+			float rayleighPhase = (3.0 / (16.0 * PI)) * (1.0 + cosTheta * cosTheta);
 
-			vec3 directSun = push.sunColor.rgb * push.sunDir.w * phase * shadowTerm * directSunScatteringBoost;
+			// 1. Single Scattering (Highly directional)
+			float miePhase = dualHenyeyGreenstein(cosTheta, effectiveG);
+
+			// 2. Multiple Scattering Lobe (Wider, diffuse)
+			float msPhase = dualHenyeyGreenstein(cosTheta, effectiveG * 0.15);
+
+			// FIX: Drive MS with overall moisture, not just rain, to prevent black shadows.
+			float msWeight = clamp(weatherMoisture * 1.5 + rainFactor, 0.15, 1.5);
+			float finalMiePhase = miePhase + (msPhase * msWeight);
+
+			vec3 sunScat = push.sunColor.rgb * push.sunDir.w * shadowTerm * directSunScatteringBoost;
+			vec3 directSun = (fogScatCoeff * finalMiePhase + rayleighScat * rayleighPhase + mieScat * finalMiePhase) * sunScat;
 
 			vec3 skyAmbient = vec3(0.20, 0.35, 0.55) * max(0.2, push.sunDir.y) + vec3(0.05, 0.08, 0.12);
 			if (skyViewIndex != 0xFFFFu && skyViewIndex != 0u) {
 				vec3 zenithSky = sampleSkyView(skyViewIndex, vec3(0.0, 1.0, 0.0));
-				vec3 viewSky = sampleSkyView(skyViewIndex, viewRayDir);
-				skyAmbient = mix(zenithSky, viewSky, 0.5);
+				vec3 horizonSky = sampleSkyView(skyViewIndex, normalize(vec3(push.sunDir.x, 0.1, push.sunDir.z)));
+				skyAmbient = mix(zenithSky, horizonSky, 0.35);
 			}
-			// Darken ambient scattering in cloud-shadowed volume columns
-			skyAmbient *= mix(0.4, 1.0, cloudTransmittance);
+
+			// FIX: Boost ambient light based on overall moisture, not just rain.
+			float ambientMSBoost = 1.0 + clamp(weatherMoisture + rainFactor * 1.2, 0.0, 1.5);
+			skyAmbient *= mix(0.4, 1.0, cloudTransmittance) * ambientMSBoost;
+
+			vec3 ambientScat = (fogScatCoeff + mieScat) * skyAmbient + (rayleighScat * length(skyAmbient));
 
 			vec3 localLightScattering = vec3(0.0);
 			uint maxLightsToSample = min(uLightCount, 32u);
@@ -224,11 +257,10 @@ void main() {
 				localLightScattering += uLights[li].color * uLights[li].intensity * attenuation * localPhase;
 			}
 
-			vec3 totalIllumination = directSun + skyAmbient + localLightScattering;
-			vec3 cellScattering = scatteringCoeff * totalIllumination + vec3(emissivity);
+			vec3 cellScattering = directSun + ambientScat + localLightScattering + vec3(emissivity);
 
-			float sliceTransmittance = exp(-extinctionCoeff * voxelSizeZ);
-			vec3 integratedScattering = cellScattering * (1.0 - sliceTransmittance) / max(0.00001, extinctionCoeff);
+			vec3 sliceTransmittance = exp(-totalExtCoeff * voxelSizeZ);
+			vec3 integratedScattering = cellScattering * (vec3(1.0) - sliceTransmittance) / max(vec3(1e-7), totalExtCoeff);
 
 			accumulatedScattering += integratedScattering * accumulatedTransmittance;
 			accumulatedTransmittance *= sliceTransmittance;
@@ -242,7 +274,7 @@ void main() {
 			imageStore(
 				uImages3DGenericWrite[nonuniformEXT(extIdx)],
 				vox,
-				vec4(vec3(accumulatedTransmittance), 1.0)
+				vec4(accumulatedTransmittance, 1.0)
 			);
 		}
 	}

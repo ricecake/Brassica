@@ -109,8 +109,8 @@ namespace brassica {
 	inline graph::ResourceDesc VolumetricFroxelDesc() {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image3D,
-			.width = 64,
-			.height = 64,
+			.width = 128,
+			.height = 96,
 			.depth = 64,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16B16A16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
