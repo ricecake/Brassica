@@ -80,6 +80,26 @@ namespace brassica {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return CloudShadowMapDesc(); }
 	};
 
+	inline graph::ResourceDesc TerrainShadowMapDesc(std::uint32_t width = 1024, std::uint32_t height = 1024) {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = width,
+			.height = height,
+			.mips = 1,
+			.layers = 3,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
+			),
+			.persistent = true,
+		};
+	}
+
+	struct TerrainShadowMap {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainShadowMapDesc(); }
+	};
+
 	inline graph::ResourceDesc CloudVolumeDesc() {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image3D,

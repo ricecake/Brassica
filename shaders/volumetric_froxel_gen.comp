@@ -46,18 +46,10 @@ float froxelNormToDist(float zNorm, float maxDist, float alpha) {
 	return maxDist * (exp(alpha * zNorm) - 1.0) / (exp(alpha) - 1.0);
 }
 
-// Calculates terrain volumetric shadowing (god rays) using hierarchical min-max ray clearance
-float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint minMaxIndex, uint gridDim) {
-	if (minMaxIndex == 0xFFFFu || minMaxIndex == 0u) return 1.0;
+float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint shadowMapIndex, uint gridDim) {
+	if (shadowMapIndex == 0xFFFFu || shadowMapIndex == 0u) return 1.0;
 
-	TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-		minMaxIndex,
-		gridDim > 0u ? gridDim : 1024u,
-		8u,
-		0.0
-	);
-
-	float softVal = calculateTerrainSoftShadow(occCtx, worldPos, lightDir, 100000.0, 12.0);
+	float softVal = evaluateTerrainShadowFromMap(shadowMapIndex, worldPos, lightDir, gridDim);
 	return mix(0.15, 1.0, softVal);
 }
 
@@ -77,6 +69,7 @@ void main() {
 	uint minMaxIndex       = unpackHigh16(push.indices1.x);
 	uint cloudShadowIndex  = unpackLow16(push.indices1.y);
 	uint weatherBiomeIndex = unpackHigh16(push.indices1.y);
+	uint shadowMapIndex    = unpackLow16(push.indices1.z);
 
 	uint cascadeScatteringIdx[3] = uint[3](scat0, scat1, scat2);
 	uint cascadeExtinctionIdx[3] = uint[3](ext0, ext1, ext2);
@@ -177,8 +170,6 @@ void main() {
 			vec3 totalScatCoeff = fogScatCoeff + rayleighScat + mieScat;
 			vec3 totalExtCoeff = fogExtCoeff + rayleighExt + mieExt;
 
-			uint gridDim = uint(push.fogParams.w);
-
 			// Low sun elevation godray boost and anisotropy
 			float sunElevation = max(0.0, push.sunDir.y);
 			float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
@@ -186,7 +177,8 @@ void main() {
 			float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
 			float effectiveG = mix(sunAnisotropyG, 0.88, rainFactor);
 
-			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, minMaxIndex, gridDim);
+			uint gridDim = uint(push.fogParams.w);
+			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, shadowMapIndex, gridDim);
 
 			// --- 1. CLOUD SHADOW EVALUATION ---
 			vec4 cloudShadowData = vec4(0.0, 0.0, 0.0, 1.0);
