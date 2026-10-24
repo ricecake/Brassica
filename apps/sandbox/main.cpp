@@ -8,12 +8,14 @@ int main(int argc, char** argv) {
 
 	brassica::EngineOptions options = brassica::EngineOptions::FromArgs(argc, argv);
 
-	brassica::Engine engine;
-	engine.AddSystemHandler<brassica::BallSystemHandler>();
-	engine.AddSystemHandler<brassica::OzzCylinderSystemHandler>();
-	engine.Init(options);
-	engine.Run();
-	engine.Cleanup();
+	{
+		brassica::Engine engine;
+		engine.AddSystemHandler<brassica::BallSystemHandler>();
+		engine.AddSystemHandler<brassica::OzzCylinderSystemHandler>();
+		engine.Init(options);
+		engine.Run();
+		engine.Cleanup();
+	}
 
 	return 0;
 }
