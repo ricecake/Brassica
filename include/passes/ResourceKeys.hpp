@@ -381,13 +381,13 @@ namespace brassica {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainBiomeDesc(numLODs); }
 	};
 
-	inline graph::ResourceDesc TerrainCubemapDesc() {
+	inline graph::ResourceDesc TerrainGlobalDesc() {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
-			.width = 8192,
-			.height = 8192,
+			.width = 4192,
+			.height = 4192,
 			.mips = 1,
-			.layers = 6,
+			.layers = 1,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
@@ -397,13 +397,13 @@ namespace brassica {
 		};
 	}
 
-	inline graph::ResourceDesc TerrainCubemapMinMaxDesc() {
+	inline graph::ResourceDesc TerrainGlobalMinMaxDesc() {
 		return graph::ResourceDesc{
 			.kind = graph::ResourceDesc::Kind::Image2D,
-			.width = 8192,
-			.height = 8192,
-			.mips = 14,
-			.layers = 6,
+			.width = 4192,
+			.height = 4192,
+			.mips = 13,
+			.layers = 1,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
@@ -413,18 +413,18 @@ namespace brassica {
 		};
 	}
 
-	inline graph::ResourceDesc TerrainCubemapBiomeDesc() { return TerrainCubemapDesc(); }
+	inline graph::ResourceDesc TerrainGlobalBiomeDesc() { return TerrainGlobalDesc(); }
 
-	struct TerrainCubemapTexture {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainCubemapDesc(); }
+	struct TerrainGlobalTexture {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainGlobalDesc(); }
 	};
 
-	struct TerrainCubemapMinMaxTexture {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainCubemapMinMaxDesc(); }
+	struct TerrainGlobalMinMaxTexture {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainGlobalMinMaxDesc(); }
 	};
 
-	struct TerrainCubemapBiomeTexture {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainCubemapBiomeDesc(); }
+	struct TerrainGlobalBiomeTexture {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainGlobalBiomeDesc(); }
 	};
 
 	// Moved from TerrainBiomeNode.hpp (same reasoning as TerrainClipmapDesc/TerrainMinMaxDesc's

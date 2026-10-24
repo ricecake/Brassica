@@ -7,57 +7,6 @@
 #include "helpers/whittaker.glsl"
 #include "terrain_dirty.glsl"
 
-// Converts 2D UV within a cubemap face [0, 1]^2 and face index [0..5] to 3D unit direction vector
-vec3 cubeFaceUVToDirection(vec2 uv, uint face) {
-	vec2 st = uv * 2.0 - 1.0;
-	vec3 dir;
-	if (face == 0u)      dir = vec3(1.0, -st.y, -st.x);
-	else if (face == 1u) dir = vec3(-1.0, -st.y, st.x);
-	else if (face == 2u) dir = vec3(st.x, 1.0, st.y);
-	else if (face == 3u) dir = vec3(st.x, -1.0, -st.y);
-	else if (face == 4u) dir = vec3(st.x, -st.y, 1.0);
-	else                 dir = vec3(-st.x, -st.y, -1.0);
-	return normalize(dir);
-}
-
-// Converts 3D unit direction vector to 2D UV within cubemap face [0, 1]^2 and face index [0..5] stored in z channel
-vec3 directionToCubeFaceUV(vec3 dir) {
-	vec3 absDir = abs(dir);
-	float ma;
-	vec2 uv;
-	float face;
-	if (absDir.x >= absDir.y && absDir.x >= absDir.z) {
-		ma = absDir.x;
-		if (dir.x > 0.0) {
-			face = 0.0;
-			uv = vec2(-dir.z, -dir.y);
-		} else {
-			face = 1.0;
-			uv = vec2(dir.z, -dir.y);
-		}
-	} else if (absDir.y >= absDir.x && absDir.y >= absDir.z) {
-		ma = absDir.y;
-		if (dir.y > 0.0) {
-			face = 2.0;
-			uv = vec2(dir.x, dir.z);
-		} else {
-			face = 3.0;
-			uv = vec2(dir.x, -dir.z);
-		}
-	} else {
-		ma = absDir.z;
-		if (dir.z > 0.0) {
-			face = 4.0;
-			uv = vec2(dir.x, -dir.y);
-		} else {
-			face = 5.0;
-			uv = vec2(-dir.x, -dir.y);
-		}
-	}
-	uv = (uv / ma + 1.0) * 0.5;
-	return vec3(uv, face);
-}
-
 // Toroidal UV mapping helper for terrain clipmap textures
 vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
     float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
@@ -76,17 +25,16 @@ vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
 // Sample terrain clipmap (r = height, g = variance, ba = octahedral encoded normal)
 vec4 sampleTerrainClipmap(
 	uint  clipmapIndex,
-	uint  cubemapIndex,
+	uint  globalMapIndex,
 	vec2  worldXZ,
 	uint  level,
 	uint  textureDim
 ) {
-	if (level >= 8u && cubemapIndex > 0u && cubemapIndex != 0xFFFFFFFFu) {
-		float theta = worldXZ.x / FAKE_PLANET_RADIUS;
-		float phi   = worldXZ.y / FAKE_PLANET_RADIUS;
-		vec3 dir    = vec3(cos(phi) * sin(theta), sin(phi), cos(phi) * cos(theta));
-		vec3 faceUV = directionToCubeFaceUV(dir);
-		return SAMPLE_ARRAY_WRAP(cubemapIndex, vec3(faceUV.xy, faceUV.z));
+	if (level >= 8u && globalMapIndex > 0u && globalMapIndex != 0xFFFFFFFFu) {
+		float worldExtentX = 2.0 * 3.14159265359 * FAKE_PLANET_RADIUS;
+		float worldExtentZ = 3.14159265359 * FAKE_PLANET_RADIUS;
+		vec2 uv = fract((worldXZ / vec2(worldExtentX, worldExtentZ)) + 0.5);
+		return SAMPLE_LINEAR(globalMapIndex, uv);
 	}
 	uint clampedLevel = min(level, 7u);
 	vec2 uv = sampleToroidalUV(worldXZ, clampedLevel, textureDim);
@@ -105,17 +53,16 @@ vec4 sampleTerrainClipmap(
 // Sample terrain min-max height map (r = min height, g = max height)
 vec2 sampleTerrainMinMax(
 	uint  minMaxIndex,
-	uint  cubemapMinMaxIndex,
+	uint  globalMinMaxIndex,
 	vec2  worldXZ,
 	uint  level,
 	uint  textureDim
 ) {
-	if (level >= 8u && cubemapMinMaxIndex > 0u && cubemapMinMaxIndex != 0xFFFFFFFFu) {
-		float theta = worldXZ.x / FAKE_PLANET_RADIUS;
-		float phi   = worldXZ.y / FAKE_PLANET_RADIUS;
-		vec3 dir    = vec3(cos(phi) * sin(theta), sin(phi), cos(phi) * cos(theta));
-		vec3 faceUV = directionToCubeFaceUV(dir);
-		return SAMPLE_ARRAY_WRAP(cubemapMinMaxIndex, vec3(faceUV.xy, faceUV.z)).rg;
+	if (level >= 8u && globalMinMaxIndex > 0u && globalMinMaxIndex != 0xFFFFFFFFu) {
+		float worldExtentX = 2.0 * 3.14159265359 * FAKE_PLANET_RADIUS;
+		float worldExtentZ = 3.14159265359 * FAKE_PLANET_RADIUS;
+		vec2 uv = fract((worldXZ / vec2(worldExtentX, worldExtentZ)) + 0.5);
+		return SAMPLE_LINEAR(globalMinMaxIndex, uv).rg;
 	}
 	uint clampedLevel = min(level, 7u);
 	vec2 uv = sampleToroidalUV(worldXZ, clampedLevel, textureDim);
@@ -134,17 +81,16 @@ vec2 sampleTerrainMinMax(
 // Sample terrain biome map (r = biome, g = water level, b = erosion ridge map, a = substrate map)
 vec4 sampleTerrainBiome(
 	uint  biomeIndex,
-	uint  cubemapBiomeIndex,
+	uint  globalBiomeIndex,
 	vec2  worldXZ,
 	uint  level,
 	uint  textureDim
 ) {
-	if (level >= 8u && cubemapBiomeIndex > 0u && cubemapBiomeIndex != 0xFFFFFFFFu) {
-		float theta = worldXZ.x / FAKE_PLANET_RADIUS;
-		float phi   = worldXZ.y / FAKE_PLANET_RADIUS;
-		vec3 dir    = vec3(cos(phi) * sin(theta), sin(phi), cos(phi) * cos(theta));
-		vec3 faceUV = directionToCubeFaceUV(dir);
-		return SAMPLE_ARRAY_WRAP(cubemapBiomeIndex, vec3(faceUV.xy, faceUV.z));
+	if (level >= 8u && globalBiomeIndex > 0u && globalBiomeIndex != 0xFFFFFFFFu) {
+		float worldExtentX = 2.0 * 3.14159265359 * FAKE_PLANET_RADIUS;
+		float worldExtentZ = 3.14159265359 * FAKE_PLANET_RADIUS;
+		vec2 uv = fract((worldXZ / vec2(worldExtentX, worldExtentZ)) + 0.5);
+		return SAMPLE_LINEAR(globalBiomeIndex, uv);
 	}
 	uint clampedLevel = min(level, 7u);
 	vec2 uv = sampleToroidalUV(worldXZ, clampedLevel, textureDim);
@@ -234,24 +180,23 @@ TerrainOcclusionContext makeTerrainOcclusionContext(
 // is what actually reaches those levels.
 vec2 sampleTerrainMinMaxMip(
 	uint  minMaxIndex,
-	uint  cubemapMinMaxIndex,
+	uint  globalMinMaxIndex,
 	vec2  worldXZ,
 	uint  level,
 	uint  mip,
 	uint  textureDim
 ) {
-	if (level >= 8u && cubemapMinMaxIndex > 0u && cubemapMinMaxIndex != 0xFFFFFFFFu) {
-		float theta = worldXZ.x / FAKE_PLANET_RADIUS;
-		float phi   = worldXZ.y / FAKE_PLANET_RADIUS;
-		vec3 dir    = vec3(cos(phi) * sin(theta), sin(phi), cos(phi) * cos(theta));
-		vec3 faceUV = directionToCubeFaceUV(dir);
+	if (level >= 8u && globalMinMaxIndex > 0u && globalMinMaxIndex != 0xFFFFFFFFu) {
+		float worldExtentX = 2.0 * 3.14159265359 * FAKE_PLANET_RADIUS;
+		float worldExtentZ = 3.14159265359 * FAKE_PLANET_RADIUS;
+		vec2 uv = fract((worldXZ / vec2(worldExtentX, worldExtentZ)) + 0.5);
 
-		int mipDim = max(1, 8192 >> int(mip));
-		ivec2 mipTexel = clamp(ivec2(faceUV.xy * float(mipDim)), ivec2(0), ivec2(mipDim - 1));
+		int mipDim = max(1, 4192 >> int(mip));
+		ivec2 mipTexel = clamp(ivec2(uv * float(mipDim)), ivec2(0), ivec2(mipDim - 1));
 
 		return texelFetch(
-			sampler2DArray(uTextureArrays[nonuniformEXT(cubemapMinMaxIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
-			ivec3(mipTexel, int(faceUV.z)),
+			sampler2D(uTextures2D[nonuniformEXT(globalMinMaxIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+			mipTexel,
 			int(mip)
 		).rg;
 	}

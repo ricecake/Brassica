@@ -20,7 +20,7 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
-	uint  cubemapMinMaxIndex;
+	uint  globalMinMaxIndex;
 }
 params;
 
@@ -39,7 +39,7 @@ float getWaterRingScale(float ring) {
 }
 
 vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
-	vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, params.cubemapMinMaxIndex, uv, uint(ringLevel), params.gridParams.w);
+	vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, params.globalMinMaxIndex, uv, uint(ringLevel), params.gridParams.w);
 
 	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y) * mix(vec3(10, 1.0, 10), vec3(1, 1.0, 1), 1.0-smoothstep(-100.0, 0.0, minMax.x) );
 	mat3 grad;

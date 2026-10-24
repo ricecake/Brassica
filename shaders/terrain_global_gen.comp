@@ -1,0 +1,51 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "terrain.glsl"
+#include "terrain/generation.glsl"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform GlobalGenPushConstants {
+	uint globalStorageIdx;       // storage image index for TerrainGlobalTexture
+	uint globalMinMaxStorageIdx; // storage image index for TerrainGlobalMinMaxTexture, mip 0
+	uint globalBiomeStorageIdx;  // storage image index for TerrainGlobalBiomeTexture
+	uint dim;                     // width/height (4192)
+} push;
+
+void main() {
+	uvec2 globalId = gl_GlobalInvocationID.xy;
+	if (globalId.x >= push.dim || globalId.y >= push.dim) {
+		return;
+	}
+
+	uint dim = push.dim;
+	vec2 uv = (vec2(globalId) + 0.5) / float(dim);
+
+	// Convert 2D planar UV to planet world coordinates
+	float worldExtentX = 2.0 * PI * FAKE_PLANET_RADIUS;
+	float worldExtentZ = PI * FAKE_PLANET_RADIUS;
+	vec2 worldXZ = (uv - 0.5) * vec2(worldExtentX, worldExtentZ);
+
+	TerrainConfig con = TerrainConfig(0.00001, -500.0, 2000.0, 0.14, 0.5);
+	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
+
+	float h = 0.0;
+	float biome = 0.0;
+	float waterLevel = 0.0;
+	float ridgeMap = 0.0;
+	float substrate = 0.0;
+	vec3 normal = vec3(0.0, 1.0, 0.0);
+
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
+
+	float variance = abs(ridgeMap);
+	vec2 octNormal = directionToOctahedralUV(normal);
+
+	ivec2 storeCoord = ivec2(globalId);
+
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.globalStorageIdx)], storeCoord, vec4(h, variance, octNormal.x, octNormal.y));
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.globalMinMaxStorageIdx)], storeCoord, vec4(h, h, 0.0, 0.0));
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.globalBiomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), waterLevel, ridgeMap, substrate));
+}

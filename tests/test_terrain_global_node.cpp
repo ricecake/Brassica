@@ -7,7 +7,7 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "passes/TerrainCubemapNode.hpp"
+#include "passes/TerrainGlobalNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "VulkanCompat.hpp"
@@ -16,7 +16,7 @@ using namespace brassica;
 
 namespace {
 
-	struct CubemapBindlessSet {
+	struct GlobalBindlessSet {
 		vk::DescriptorSetLayout frameLayout{};
 		vk::DescriptorPool      framePool{};
 		vk::DescriptorSet       frameSet{};
@@ -27,8 +27,8 @@ namespace {
 		graph::PhysicalResourceRegistry::BindlessBindings bindings{};
 	};
 
-	CubemapBindlessSet CreateCubemapBindlessSet(vk::Device device) {
-		CubemapBindlessSet result;
+	GlobalBindlessSet CreateGlobalBindlessSet(vk::Device device) {
+		GlobalBindlessSet result;
 
 		std::array<vk::DescriptorSetLayoutBinding, 1> uboBindings{};
 		uboBindings[0]
@@ -134,7 +134,7 @@ namespace {
 		return result;
 	}
 
-	void DestroyCubemapBindlessSet(vk::Device device, CubemapBindlessSet& s) {
+	void DestroyGlobalBindlessSet(vk::Device device, GlobalBindlessSet& s) {
 		device.destroySampler(s.sampler);
 		device.destroyDescriptorPool(s.pool);
 		device.destroyDescriptorSetLayout(s.layout);
@@ -144,7 +144,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("TerrainCubemapNode creates 8192x8192 cubemap resources and executes cleanly") {
+TEST_CASE("TerrainGlobalNode creates 4192x4192 2D global map resources and executes cleanly") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
@@ -174,12 +174,12 @@ TEST_CASE("TerrainCubemapNode creates 8192x8192 cubemap resources and executes c
 		render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
 
 		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
-		CubemapBindlessSet              bindlessSet = CreateCubemapBindlessSet(vkDevice);
+		GlobalBindlessSet                bindlessSet = CreateGlobalBindlessSet(vkDevice);
 		registry.SetGlobalDescriptorSet(bindlessSet.bindings);
 		graph::PhysicalExecutionBackend backend(registry);
 
-		TerrainCubemapNode cubemapNode;
-		cubemapNode.Init(
+		TerrainGlobalNode globalNode;
+		globalNode.Init(
 			render::NodeServices{
 				.device = vkDevice,
 				.pipelineLibrary = &pipelineLibrary,
@@ -189,7 +189,7 @@ TEST_CASE("TerrainCubemapNode creates 8192x8192 cubemap resources and executes c
 		Shader::ClearConstants();
 
 		graph::Graph graph;
-		graph.RegisterRef(cubemapNode);
+		graph.RegisterRef(globalNode);
 
 		graph::FrameContext ctx{.width = 256, .height = 256};
 
@@ -207,8 +207,8 @@ TEST_CASE("TerrainCubemapNode creates 8192x8192 cubemap resources and executes c
 		device.GetQueue().waitIdle();
 
 		pipelineLibrary.Reset();
-		cubemapNode.Destroy(vkDevice);
-		DestroyCubemapBindlessSet(vkDevice, bindlessSet);
+		globalNode.Destroy(vkDevice);
+		DestroyGlobalBindlessSet(vkDevice, bindlessSet);
 		vkDevice.destroyCommandPool(pool);
 	}
 

@@ -1,0 +1,39 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform GlobalDownsamplePushConstants {
+	uint srcMinMaxStorageIdx; // bindless sampled index for TerrainGlobalMinMaxTexture
+	uint dstMinMaxStorageIdx; // bindless storage index for TerrainGlobalMinMaxTexture mip m
+	uint dstDim;              // width/height of target mip m
+	uint srcDim;              // width/height of source mip m-1
+	uint srcMip;              // source mip level (m-1)
+} push;
+
+void main() {
+	uvec2 globalId = gl_GlobalInvocationID.xy;
+	if (globalId.x >= push.dstDim || globalId.y >= push.dstDim) {
+		return;
+	}
+
+	ivec2 srcPos = ivec2(globalId) * 2;
+
+	ivec2 p00 = srcPos;
+	ivec2 p10 = min(srcPos + ivec2(1, 0), ivec2(push.srcDim - 1u));
+	ivec2 p01 = min(srcPos + ivec2(0, 1), ivec2(push.srcDim - 1u));
+	ivec2 p11 = min(srcPos + ivec2(1, 1), ivec2(push.srcDim - 1u));
+
+	vec2 a = texelFetch(sampler2D(uTextures2D[nonuniformEXT(push.srcMinMaxStorageIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), p00, int(push.srcMip)).rg;
+	vec2 b = texelFetch(sampler2D(uTextures2D[nonuniformEXT(push.srcMinMaxStorageIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), p10, int(push.srcMip)).rg;
+	vec2 c = texelFetch(sampler2D(uTextures2D[nonuniformEXT(push.srcMinMaxStorageIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), p01, int(push.srcMip)).rg;
+	vec2 d = texelFetch(sampler2D(uTextures2D[nonuniformEXT(push.srcMinMaxStorageIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), p11, int(push.srcMip)).rg;
+
+	float minH = min(min(a.x, b.x), min(c.x, d.x));
+	float maxH = max(max(a.y, b.y), max(c.y, d.y));
+
+	ivec2 dstPos = ivec2(globalId);
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.dstMinMaxStorageIdx)], dstPos, vec4(minH, maxH, 0.0, 0.0));
+}

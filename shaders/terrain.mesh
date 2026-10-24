@@ -15,9 +15,9 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
-	uint  cubemapIndex;
-	uint  cubemapMinMaxIndex;
-	uint  cubemapBiomeIndex;
+	uint  globalIndex;
+	uint  globalMinMaxIndex;
+	uint  globalBiomeIndex;
 }
 params;
 
@@ -116,7 +116,7 @@ void main() {
 
 	vec4 texSample = sampleTerrainClipmap(
 		params.clipmapIndex,
-		params.cubemapIndex,
+		params.globalIndex,
 		morphedWorldXZ,
 		morphLOD,
 		params.gridParams.w
@@ -127,7 +127,7 @@ void main() {
 	if (alpha > 0.0) {
 		vec4 texNext = sampleTerrainClipmap(
 			params.clipmapIndex,
-			params.cubemapIndex,
+			params.globalIndex,
 			morphedWorldXZ,
 			morphLOD + 1,
 			params.gridParams.w
@@ -196,7 +196,7 @@ void main() {
 	float substrate = 0.0;
 
 	if (params.biomeIndex > 0u) {
-		vec4 biomeSample = sampleTerrainBiome(params.biomeIndex, params.cubemapBiomeIndex, morphedWorldXZ, morphLOD, params.gridParams.w);
+		vec4 biomeSample = sampleTerrainBiome(params.biomeIndex, params.globalBiomeIndex, morphedWorldXZ, morphLOD, params.gridParams.w);
 		geoBiome = biomeSample.r;
 		localWaterLevel = biomeSample.g;
 		ridgeMap = biomeSample.b;

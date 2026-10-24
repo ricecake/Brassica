@@ -28,8 +28,8 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  debugVisualizeGTAO;
 	uint  cloudShadowIndex;
 	uint  shadowMapIndex;
-	uint  cubemapIndex;
-	uint  cubemapMinMaxIndex;
+	uint  globalIndex;
+	uint  globalMinMaxIndex;
 }
 
 params;
@@ -67,7 +67,7 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 		if (params.minMaxIndex > 0u) {
 			vec2 minMax = sampleTerrainMinMax(
 				params.minMaxIndex,
-				params.cubemapMinMaxIndex,
+				params.globalMinMaxIndex,
 				samplePos.xz,
 				stepLod,
 				params.gridParams.w
@@ -79,7 +79,7 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 
 		vec4 texSample = sampleTerrainClipmap(
 			params.clipmapIndex,
-			params.cubemapIndex,
+			params.globalIndex,
 			samplePos.xz,
 			stepLod,
 			params.gridParams.w
@@ -144,7 +144,7 @@ void main() {
 		if (uLights[0].intensity > 0.0) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 				params.minMaxIndex,
-				params.cubemapMinMaxIndex,
+				params.globalMinMaxIndex,
 				params.gridParams.w,
 				params.gridParams.x,
 				0.0

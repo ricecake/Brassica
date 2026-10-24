@@ -22,9 +22,9 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
-	uint  cubemapIndex;
-	uint  cubemapMinMaxIndex;
-	uint  cubemapBiomeIndex;
+	uint  globalIndex;
+	uint  globalMinMaxIndex;
+	uint  globalBiomeIndex;
 }
 params;
 
@@ -83,7 +83,7 @@ void main() {
 			// 	lodLevel,
 			// 	params.gridParams.w
 			// );
-			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, params.cubemapMinMaxIndex, centerXZ, lodLevel, 5, params.gridParams.w);
+			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, params.globalMinMaxIndex, centerXZ, lodLevel, 5, params.gridParams.w);
 			relMinB.y = minMax.x - 100.0 - uCameraPosition.y;
 			relMaxB.y = minMax.y + 100.0 - uCameraPosition.y;
 		}
@@ -138,7 +138,7 @@ void main() {
 		if (visible && lodLevel >= 2u && params.minMaxIndex > 0u) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 				params.minMaxIndex,
-				params.cubemapMinMaxIndex,
+				params.globalMinMaxIndex,
 				params.gridParams.w,
 				params.gridParams.x,
 				params.waterLevel
@@ -156,7 +156,7 @@ void main() {
 		if (visible) {
 			// 1. Sample Variance
 			vec2 centerXZ = uCameraPosition.xz + relMinB.xz + (meshletSize * 0.5);
-			float variance = sampleTerrainClipmap(params.clipmapIndex, params.cubemapIndex, centerXZ, lodLevel, params.gridParams.w).g;
+			float variance = sampleTerrainClipmap(params.clipmapIndex, params.globalIndex, centerXZ, lodLevel, params.gridParams.w).g;
 
 			// 2. Calculate Screen-Space Error (SSE)
 			float nodeSpacing = meshletSize / 10.0;

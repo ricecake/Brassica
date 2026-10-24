@@ -35,9 +35,9 @@ layout(push_constant) uniform FoliagePushConstants {
 	uint  terrainNumLevels;
 	uint  foliageFlags; // bit 0: terrain occlusion culling
 	uint  hizIndex; // unused here -- HiZ occlusion is task-shader-only; keeps layout matching foliage.task
-	uint  cubemapIndex;
-	uint  cubemapMinMaxIndex;
-	uint  cubemapBiomeIndex;
+	uint  globalIndex;
+	uint  globalMinMaxIndex;
+	uint  globalBiomeIndex;
 }
 params;
 
@@ -1079,7 +1079,7 @@ void main() {
 	float dropOff = terrainDropOff(clumpCenterWorld);
 
 	uint sampleLOD = (distToCam < 400.0) ? 0u : min(lodLevel, 2u);
-	vec4 terrainSample = sampleTerrainClipmap(params.clipmapIndex, params.cubemapIndex, clumpCenterWorld, sampleLOD, params.gridParams.w);
+	vec4 terrainSample = sampleTerrainClipmap(params.clipmapIndex, params.globalIndex, clumpCenterWorld, sampleLOD, params.gridParams.w);
 	float terrainHeight = terrainSample.r - dropOff;
 	vec3  terrainNormal = (length(terrainSample.gba) >= 0.1) ? normalize(terrainSample.gba) : vec3(0.0, 1.0, 0.0);
 

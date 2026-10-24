@@ -46,7 +46,7 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t gMaterialIndex{0};
 		std::uint32_t skyViewIndex{0};
-		std::uint32_t cubemapMinMaxIndex{0};
+		std::uint32_t globalMinMaxIndex{0};
 	};
 
 	static_assert(sizeof(WaterPushConstants) == 64, "WaterPushConstants size must be 64 bytes");
@@ -142,7 +142,7 @@ namespace brassica {
 			r.Read<GBufferMaterial>();
 			r.Read<GBufferDepth>();
 			r.Read<TerrainMinMaxTexture>();
-			r.Read<TerrainCubemapMinMaxTexture>();
+			r.Read<TerrainGlobalMinMaxTexture>();
 			r.Read<SkyViewLUT>();
 			r.Modify<HdrColor>();
 			r.After<DeferredNode>();
@@ -155,7 +155,7 @@ namespace brassica {
 			push.gNormalIndex = ctx.Index<GBufferNormal>();
 			push.sceneColor = ctx.Index<HdrColor>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
-			push.cubemapMinMaxIndex = ctx.Index<TerrainCubemapMinMaxTexture>();
+			push.globalMinMaxIndex = ctx.Index<TerrainGlobalMinMaxTexture>();
 			push.gMaterialIndex = ctx.Index<GBufferMaterial>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 

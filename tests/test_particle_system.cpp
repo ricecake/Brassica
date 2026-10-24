@@ -42,7 +42,7 @@ namespace {
 			r.Create<TerrainMinMaxTexture>();
 			r.Create<TerrainClipmapTexture>();
 			r.Create<TerrainWeatherBiomeTexture>();
-			r.Create<TerrainCubemapMinMaxTexture>();
+			r.Create<TerrainGlobalMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext&) {}

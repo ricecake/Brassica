@@ -24,9 +24,9 @@ namespace brassica {
 		alignas(16) glm::vec4 cameraPos{0.0f};          // xyz = cameraPos, w = time
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f}; // xyz = sunDir, w = sunIntensity
 		alignas(16) glm::uvec4 gridParams{0};           // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = mapDim
-		alignas(16) glm::uvec4 indices{0xFFFFFFFFu};     // x = minMaxIndex, y = clipmapIndex, z = shadowMapStorageIdx, w = cubemapMinMaxIndex
+		alignas(16) glm::uvec4 indices{0xFFFFFFFFu};     // x = minMaxIndex, y = clipmapIndex, z = shadowMapStorageIdx, w = globalMinMaxIndex
 		alignas(16) glm::uvec4 cascadeLODs{1, 3, 6, 0}; // x = cascade 0 LOD (1), y = cascade 1 LOD (3), z = cascade 2 LOD (6)
-		alignas(16) glm::uvec4 cubemapIndices{0xFFFFFFFFu}; // x = cubemapIndex, y = unused, z = unused, w = unused
+		alignas(16) glm::uvec4 globalIndices{0xFFFFFFFFu}; // x = globalIndex, y = unused, z = unused, w = unused
 	};
 
 	static_assert(
@@ -72,16 +72,16 @@ namespace brassica {
 			r.Create<TerrainShadowMap>();
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainClipmapTexture>();
-			r.Read<TerrainCubemapTexture>();
-			r.Read<TerrainCubemapMinMaxTexture>();
+			r.Read<TerrainGlobalTexture>();
+			r.Read<TerrainGlobalMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push.indices.x = ctx.Index<TerrainMinMaxTexture>();
 			push.indices.y = ctx.Index<TerrainClipmapTexture>();
 			push.indices.z = ctx.StorageIndex<TerrainShadowMap>();
-			push.indices.w = ctx.Index<TerrainCubemapMinMaxTexture>();
-			push.cubemapIndices.x = ctx.Index<TerrainCubemapTexture>();
+			push.indices.w = ctx.Index<TerrainGlobalMinMaxTexture>();
+			push.globalIndices.x = ctx.Index<TerrainGlobalTexture>();
 
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
 			if (!resolved.pipeline) {
