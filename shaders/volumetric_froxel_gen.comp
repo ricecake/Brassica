@@ -109,7 +109,7 @@ void main() {
 		vec3 accumulatedTransmittance = vec3(1.0);
 		bool hasOccluded = false;
 
-		float jitter = InterleavedGradientNoise(vec2(xy), int(uFrameIndex));
+		// float jitter = InterleavedGradientNoise(vec2(xy), int(uFrameIndex));
 
 		// float jitter = mortonOwenThreshold(ivec2(floatBitsToInt(xy.x), floatBitsToInt(xy.y)), int(uFrameIndex));
 		for (int z = 0; z < 64; ++z) {
@@ -124,7 +124,7 @@ void main() {
 			float dist = froxelNormToDist(zCenterNorm, maxDist, kExpAlpha);
 			float voxelSizeZ = max(0.001, distFar - distNear);
 
-			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist + viewRayDir*((distFar-distNear)*0.0125*jitter);
+			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist;
 
 			// Sample weather map at worldPos XZ
 			float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
@@ -188,30 +188,30 @@ void main() {
 
 			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, minMaxIndex, gridDim);
 
-			// Emphasize cloud shadow contrast
+			// --- 1. CLOUD SHADOW EVALUATION ---
+			vec4 cloudShadowData = vec4(0.0, 0.0, 0.0, 1.0);
 			float cloudTransmittance = 1.0;
+
 			if (cloudShadowIndex > 0u && cloudShadowIndex != 0xFFFFu && push.sunDir.y > 0.001) {
-				vec4 cloudShadowData = sampleCloudShadow(cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
+				cloudShadowData = sampleCloudShadow(cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
+				// Emphasize cloud shadow contrast
 				cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.8);
 				shadowTerm *= cloudTransmittance;
 			}
 
+			// --- 2. DIRECT SUN SCATTERING ---
 			float cosTheta = dot(viewRayDir, push.sunDir.xyz);
 			float rayleighPhase = (3.0 / (16.0 * PI)) * (1.0 + cosTheta * cosTheta);
 
-			// 1. Single Scattering (Highly directional)
 			float miePhase = dualHenyeyGreenstein(cosTheta, effectiveG);
-
-			// 2. Multiple Scattering Lobe (Wider, diffuse)
 			float msPhase = dualHenyeyGreenstein(cosTheta, effectiveG * 0.15);
-
-			// FIX: Drive MS with overall moisture, not just rain, to prevent black shadows.
 			float msWeight = clamp(weatherMoisture * 1.5 + rainFactor, 0.15, 1.5);
 			float finalMiePhase = miePhase + (msPhase * msWeight);
 
 			vec3 sunScat = push.sunColor.rgb * push.sunDir.w * shadowTerm * directSunScatteringBoost;
 			vec3 directSun = (fogScatCoeff * finalMiePhase + rayleighScat * rayleighPhase + mieScat * finalMiePhase) * sunScat;
 
+			// --- 3. CLOUD IRRADIANCE & SKY AMBIENT ---
 			vec3 skyAmbient = vec3(0.20, 0.35, 0.55) * max(0.2, push.sunDir.y) + vec3(0.05, 0.08, 0.12);
 			if (skyViewIndex != 0xFFFFu && skyViewIndex != 0u) {
 				vec3 zenithSky = sampleSkyView(skyViewIndex, vec3(0.0, 1.0, 0.0));
@@ -219,22 +219,33 @@ void main() {
 				skyAmbient = mix(zenithSky, horizonSky, 0.35);
 			}
 
-			// Calculate how much direct sunlight is blocked by the clouds overhead.
-			// Convert a fraction of that blocked energy into uniform ambient glow.
-			float diffusedSunEnergy = (1.0 - cloudTransmittance) * 0.15;
+			float opticalDepth = max(0.0, cloudShadowData.z);
+			vec3 msTransmittance = vec3(exp(-opticalDepth), exp(-opticalDepth * 0.25), exp(-opticalDepth * 0.05));
 
-			// Modulate by sun.y so the clouds stop glowing after sunset
-			vec3 cloudBaseIrradiance = push.sunColor.rgb * push.sunDir.w * max(0.0, push.sunDir.y) * diffusedSunEnergy;
+			// Added 0.05 base diffusion so ultra-dense storm cores don't go pitch black
+			float diffusedTransmittance = dot(msTransmittance, vec3(0.15, 0.45, 0.40)) + 0.05;
+			float powder = 1.0 - exp(-opticalDepth * 2.0);
 
-			// Add the diffused sunlight to the sky ambient, instead of artificially darkening it
-			skyAmbient += cloudBaseIrradiance;
+			vec3 cloudTint = push.sunColor.rgb * push.sunDir.w * max(0.0, push.sunDir.y);
+			skyAmbient += cloudTint * (diffusedTransmittance * powder) * 0.6;
 
-			// Apply the multiple-scattering moisture boost
 			float ambientMSBoost = 1.0 + clamp(weatherMoisture + rainFactor * 1.2, 0.0, 1.5);
 			skyAmbient *= ambientMSBoost;
-
 			vec3 ambientScat = (fogScatCoeff + mieScat) * skyAmbient + (rayleighScat * length(skyAmbient));
 
+			// --- 4. UPWELLING GROUND BOUNCE ---
+			// Sun hits the terrain and bounces back UP into the fog.
+			// When looking down from the air, this creates highly-visible forward scattering.
+			vec3 averageTerrainAlbedo = vec3(0.18, 0.16, 0.12);
+			vec3 upwellingEnergy = push.sunColor.rgb * push.sunDir.w * max(0.0, push.sunDir.y) * shadowTerm * averageTerrainAlbedo;
+
+			// The light source is the ground (Vector to light points straight DOWN)
+			float upwellingCosTheta = dot(viewRayDir, vec3(0.0, -1.0, 0.0));
+			float upwellingPhase = dualHenyeyGreenstein(upwellingCosTheta, effectiveG * 0.3); // Diffused by the bounce
+
+			vec3 groundBounceScat = (fogScatCoeff + mieScat) * upwellingEnergy * upwellingPhase;
+
+			// --- 5. LOCAL LIGHTS & INTEGRATION ---
 			vec3 localLightScattering = vec3(0.0);
 			uint maxLightsToSample = min(uLightCount, 32u);
 			for (uint li = 0u; li < maxLightsToSample; ++li) {
@@ -249,15 +260,8 @@ void main() {
 				vec3 L;
 				float attenuation;
 				calculateLightContribution(
-					uLights[li].type,
-					lightPos,
-					uLights[li].direction,
-					uLights[li].innerCutoff,
-					uLights[li].outerCutoff,
-					uLights[li].intensity,
-					worldPos,
-					L,
-					attenuation
+					uLights[li].type, lightPos, uLights[li].direction, uLights[li].innerCutoff,
+					uLights[li].outerCutoff, uLights[li].intensity, worldPos, L, attenuation
 				);
 
 				if (attenuation <= 0.0) continue;
@@ -267,7 +271,8 @@ void main() {
 				localLightScattering += uLights[li].color * uLights[li].intensity * attenuation * localPhase;
 			}
 
-			vec3 cellScattering = directSun + ambientScat + localLightScattering + vec3(emissivity);
+			// Add the groundBounceScat to the final cell energy
+			vec3 cellScattering = directSun + ambientScat + groundBounceScat + localLightScattering + vec3(emissivity);
 
 			vec3 sliceTransmittance = exp(-totalExtCoeff * voxelSizeZ);
 			vec3 integratedScattering = cellScattering * (vec3(1.0) - sliceTransmittance) / max(vec3(1e-7), totalExtCoeff);
