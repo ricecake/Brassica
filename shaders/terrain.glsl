@@ -11,7 +11,7 @@
 vec2 sampleToroidalUV(vec2 worldXZ, uint level, uint textureDim) {
     float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
     float texelSize = baseTexelSize * getLODScale(float(level));
-    float dim = float((textureDim > 0u) ? textureDim : 1024u);
+    float dim = float((textureDim > 0u) ? textureDim : 1088u);
 
     // Remove floor() to preserve continuous sub-texel precision
     vec2 worldGrid = worldXZ / texelSize;
@@ -124,12 +124,12 @@ vec2 sampleTerrainMinMaxMip(
 ) {
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
 	float ts = baseTexelSize * getLODScale(float(level));
-	float dim = float((textureDim > 0u) ? textureDim : 1024u);
-
-	vec2 worldGrid = floor(worldXZ / ts);
-	vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
 
 	if (mip == 0u) {
+		float dim = float((textureDim > 0u) ? textureDim : 1088u);
+		vec2 worldGrid = floor(worldXZ / ts);
+		vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
+
 		// Mip 0 is TerrainGenNode's raw per-texel height (min == max there -- no dilation
 		// baked in on write). Dilate here on read instead, mirroring exactly the {pix, pix+1}
 		// toroidally-wrapped 2x2 combine shaders/terrain_downsample.comp's SpdLoadSourceImage
@@ -137,13 +137,7 @@ vec2 sampleTerrainMinMaxMip(
 		// between texels needs both corners bounded, not just one). This is terrainMarchStep's
 		// new finest fallback (m == -1) below mip 1 -- used only when mip 1 is still ambiguous,
 		// a rare case by the algorithm's own design, so the extra 3 texelFetches here are only
-		// paid when actually needed. Baking this into mip 0's write side instead (e.g. via
-		// terrain_gen.comp's existing subgroup quad swaps) was considered and rejected: a
-		// subgroup quad is a fixed 2x2 hardware grouping, so it only covers dilation for texel
-		// pairs that happen to share a quad -- the other half of all texel-to-texel boundaries
-		// (every quad seam) would get no dilation margin at all, silently reintroducing exactly
-		// the "ray dips below the interpolated surface but stays above every stored corner"
-		// gap dilation exists to close in the first place.
+		// paid when actually needed.
 		ivec2 pix = ivec2(texelCoord);
 		ivec2 pixNext = ivec2(mod(texelCoord + 1.0, dim));
 		vec2 a = texelFetch(
@@ -165,9 +159,12 @@ vec2 sampleTerrainMinMaxMip(
 		return vec2(min(min(a.x, b.x), min(c.x, d.x)), max(max(a.y, b.y), max(c.y, d.y)));
 	}
 
-	// TerrainMinMaxDesc fixes mips=11 (0..10) for a 1024-wide map -- same coupling
-	// TerrainMinMaxDownsampleNode's kOutputMips already hardcodes.
-	int  mipDim = max(1, int(dim) >> int(mip));
+	// Downsampled mips (1..10) were built for the 1024x1024 sub-portion
+	float downsampleDim = 1024.0;
+	vec2 worldGrid = floor(worldXZ / ts);
+	vec2 texelCoord = mod(worldGrid + downsampleDim * 0.5, downsampleDim);
+
+	int  mipDim = max(1, int(downsampleDim) >> int(mip));
 	ivec2 mipTexel = clamp(ivec2(texelCoord) >> int(mip), ivec2(0), ivec2(mipDim - 1));
 
 	return texelFetch(
@@ -182,7 +179,7 @@ vec2 sampleTerrainMinMaxMip(
 // level 0's.
 float terrainLevelHalfExtent(uint level, uint textureDim) {
 	const float kClipmapCoverageSafety = 0.9; // leaves slack for snapping/update lag
-	float dim = float((textureDim > 0u) ? textureDim : 1024u);
+	float dim = float((textureDim > 0u) ? textureDim : 1088u);
 	return 0.5 * dim * texelSize(level) * kClipmapCoverageSafety;
 }
 
