@@ -74,8 +74,9 @@ void main() {
 
 		float baseSize = params.baseTileSize > 0.0 ? params.baseTileSize : 16.0;
 		float tileSize = baseSize * getLODScale(float(lodLevel));
+		float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
 
-		vec2 cameraSnap = floor(uCameraPosition.xz / tileSize) * tileSize;
+		vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
 		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 
 		vec3 relMinB = vec3(
@@ -104,7 +105,8 @@ void main() {
 
 		if (visible && lodLevel > 0) {
 			float prevTileSize = baseSize * getLODScale(float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevTileSize) * prevTileSize;
+			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel - 1));
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
 			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;
 			float prevExtent = float(tilesPerRow) * 0.5 * prevTileSize;
 

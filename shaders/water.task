@@ -65,8 +65,9 @@ void main() {
 
 		float baseMeshletSize = 24.0;
 		float meshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel)) * angleCompression;
+		float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getWaterRingScale(float(ringLevel));
 
-		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+		vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
 		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 		float maxWaveAmp = 20.0;
 
@@ -88,7 +89,8 @@ void main() {
 
 		if (visible && ringLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel - 1)) * angleCompression;
-			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getWaterRingScale(float(ringLevel - 1));
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
 			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
