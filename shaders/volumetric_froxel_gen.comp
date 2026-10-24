@@ -19,7 +19,7 @@ layout(push_constant) uniform VolumetricFroxelGenPushConstants {
 	vec4  sunColor;    // rgb = sun color/radiance, w = phase anisotropy g
 	vec4  fogParams;   // x = fog density, y = fog height falloff, z = fog base height, w = gridTextureDim
 	uvec4 indices0;    // x = scat0|scat1, y = scat2|ext0, z = ext1|ext2, w = noise|skyView
-	uvec4 indices1;    // x = clipmap|minMax, y = cloudShadow
+	uvec4 indices1;    // x = clipmap|minMax, y = cloudShadow|weather, z = shadowMap|cubemap, w = cubemapMinMax|0
 } push;
 
 uint unpackLow16(uint val) {
@@ -70,6 +70,8 @@ void main() {
 	uint cloudShadowIndex  = unpackLow16(push.indices1.y);
 	uint weatherBiomeIndex = unpackHigh16(push.indices1.y);
 	uint shadowMapIndex    = unpackLow16(push.indices1.z);
+	uint cubemapIndex      = unpackHigh16(push.indices1.z);
+	uint cubemapMinMaxIndex = unpackLow16(push.indices1.w);
 
 	uint cascadeScatteringIdx[3] = uint[3](scat0, scat1, scat2);
 	uint cascadeExtinctionIdx[3] = uint[3](ext0, ext1, ext2);

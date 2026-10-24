@@ -43,9 +43,12 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		float         waterLevel{0.0f};
 		std::uint32_t weatherBiomeIndex{0};
+		std::uint32_t cubemapIndex{0};
+		std::uint32_t cubemapMinMaxIndex{0};
+		std::uint32_t cubemapBiomeIndex{0};
 	};
 
-	static_assert(sizeof(TerrainPushConstants) == 36, "TerrainPushConstants size must be 36 bytes");
+	static_assert(sizeof(TerrainPushConstants) == 48, "TerrainPushConstants size must be 48 bytes");
 
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
@@ -136,6 +139,9 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<TerrainCubemapTexture>();
+			r.Read<TerrainCubemapMinMaxTexture>();
+			r.Read<TerrainCubemapBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -143,6 +149,9 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.cubemapIndex = ctx.Index<TerrainCubemapTexture>();
+			push.cubemapMinMaxIndex = ctx.Index<TerrainCubemapMinMaxTexture>();
+			push.cubemapBiomeIndex = ctx.Index<TerrainCubemapBiomeTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{

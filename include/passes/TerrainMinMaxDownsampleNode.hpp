@@ -278,7 +278,8 @@ namespace brassica {
 			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			vkCmd.dispatch(tilesPerAxis, tilesPerAxis, gridParams.x);
+			std::uint32_t lodCount = std::min(gridParams.x, 8u);
+			vkCmd.dispatch(tilesPerAxis, tilesPerAxis, lodCount);
 
 			hasDispatched = true;
 			lastDispatchedGridParams = gridParams;

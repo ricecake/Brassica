@@ -50,7 +50,11 @@ namespace brassica {
 		std::uint32_t debugVisualizeGTAO{0};
 		std::uint32_t cloudShadowIndex{0};
 		std::uint32_t shadowMapIndex{0};
+		std::uint32_t cubemapIndex{0};
+		std::uint32_t cubemapMinMaxIndex{0};
 	};
+
+	static_assert(sizeof(DeferredPushConstants) == 92, "DeferredPushConstants size must be 92 bytes");
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -138,6 +142,8 @@ namespace brassica {
 			r.Read<GTAOTexture>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainShadowMap>();
+			r.Read<TerrainCubemapTexture>();
+			r.Read<TerrainCubemapMinMaxTexture>();
 			r.Create<HdrColor>();
 		}
 
@@ -157,6 +163,8 @@ namespace brassica {
 			push.gtaoIndex = enableGTAO ? ctx.Index<GTAOTexture>() : 0u;
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
 			push.shadowMapIndex = ctx.Index<TerrainShadowMap>();
+			push.cubemapIndex = ctx.Index<TerrainCubemapTexture>();
+			push.cubemapMinMaxIndex = ctx.Index<TerrainCubemapMinMaxTexture>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

@@ -24,13 +24,14 @@ namespace brassica {
 		alignas(16) glm::vec4 cameraPos{0.0f};          // xyz = cameraPos, w = time
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f}; // xyz = sunDir, w = sunIntensity
 		alignas(16) glm::uvec4 gridParams{0};           // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = mapDim
-		alignas(16) glm::uvec4 indices{0xFFFFFFFFu};     // x = minMaxIndex, y = clipmapIndex, z = shadowMapStorageIdx, w = unused
+		alignas(16) glm::uvec4 indices{0xFFFFFFFFu};     // x = minMaxIndex, y = clipmapIndex, z = shadowMapStorageIdx, w = cubemapMinMaxIndex
 		alignas(16) glm::uvec4 cascadeLODs{1, 3, 6, 0}; // x = cascade 0 LOD (1), y = cascade 1 LOD (3), z = cascade 2 LOD (6)
+		alignas(16) glm::uvec4 cubemapIndices{0xFFFFFFFFu}; // x = cubemapIndex, y = unused, z = unused, w = unused
 	};
 
 	static_assert(
-		sizeof(TerrainShadowPushConstants) == 80,
-		"TerrainShadowPushConstants size must be 80 bytes"
+		sizeof(TerrainShadowPushConstants) == 96,
+		"TerrainShadowPushConstants size must be 96 bytes"
 	);
 
 	// Generates a 3-layer 2D shadow map for the sun using minmax mipmap traversal.
@@ -71,12 +72,16 @@ namespace brassica {
 			r.Create<TerrainShadowMap>();
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainClipmapTexture>();
+			r.Read<TerrainCubemapTexture>();
+			r.Read<TerrainCubemapMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push.indices.x = ctx.Index<TerrainMinMaxTexture>();
 			push.indices.y = ctx.Index<TerrainClipmapTexture>();
 			push.indices.z = ctx.StorageIndex<TerrainShadowMap>();
+			push.indices.w = ctx.Index<TerrainCubemapMinMaxTexture>();
+			push.cubemapIndices.x = ctx.Index<TerrainCubemapTexture>();
 
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
 			if (!resolved.pipeline) {

@@ -56,9 +56,12 @@ namespace brassica {
 		std::uint32_t terrainNumLevels{8};
 		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling
 		std::uint32_t hizIndex{0};     // bindless index for History<HiZTexture>
+		std::uint32_t cubemapIndex{0};
+		std::uint32_t cubemapMinMaxIndex{0};
+		std::uint32_t cubemapBiomeIndex{0};
 	};
 
-	static_assert(sizeof(FoliagePushConstants) == 116, "FoliagePushConstants size must be 116 bytes");
+	static_assert(sizeof(FoliagePushConstants) == 128, "FoliagePushConstants size must be 128 bytes");
 
 	// S4: no kPhase -- see EntityNode.hpp's identical reasoning (TerrainNode's Create-before-
 	// accessor orders this node after it, and every reader of the shared GBuffer keys gets a
@@ -175,6 +178,9 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<TerrainCubemapTexture>();
+			r.Read<TerrainCubemapMinMaxTexture>();
+			r.Read<TerrainCubemapBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -184,6 +190,9 @@ namespace brassica {
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.biomeTableIndex = ctx.Index<FoliageBiomeTableTexture>();
+			push.cubemapIndex = ctx.Index<TerrainCubemapTexture>();
+			push.cubemapMinMaxIndex = ctx.Index<TerrainCubemapMinMaxTexture>();
+			push.cubemapBiomeIndex = ctx.Index<TerrainCubemapBiomeTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

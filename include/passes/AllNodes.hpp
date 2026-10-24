@@ -26,6 +26,7 @@
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/SkyBackgroundNode.hpp"
 #include "passes/TerrainBiomeNode.hpp"
+#include "passes/TerrainCubemapNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainMinMaxDownsampleNode.hpp"
 #include "passes/TerrainNode.hpp"

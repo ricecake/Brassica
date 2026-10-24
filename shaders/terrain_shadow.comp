@@ -8,11 +8,12 @@
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform TerrainShadowPushConstants {
-	vec4  cameraPos;   // xyz = camera position, w = time
-	vec4  sunDir;      // xyz = sun direction, w = sun intensity
-	uvec4 gridParams;  // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = mapDim
-	uvec4 indices;     // x = minMaxIndex, y = clipmapIndex, z = shadowMapStorageIdx, w = unused
-	uvec4 cascadeLODs; // x = cascade 0 LOD (1), y = cascade 1 LOD (3), z = cascade 2 LOD (6), w = unused
+	vec4  cameraPos;      // xyz = camera position, w = time
+	vec4  sunDir;         // xyz = sun direction, w = sun intensity
+	uvec4 gridParams;     // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = mapDim
+	uvec4 indices;        // x = minMaxIndex, y = clipmapIndex, z = shadowMapStorageIdx, w = cubemapMinMaxIndex
+	uvec4 cascadeLODs;    // x = cascade 0 LOD (1), y = cascade 1 LOD (3), z = cascade 2 LOD (6), w = unused
+	uvec4 cubemapIndices; // x = cubemapIndex, y = unused, z = unused, w = unused
 } push;
 
 void main() {
@@ -43,7 +44,7 @@ void main() {
 
 	float terrainHeight = 0.0;
 	if (clipmapIndex > 0u && clipmapIndex != 0xFFFFFFFFu) {
-		terrainHeight = sampleTerrainClipmap(clipmapIndex, worldXZ, cascadeLOD, mapDim).r;
+		terrainHeight = sampleTerrainClipmap(clipmapIndex, push.cubemapIndices.x, worldXZ, cascadeLOD, mapDim).r;
 	}
 
 	vec3 lightDir = normalize(push.sunDir.xyz);
@@ -61,6 +62,7 @@ void main() {
 
 	TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 		minMaxIndex,
+		push.indices.w,
 		mapDim,
 		push.gridParams.x,
 		0.0

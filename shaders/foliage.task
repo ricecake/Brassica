@@ -36,6 +36,9 @@ layout(push_constant) uniform FoliagePushConstants {
 	uint  terrainNumLevels;
 	uint  foliageFlags; // bit 0: terrain occlusion culling
 	uint  hizIndex;
+	uint  cubemapIndex;
+	uint  cubemapMinMaxIndex;
+	uint  cubemapBiomeIndex;
 }
 params;
 
@@ -90,6 +93,7 @@ void main() {
 			vec2 centerXZ = cameraSnap + (vec2(float(col), float(row)) - float(tilesPerRow) * 0.5 + vec2(0.5)) * tileSize;
 			vec2 minMax = sampleTerrainMinMax(
 				params.minMaxIndex,
+				params.cubemapMinMaxIndex,
 				centerXZ,
 				lodLevel,
 				params.gridParams.w
@@ -129,6 +133,7 @@ void main() {
 			} else if (params.minMaxIndex > 0u) {
 				TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 					params.minMaxIndex,
+					params.cubemapMinMaxIndex,
 					params.gridParams.w,
 					params.terrainNumLevels,
 					params.waterLevel
