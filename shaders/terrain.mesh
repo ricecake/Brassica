@@ -77,7 +77,8 @@ void main() {
 	uint meshletsPerRow = params.gridParams.y;
 	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
 
-	vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
+	vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
 	vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 
 	float outerDist = (float(params.gridParams.y) * 0.5) * parentMeshletSize;
@@ -97,14 +98,15 @@ void main() {
 
 
 	if (morphLOD < params.gridParams.x - 1 && outerDist > 0.0) {
-		float morphWidth = 2.5 * parentMeshletSize;
+		float morphWidth = 2 * texelSize;
 		float morphStart = max(0.0, outerDist - morphWidth);
 
 		if (distToCam > morphStart) {
 			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
-			alpha = 0.5*round(2.0*alpha * alpha * (3.0 - 2.0 * alpha));
+			// alpha = 0.5*round(2.0*alpha * alpha * (3.0 - 2.0 * alpha));
+			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
 
-			relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
+			// relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
 		}
 	}
 	vec2 morphedWorldXZ = uCameraPosition.xz + relMorphedXZ;
@@ -125,7 +127,7 @@ void main() {
 			morphLOD + 1,
 			params.gridParams.w
 		);
-		height = mix(height, texNext.r, alpha);
+		height = mix(height, texNext.r - 0.01, alpha);
 		vec3 normalNext = octahedralUVToDirection(texNext.ba);
 		normal = normalize(mix(normal, normalNext, alpha));
 	}
@@ -140,24 +142,24 @@ void main() {
 	bool isLeftMacroEdge = (lx == 0) && (cx == 0);
 	bool isRightMacroEdge = (lx == 10) && (cx == gridDim - 1);
 
-	bool isOddBoundaryInternal = ((lx % 2 != 0) && (isTopMacroEdge || isBottomMacroEdge)) ||
-	                     ((ly % 2 != 0) && (isLeftMacroEdge || isRightMacroEdge));
+	// bool isOddBoundaryInternal = ((lx % 2 != 0) && (isTopMacroEdge || isBottomMacroEdge)) ||
+	//                      ((ly % 2 != 0) && (isLeftMacroEdge || isRightMacroEdge));
 
-	if (isOddBoundaryInternal) {
-		vec2 localA = vec2(float(lx - (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly - (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
-		vec2 localB = vec2(float(lx + (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly + (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
+	// if (isOddBoundaryInternal) {
+	// 	vec2 localA = vec2(float(lx - (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly - (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
+	// 	vec2 localB = vec2(float(lx + (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly + (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
 
-		vec2 relBaseA = relMeshletMinXZ + localA;
-		vec2 relBaseB = relMeshletMinXZ + localB;
+	// 	vec2 relBaseA = relMeshletMinXZ + localA;
+	// 	vec2 relBaseB = relMeshletMinXZ + localB;
 
-		vec2 worldA = uCameraPosition.xz + relBaseA;
-		vec2 worldB = uCameraPosition.xz + relBaseB;
+	// 	vec2 worldA = uCameraPosition.xz + relBaseA;
+	// 	vec2 worldB = uCameraPosition.xz + relBaseB;
 
-		float hA = sampleTerrainClipmap(params.clipmapIndex, worldA, morphLOD, params.gridParams.w).r;
-		float hB = sampleTerrainClipmap(params.clipmapIndex, worldB, morphLOD, params.gridParams.w).r;
+	// 	float hA = sampleTerrainClipmap(params.clipmapIndex, worldA, morphLOD, params.gridParams.w).r;
+	// 	float hB = sampleTerrainClipmap(params.clipmapIndex, worldB, morphLOD, params.gridParams.w).r;
 
-		height = (hA + hB) * 0.5;
-	}
+	// 	height = (hA + hB) * 0.5;
+	// }
 
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
@@ -323,7 +325,8 @@ void main() {
 		bool cullQuad = false;
 		if (morphLOD > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(morphLOD - 1));
-			vec2  prevRelSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize - uCameraPosition.xz;
+			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(morphLOD - 1));
+			vec2  prevRelSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
@@ -336,8 +339,8 @@ void main() {
 			}
 		}
 
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;
+		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
 	}
 
 	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
