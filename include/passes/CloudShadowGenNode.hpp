@@ -29,7 +29,8 @@ namespace brassica {
 		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 0.6f};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t shadowMapStorageIdx{0};
-		std::uint32_t _pad[2]{0};
+		std::uint32_t terrainShadowMapIdx{0};
+		std::uint32_t gridDim{1024};
 	};
 
 	// Evaluates top-down atmospheric and cloud extinction across 5 altitude layers:
@@ -65,6 +66,7 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.sunDir = glm::vec4(p.sunDir, 0.0f);
+			push.gridDim = p.terrainGridParams.w;
 			cameraPos = p.cameraPosition;
 		}
 
@@ -79,6 +81,7 @@ namespace brassica {
 			r.Read<CloudVolumeCascade1>();
 			r.Read<CloudVolumeCascade2>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<TerrainShadowMap>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -88,6 +91,7 @@ namespace brassica {
 			push.cascadeSampledIdx.w = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.shadowMapStorageIdx = ctx.StorageIndex<CloudShadowMap>();
+			push.terrainShadowMapIdx = ctx.Index<TerrainShadowMap>();
 			push.cameraPos = glm::vec4(cameraPos, 320000.0f);
 
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
