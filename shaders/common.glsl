@@ -377,3 +377,57 @@ HierarchicalWorleyData2D hierarchicalWorleyTiled(in vec2 p, in float period) {
 
     return HierarchicalWorleyData2D(sqrt(f1_dist), sqrt(f2_dist), f1_pos, f2_pos, f1_level, f2_level, f1_id, f2_id, p);
 }
+
+
+struct OrganicMacroCell {
+    vec2 corners[3];     // The base Cartesian vertices of the simplex triangle
+    vec2 edgePoints[3];  // The displaced intersection points on the edges
+    vec2 center;       // The central convergence point
+};
+
+// Internal helper: Evaluates the angular radius outward from a vertex
+float _evaluateCellRadius(vec2 v_skew, vec2 v_cart, vec2 target_cart, float lobeCount) {
+    vec2 dir = normalize(target_cart - v_cart);
+    float theta = atan(dir.y, dir.x);
+
+    // Hash function baked in to avoid external dependencies
+    float hash = fract(sin(dot(v_skew, vec2(12.9898, 78.233))) * 43758.5453123);
+    float offset = hash * 6.2831853;
+
+    return 0.5 + 0.5 * sin(lobeCount * theta + offset);
+}
+
+// Internal helper: Finds the intersection ratio between two competing vertex radii
+vec2 _calculateEdgeSplit(vec2 vA_skew, vec2 vA_cart, vec2 vB_skew, vec2 vB_cart, float lobeCount) {
+    float rA = _evaluateCellRadius(vA_skew, vA_cart, vB_cart, lobeCount);
+    float rB = _evaluateCellRadius(vB_skew, vB_cart, vA_cart, lobeCount);
+
+    float t = rA / max(rA + rB, 0.0001);
+    return mix(vA_cart, vB_cart, t);
+}
+
+// Public API: Generates the full 7-point geometry for a given simplex grid coordinate
+OrganicMacroCell generateOrganicMacroCell(vec2 gridOriginSkew, float scale, float lobeCount) {
+    OrganicMacroCell cell;
+
+    const float G2 = 0.21132486540; // (3 - sqrt(3)) / 6
+
+    // 1. Map skewed grid coordinates to scaled Cartesian space
+    vec2 v0_skew = gridOriginSkew;
+    vec2 v1_skew = gridOriginSkew + vec2(1.0, 0.0);
+    vec2 v2_skew = gridOriginSkew + vec2(0.0, 1.0);
+
+    cell.corners[0] = (v0_skew - (v0_skew.x + v0_skew.y) * G2) * scale;
+    cell.corners[1] = (v1_skew - (v1_skew.x + v1_skew.y) * G2) * scale;
+    cell.corners[2] = (v2_skew - (v2_skew.x + v2_skew.y) * G2) * scale;
+
+    // 2. Evaluate the specific organic intersections along the 3 edges
+    cell.edgePoints[0] = _calculateEdgeSplit(v0_skew, cell.corners[0], v1_skew, cell.corners[1], lobeCount);
+    cell.edgePoints[1] = _calculateEdgeSplit(v1_skew, cell.corners[1], v2_skew, cell.corners[2], lobeCount);
+    cell.edgePoints[2] = _calculateEdgeSplit(v2_skew, cell.corners[2], v0_skew, cell.corners[0], lobeCount);
+
+    // 3. Define the center to guarantee a planar interior partition
+    cell.center = (cell.edgePoints[0] + cell.edgePoints[1] + cell.edgePoints[2]) / 3.0;
+
+    return cell;
+}
