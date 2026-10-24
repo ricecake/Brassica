@@ -182,12 +182,10 @@ void main() {
 
 			// --- 1. CLOUD SHADOW EVALUATION ---
 			vec4 cloudShadowData = vec4(0.0, 0.0, 0.0, 1.0);
-			float cloudTransmittance = 1.0;
-
 			if (cloudShadowIndex > 0u && cloudShadowIndex != 0xFFFFu && push.sunDir.y > 0.001) {
 				cloudShadowData = sampleCloudShadow(cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
 				// Emphasize cloud shadow contrast
-				cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.8);
+				float cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.8);
 				shadowTerm *= cloudTransmittance;
 			}
 

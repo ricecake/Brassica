@@ -4,6 +4,7 @@
 #include "bindless.glsl"
 #include "atmosphere/common.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -12,8 +13,11 @@ layout(push_constant) uniform CloudShadowGenPushConstants {
 	uvec4 cascadeSampledIdx;     // xyz = sampled bindless indices for volume cascades 0, 1, 2
 	vec4  cameraPos;             // xyz = camera position, w = shadowMapExtent (320000.0)
 	vec4  fogParams;             // x = fog density, y = fog height falloff, z = fog base height
+	uvec4 gridParams;            // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = mapDim
 	uint  weatherBiomeIndex;     // bindless index for weather map
 	uint  shadowMapStorageIdx;   // bindless index for storage image array
+	uint  terrainShadowMapIdx;   // bindless index for terrain shadow map
+	uint  clipmapIndex;          // bindless index for terrain clipmap
 } push;
 
 float sampleCloudCascades(vec3 worldPos, float distFromCam) {
@@ -123,6 +127,7 @@ void main() {
 	float maxExt = 0.0;
 	float optDepth = 0.0;
 	float distTraveled = 0.0;
+	float minTerrainShadow = 1.0;
 
 	bool savedL1 = false;
 	bool savedL2 = false;
@@ -141,8 +146,29 @@ void main() {
 		optDepth += ext * stepSize;
 		distTraveled += stepSize;
 
+		// 1. Solid terrain clipmap height check across the whole 320km domain
+		if (push.clipmapIndex > 0u && push.clipmapIndex != 0xFFFFFFFFu) {
+			uint lodLevel = terrainClipmapLevelFor(p.xz, push.gridParams.w, push.gridParams.x);
+			float terrH = sampleTerrainClipmap(push.clipmapIndex, p.xz, lodLevel, push.gridParams.w).r;
+			float drop = terrainDropOff(p.xz);
+			if (p.y <= terrH - drop + 0.5) {
+				minTerrainShadow = 0.0;
+			}
+		}
+
+		// 2. Soft terrain shadow map check with boundary edge fade
+		if (minTerrainShadow > 0.0 && push.terrainShadowMapIdx > 0u && push.terrainShadowMapIdx != 0xFFFFFFFFu) {
+			float softVal = evaluateTerrainShadowFromMap(push.terrainShadowMapIdx, p, sunDir, push.gridParams.w);
+			vec2 offsetFromCam = p.xz - push.cameraPos.xz;
+			float distXZ = max(abs(offsetFromCam.x), abs(offsetFromCam.y));
+			float maxRange = float(push.gridParams.w) * texelSize(6u) * 0.5;
+			float fade = smoothstep(maxRange * 0.7, maxRange * 0.95, distXZ);
+			float terrSoftShadow = mix(softVal, 1.0, fade);
+			minTerrainShadow = min(minTerrainShadow, terrSoftShadow);
+		}
+
 		float avgExt = optDepth / max(distTraveled, 0.001);
-		float transmittance = exp(-optDepth);
+		float transmittance = exp(-optDepth) * minTerrainShadow;
 
 		if (!savedL1 && currentY <= 12500.0) {
 			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 1), vec4(maxExt, avgExt, optDepth, transmittance));
@@ -159,7 +185,7 @@ void main() {
 	}
 
 	float avgExt = optDepth / max(distTraveled, 0.001);
-	float transmittance = exp(-optDepth);
+	float transmittance = exp(-optDepth) * minTerrainShadow;
 	vec4 finalData = vec4(maxExt, avgExt, optDepth, transmittance);
 
 	if (!savedL1) imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 1), finalData);
