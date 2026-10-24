@@ -1043,6 +1043,174 @@ void emitTreeItem(
 	}
 }
 
+void emitTreeStandin2D(
+	vec3 basePos,
+	float heightScale,
+	float widthScale,
+	float angle,
+	uint treeType,
+	float fade,
+	inout uint vCount,
+	inout uint pCount
+) {
+	float treeH = (6.0 + (pcg_hash(vCount + 1u) * 2.0)) * heightScale * params.lengthMultiplier * fade;
+	float treeW = (3.0 + (pcg_hash(vCount + 2u) * 1.5)) * widthScale * params.widthMultiplier * fade;
+
+	vec4 barkColor = vec4(0.32, 0.25, 0.18, 1.0);
+	vec4 canopyColor;
+	if (treeType == 3u) { // Cactus
+		canopyColor = vec4(0.24, 0.50, 0.28, 1.0);
+	} else if (treeType == 2u) { // Palm
+		canopyColor = vec4(0.20, 0.65, 0.22, 1.0);
+	} else if (treeType == 0u) { // Pine
+		canopyColor = vec4(0.10, 0.35, 0.14, 1.0);
+	} else { // Deciduous
+		canopyColor = vec4(0.22, 0.60, 0.16, 1.0);
+	}
+
+	vec3 viewDirHoriz = normalize(vec3(basePos.x, 0.0, basePos.z) + vec3(1e-4, 0.0, 1e-4));
+	vec3 camRightHoriz = vec3(-viewDirHoriz.z, 0.0, viewDirHoriz.x);
+
+	vec3 sideAxis = camRightHoriz * (treeW * 0.5);
+
+	uint vBase = vCount;
+	vec3 pBL = basePos - sideAxis;
+	vec3 pBR = basePos + sideAxis;
+	vec3 pTL = basePos - sideAxis + vec3(0.0, treeH, 0.0);
+	vec3 pTR = basePos + sideAxis + vec3(0.0, treeH, 0.0);
+
+	vec3 viewBL = mat3(uViewMatrix) * pBL;
+	gl_MeshVerticesEXT[vBase + 0u].gl_Position = uProjMatrix * vec4(viewBL, 1.0);
+	outWorldPos[vBase + 0u] = pBL + uCameraPosition.xyz;
+	outNormal[vBase + 0u] = vec3(0.0, 1.0, 0.0);
+	outUV[vBase + 0u] = vec2(0.0, 0.0);
+	outColor[vBase + 0u] = barkColor;
+	outMaterialType[vBase + 0u] = 9u;
+	outFade[vBase + 0u] = fade;
+
+	vec3 viewBR = mat3(uViewMatrix) * pBR;
+	gl_MeshVerticesEXT[vBase + 1u].gl_Position = uProjMatrix * vec4(viewBR, 1.0);
+	outWorldPos[vBase + 1u] = pBR + uCameraPosition.xyz;
+	outNormal[vBase + 1u] = vec3(0.0, 1.0, 0.0);
+	outUV[vBase + 1u] = vec2(1.0, 0.0);
+	outColor[vBase + 1u] = barkColor;
+	outMaterialType[vBase + 1u] = 9u;
+	outFade[vBase + 1u] = fade;
+
+	vec3 viewTL = mat3(uViewMatrix) * pTL;
+	gl_MeshVerticesEXT[vBase + 2u].gl_Position = uProjMatrix * vec4(viewTL, 1.0);
+	outWorldPos[vBase + 2u] = pTL + uCameraPosition.xyz;
+	outNormal[vBase + 2u] = vec3(0.0, 1.0, 0.0);
+	outUV[vBase + 2u] = vec2(0.0, 1.0);
+	outColor[vBase + 2u] = canopyColor;
+	outMaterialType[vBase + 2u] = 9u;
+	outFade[vBase + 2u] = fade;
+
+	vec3 viewTR = mat3(uViewMatrix) * pTR;
+	gl_MeshVerticesEXT[vBase + 3u].gl_Position = uProjMatrix * vec4(viewTR, 1.0);
+	outWorldPos[vBase + 3u] = pTR + uCameraPosition.xyz;
+	outNormal[vBase + 3u] = vec3(0.0, 1.0, 0.0);
+	outUV[vBase + 3u] = vec2(1.0, 1.0);
+	outColor[vBase + 3u] = canopyColor;
+	outMaterialType[vBase + 3u] = 9u;
+	outFade[vBase + 3u] = fade;
+
+	uint pBase = pCount;
+	gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 1u, vBase + 2u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 1u, vBase + 3u, vBase + 2u);
+
+	vCount += 4u;
+	pCount += 2u;
+}
+
+void emitOrganicMacroCellPatch(
+	vec2 clumpCenterWorld,
+	vec2 clumpCenterRel,
+	float terrainHeight,
+	vec3 terrainNormal,
+	uint treeType,
+	float treeScale,
+	float fade,
+	inout uint vCount,
+	inout uint pCount
+) {
+	float cellScale = 24.0 * treeScale;
+	vec2 gridSkew = clumpCenterWorld / cellScale;
+	vec2 gridOriginSkew = floor(gridSkew);
+
+	float lobeCount = 5.0;
+	OrganicMacroCell cell = generateOrganicMacroCell(gridOriginSkew, cellScale, lobeCount);
+
+	vec4 leafTopColor;
+	vec4 leafBottomColor;
+	if (treeType == 3u) { // Cactus
+		leafTopColor = vec4(0.28, 0.52, 0.30, 1.0);
+		leafBottomColor = vec4(0.18, 0.38, 0.20, 1.0);
+	} else if (treeType == 2u) { // Palm
+		leafTopColor = vec4(0.22, 0.68, 0.22, 1.0);
+		leafBottomColor = vec4(0.12, 0.45, 0.15, 1.0);
+	} else if (treeType == 0u) { // Pine / Evergreen
+		leafTopColor = vec4(0.12, 0.38, 0.16, 1.0);
+		leafBottomColor = vec4(0.06, 0.22, 0.08, 1.0);
+	} else { // Deciduous
+		leafTopColor = vec4(0.26, 0.64, 0.18, 1.0);
+		leafBottomColor = vec4(0.14, 0.40, 0.09, 1.0);
+	}
+
+	vec2 points[7];
+	points[0] = cell.center;
+	points[1] = cell.corners[0];
+	points[2] = cell.corners[1];
+	points[3] = cell.corners[2];
+	points[4] = cell.edgePoints[0];
+	points[5] = cell.edgePoints[1];
+	points[6] = cell.edgePoints[2];
+
+	float heights[7];
+	float baseTreeH = 8.0 * treeScale;
+	heights[0] = baseTreeH * 1.0;
+	heights[1] = baseTreeH * 0.25;
+	heights[2] = baseTreeH * 0.25;
+	heights[3] = baseTreeH * 0.25;
+	heights[4] = baseTreeH * 0.60;
+	heights[5] = baseTreeH * 0.60;
+	heights[6] = baseTreeH * 0.60;
+
+	uint vBase = vCount;
+	for (uint i = 0u; i < 7u; ++i) {
+		vec2 ptWorldXZ = clumpCenterWorld + points[i] - cell.center;
+		vec2 ptRelXZ = ptWorldXZ - uCameraPosition.xz;
+
+		float ptDeformH = heights[i];
+		vec3 ptRelPos = vec3(ptRelXZ.x, terrainHeight + ptDeformH - uCameraPosition.y, ptRelXZ.y);
+
+		vec3 domeNormal = normalize(vec3(points[i].x - cell.center.x, baseTreeH * 0.8, points[i].y - cell.center.y));
+		vec3 finalNormal = normalize(mix(terrainNormal, domeNormal, 0.6));
+
+		vec4 col = mix(leafBottomColor, leafTopColor, (i == 0u) ? 1.0 : (i >= 4u ? 0.6 : 0.3));
+
+		vec3 viewP = mat3(uViewMatrix) * ptRelPos;
+		gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
+		outWorldPos[vBase + i] = ptRelPos + uCameraPosition.xyz;
+		outNormal[vBase + i] = finalNormal;
+		outUV[vBase + i] = vec2(0.5) + (points[i] - cell.center) / cellScale;
+		outColor[vBase + i] = col;
+		outMaterialType[vBase + i] = 9u;
+		outFade[vBase + i] = fade;
+	}
+
+	uint pBase = pCount;
+	gl_PrimitiveTriangleIndicesEXT[pBase + 0u] = uvec3(vBase + 0u, vBase + 1u, vBase + 4u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 1u] = uvec3(vBase + 0u, vBase + 4u, vBase + 2u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 2u] = uvec3(vBase + 0u, vBase + 2u, vBase + 5u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 3u] = uvec3(vBase + 0u, vBase + 5u, vBase + 3u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 4u] = uvec3(vBase + 0u, vBase + 3u, vBase + 6u);
+	gl_PrimitiveTriangleIndicesEXT[pBase + 5u] = uvec3(vBase + 0u, vBase + 6u, vBase + 1u);
+
+	vCount += 7u;
+	pCount += 6u;
+}
+
 void main() {
 	uint clumpGlobalIdx = gl_WorkGroupID.x;
 	uint tileIdx = clumpGlobalIdx >> 4u;
@@ -1166,12 +1334,7 @@ void main() {
 							foliageType = 4u;
 						} else {
 							cumulative += params.bushRatio;
-						if (sel < cumulative) {
-							foliageType = 5u;
-						} else {
-							cumulative += params.treeRatio;
-							foliageType = (sel < cumulative) ? 6u : 0u;
-						}
+							foliageType = (sel < cumulative) ? 5u : 0u;
 						}
 					}
 				}
@@ -1192,9 +1355,6 @@ void main() {
 		} else if (foliageType == 2u) {
 			itemVerts = 17u;
 			itemPrims = 14u;
-		} else if (foliageType == 6u) {
-			itemVerts = 60u;
-			itemPrims = 98u;
 		} else {
 			itemVerts = 12u;
 			itemPrims = 10u;
@@ -1206,9 +1366,6 @@ void main() {
 
 		vec3  basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
 		float heightScale = bHWDF.x * fade;
-		// Must shrink with fade the same way heightScale does -- leaving width full-size while
-		// height shrinks toward the LOD ring's outer edge turns each item into a tall thin sliver
-		// right before it fades out, instead of shrinking uniformly.
 		float widthScale = bHWDF.y * fade;
 		vec3  sway = vec3(windStrength, 0.0, windStrength);
 
@@ -1223,14 +1380,56 @@ void main() {
 			);
 		} else if (foliageType == 2u) {
 			emitFlowerItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorBottom, fade, vCount, pCount);
-		} else if (foliageType == 6u) {
-			emitTreeItem(
-				basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, biomeIdx, temp, moisture, fade, vCount, pCount
-			);
 		} else {
 			emitBladeItem(
 				basePos, heightScale, widthScale, foliageType, angle, distToCam, sway, params.windTime, itemWorldXZ,
 				itemSeed, terrainNormal, bColorTop, bColorBottom, bCVE.x, rigidity, fade, vCount, pCount
+			);
+		}
+	}
+
+	// Forest / Cactus Patch System (Split from undergrowth, rendered with multi-LOD)
+	uint patchTreeType = 1u; // 0 Pine, 1 Deciduous, 2 Palm, 3 Cactus
+	if (biomeIdx == 7u) {
+		patchTreeType = 3u; // Cactus
+	} else if (biomeIdx == 8u || biomeIdx == 9u) {
+		patchTreeType = 2u; // Palm
+	} else if (biomeIdx == 0u || biomeIdx == 1u || biomeIdx == 2u || temp < 0.35) {
+		patchTreeType = 0u; // Pine
+	} else {
+		patchTreeType = 1u; // Deciduous
+	}
+
+	float patchNoise = 0.5 + 0.5 * sin(clumpCenterWorld.x * 0.012 + sin(clumpCenterWorld.y * 0.008) * 2.0) * cos(clumpCenterWorld.y * 0.012);
+	float treeSuitability = (patchTreeType == 3u) ? (1.0 - smoothstep(0.1, 0.4, moisture)) : smoothstep(0.2, 0.7, moisture);
+	float forestPatchDensity = patchNoise * treeSuitability * params.treeRatio;
+
+	bool isForestPatch = (!isUnderwater && forestPatchDensity > 0.08 && terrainNormal.y > 0.65);
+
+	if (isForestPatch && (vCount + 60u <= 128u) && (pCount + 98u <= 128u)) {
+		float treeScale = (0.8 + 0.6 * pcg_hash(cellSeed + 999u)) * (0.8 + 0.5 * forestPatchDensity);
+		float heightScale = bHWDF.x * fade * treeScale;
+		float widthScale = bHWDF.y * fade * treeScale;
+		vec3  treeBasePos = vec3(clumpCenterRel.x, terrainHeight - uCameraPosition.y, clumpCenterRel.y);
+		vec3  sway = vec3(windStrength, 0.0, windStrength);
+		float treeAngle = pcg_hash(cellSeed + 888u) * TAU;
+
+		if (distToCam < 55.0) {
+			// Near LOD (LOD 0): Full 3D tree / cactus mesh
+			emitTreeItem(
+				treeBasePos, heightScale, widthScale, treeAngle, sway, cellSeed + 777u, terrainNormal,
+				biomeIdx, temp, moisture, fade, vCount, pCount
+			);
+		} else if (distToCam < 160.0) {
+			// Medium LOD (LOD 1): 2D Tree Stand-in Quad
+			emitTreeStandin2D(
+				treeBasePos, heightScale, widthScale, treeAngle, patchTreeType, fade, vCount, pCount
+			);
+		} else {
+			// Far LOD (LOD 2): Organic Macro Cell grid patch mesh
+			emitOrganicMacroCellPatch(
+				clumpCenterWorld, clumpCenterRel, terrainHeight, terrainNormal,
+				patchTreeType, treeScale, fade, vCount, pCount
 			);
 		}
 	}
