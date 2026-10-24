@@ -50,6 +50,8 @@ void main() {
 		roughness = 0.5;
 	} else if (inMaterialType == 8u) { // Cactus
 		roughness = 0.4;
+	} else if (inMaterialType == 9u) { // Stand-in 2D / Organic Macro Cell Canopy
+		roughness = 0.55;
 	}
 	outPosition = vec4(relPos, 1.0);
 	outNormal = vec4(normalize(inNormal), roughness);
