@@ -27,6 +27,7 @@ layout(push_constant) uniform DeferredPushConstants {
 	float aoDirectInfluence;
 	uint  debugVisualizeGTAO;
 	uint  cloudShadowIndex;
+	uint  shadowMapIndex;
 }
 
 params;
@@ -177,7 +178,7 @@ void main() {
 
 				vec3 rayOrigin = pos + biasVector;
 
-				float raySoftShadow = calculateTerrainSoftShadow(occCtx, rayOrigin, lightDir, 20000.0, kPenumbra);
+				float raySoftShadow = evaluateTerrainShadowFromMap(params.shadowMapIndex, rayOrigin, lightDir, params.gridParams.w);
 
 				// Combine ray soft shadow with facing-away grazing angle transition for continuous C0 soft shadow
 				shadowMask = min(raySoftShadow, softNdotL);

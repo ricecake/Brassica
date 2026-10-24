@@ -22,10 +22,8 @@
 
 namespace brassica {
 
-	// Forward-declared only: After<AtmosphereCompositeNode>()/Before<WaterNode>() below need
-	// just the type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
-	struct AtmosphereCompositeNode;
-	struct WaterNode;
+	// Forward-declared only: After<CloudRenderNode>() below needs just the type's name.
+	struct CloudRenderNode;
 
 	struct alignas(16) VolumetricRenderPushConstants {
 		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
@@ -37,7 +35,10 @@ namespace brassica {
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gDepthIndex{0};
 		std::uint32_t hdrColorIndex{0};
-		float         maxDistance{12800.0f};
+		std::uint32_t skyViewIndex{0};
+		std::uint32_t transmittanceIndex{0};
+		float         maxDistance{100000.0f};
+		float         _pad[2]{0.0f, 0.0f};
 	};
 
 	// Composites froxel volumetric scattering and extinction onto HdrColor.
@@ -107,9 +108,10 @@ namespace brassica {
 			r.Read<VolumetricCascade1Extinction>();
 			r.Read<VolumetricCascade2Scattering>();
 			r.Read<VolumetricCascade2Extinction>();
+			r.Read<SkyViewLUT>();
+			r.Read<TransmittanceLUT>();
 			r.Modify<HdrColor>();
-			r.After<AtmosphereCompositeNode>();
-			r.Before<WaterNode>();
+			r.After<CloudRenderNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -124,6 +126,8 @@ namespace brassica {
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gDepthIndex = ctx.Index<GBufferDepth>();
 			push.hdrColorIndex = ctx.Index<HdrColor>();
+			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

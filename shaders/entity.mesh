@@ -9,7 +9,7 @@
 #include "bindless.glsl"
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-layout(max_vertices = 128, max_primitives = 256, triangles) out;
+layout(max_vertices = 256, max_primitives = 256, triangles) out;
 
 layout(push_constant) uniform PushConstants {
     uint64_t uEntityBufferAddress;
@@ -31,7 +31,7 @@ layout(location = 3) out vec4 vMaterial[];
 struct EntityInstanceData {
     vec4 positionAndScale;
     vec4 color;
-    uvec4 params;   // x = meshType (0=Ball, 1=Cylinder), y = param1, z = param2, w = flags
+    uvec4 params;   // x = meshType (0=Sphere, 1=Cylinder, 2=Box, 3=Plane), y = param1, z = param2, w = flags
     vec4 material; // x = metallic, y = roughness, z = glint, w = emissivity
     vec4 rotation; // xyz = euler angles (radians)
 };
@@ -40,7 +40,20 @@ layout(buffer_reference, std430) readonly buffer EntityBufferRef {
     EntityInstanceData instances[];
 };
 
-const float GOLDEN_ANGLE = 2.39996322972865332;
+// Unified vertex emitter
+void EmitVertex(uint i, vec3 localPos, vec3 localNorm, vec3 center, float scale, mat3 rotMat, vec4 color, vec4 material) {
+    vec3 worldNorm = normalize(rotMat * localNorm);
+    vec3 worldPos = center + rotMat * (localPos * scale);
+
+    float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
+    worldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
+
+    gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(worldPos, 1.0);
+    vWorldPos[i] = worldPos;
+    vNormal[i] = worldNorm;
+    vColor[i] = color;
+    vMaterial[i] = material;
+}
 
 void main() {
     EntityBufferRef entityBuf = EntityBufferRef(push.uEntityBufferAddress);
@@ -52,137 +65,196 @@ void main() {
     vec4 color = inst.color;
     vec4 material = inst.material;
 
+    vec3 rot = inst.rotation.xyz;
+    mat3 rotX = mat3(1.0, 0.0, 0.0, 0.0, cos(rot.x), -sin(rot.x), 0.0, sin(rot.x), cos(rot.x));
+    mat3 rotY = mat3(cos(rot.y), 0.0, sin(rot.y), 0.0, 1.0, 0.0, -sin(rot.y), 0.0, cos(rot.y));
+    mat3 rotZ = mat3(cos(rot.z), -sin(rot.z), 0.0, sin(rot.z), cos(rot.z), 0.0, 0.0, 0.0, 1.0);
+    mat3 rotMat = rotY * rotX * rotZ;
+
+    uint tid = gl_LocalInvocationIndex;
+
     if (meshType == 0u) {
-        // Ball (Sphere)
-        uint rings = inst.params.y > 0u ? inst.params.y : 8u;
-        uint pointsPerRing = inst.params.z > 0u ? inst.params.z : 12u;
+        // Spherified Cube
+        uint N = inst.params.y > 0u ? inst.params.y : 4u;
+        N = min(N, 4u); // Hardware Limit: N=4 creates 192 primitives. N=5 creates 300 (Overflows 256).
 
-        uint numVertices = rings * pointsPerRing + 2u;
-        uint numQuads = (rings - 1u) * pointsPerRing;
-        uint numPrimitives = numQuads * 2u + pointsPerRing * 2u;
+        uint vertsPerFace = (N + 1u) * (N + 1u);
+        uint numVertices = 6u * vertsPerFace;
+        uint numPrimitives = 6u * N * N * 2u;
 
         SetMeshOutputsEXT(numVertices, numPrimitives);
 
-        uint tid = gl_LocalInvocationIndex;
-
         for (uint i = tid; i < numVertices; i += 32u) {
-            vec3 norm;
-            if (i == 0u) {
-                norm = vec3(0.0, 1.0, 0.0);
-            } else if (i == numVertices - 1u) {
-                norm = vec3(0.0, -1.0, 0.0);
-            } else {
-                uint idx = i - 1u;
-                uint r = idx / pointsPerRing;
-                uint k = idx % pointsPerRing;
+            uint face = i / vertsPerFace;
+            uint idx = i % vertsPerFace;
+            uint x = idx % (N + 1u);
+            uint y = idx / (N + 1u);
 
-                float phi = PI * float(r + 1u) / float(rings + 1u);
-                float theta = float(k) * (2.0 * PI / float(pointsPerRing)) + float(r) * GOLDEN_ANGLE;
+            float u = (float(x) / float(N)) * 2.0 - 1.0;
+            float v = (float(y) / float(N)) * 2.0 - 1.0;
 
-                float y = cos(phi);
-                float rCyl = sin(phi);
-                float x = rCyl * cos(theta);
-                float z = rCyl * sin(theta);
+            vec3 pos;
+            if (face == 0u)      pos = vec3( u,  v,  1.0);
+            else if (face == 1u) pos = vec3( u,  v, -1.0);
+            else if (face == 2u) pos = vec3( u,  1.0,  v);
+            else if (face == 3u) pos = vec3( u, -1.0,  v);
+            else if (face == 4u) pos = vec3( 1.0,  u,  v);
+            else                 pos = vec3(-1.0,  u,  v);
 
-                norm = normalize(vec3(x, y, z));
-            }
-
-            vec3 worldPos = center + norm * scale;
-            float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
-            worldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
-
-            gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(worldPos, 1.0);
-            vWorldPos[i] = worldPos;
-            vNormal[i] = norm;
-            vColor[i] = color;
-            vMaterial[i] = material;
+            vec3 norm = normalize(pos);
+            EmitVertex(i, norm, norm, center, scale, rotMat, color, material);
         }
 
-        // Top pole fan
-        for (uint k = tid; k < pointsPerRing; k += 32u) {
-            uint nextK = (k + 1u) % pointsPerRing;
-            gl_PrimitiveTriangleIndicesEXT[k] = uvec3(0u, 1u + k, 1u + nextK);
-        }
-
-        // Quad strips
-        uint quadOffset = pointsPerRing;
+        uint numQuads = 6u * N * N;
         for (uint p = tid; p < numQuads; p += 32u) {
-            uint r = p / pointsPerRing;
-            uint k = p % pointsPerRing;
-            uint nextK = (k + 1u) % pointsPerRing;
+            uint face = p / (N * N);
+            uint idx = p % (N * N);
+            uint x = idx % N;
+            uint y = idx / N;
 
-            uint r0_k0 = 1u + r * pointsPerRing + k;
-            uint r0_k1 = 1u + r * pointsPerRing + nextK;
-            uint r1_k0 = 1u + (r + 1u) * pointsPerRing + k;
-            uint r1_k1 = 1u + (r + 1u) * pointsPerRing + nextK;
+            uint vOffset = face * vertsPerFace;
+            uint v00 = vOffset + y * (N + 1u) + x;
+            uint v10 = vOffset + y * (N + 1u) + (x + 1u);
+            uint v01 = vOffset + (y + 1u) * (N + 1u) + x;
+            uint v11 = vOffset + (y + 1u) * (N + 1u) + (x + 1u);
 
-            gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u] = uvec3(r0_k0, r1_k1, r1_k0);
-            gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u + 1u] = uvec3(r0_k0, r0_k1, r1_k1);
+            bool flip = (face == 1u || face == 2u || face == 5u);
+            if (flip) {
+                gl_PrimitiveTriangleIndicesEXT[p * 2u] = uvec3(v00, v11, v10);
+                gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(v00, v01, v11);
+            } else {
+                gl_PrimitiveTriangleIndicesEXT[p * 2u] = uvec3(v00, v10, v11);
+                gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(v00, v11, v01);
+            }
         }
 
-        // Bottom pole fan
-        uint bottomOffset = quadOffset + numQuads * 2u;
-        uint southPole = numVertices - 1u;
-        uint lastRingStart = 1u + (rings - 1u) * pointsPerRing;
+    } else if (meshType == 1u) {
+        // Capped Cylinder
+        uint segments = inst.params.y > 0u ? inst.params.y : 16u;
+        segments = min(segments, 63u); // Hardware Limit: 63 segments = 254 vertices, 252 primitives.
 
-        for (uint k = tid; k < pointsPerRing; k += 32u) {
-            uint nextK = (k + 1u) % pointsPerRing;
-            gl_PrimitiveTriangleIndicesEXT[bottomOffset + k] = uvec3(southPole, lastRingStart + k, lastRingStart + nextK);
-        }
-
-    } else {
-        // Cylinder mesh generation (Procedural / Parametric Cylinder)
-        uint segments = 12u;
-        uint stacks = 4u;
-
-        uint numVertices = (stacks + 1u) * (segments + 1u);
-        uint numPrimitives = stacks * segments * 2u;
+        uint numVertices = 4u * segments + 2u;
+        uint numPrimitives = 4u * segments;
 
         SetMeshOutputsEXT(numVertices, numPrimitives);
 
-        uint tid = gl_LocalInvocationIndex;
+        for (uint i = tid; i < numVertices; i += 32u) {
+            vec3 pos, norm;
+            if (i < 2u * segments) {
+                uint ring = i / segments;
+                uint seg = i % segments;
+                float angle = float(seg) * (2.0 * PI / float(segments));
+                float y = (ring == 0u) ? 1.0 : -1.0;
+                pos = vec3(cos(angle), y, sin(angle));
+                norm = vec3(cos(angle), 0.0, sin(angle));
+            } else if (i < 3u * segments + 1u) {
+                uint seg = i - 2u * segments;
+                if (seg == segments) { pos = vec3(0, 1.0, 0); norm = vec3(0, 1.0, 0); }
+                else {
+                    float angle = float(seg) * (2.0 * PI / float(segments));
+                    pos = vec3(cos(angle), 1.0, sin(angle));
+                    norm = vec3(0, 1.0, 0);
+                }
+            } else {
+                uint seg = i - (3u * segments + 1u);
+                if (seg == segments) { pos = vec3(0, -1.0, 0); norm = vec3(0, -1.0, 0); }
+                else {
+                    float angle = float(seg) * (2.0 * PI / float(segments));
+                    pos = vec3(cos(angle), -1.0, sin(angle));
+                    norm = vec3(0, -1.0, 0);
+                }
+            }
+            EmitVertex(i, pos, norm, center, scale, rotMat, color, material);
+        }
 
-        // Rotation matrix
-        vec3 rot = inst.rotation.xyz;
-        mat3 rotX = mat3(1.0, 0.0, 0.0, 0.0, cos(rot.x), -sin(rot.x), 0.0, sin(rot.x), cos(rot.x));
-        mat3 rotY = mat3(cos(rot.y), 0.0, sin(rot.y), 0.0, 1.0, 0.0, -sin(rot.y), 0.0, cos(rot.y));
-        mat3 rotZ = mat3(cos(rot.z), -sin(rot.z), 0.0, sin(rot.z), cos(rot.z), 0.0, 0.0, 0.0, 1.0);
-        mat3 rotMat = rotY * rotX * rotZ;
+        for (uint p = tid; p < segments; p += 32u) {
+            uint nextP = (p + 1u) % segments;
+
+            // Tube
+            uint top0 = p, top1 = nextP;
+            uint bot0 = p + segments, bot1 = nextP + segments;
+            gl_PrimitiveTriangleIndicesEXT[p * 2u]     = uvec3(top0, bot1, bot0);
+            gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(top0, top1, bot1);
+
+            // Top Cap (+Y normal requires CCW winding pointing up)
+            uint tcRing = 2u * segments;
+            uint tcCenter = 3u * segments;
+            gl_PrimitiveTriangleIndicesEXT[2u * segments + p] = uvec3(tcCenter, tcRing + nextP, tcRing + p);
+
+            // Bottom Cap (-Y normal requires CCW winding pointing down)
+            uint bcRing = 3u * segments + 1u;
+            uint bcCenter = 4u * segments + 1u;
+            gl_PrimitiveTriangleIndicesEXT[3u * segments + p] = uvec3(bcCenter, bcRing + p, bcRing + nextP);
+        }
+
+    } else if (meshType == 2u) {
+        // Box
+        uint numVertices = 24u;
+        uint numPrimitives = 12u;
+
+        SetMeshOutputsEXT(numVertices, numPrimitives);
+
+        const vec3 boxPos[8] = {
+            vec3(-1,-1, 1), vec3( 1,-1, 1), vec3( 1, 1, 1), vec3(-1, 1, 1),
+            vec3(-1,-1,-1), vec3( 1,-1,-1), vec3( 1, 1,-1), vec3(-1, 1,-1)
+        };
+        const vec3 boxNorms[6] = {
+            vec3(0,0,1), vec3(0,0,-1), vec3(0,1,0), vec3(0,-1,0), vec3(1,0,0), vec3(-1,0,0)
+        };
+        const uint boxFaceIndices[24] = {
+            0,1,2,3, 5,4,7,6, 3,2,6,7, 4,5,1,0, 1,5,6,2, 4,0,3,7
+        };
 
         for (uint i = tid; i < numVertices; i += 32u) {
-            uint stack = i / (segments + 1u);
-            uint seg = i % (segments + 1u);
-
-            float stackHeight = (float(stack) / float(stacks) - 0.5) * 2.0; // [-1, 1]
-            float angle = float(seg) * (2.0 * PI / float(segments));
-
-            vec3 localNorm = normalize(vec3(cos(angle), 0.0, sin(angle)));
-            vec3 localPos = vec3(cos(angle), stackHeight, sin(angle));
-
-            vec3 worldNorm = normalize(rotMat * localNorm);
-            vec3 worldPos = center + rotMat * (localPos * scale);
-
-            float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
-            worldPos.y -= distSq / (2.0 * FAKE_PLANET_RADIUS);
-
-            gl_MeshVerticesEXT[i].gl_Position = uViewProjMatrix * vec4(worldPos, 1.0);
-            vWorldPos[i] = worldPos;
-            vNormal[i] = worldNorm;
-            vColor[i] = color;
-            vMaterial[i] = material;
+            vec3 pos = boxPos[boxFaceIndices[i]];
+            vec3 norm = boxNorms[i / 4u];
+            EmitVertex(i, pos, norm, center, scale, rotMat, color, material);
         }
 
-        for (uint p = tid; p < stacks * segments; p += 32u) {
-            uint stack = p / segments;
-            uint seg = p % segments;
-
-            uint i0 = stack * (segments + 1u) + seg;
-            uint i1 = i0 + 1u;
-            uint i2 = (stack + 1u) * (segments + 1u) + seg;
-            uint i3 = i2 + 1u;
-
-            gl_PrimitiveTriangleIndicesEXT[p * 2u] = uvec3(i0, i2, i1);
-            gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(i1, i2, i3);
+        for (uint p = tid; p < numPrimitives; p += 32u) {
+            uint face = p / 2u;
+            uint tri = p % 2u;
+            uint offset = face * 4u;
+            if (tri == 0u) gl_PrimitiveTriangleIndicesEXT[p] = uvec3(offset, offset + 1u, offset + 2u);
+            else           gl_PrimitiveTriangleIndicesEXT[p] = uvec3(offset, offset + 2u, offset + 3u);
         }
+
+    } else if (meshType == 3u) {
+        // Plane
+        uint N = inst.params.y > 0u ? inst.params.y : 10u;
+        N = min(N, 11u); // Hardware Limit: 11 grid steps = 144 vertices, 242 primitives.
+
+        uint numVertices = (N + 1u) * (N + 1u);
+        uint numPrimitives = N * N * 2u;
+
+        SetMeshOutputsEXT(numVertices, numPrimitives);
+
+        for (uint i = tid; i < numVertices; i += 32u) {
+            uint x = i % (N + 1u);
+            uint z = i / (N + 1u);
+
+            float px = (float(x) / float(N)) * 2.0 - 1.0;
+            float pz = (float(z) / float(N)) * 2.0 - 1.0;
+
+            vec3 pos = vec3(px, 0.0, pz);
+            vec3 norm = vec3(0.0, 1.0, 0.0);
+            EmitVertex(i, pos, norm, center, scale, rotMat, color, material);
+        }
+
+        for (uint p = tid; p < N * N; p += 32u) {
+            uint x = p % N;
+            uint z = p / N;
+
+            uint v00 = z * (N + 1u) + x;
+            uint v10 = v00 + 1u;
+            uint v01 = (z + 1u) * (N + 1u) + x;
+            uint v11 = v01 + 1u;
+
+            gl_PrimitiveTriangleIndicesEXT[p * 2u]     = uvec3(v00, v01, v10);
+            gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(v10, v01, v11);
+        }
+    } else {
+        // Safe fallback for unmapped mesh IDs to prevent driver hangups
+        SetMeshOutputsEXT(0, 0);
     }
 }

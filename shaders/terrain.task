@@ -60,8 +60,9 @@ void main() {
 
 		float baseMeshletSize = 32.0;
 		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
+		float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
 
-		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+		vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
 		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 
 		vec3 relMinB = vec3(
@@ -115,7 +116,8 @@ void main() {
 
 		if (visible && lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
+			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel - 1));
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
 			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 

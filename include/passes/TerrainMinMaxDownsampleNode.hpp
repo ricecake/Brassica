@@ -32,10 +32,10 @@ namespace brassica {
 	// the old workGroupOffset-carrying layout this replaced.
 	struct TerrainDownsamplePushConstants {
 		std::uint32_t srcIndex{0};      // bindless SAMPLED index for TerrainMinMaxTexture (mip 0 read)
-		std::uint32_t mips{10};         // SPD output mip count -- our mip 1..10 for MapDim = 1024
+		std::uint32_t mips{10};         // SPD output mip count -- our mip 1..10 for DownsampleDim = 1024
 		std::uint32_t isFullRebuild{1}; // 1 = every tile dirty (first frame/force/resize), 0 = subregion
-		std::uint32_t textureDim{constants::Class::Terrain::MapDim}; // per-layer map width, for the
-		                                                             // shader's own dirty-tile test
+		std::uint32_t textureDim{1024}; // sub-portion map width (1024) for downsampling
+		                                // and dirty-tile test
 		std::array<std::uint32_t, 10> mipIndices{};                  // bindless STORAGE indices for our mip 1..10
 	};
 
@@ -118,10 +118,11 @@ namespace brassica {
 	// Create-before-accessor, and every reader of TerrainMinMaxTexture gets a real edge from this
 	// node too (the default "reader sees final state" resource edge) -- no phase needed.
 	struct TerrainMinMaxDownsampleNode: render::NodeRegistrar<TerrainMinMaxDownsampleNode> {
-		// FFX SPD's fixed contract: one workgroup per 64x64 source tile. For MapDim = 1024 that's
+		// FFX SPD's fixed contract: one workgroup per 64x64 source tile. For DownsampleDim = 1024 that's
 		// 16x16 tiles per slice -- matches the dispatch in Execute.
 		static constexpr std::uint32_t kTileSize = 64;
-		static constexpr std::uint32_t kOutputMips = 10; // our mip 1..10 for MapDim = 1024
+		static constexpr std::uint32_t kDownsampleDim = 1024;
+		static constexpr std::uint32_t kOutputMips = 10; // our mip 1..10 for DownsampleDim = 1024
 
 		render::PipelineLibrary*       pipelineLibrary = nullptr;
 		ComputeShader                  downsampleShader;
@@ -269,8 +270,8 @@ namespace brassica {
 			}
 			push.mips = kOutputMips;
 			push.isFullRebuild = isFullRebuild ? 1u : 0u;
-			push.textureDim = gridParams.w;
-			std::uint32_t tilesPerAxis = (gridParams.w + kTileSize - 1) / kTileSize;
+			push.textureDim = kDownsampleDim;
+			std::uint32_t tilesPerAxis = (kDownsampleDim + kTileSize - 1) / kTileSize;
 
 			std::array<vk::DescriptorSetLayout, 1> extraLayouts{counterSet.layout};
 			std::array<vk::DescriptorSet, 1>       extraSets{counterSet.set};

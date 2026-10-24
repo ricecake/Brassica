@@ -106,11 +106,6 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			bool shouldRun = (frameCount++ % 3 == 0) || hasUpdate || forceRegeneration;
-			if (!shouldRun) {
-				return;
-			}
-
 			// Update cascade states
 			float extents[3] = {push.cascadeExtents.x, push.cascadeExtents.y, push.cascadeExtents.z};
 			for (int i = 0; i < 3; ++i) {

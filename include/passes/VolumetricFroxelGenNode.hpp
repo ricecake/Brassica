@@ -128,6 +128,7 @@ namespace brassica {
 			// shaders/volumetric_froxel_gen.comp loops uLights[] directly (min(uLightCount, 32u))
 			// for point/spot lighting, not just through SkyViewLUT/CloudShadowMap.
 			r.Read<LightsBuffer>();
+			r.Read<TerrainShadowMap>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -162,6 +163,7 @@ namespace brassica {
 			std::uint32_t minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			std::uint32_t cloudShadowIndex = ctx.Index<CloudShadowMap>();
 			std::uint32_t weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			std::uint32_t shadowMapIndex = ctx.Index<TerrainShadowMap>();
 
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
@@ -170,13 +172,13 @@ namespace brassica {
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
-			genPush.indices1.z = 0u;
+			genPush.indices1.z = pack16(shadowMapIndex, 0u);
 			genPush.indices1.w = 0u;
 
 			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {
-				// 64 / 8 = 8 workgroups per dimension x and y (z is integrated in shader column)
-				vkCmd.dispatch(8, 8, 1);
+				// 128 / 8 = 16, 96 / 8 = 12 workgroups (z is integrated in shader column)
+				vkCmd.dispatch(16, 12, 1);
 			}
 		}
 	};

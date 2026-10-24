@@ -168,21 +168,36 @@ namespace brassica {
 				ma_sound_group_set_pitch(&masterGroup, mgrState.globalPitch * state.globalPitch);
 			}
 
-			// Enable / disable procedural sound effects based on manager state
-			if (windSound) {
+			// Enable / disable procedural sound effects and update tuning aspects based on manager state
+			if (windSound && windEffect) {
 				windSound->SetVolume(mgrState.enableWind ? 1.0f : 0.0f);
+				windEffect->SetVolumeScale(mgrState.windVolume);
+				windEffect->SetPitchScale(mgrState.windPitch);
+				windEffect->SetResonanceScale(mgrState.windResonance);
 			}
-			if (rainSound) {
+			if (rainSound && rainEffect) {
 				rainSound->SetVolume(mgrState.enableRain ? 1.0f : 0.0f);
+				rainEffect->SetVolumeScale(mgrState.rainVolume);
+				rainEffect->SetPitchScale(mgrState.rainPitch);
+				rainEffect->SetDensityScale(mgrState.rainDensity);
 			}
-			if (rustleSound) {
+			if (rustleSound && rustleEffect) {
 				rustleSound->SetVolume(mgrState.enableRustle ? 1.0f : 0.0f);
+				rustleEffect->SetVolumeScale(mgrState.rustleVolume);
+				rustleEffect->SetPitchScale(mgrState.rustlePitch);
+				rustleEffect->SetModSpeedScale(mgrState.rustleModSpeed);
 			}
-			if (spaceSound) {
+			if (spaceSound && spaceEffect) {
 				spaceSound->SetVolume(mgrState.enableSpaceNoise ? 1.0f : 0.0f);
+				spaceEffect->SetVolumeScale(mgrState.spaceVolume);
+				spaceEffect->SetPitchScale(mgrState.spacePitch);
+				spaceEffect->SetSubBassFreq(mgrState.spaceSubFreq);
 			}
-			if (speedWooshSound) {
+			if (speedWooshSound && speedWooshEffect) {
 				speedWooshSound->SetVolume(mgrState.enableSpeedWoosh ? 1.0f : 0.0f);
+				speedWooshEffect->SetVolumeScale(mgrState.speedWooshVolume);
+				speedWooshEffect->SetPitchScale(mgrState.speedWooshPitch);
+				speedWooshEffect->SetResonanceScale(mgrState.speedWooshResonance);
 			}
 
 			// Update procedural sources

@@ -8,6 +8,7 @@
 #include "EngineConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/TonemapPushConstants.hpp"
+#include "ui/AudioWidget.hpp"
 #include "ui/IWidget.hpp"
 #include "ui/ManagerSettingsWidget.hpp"
 #include <glm/gtc/quaternion.hpp>
@@ -89,6 +90,13 @@ namespace brassica {
 		CHECK(quickWidget.IsVisible() == true);
 
 		ServiceLocator::SetInstance(nullptr);
+	}
+
+	TEST_CASE("AudioWidget Creation and Attributes") {
+		ui::AudioWidget widget;
+		CHECK(widget.GetTitle() == "Audio Settings");
+		CHECK(widget.GetCategory() == "Audio");
+		CHECK_FALSE(widget.IsVisible());
 	}
 
 	TEST_CASE("TonemapPushConstants Post-Processing and CDL Parameters") {

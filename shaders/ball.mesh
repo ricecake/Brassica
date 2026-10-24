@@ -5,7 +5,8 @@
 #include "bindless.glsl"
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-layout(max_vertices = 128, max_primitives = 256, triangles) out;
+// Bumped from 128/256 to support up to N=4 subdivisions per cube face
+layout(max_vertices = 216, max_primitives = 216, triangles) out;
 
 struct TaskPayload {
     vec4 positionAndScale;
@@ -19,47 +20,46 @@ layout(location = 0) out vec3 vWorldPos[];
 layout(location = 1) out vec3 vNormal[];
 layout(location = 2) out vec4 vColor[];
 
-const float GOLDEN_ANGLE = 2.39996322972865332; // Golden angle in radians
-
 void main() {
     vec3 center = IN.positionAndScale.xyz;
     float radius = IN.positionAndScale.w;
     vec4 color = IN.color;
 
-    uint rings = IN.params.x > 0u ? IN.params.x : 8u;
-    uint pointsPerRing = IN.params.y > 0u ? IN.params.y : 12u;
+    // params.x dictates the number of grid subdivisions per cube face.
+    uint N = IN.params.x > 0u ? IN.params.x : 4u;
+    uint vertsPerFace = (N + 1u) * (N + 1u);
+    uint numVertices = 6u * vertsPerFace;
 
-    uint numVertices = rings * pointsPerRing + 2u;
-    uint numQuads = (rings - 1u) * pointsPerRing;
-    uint numPrimitives = numQuads * 2u + pointsPerRing * 2u;
+    uint trisPerFace = N * N * 2u;
+    uint numPrimitives = 6u * trisPerFace;
 
     SetMeshOutputsEXT(numVertices, numPrimitives);
 
     uint tid = gl_LocalInvocationIndex;
 
-    // 1. Fibonacci sphere vertices
+    // 1. Spherified Cube Vertices
+    // Note: Edge vertices are purposely duplicated between adjacent faces to keep
+    // thread evaluation independent and avoid complex cross-face seam deduplication.
     for (uint i = tid; i < numVertices; i += 32u) {
-        vec3 norm;
-        if (i == 0u) {
-            norm = vec3(0.0, 1.0, 0.0);
-        } else if (i == numVertices - 1u) {
-            norm = vec3(0.0, -1.0, 0.0);
-        } else {
-            uint idx = i - 1u;
-            uint r = idx / pointsPerRing;
-            uint k = idx % pointsPerRing;
+        uint face = i / vertsPerFace;
+        uint idx = i % vertsPerFace;
+        uint x = idx % (N + 1u);
+        uint y = idx / (N + 1u);
 
-            float phi = PI * float(r + 1u) / float(rings + 1u);
-            float theta = float(k) * (2.0 * PI / float(pointsPerRing)) + float(r) * GOLDEN_ANGLE;
+        // Map grid coordinates to a [-1, 1] range across the face
+        float u = (float(x) / float(N)) * 2.0 - 1.0;
+        float v = (float(y) / float(N)) * 2.0 - 1.0;
 
-            float y = cos(phi);
-            float rCyl = sin(phi);
-            float x = rCyl * cos(theta);
-            float z = rCyl * sin(theta);
+        vec3 pos;
+        if (face == 0u)      pos = vec3( u,  v,  1.0); // +Z
+        else if (face == 1u) pos = vec3( u,  v, -1.0); // -Z
+        else if (face == 2u) pos = vec3( u,  1.0,  v); // +Y
+        else if (face == 3u) pos = vec3( u, -1.0,  v); // -Y
+        else if (face == 4u) pos = vec3( 1.0,  u,  v); // +X
+        else                 pos = vec3(-1.0,  u,  v); // -X
 
-            norm = normalize(vec3(x, y, z));
-        }
-
+        // Normalization inflates the cube structure into a perfect sphere
+        vec3 norm = normalize(pos);
         vec3 worldPos = center + norm * radius;
 
         float distSq = dot(worldPos.xz - uCameraPosition.xz, worldPos.xz - uCameraPosition.xz);
@@ -71,36 +71,30 @@ void main() {
         vColor[i] = color;
     }
 
-    // 2. Triangles / Primitives
-    // Top pole fan
-    for (uint k = tid; k < pointsPerRing; k += 32u) {
-        uint nextK = (k + 1u) % pointsPerRing;
-        gl_PrimitiveTriangleIndicesEXT[k] = uvec3(0u, 1u + k, 1u + nextK);
-    }
-
-    // Quad strips between rings
-    uint quadOffset = pointsPerRing;
+    // 2. Face Grid Primitives
+    uint numQuads = 6u * N * N;
     for (uint p = tid; p < numQuads; p += 32u) {
-        uint r = p / pointsPerRing;
-        uint k = p % pointsPerRing;
-        uint nextK = (k + 1u) % pointsPerRing;
+        uint face = p / (N * N);
+        uint idx = p % (N * N);
+        uint x = idx % N;
+        uint y = idx / N;
 
-        uint r0_k0 = 1u + r * pointsPerRing + k;
-        uint r0_k1 = 1u + r * pointsPerRing + nextK;
-        uint r1_k0 = 1u + (r + 1u) * pointsPerRing + k;
-        uint r1_k1 = 1u + (r + 1u) * pointsPerRing + nextK;
+        uint vOffset = face * vertsPerFace;
+        uint v00 = vOffset + y * (N + 1u) + x;
+        uint v10 = vOffset + y * (N + 1u) + (x + 1u);
+        uint v01 = vOffset + (y + 1u) * (N + 1u) + x;
+        uint v11 = vOffset + (y + 1u) * (N + 1u) + (x + 1u);
 
-        gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u] = uvec3(r0_k0, r1_k1, r1_k0);
-        gl_PrimitiveTriangleIndicesEXT[quadOffset + p * 2u + 1u] = uvec3(r0_k0, r0_k1, r1_k1);
-    }
+        // Maintain CCW winding: Faces -Z, +Y, and -X require flipped indices
+        // based on the orientation of the UV mapping applied in the vertex step.
+        bool flip = (face == 1u || face == 2u || face == 5u);
 
-    // Bottom pole fan
-    uint bottomOffset = quadOffset + numQuads * 2u;
-    uint southPole = numVertices - 1u;
-    uint lastRingStart = 1u + (rings - 1u) * pointsPerRing;
-
-    for (uint k = tid; k < pointsPerRing; k += 32u) {
-        uint nextK = (k + 1u) % pointsPerRing;
-        gl_PrimitiveTriangleIndicesEXT[bottomOffset + k] = uvec3(southPole, lastRingStart + k, lastRingStart + nextK);
+        if (flip) {
+            gl_PrimitiveTriangleIndicesEXT[p * 2u] = uvec3(v00, v11, v10);
+            gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(v00, v01, v11);
+        } else {
+            gl_PrimitiveTriangleIndicesEXT[p * 2u] = uvec3(v00, v10, v11);
+            gl_PrimitiveTriangleIndicesEXT[p * 2u + 1u] = uvec3(v00, v11, v01);
+        }
     }
 }

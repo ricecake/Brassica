@@ -20,8 +20,8 @@
 // 27 -> 28: Added GTAONode.
 // 28 -> 26: ParticleSystemNode sub-nodes dynamically registered, added CloudShadowGenNode.
 // 26 -> 27: Added TerrainReadbackNode (design plan's bug 6 fix -- the terrain ground-height
-// readback is now a real graph node instead of TerrainManager's own side-channel transfer-queue
-// submit).
+// 27 -> 28: Added TerrainShadowNode.
+// 28 -> 27: Unified AtmosphereCompositeNode into VolumetricRenderNode.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
 	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 27);
 }

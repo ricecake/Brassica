@@ -25,9 +25,9 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	// Forward-declared only: After<VolumetricRenderNode>()/Before<CirrusNode>() below need just
+	// Forward-declared only: After<DeferredNode>()/Before<CirrusNode>() below need just
 	// the type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
-	struct VolumetricRenderNode;
+	struct DeferredNode;
 	struct CirrusNode;
 
 	struct WaterPushConstants {
@@ -141,7 +141,7 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<SkyViewLUT>();
 			r.Modify<HdrColor>();
-			r.After<VolumetricRenderNode>();
+			r.After<DeferredNode>();
 			r.Before<CirrusNode>();
 		}
 

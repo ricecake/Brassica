@@ -48,9 +48,13 @@ namespace brassica {
 		float targetStrength = std::clamp(state.windStrength * 2.0f, 0.0f, 10.0f);
 		m_currentWindStrength += (targetStrength - m_currentWindStrength) * deltaTime * 3.0f;
 
-		float gain = std::clamp(m_currentWindStrength * 0.5f, 0.0f, 0.5f);
-		float freq = 0.005f + std::clamp(m_currentWindStrength * 0.02f, 0.0f, 0.1f);
-		float resonance = 0.5f + m_currentWindStrength * 0.2f;
+		float vol = m_volumeScale.load(std::memory_order_relaxed);
+		float pitch = m_pitchScale.load(std::memory_order_relaxed);
+		float resScale = m_resonanceScale.load(std::memory_order_relaxed);
+
+		float gain = std::clamp(m_currentWindStrength * 0.5f * vol, 0.0f, 1.0f);
+		float freq = std::clamp((0.005f + std::clamp(m_currentWindStrength * 0.02f, 0.0f, 0.1f)) * pitch, 0.0001f, 0.45f);
+		float resonance = std::clamp((0.5f + m_currentWindStrength * 0.2f) * resScale, 0.01f, 10.0f);
 
 		m_gain.store(gain, std::memory_order_relaxed);
 		m_freq.store(freq, std::memory_order_relaxed);

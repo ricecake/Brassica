@@ -30,7 +30,6 @@ namespace brassica {
 	// writer-chain relations below need just the type's name -- see
 	// ClusterLightAssignmentNode.hpp's identical reasoning.
 	struct WaterNode;
-	struct AtmosphereCompositeNode;
 	struct VolumetricRenderNode;
 	struct CirrusNode;
 	struct CloudRenderNode;
@@ -799,7 +798,6 @@ namespace brassica {
 			// HdrColor writer chain are ever registered together: Before<WaterNode>() alone only
 			// guarantees "before Water," not "before Water's own predecessors," so without these
 			// this node would be an unordered HdrColor writer against both and a hard ambiguity.
-			r.After<AtmosphereCompositeNode>();
 			r.After<VolumetricRenderNode>();
 		}
 

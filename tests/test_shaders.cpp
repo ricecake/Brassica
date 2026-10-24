@@ -43,8 +43,8 @@ TEST_CASE("Validate All GLSL Shaders Compile Successfully") {
 		fs::path    path = entry.path();
 		std::string ext = path.extension().string();
 
-		if (ext == ".glsl") {
-			// Included GLSL helper header -- validated when included by top-level shaders
+		if (ext == ".glsl" || path.string().find("external") != std::string::npos) {
+			// Included GLSL helper header or external third-party snippet -- validated when included by top-level shaders
 			continue;
 		}
 
