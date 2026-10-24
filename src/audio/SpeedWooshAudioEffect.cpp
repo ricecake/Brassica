@@ -51,9 +51,13 @@ namespace brassica {
 
 		m_currentSpeed += (state.speed - m_currentSpeed) * deltaTime * 4.0f;
 
-		float gain = speedFactor * 0.5f;
-		float freq = 0.01f + speedFactor * 0.14f;
-		float resonance = 0.2f + speedFactor * 0.5f;
+		float vol = m_volumeScale.load(std::memory_order_relaxed);
+		float pitch = m_pitchScale.load(std::memory_order_relaxed);
+		float resScale = m_resonanceScale.load(std::memory_order_relaxed);
+
+		float gain = speedFactor * 0.5f * vol;
+		float freq = std::clamp((0.01f + speedFactor * 0.14f) * pitch, 0.0001f, 0.45f);
+		float resonance = std::clamp((0.2f + speedFactor * 0.5f) * resScale, 0.01f, 10.0f);
 
 		m_gain.store(gain, std::memory_order_relaxed);
 		m_freq.store(freq, std::memory_order_relaxed);
