@@ -112,7 +112,8 @@ void main() {
 
 	float baseMeshletSize = 32.0;
 	float meshletSize = baseMeshletSize * getLODScale(float(lod));
-	vec2  cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod));
+	vec2  cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
 
 	vec3 minB = vec3(
 		cameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,

@@ -43,7 +43,7 @@ struct TerrainClipmapUpdate {
 
 TerrainClipmapUpdate terrainClipmapUpdateFor(uint level, uint textureDim, bool forceRegeneration) {
 	float ts = texelSize(level);
-	float dim = float((textureDim > 0u) ? textureDim : 1024u);
+	float dim = float((textureDim > 0u) ? textureDim : 1088u);
 	int   dimInt = int(dim);
 
 	vec2  camGrid = floor(uCameraPosition.xz / ts);
@@ -66,7 +66,7 @@ bool terrainClipmapTexelDirty(TerrainClipmapUpdate u, int colIdx, int rowIdx, ui
 	if (u.isFull) {
 		return true;
 	}
-	int dimInt = int((textureDim > 0u) ? textureDim : 1024u);
+	int dimInt = int((textureDim > 0u) ? textureDim : 1088u);
 	int deltaX = u.delta.x;
 	int deltaZ = u.delta.y;
 	bool dirtyX = (deltaX > 0 && colIdx >= dimInt - deltaX) || (deltaX < 0 && colIdx < -deltaX);
