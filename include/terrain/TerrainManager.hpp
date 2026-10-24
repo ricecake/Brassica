@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "vulkan/vulkan.hpp"
@@ -14,13 +15,41 @@
 
 namespace brassica {
 
-	// CPU-side terrain config/state (numLODs/baseTexelSize, Regenerate()) plus the async GPU->CPU
+	// One planned (or in-flight, or just-completed) readback request: the region to copy, plus
+	// the world-space context needed to interpret it once it lands. Filled in by PlanReadback,
+	// consumed by TerrainReadbackNode's Execute (graph/TerrainReadbackNode.hpp), then copied
+	// into the cached* fields below once PollReadbackData confirms the GPU work completed --
+	// same split today's code already had (pending* vs cached*), just named as one struct
+	// instead of two sets of loose members.
+	struct TerrainReadbackRegion {
+		uint32_t     arrayLayer = 0;
+		uint32_t     mipLevel = 0;
+		vk::Offset2D offset{};
+		vk::Extent2D extent{};
+		glm::vec2    originWorld{0.0f};
+		float        texelSize{0.5f};
+		glm::vec2    camPos{0.0f};
+	};
+
+	// CPU-side terrain config/state (numLODs/baseTexelSize, Regenerate()) plus the GPU->CPU
 	// readback system backing GetCachedGroundHeight() -- the two things left once the GPU image/
 	// view/sampler ownership, the CPU noise-based paging/generation machinery, and the noise-based
 	// CPU height sampler (SampleTerrain -- it queried an unrelated noise function, not what's
 	// actually rendered) were all deleted. The terrain arrays are now normal pass-owned graph
 	// resources, Created<> by TerrainGenNode; see terrain/TerrainClipmap.hpp's git history for
 	// what used to live here. Named for what it actually does now, not what it used to be.
+	//
+	// The readback itself is a real graph node now (TerrainReadbackNode, passes/
+	// TerrainReadbackNode.hpp) -- this class no longer owns a transfer queue, command pool, or
+	// semaphore of its own. It decides *whether* a new readback is wanted and *what* region
+	// (PlanReadback, moved here from Engine::UpdateCamera), the node records the actual copy
+	// through the graph's own barrier-synthesized command buffer, and this class picks the
+	// result back up by frame retirement (PollReadbackData, keyed off Engine's own
+	// frameTimelineSemaphore -- no dedicated semaphore needed, since the copy now completes
+	// exactly when the rest of its frame does). That's what closes the design plan's bug 6: the
+	// old TriggerImageRegionReadbackAsync transitioned a graph image on its own transfer queue
+	// with no semaphore and no tracked-state update at all -- a real race on any device with a
+	// separate transfer family, now gone because there is no side-channel submit left.
 	class TerrainManager: public ITerrainManager {
 	public:
 		TerrainManager() = default;
@@ -40,13 +69,18 @@ namespace brassica {
 			baseTexelSize = state.baseTexelSize;
 		}
 
+		// concurrentFamilies: forwarded straight to the readback staging buffer's VkBufferCreateInfo
+		// (TerrainManager.cpp) -- this buffer is out-of-registry (TerrainReadbackStaging is only
+		// ever RegisterImportedBuffer'd, never provisioned), so it doesn't pick up
+		// PhysicalResourceRegistry's own CONCURRENT handling automatically. See the design plan's
+		// S4 "Queue-family ownership": a Transfer-domain TerrainReadbackNode writes it, the CPU
+		// reads it, and neither this engine has a real ownership-transfer barrier to give it.
 		void Init(
-			vk::Device   device,
-			VmaAllocator allocator,
-			vk::Queue    transferQueue,
-			uint32_t     transferQueueFamily,
-			uint32_t     numLODs = constants::Class::Terrain::DefaultMaxLODs,
-			float        baseTexelSize = constants::Class::Terrain::BaseTexelSize
+			vk::Device                     device,
+			VmaAllocator                   allocator,
+			uint32_t                       numLODs = constants::Class::Terrain::DefaultMaxLODs,
+			float                          baseTexelSize = constants::Class::Terrain::BaseTexelSize,
+			std::span<const std::uint32_t> concurrentFamilies = {}
 		);
 		void Cleanup();
 
@@ -60,49 +94,62 @@ namespace brassica {
 
 		float GetBaseTexelSize() const { return baseTexelSize; }
 
-		// Async GPU->CPU readback -- a real device-local image region (TerrainClipmapTexture's
-		// mip 0, in practice -- the real per-texel height+normal map, not the hierarchical
-		// min/max occlusion bound: it's written directly by TerrainGenNode with no downstream
-		// pass to wait on, and carries the normal for physics besides) copied back through a
-		// dedicated transfer-queue command buffer + timeline semaphore + host-visible staging
-		// buffer, polled non-blockingly rather than waited on. Moved here verbatim from Engine
-		// (which owned it directly before this class had anything worth attaching it to); the
-		// caller still decides *what* region to request (that needs camera position + the
-		// physical registry, neither of which this class owns).
-		bool TriggerImageRegionReadbackAsync(
-			vk::Image       image,
-			uint32_t        arrayLayer,
-			uint32_t        mipLevel,
-			vk::Offset2D    offset,
-			vk::Extent2D    extent,
-			glm::vec2       originWorld,
-			float           texelSize,
-			glm::vec2       camPos,
-			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
-		);
+		[[nodiscard]] vk::Buffer GetReadbackStagingBuffer() const { return readbackStagingBuffer; }
 
-		bool TriggerImageRegionReadbackAsync(
-			vk::Image       image,
-			uint32_t        arrayLayer,
-			uint32_t        mipLevel,
-			vk::Offset2D    offset,
-			vk::Extent2D    extent,
-			vk::ImageLayout currentLayout = vk::ImageLayout::eGeneral
-		) {
-			return TriggerImageRegionReadbackAsync(
-				image,
-				arrayLayer,
-				mipLevel,
-				offset,
-				extent,
-				glm::vec2(0.0f),
-				0.5f,
-				glm::vec2(0.0f),
-				currentLayout
-			);
+		static constexpr vk::DeviceSize kReadbackStagingBytes = 1024 * 1024;
+
+		// Decides whether a new ground-height-and-normal readback should be requested this
+		// frame (same cooldown this used to apply inline in Engine::UpdateCamera: skip while
+		// one is still in flight, and skip if the camera hasn't moved far enough since the last
+		// one landed) and, if so, computes the region to copy -- a 128x128 window at LOD 0 mip
+		// 0 (64m x 64m footprint) centered on camPos2D, clamped to the clipmap's bounds. Reads
+		// the real per-texel height+normal map (TerrainClipmapTexture), not
+		// TerrainMinMaxTexture's hierarchical occlusion bound -- it's written directly by
+		// TerrainGenNode with no downstream pass to wait on, and carries the surface normal
+		// (GetInterpolatedGroundNormal) for physics besides.
+		void PlanReadback(glm::vec2 camPos2D);
+
+		[[nodiscard]] bool HasPendingReadback() const { return hasPendingReadback; }
+
+		[[nodiscard]] const TerrainReadbackRegion& GetPendingReadback() const { return pendingRegion; }
+
+		// Called by TerrainReadbackNode::Execute once it has actually recorded the copy, with
+		// NodeContext::placedQueue -- which real GPU queue's timeline will eventually carry this
+		// copy's completion. Under PhysicalExecutionBackend that's always Graphics; under
+		// MultiQueueExecutionBackend it's whichever queue ForceDomain/Heft actually placed this
+		// Transfer-domain node on, which the two can disagree about. The real (semaphore, value)
+		// pair isn't knowable yet at record time (QueueLane's timeline value is only assigned
+		// when a segment actually closes, which can happen more than once per frame) -- see
+		// CaptureReadbackCompletion, which Engine calls once it is, right after this frame's
+		// backend Execute() call returns.
+		void MarkReadbackSubmitted(graph::ExecutionDomain placedQueue) {
+			pendingReadbackQueue = placedQueue;
+			awaitingCompletionCapture = true;
+			hasPendingReadback = false;
 		}
 
-		void PollReadbackData();
+		[[nodiscard]] bool HasPendingCompletionCapture() const { return awaitingCompletionCapture; }
+
+		[[nodiscard]] graph::ExecutionDomain PendingReadbackQueue() const { return pendingReadbackQueue; }
+
+		// Called by Engine.cpp immediately after this frame's backend Execute() returns, only
+		// when HasPendingCompletionCapture() -- by then the real completion (semaphore, value)
+		// pair for whichever queue actually ran the readback this frame is known: Engine's own
+		// frameTimelineSemaphore + frameIndex+1 under GraphicsOnly (TerrainReadbackNode always
+		// lands on Graphics there, which signals that value exactly once per frame), or
+		// PendingReadbackQueue()'s own QueueLane::Timeline() + LastSubmittedValue() under
+		// ForceDomain/Heft.
+		void CaptureReadbackCompletion(vk::Semaphore completionSemaphore, uint64_t completionValue) {
+			if (!awaitingCompletionCapture) {
+				return;
+			}
+			awaitingCompletionCapture = false;
+			pendingCompletionSemaphore = completionSemaphore;
+			pendingCompletionValue = completionValue;
+			readbackInFlight = true;
+		}
+
+		void PollReadbackData(vk::Device device);
 
 		// Evaluates 2D bilinear height interpolation across the cached terrain height readback grid.
 		float GetInterpolatedGroundHeight(glm::vec2 worldXZ, float fallback) const;
@@ -131,22 +178,19 @@ namespace brassica {
 
 		vk::Device   device{nullptr};
 		VmaAllocator allocator{VK_NULL_HANDLE};
-		vk::Queue    transferQueue{nullptr};
-		uint32_t     transferQueueFamily{0};
 
-		vk::CommandPool   asyncTransferCommandPool{nullptr};
-		vk::CommandBuffer asyncTransferCommandBuffer{nullptr};
-		vk::Buffer        readbackStagingBuffer{nullptr};
-		VmaAllocation     readbackStagingAllocation{VK_NULL_HANDLE};
-		void*             readbackStagingMapped{nullptr};
-		vk::Semaphore     readbackTimelineSemaphore{nullptr};
-		uint64_t          readbackSubmittedTimelineValue{0};
-		uint64_t          readbackCompletedTimelineValue{0};
-		bool              readbackInFlight{false};
+		vk::Buffer    readbackStagingBuffer{nullptr};
+		VmaAllocation readbackStagingAllocation{VK_NULL_HANDLE};
+		void*         readbackStagingMapped{nullptr};
 
-		glm::vec2 pendingOriginWorld{0.0f};
-		float     pendingTexelSize{0.5f};
-		glm::vec2 pendingCamPos{0.0f};
+		bool                  hasPendingReadback{false};
+		TerrainReadbackRegion pendingRegion{};
+
+		graph::ExecutionDomain pendingReadbackQueue{graph::ExecutionDomain::Graphics};
+		bool                   awaitingCompletionCapture{false};
+		vk::Semaphore          pendingCompletionSemaphore{nullptr};
+		uint64_t               pendingCompletionValue{0};
+		bool                   readbackInFlight{false};
 
 		std::vector<glm::vec4> cachedReadbackData;
 		uint32_t               cachedReadbackWidth{0};

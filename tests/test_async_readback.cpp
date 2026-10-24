@@ -28,7 +28,7 @@ TEST_CASE("Engine Persistent Queues & Async Readback Test") {
 		// Test non-blocking readback polling before triggers -- GetCachedGroundHeight must still
 		// report the fallback verbatim, confirming no spurious cached data before anything ever
 		// completed.
-		engine.GetTerrainManager().PollReadbackData();
+		engine.GetTerrainManager().PollReadbackData(engine.GetDevice());
 
 		constexpr float kFallback = -1024.0f;
 		CHECK(engine.GetTerrainManager().GetCachedGroundHeight(kFallback) == kFallback);
@@ -37,7 +37,7 @@ TEST_CASE("Engine Persistent Queues & Async Readback Test") {
 		engine.UpdateCamera(0.016f);
 
 		// Poll readback after camera update
-		engine.GetTerrainManager().PollReadbackData();
+		engine.GetTerrainManager().PollReadbackData(engine.GetDevice());
 
 		engine.Cleanup();
 	} else {

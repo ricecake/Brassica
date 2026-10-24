@@ -34,13 +34,22 @@ namespace brassica::testing {
 
 	class MinimalDevice {
 	public:
-		MinimalDevice() {
+		// enableSyncValidation turns on VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT
+		// (Khronos validation's syncval) in addition to core validation -- opt-in rather than
+		// always-on because syncval is slower and some existing tests may not have been audited
+		// against it yet. Multi-queue sync tests (test_multiqueue_sync.cpp) are the first real
+		// caller: syncval is what actually proves a cross-queue wait covers what it claims to,
+		// core validation alone only checks each barrier/submit in isolation.
+		explicit MinimalDevice(bool enableSyncValidation = false) {
 			vkb::InstanceBuilder instanceBuilder;
 			instanceBuilder.set_app_name("brassica-tests")
 				.require_api_version(1, 3, 0)
 				.set_headless(true)
 				.set_debug_callback(&MinimalDevice::DebugCallback)
 				.set_debug_callback_user_data_pointer(this);
+			if (enableSyncValidation) {
+				instanceBuilder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
+			}
 
 			auto instRes = instanceBuilder.request_validation_layers(true).build();
 			if (!instRes) {
@@ -76,6 +85,12 @@ namespace brassica::testing {
 			features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
 			features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 			features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+			// Timeline semaphores -- not needed by any existing MinimalDevice caller (every one
+			// of them submits through a single synchronous device.waitIdle(), no semaphore at
+			// all), but test_multiqueue_sync.cpp's QueueRecorder lanes each own one. Vulkan 1.3
+			// core already requires synchronization2; it does not require timelineSemaphore (a
+			// 1.2 feature synchronization2 happens to build on but doesn't itself enable).
+			features12.timelineSemaphore = VK_TRUE;
 
 			VkPhysicalDeviceFeatures features1{};
 			features1.shaderInt64 = VK_TRUE;

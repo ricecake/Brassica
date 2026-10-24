@@ -62,6 +62,15 @@ namespace brassica {
 				VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 				bufInfo.size = size;
 				bufInfo.usage = static_cast<VkBufferUsageFlags>(usage | vk::BufferUsageFlagBits::eShaderDeviceAddress);
+				// aabbBuffer/instanceBuffer/scratchBuffer/blasBuffer/tlasBuffer all go through
+			    // here -- TerrainTLAS and its backing buffer are out-of-registry (RegisterImported-
+			    // AccelerationStructure, not Provision*), so this is the one place to apply the
+			    // design plan's S4 CONCURRENT-vs-EXCLUSIVE call for them.
+				if (m_concurrentFamilies.size() > 1) {
+					bufInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+					bufInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(m_concurrentFamilies.size());
+					bufInfo.pQueueFamilyIndices = m_concurrentFamilies.data();
+				}
 
 				VmaAllocationCreateInfo allocInfo{};
 				allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
@@ -73,7 +82,7 @@ namespace brassica {
 				VkBuffer          vkBuf = VK_NULL_HANDLE;
 				VmaAllocationInfo allocResInfo{};
 				if (vmaCreateBuffer(allocator, &bufInfo, &allocInfo, &vkBuf, &res.allocation, &allocResInfo) ==
-				    VK_SUCCESS) {
+			        VK_SUCCESS) {
 					res.buffer = vkBuf;
 					vk::BufferDeviceAddressInfo addrInfo{};
 					addrInfo.setBuffer(res.buffer);
@@ -250,8 +259,8 @@ namespace brassica {
 
 		std::array<vk::DescriptorSetLayout, 2> setLayouts{frameSetLayout, globalSetLayout};
 		std::array<vk::PushConstantRange, 1>   pushConstantRanges{
-			vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainAABBPushConstants)}
-		};
+            vk::PushConstantRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(TerrainAABBPushConstants)}
+        };
 
 		render::ComputePipelineRequest request{
 			.shader = aabbShader,

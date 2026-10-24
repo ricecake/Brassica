@@ -120,15 +120,15 @@ namespace brassica {
 	void Engine::InitSwapchain() {
 		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
 		auto                  swap_ret = swapchainBuilder
-											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-											 .set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
-											 .add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
-											 .add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-											 .set_desired_extent(1280, 720)
-											 .add_image_usage_flags(
-												 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-											 )
-											 .build();
+							.set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+							.set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
+							.add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
+							.add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+							.set_desired_extent(1280, 720)
+							.add_image_usage_flags(
+								VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+							)
+							.build();
 
 		if (!swap_ret) {
 			spdlog::error("Failed to create swapchain: {}", swap_ret.error().message());
@@ -173,16 +173,16 @@ namespace brassica {
 
 		vkb::SwapchainBuilder swapchainBuilder{chosenGPU, device, surface};
 		auto                  swap_ret = swapchainBuilder
-											 .set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-											 .set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
-											 .add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
-											 .add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-											 .set_desired_extent(static_cast<uint32_t>(width), static_cast<uint32_t>(height))
-											 .set_old_swapchain(vkbSwapchain)
-											 .add_image_usage_flags(
-												 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-											 )
-											 .build();
+							.set_desired_format({VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+							.set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
+							.add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
+							.add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+							.set_desired_extent(static_cast<uint32_t>(width), static_cast<uint32_t>(height))
+							.set_old_swapchain(vkbSwapchain)
+							.add_image_usage_flags(
+								VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+							)
+							.build();
 
 		if (!swap_ret) {
 			spdlog::error("Failed to recreate swapchain: {}", swap_ret.error().message());
@@ -295,6 +295,7 @@ namespace brassica {
 			// destructor calls device.destroyImageView and vmaDestroyImage on whatever the
 			// registry still owns (G-buffer textures, the gradient background, ...).
 			physicalRegistry.Reset();
+			queueRecorder.Destroy();
 
 			terrainAS.DestroyAccelerationStructures();
 
@@ -403,7 +404,7 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		terrainAS.Init(instance, device, allocator);
+		terrainAS.Init(instance, device, allocator, physicalRegistry.ConcurrentFamilies());
 
 		// Simple constant seed, not a real terrain query -- no node/pipeline exists yet at this
 		// point in Init, so there's no cheap way to ask the GPU what's actually there. The
@@ -420,10 +421,21 @@ namespace brassica {
 		terrainManager.Init(
 			device,
 			allocator,
-			transferQueue,
-			transferQueueFamily,
 			constants::Class::Terrain::DefaultMaxLODs,
-			constants::Class::Terrain::BaseTexelSize
+			constants::Class::Terrain::BaseTexelSize,
+			physicalRegistry.ConcurrentFamilies()
+		);
+		// One-time: unlike AutoExposureBuffer/LightsBuffer (a different real handle per
+		// FRAME_OVERLAP slot, re-imported every frame), this staging buffer's handle never
+		// changes once TerrainManager::Init allocates it, so there's nothing to refresh.
+		physicalRegistry.RegisterImportedBuffer<TerrainReadbackStaging>(
+			terrainManager.GetReadbackStagingBuffer(),
+			graph::ResourceDesc{
+				.kind = graph::ResourceDesc::Kind::Buffer,
+				.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferDst),
+				.byteSize = TerrainManager::kReadbackStagingBytes,
+			},
+			false
 		);
 
 		render::NodeServices nodeServices{
@@ -560,7 +572,7 @@ namespace brassica {
 
 	void Engine::UpdateCamera(float deltaTime) {
 		// Poll GPU readback data first
-		terrainManager.PollReadbackData();
+		terrainManager.PollReadbackData(device);
 
 		glm::vec2 camPos2D(camera.position.x, camera.position.z);
 		// Query terrain height from TerrainManager.
@@ -688,10 +700,10 @@ namespace brassica {
 
 			bool isCtrlHeld = defaultHandler &&
 				(defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_CONTROL) ||
-				 defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
+			     defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_CONTROL));
 			bool isShiftHeld = defaultHandler &&
 				(defaultHandler->IsKeyPressed(GLFW_KEY_LEFT_SHIFT) ||
-				 defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT));
+			     defaultHandler->IsKeyPressed(GLFW_KEY_RIGHT_SHIFT));
 			bool isSpacePressed = defaultHandler && defaultHandler->IsKeyPressed(GLFW_KEY_SPACE);
 
 			if (isUnderwater) {
@@ -847,8 +859,8 @@ namespace brassica {
 		}
 
 		// Apply world wrapping for 600km radius planet
-		constexpr float R = FAKE_PLANET_RADIUS; // 600,000 m
-		constexpr float X_max = glm::pi<float>() * R; // ~1,884,955.592 m
+		constexpr float R = FAKE_PLANET_RADIUS;            // 600,000 m
+		constexpr float X_max = glm::pi<float>() * R;      // ~1,884,955.592 m
 		constexpr float Z_max = glm::half_pi<float>() * R; // ~942,477.796 m
 
 		// North / South seam crossing (Z axis)
@@ -894,74 +906,18 @@ namespace brassica {
 			camera.position.x += 2.0f * X_max;
 		}
 
-
-		// Trigger a new ground-height-and-normal readback for next frame, if TerrainClipmapTexture
-		// is initialized and has been populated/transitioned in the frame graph. Reads a 128x128
-		// window at LOD 0 mip 0 (64m x 64m footprint) to support smooth bilinear ground height
-		// interpolation below the camera and significantly reduce transfer frequency. Reads the
-		// real per-texel height+normal map rather than TerrainMinMaxTexture's hierarchical
-		// occlusion bound (what this used to read, before it turned out unrelated to the terrain
-		// shadow investigation that prompted a closer look here) -- it's written directly by
-		// TerrainGenNode with no downstream pass to wait on, and carries the surface normal
-		// (TerrainManager::GetInterpolatedGroundNormal) for physics besides, which is part of why
-		// this readback existed in the first place.
-		auto clipmapTex = physicalRegistry.GetTexture<TerrainClipmapTexture>();
-		if (clipmapTex && clipmapTex->GetImage() && terrainManager.GetNumLODs() > 0 &&
-		    clipmapTex->GetCurrentLayout() != vk::ImageLayout::eUndefined) {
-			bool shouldTrigger = !terrainManager.IsReadbackInFlight();
-			if (shouldTrigger && terrainManager.HasReadbackData()) {
-				float distFromLastTrigger = glm::distance(camPos2D, terrainManager.GetLastReadbackCamPos());
-				if (distFromLastTrigger < 16.0f) {
-					shouldTrigger = false;
-				}
-			}
-
-			if (shouldTrigger) {
-				constexpr int kReadbackWidth = 128;
-				constexpr int kReadbackHeight = 128;
-				int           dim = static_cast<int>(constants::Class::Terrain::MapDim); // 1024
-				float     texelSize = terrainManager.GetBaseTexelSize() > 0.0001f ? terrainManager.GetBaseTexelSize()
-																				  : 0.5f;
-				glm::vec2 camGrid = glm::floor(camPos2D / texelSize);
-
-				int camU = static_cast<int>(camGrid.x) % dim;
-				int camV = static_cast<int>(camGrid.y) % dim;
-				if (camU < 0)
-					camU += dim;
-				if (camV < 0)
-					camV += dim;
-
-				int minU = std::clamp(camU - kReadbackWidth / 2, 0, dim - kReadbackWidth);
-				int minV = std::clamp(camV - kReadbackHeight / 2, 0, dim - kReadbackHeight);
-
-				int g_x0 = static_cast<int>(camGrid.x) - (camU - minU);
-				int g_y0 = static_cast<int>(camGrid.y) - (camV - minV);
-
-				glm::vec2 originWorld(
-					(static_cast<float>(g_x0) + 0.5f) * texelSize,
-					(static_cast<float>(g_y0) + 0.5f) * texelSize
-				);
-
-				terrainManager.TriggerImageRegionReadbackAsync(
-					clipmapTex->GetImage(),
-					0, // arrayLayer (LOD 0)
-					0, // mipLevel 0
-					vk::Offset2D{minU, minV},
-					vk::Extent2D{static_cast<uint32_t>(kReadbackWidth), static_cast<uint32_t>(kReadbackHeight)},
-					originWorld,
-					texelSize,
-					camPos2D,
-					clipmapTex->GetCurrentLayout()
-				);
-			}
-		}
+		// Plans (but doesn't record) a new ground-height-and-normal readback -- the real copy
+		// now happens through TerrainReadbackNode (passes/TerrainReadbackNode.hpp), as part of
+		// this frame's graph execution, not here. PlanReadback carries the same cooldown/region
+		// math this used to do inline (see its own comment, terrain/TerrainManager.cpp).
+		terrainManager.PlanReadback(camPos2D);
 
 		// Apply camera height constraint with basketball collision radius for free-fly modes
 		if (camera.mode != CameraMode::FirstPerson) {
 			constexpr float kBasketballRadius = 0.15f;
-			float groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight
-																		 : std::max(currentGroundHeight, 0.0f);
-			float minHeight = groundSurfaceHeight + kBasketballRadius;
+			float           groundSurfaceHeight = terrainManager.HasReadbackData() ? currentGroundHeight
+																				   : std::max(currentGroundHeight, 0.0f);
+			float           minHeight = groundSurfaceHeight + kBasketballRadius;
 			if (camera.position.y < minHeight) {
 				camera.position.y = minHeight;
 			}
@@ -1261,6 +1217,24 @@ namespace brassica {
 		}
 
 		physicalRegistry.SetDeviceAndAllocator(device, allocator);
+		// Must follow queueSet's own population just above: every resource this registry
+		// provisions from here on picks CONCURRENT vs. EXCLUSIVE sharing off this snapshot
+		// (PhysicalResourceRegistry::ConcurrentFamilies, design plan's S4 "Queue-family
+		// ownership"). On this Mac (MoltenVK, one queue family) DistinctQueueFamilies collapses
+		// to size <= 1 and every resource stays EXCLUSIVE exactly as before this call existed.
+		physicalRegistry.SetQueueSet(queueSet);
+
+		// Always Init()'d regardless of options.queuePlacement -- cheap (three command pools plus
+		// three timeline semaphores) and lets EffectiveQueuePlacement's splitAliasedQueues
+		// override apply without having to re-Init a backend mid-run. GpuQueueIndex (QueueHazard-
+		// Tracker.hpp) maps ExecutionDomain::{Graphics,Compute,Transfer} to {0,1,2}, so these
+		// arrays must be in that exact order.
+		queueRecorder.Init(
+			device,
+			chosenGPU,
+			{graphicsQueue, computeQueue, transferQueue},
+			{graphicsQueueFamily, computeQueueFamily, transferQueueFamily}
+		);
 
 		// Initialize Pipeline Cache
 		std::vector<char> pipelineCacheData;
@@ -1344,6 +1318,7 @@ namespace brassica {
 			frameGraph.Register<graph::Import<TerrainTLAS>>();
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+			frameGraph.Register<graph::Import<LightsBuffer>>();
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
@@ -1394,6 +1369,16 @@ namespace brassica {
 		}
 	}
 
+	graph::QueuePlacementMode Engine::EffectiveQueuePlacement() const {
+		if (options.queuePlacement == graph::QueuePlacementMode::GraphicsOnly) {
+			return graph::QueuePlacementMode::GraphicsOnly;
+		}
+		if (!options.splitAliasedQueues && graph::DistinctQueueFamilies(queueSet).size() <= 1) {
+			return graph::QueuePlacementMode::GraphicsOnly;
+		}
+		return options.queuePlacement;
+	}
+
 	void Engine::DrawFrame() {
 		if (windowResized) {
 			RecreateSwapchain();
@@ -1403,8 +1388,17 @@ namespace brassica {
 
 		FrameData& frame = GetCurrentFrame();
 
+		// Decided once per frame: GraphicsOnly uses the original single-command-buffer path
+		// below unchanged (byte-identical to before queuePlacement existed); anything else runs
+		// through queueRecorder instead, which owns its own frame pacing, submission and
+		// (via externalSync) the swapchain semaphore contract -- design plan's S4.
+		const graph::QueuePlacementMode effectivePlacement = EffectiveQueuePlacement();
+		const bool                      useQueueRecorder = effectivePlacement != graph::QueuePlacementMode::GraphicsOnly;
+
 		// 1. Wait for GPU to finish the last time this frame context was used
-		if (frameNumber >= FRAME_OVERLAP) {
+		if (useQueueRecorder) {
+			queueRecorder.BeginFrame(frameNumber); // each lane does its own FRAME_OVERLAP-bounded wait
+		} else if (frameNumber >= FRAME_OVERLAP) {
 			uint64_t              waitValue = frameNumber - FRAME_OVERLAP + 1;
 			vk::SemaphoreWaitInfo waitInfo{};
 			waitInfo.setSemaphores(frameTimelineSemaphore);
@@ -1428,9 +1422,11 @@ namespace brassica {
 		uint32_t swapchainImageIndex = acquireResult.value;
 
 		// 3. Record Commands
-		frame.commandBuffer.reset();
-		vk::CommandBufferBeginInfo cmdBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
-		frame.commandBuffer.begin(cmdBeginInfo);
+		if (!useQueueRecorder) {
+			frame.commandBuffer.reset();
+			vk::CommandBufferBeginInfo cmdBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+			frame.commandBuffer.begin(cmdBeginInfo);
+		}
 
 		vk::Extent2D extent{vkbSwapchain.extent.width, vkbSwapchain.extent.height};
 		vk::Format   format = GetSwapchainFormat();
@@ -1586,6 +1582,16 @@ namespace brassica {
 			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
 			vmaFlushAllocation(allocator, lightsSSBOAllocations[activeFrame], 0, sizeof(LightsSSBOData));
 		}
+		// Imported right after the CPU write it covers, same pattern and reasoning as
+		// AutoExposureBuffer just below -- this is what lets ParticleBehaviorNode's later GPU
+		// write (shaders/particle_behavior.comp) and ClusterLightAssignmentNode's read get a
+		// real tracked dependency instead of the manual After<ParticleBehaviorNode>() relation
+		// that used to be the only thing connecting them.
+		physicalRegistry.RegisterImportedBuffer<LightsBuffer>(
+			lightsSSBOBuffers[activeFrame],
+			graph::StorageBufferDesc(sizeof(LightsSSBOData)),
+			true
+		);
 
 		// bindlessBindings.set/layout (set 1) never change frame to frame -- only frameSet
 		// actually varies here, since it's the only piece that's genuinely double-buffered. This
@@ -1665,25 +1671,111 @@ namespace brassica {
 
 		graph::Graph frameGraph;
 		frameGraph.Register<graph::Import<TerrainTLAS>>();
+		// LightsBuffer (uLights/uLightCount, frame set binding 2) is a genuine hybrid: the CPU
+		// upload a few lines above writes it fresh every frame, and ParticleBehaviorNode's own
+		// Modify<LightsBuffer>() (firefly particles) writes on top of that during graph
+		// execution -- but ParticleBehaviorNode being the sole real-node "producer" ValidateRuntime
+		// sees made every *other* reader's Read<LightsBuffer>() depend on it actually being
+		// registered and active this frame, which doesn't always hold (particles can be
+		// disabled). An explicit Import<>, same pattern TerrainTLAS already uses alongside
+		// TerrainGenNode's own Modify<TerrainTLAS>(), gives it a producer that's never missing
+		// regardless -- confirmed the hard way: this was missing here (though present in the
+		// --print-render-graph path below) and produced exactly ValidateRuntime's "no node or
+		// import produces these resource keys" error on real hardware.
+		frameGraph.Register<graph::Import<LightsBuffer>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 
-		graph::FrameContext             ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
-		graph::PhysicalExecutionBackend backend(physicalRegistry);
-		backend.SetQueueSet(queueSet);
-		graph::CommandBuffer graphCmd{static_cast<void*>(static_cast<VkCommandBuffer>(frame.commandBuffer))};
+		graph::FrameContext ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
+
+		// Shared between both paths below -- the single-queue path appends this directly to
+		// frame.commandBuffer; the multi-queue path passes it as ExternalGraphicsSync::beforeClose,
+		// run on the Graphics lane's last segment right before QueueRecorder::Execute closes and
+		// submits it.
+		auto recordPresentBarrier = [&](vk::CommandBuffer cmd) {
+			// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
+			// srcStage/srcAccess come from the registry's tracked state rather than being
+			// hardcoded -- DeferredNode's Modify<Swapchain> always leaves it at exactly
+			// {eColorAttachmentOptimal, eColorAttachmentOutput, eColorAttachmentWrite|Read} today
+			// (see tests/test_resource_state.cpp's swapchain-chain case), but reading it instead of
+			// assuming it means this stays correct the day a different node becomes the last writer.
+			auto                    swapchainTex = physicalRegistry.GetTexture<Swapchain>();
+			vk::ImageMemoryBarrier2 presentBarrier{};
+			presentBarrier.setSrcStageMask(
+				swapchainTex ? swapchainTex->GetLastStage() : vk::PipelineStageFlagBits2::eColorAttachmentOutput
+			);
+			presentBarrier.setSrcAccessMask(
+				swapchainTex ? swapchainTex->GetLastAccess() : vk::AccessFlagBits2::eColorAttachmentWrite
+			);
+			presentBarrier.setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe);
+			presentBarrier.setDstAccessMask(vk::AccessFlagBits2::eNone);
+			presentBarrier.setOldLayout(
+				swapchainTex ? swapchainTex->GetCurrentLayout() : vk::ImageLayout::eColorAttachmentOptimal
+			);
+			presentBarrier.setNewLayout(vk::ImageLayout::ePresentSrcKHR);
+			presentBarrier.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+			presentBarrier.setImage(swapchainImages[swapchainImageIndex]);
+
+			vk::DependencyInfo presentDepInfo{};
+			presentDepInfo.setImageMemoryBarriers(presentBarrier);
+			cmd.pipelineBarrier2(presentDepInfo);
+		};
 
 		try {
-			// enableAliasing=false: ImageAliasPool/BufferAliasPool's block bookkeeping
-			// (PhysicalResource.hpp) records neither an occupant's identity nor its liveness, only
-			// the schedule stage its lifetime last touched -- and that bookkeeping is never
-			// refreshed for a key that keeps hitting ProvisionTexture's desc-match early return
-			// (PhysicalRegistry.hpp), which every steady-state resource here does every frame. A
-			// window resize (or any new/changed key) can then bind a fresh image onto a block a
-			// live resource still occupies. See FRAME_GRAPH_MIGRATION_TODO.md for the full writeup;
-			// this was already the migration plan's own recommendation before shipping true.
-			backend.Execute(frameGraph, ctx, graphCmd, false);
+			if (useQueueRecorder) {
+				// Mirrors PhysicalExecutionBackend::Execute's own NodeContext construction
+				// (PhysicalExecutionBackend.hpp) -- frameSet/globalSet/width/height/frameIndex/
+				// resources are the backend-level handles every node needs regardless of which
+				// backend records it; .cmd is left default here since QueueRecorder's own
+				// RunQueueBatch sets it fresh per node.
+				graph::NodeContext nodeCtx{};
+				nodeCtx.width = extent.width;
+				nodeCtx.height = extent.height;
+				nodeCtx.frameIndex = frameNumber;
+				nodeCtx.resources = &physicalRegistry;
+				nodeCtx.frameSet =
+					static_cast<void*>(static_cast<VkDescriptorSet>(physicalRegistry.GetFrameDescriptorSet()));
+				nodeCtx.frameSetLayout = static_cast<void*>(
+					static_cast<VkDescriptorSetLayout>(physicalRegistry.GetFrameDescriptorSetLayout())
+				);
+				nodeCtx.globalSet =
+					static_cast<void*>(static_cast<VkDescriptorSet>(physicalRegistry.GetBindlessDescriptorSet()));
+				nodeCtx.globalSetLayout = static_cast<void*>(
+					static_cast<VkDescriptorSetLayout>(physicalRegistry.GetBindlessDescriptorSetLayout())
+				);
+
+				graph::ExternalGraphicsSync externalSync{};
+				externalSync.waitSemaphore = frame.swapchainSemaphore;
+				// eAllCommands, not eColorAttachmentOutput (unverified attempt #2 at a real
+				// hardware WRITE_AFTER_READ-against-vkAcquireNextImageKHR hazard, reported every
+				// frame under both GraphicsOnly and Heft -- attempt #1, swapping BarrierTranslator's
+				// first-touch src fallback from eTopOfPipe to eNone, made no observable difference
+				// at all, confirming the issue isn't on that side). Strictly safer than a narrower
+				// mask regardless of whether it's the actual fix: broadening a wait can only add
+				// synchronization, never remove any, so every batch's own real dependency on this
+				// semaphore still holds either way.
+				externalSync.waitStage = vk::PipelineStageFlagBits2::eAllCommands;
+				externalSync.signalSemaphore = swapchainRenderSemaphores[swapchainImageIndex];
+				externalSync.signalStage = vk::PipelineStageFlagBits2::eAllCommands;
+				externalSync.beforeClose = recordPresentBarrier;
+
+				queueRecorder.Execute(frameGraph, ctx, physicalRegistry, nodeCtx, effectivePlacement, externalSync);
+			} else {
+				graph::PhysicalExecutionBackend backend(physicalRegistry);
+				backend.SetQueueSet(queueSet);
+				graph::CommandBuffer graphCmd{static_cast<void*>(static_cast<VkCommandBuffer>(frame.commandBuffer))};
+				// enableAliasing=false: ImageAliasPool/BufferAliasPool's block bookkeeping
+				// (PhysicalResource.hpp) records neither an occupant's identity nor its liveness,
+				// only the schedule stage its lifetime last touched -- and that bookkeeping is
+				// never refreshed for a key that keeps hitting ProvisionTexture's desc-match early
+				// return (PhysicalRegistry.hpp), which every steady-state resource here does every
+				// frame. A window resize (or any new/changed key) can then bind a fresh image onto
+				// a block a live resource still occupies. See FRAME_GRAPH_MIGRATION_TODO.md for the
+				// full writeup; this was already the migration plan's own recommendation before
+				// shipping true.
+				backend.Execute(frameGraph, ctx, graphCmd, false);
+			}
 		} catch (const std::exception& e) {
 			// A frame graph compile/execute failure is a deterministic structural bug (a phase
 			// violation, a circular dependency, a missing producer), not a transient one -- next
@@ -1693,35 +1785,44 @@ namespace brassica {
 			// already-acquired swapchain image/semaphore before returning.
 			spdlog::critical("Frame graph execution failed: {} -- shutting down.", e.what());
 			fatalErrorEncountered = true;
-			frame.commandBuffer.end();
 
-			// backend.Execute throws before recording anything into frame.commandBuffer
-			// (Provision, which is where this can fail, runs before the command buffer is ever
-			// touched) -- so this is submitting an empty but valid begin/end pair, purely to
-			// consume frame.swapchainSemaphore's signal from the acquire above. Skipping the
-			// submit entirely would leave that semaphore signaled, and the next time this frame
-			// slot's semaphore is reused for acquireNextImageKHR (FRAME_OVERLAP frames from now),
-			// the validation layer correctly flags "Semaphore must not be currently signaled".
-			// presentKHR is skipped on purpose: the swapchain image's layout was never
-			// transitioned to ePresentSrcKHR (the graph never ran), so presenting it now would be
-			// invalid -- this frame is simply dropped, not shown with stale/undefined content.
-			vk::CommandBufferSubmitInfo cmdSubmitInfo{};
-			cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
+			if (useQueueRecorder) {
+				// Mirrors the GraphicsOnly branch below: consume the acquire semaphore, advance
+				// (only) the Graphics lane's own timeline, present nothing -- design plan's S4
+				// catch path. See QueueRecorder::AbandonFrame's own comment for why nothing any
+				// lane partially recorded this frame is ever submitted.
+				queueRecorder.AbandonFrame(frame.swapchainSemaphore, vk::PipelineStageFlagBits2::eAllCommands);
+			} else {
+				frame.commandBuffer.end();
 
-			vk::SemaphoreSubmitInfo waitInfo{};
-			waitInfo.setSemaphore(frame.swapchainSemaphore);
-			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+				// backend.Execute throws before recording anything into frame.commandBuffer
+				// (Provision, which is where this can fail, runs before the command buffer is ever
+				// touched) -- so this is submitting an empty but valid begin/end pair, purely to
+				// consume frame.swapchainSemaphore's signal from the acquire above. Skipping the
+				// submit entirely would leave that semaphore signaled, and the next time this frame
+				// slot's semaphore is reused for acquireNextImageKHR (FRAME_OVERLAP frames from now),
+				// the validation layer correctly flags "Semaphore must not be currently signaled".
+				// presentKHR is skipped on purpose: the swapchain image's layout was never
+				// transitioned to ePresentSrcKHR (the graph never ran), so presenting it now would be
+				// invalid -- this frame is simply dropped, not shown with stale/undefined content.
+				vk::CommandBufferSubmitInfo cmdSubmitInfo{};
+				cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
-			vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
-			frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
-			frameTimelineSignalInfo.setValue(frameNumber + 1);
-			frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+				vk::SemaphoreSubmitInfo waitInfo{};
+				waitInfo.setSemaphore(frame.swapchainSemaphore);
+				waitInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 
-			vk::SubmitInfo2 recoverySubmitInfo{};
-			recoverySubmitInfo.setWaitSemaphoreInfos(waitInfo);
-			recoverySubmitInfo.setSignalSemaphoreInfos(frameTimelineSignalInfo);
-			recoverySubmitInfo.setCommandBufferInfos(cmdSubmitInfo);
-			graphicsQueue.submit2(recoverySubmitInfo, nullptr);
+				vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
+				frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
+				frameTimelineSignalInfo.setValue(frameNumber + 1);
+				frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+
+				vk::SubmitInfo2 recoverySubmitInfo{};
+				recoverySubmitInfo.setWaitSemaphoreInfos(waitInfo);
+				recoverySubmitInfo.setSignalSemaphoreInfos(frameTimelineSignalInfo);
+				recoverySubmitInfo.setCommandBufferInfos(cmdSubmitInfo);
+				graphicsQueue.submit2(recoverySubmitInfo, nullptr);
+			}
 
 			frameNumber++;
 			return;
@@ -1729,66 +1830,72 @@ namespace brassica {
 
 		terrainManager.ResetForceRegeneration();
 
-		// Transition swapchain image layout to PRESENT_SRC_KHR for presentation. oldLayout/
-		// srcStage/srcAccess now come from the registry's tracked state rather than being
-		// hardcoded -- DeferredNode's Modify<Swapchain> always leaves it at exactly
-		// {eColorAttachmentOptimal, eColorAttachmentOutput, eColorAttachmentWrite|Read} today
-		// (see tests/test_resource_state.cpp's swapchain-chain case), but reading it instead of
-		// assuming it means this stays correct the day a different node becomes the last writer.
-		auto                    swapchainTex = physicalRegistry.GetTexture<Swapchain>();
-		vk::ImageMemoryBarrier2 presentBarrier{};
-		presentBarrier.setSrcStageMask(
-			swapchainTex ? swapchainTex->GetLastStage() : vk::PipelineStageFlagBits2::eColorAttachmentOutput
-		);
-		presentBarrier.setSrcAccessMask(
-			swapchainTex ? swapchainTex->GetLastAccess() : vk::AccessFlagBits2::eColorAttachmentWrite
-		);
-		presentBarrier.setDstStageMask(vk::PipelineStageFlagBits2::eBottomOfPipe);
-		presentBarrier.setDstAccessMask(vk::AccessFlagBits2::eNone);
-		presentBarrier.setOldLayout(
-			swapchainTex ? swapchainTex->GetCurrentLayout() : vk::ImageLayout::eColorAttachmentOptimal
-		);
-		presentBarrier.setNewLayout(vk::ImageLayout::ePresentSrcKHR);
-		presentBarrier.setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-		presentBarrier.setImage(swapchainImages[swapchainImageIndex]);
+		// Completion capture for a pending terrain readback, now that this frame's real
+		// (semaphore, value) completion pair is known -- design plan's S4 TerrainManager
+		// completion hookup. Must run after Execute() returns in both branches: under
+		// useQueueRecorder, PendingReadbackQueue()'s lane has only just closed+submitted inside
+		// Execute() itself; under GraphicsOnly, frameNumber+1 is the value the submit below is
+		// about to signal (deterministic in advance, so order relative to that submit doesn't
+		// matter for this case).
+		if (terrainManager.HasPendingCompletionCapture()) {
+			if (useQueueRecorder) {
+				graph::QueueLane& lane = queueRecorder.Lane(terrainManager.PendingReadbackQueue());
+				terrainManager.CaptureReadbackCompletion(lane.Timeline(), lane.LastSubmittedValue());
+			} else {
+				terrainManager.CaptureReadbackCompletion(frameTimelineSemaphore, frameNumber + 1);
+			}
+		}
 
-		vk::DependencyInfo presentDepInfo{};
-		presentDepInfo.setImageMemoryBarriers(presentBarrier);
-		frame.commandBuffer.pipelineBarrier2(presentDepInfo);
+		if (!useQueueRecorder) {
+			recordPresentBarrier(frame.commandBuffer);
+			frame.commandBuffer.end();
 
-		frame.commandBuffer.end();
+			// 4. Submit to GPU (Using Vulkan 1.4 / Sync2 API)
+			vk::CommandBufferSubmitInfo cmdSubmitInfo{};
+			cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
 
-		// 4. Submit to GPU (Using Vulkan 1.4 / Sync2 API)
-		vk::CommandBufferSubmitInfo cmdSubmitInfo{};
-		cmdSubmitInfo.setCommandBuffer(frame.commandBuffer);
+			std::vector<vk::SemaphoreSubmitInfo> waitInfos;
 
-		std::vector<vk::SemaphoreSubmitInfo> waitInfos;
+			// eAllCommands, not eColorAttachmentOutput -- see the matching comment on
+			// externalSync.waitStage above for why (unverified attempt #2 at a real-hardware
+			// WRITE_AFTER_READ hazard against vkAcquireNextImageKHR, reported under both
+			// GraphicsOnly and Heft equally; this is GraphicsOnly's own copy of that same wait).
+			vk::SemaphoreSubmitInfo waitInfo{};
+			waitInfo.setSemaphore(frame.swapchainSemaphore);
+			waitInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
 
-		vk::SemaphoreSubmitInfo waitInfo{};
-		waitInfo.setSemaphore(frame.swapchainSemaphore);
-		waitInfo.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+			waitInfos.push_back(waitInfo);
 
-		waitInfos.push_back(waitInfo);
+			std::vector<vk::SemaphoreSubmitInfo> signalInfos;
 
-		std::vector<vk::SemaphoreSubmitInfo> signalInfos;
+			// eAllCommands, not eAllGraphics: a compute dispatch recorded into this same command
+			// buffer sits outside eAllGraphics' scope, so a signal there would let the CPU reset
+			// this slot's command pool (frameTimelineSemaphore) or let the presentation engine read
+			// the swapchain image (swapchainRenderSemaphores) while trailing compute work is still
+			// in flight.
+			vk::SemaphoreSubmitInfo renderSignalInfo{};
+			renderSignalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
+			renderSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+			signalInfos.push_back(renderSignalInfo);
 
-		vk::SemaphoreSubmitInfo renderSignalInfo{};
-		renderSignalInfo.setSemaphore(swapchainRenderSemaphores[swapchainImageIndex]);
-		renderSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
-		signalInfos.push_back(renderSignalInfo);
+			vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
+			frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
+			frameTimelineSignalInfo.setValue(frameNumber + 1);
+			frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllCommands);
+			signalInfos.push_back(frameTimelineSignalInfo);
 
-		vk::SemaphoreSubmitInfo frameTimelineSignalInfo{};
-		frameTimelineSignalInfo.setSemaphore(frameTimelineSemaphore);
-		frameTimelineSignalInfo.setValue(frameNumber + 1);
-		frameTimelineSignalInfo.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
-		signalInfos.push_back(frameTimelineSignalInfo);
+			vk::SubmitInfo2 submitInfo{};
+			submitInfo.setWaitSemaphoreInfos(waitInfos);
+			submitInfo.setSignalSemaphoreInfos(signalInfos);
+			submitInfo.setCommandBufferInfos(cmdSubmitInfo);
 
-		vk::SubmitInfo2 submitInfo{};
-		submitInfo.setWaitSemaphoreInfos(waitInfos);
-		submitInfo.setSignalSemaphoreInfos(signalInfos);
-		submitInfo.setCommandBufferInfos(cmdSubmitInfo);
-
-		graphicsQueue.submit2(submitInfo, nullptr);
+			graphicsQueue.submit2(submitInfo, nullptr);
+		}
+		// useQueueRecorder: the present-layout barrier, the Graphics lane's close+submit, and its
+		// extra signal on swapchainRenderSemaphores[swapchainImageIndex] all already happened
+		// inside queueRecorder.Execute() above (recordPresentBarrier as its beforeClose hook,
+		// externalSync.signalSemaphore as its extra CloseAndSubmit signal) -- nothing left to
+		// record or submit manually here.
 
 		// 5. Present
 		vk::PresentInfoKHR presentInfo{};
@@ -1892,6 +1999,17 @@ namespace brassica {
 				VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 				bufferInfo.size = size;
 				bufferInfo.usage = usage;
+				// These frame-set buffers (FrameUBO, LightsSSBOData, AutoExposureBuffer, etc.) live
+				// outside the registry, so they don't get PhysicalResource.hpp's
+				// BuildBufferCreateInfo treatment -- but they're read and written by real graph
+				// nodes (ClusterLightAssignmentNode, ExposureNode, ...) just like any registry
+				// resource, so the same CONCURRENT-vs-EXCLUSIVE call applies, design plan's S4.
+				const auto concurrentFamilies = physicalRegistry.ConcurrentFamilies();
+				if (concurrentFamilies.size() > 1) {
+					bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+					bufferInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(concurrentFamilies.size());
+					bufferInfo.pQueueFamilyIndices = concurrentFamilies.data();
+				}
 
 				VmaAllocationCreateInfo allocCreateInfo{};
 				allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;

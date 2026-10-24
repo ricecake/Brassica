@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 #include "graph/BarrierTranslator.hpp"
@@ -250,7 +251,8 @@ namespace brassica::graph {
 		vk::CommandBuffer cmd,
 		PhysicalTexture&  tex,
 		AccessKind        access,
-		ExecutionDomain   domain
+		ExecutionDomain   domain,
+		ResourceId        key = nullptr
 	) {
 		const auto& desc = tex.GetDesc();
 
@@ -263,14 +265,18 @@ namespace brassica::graph {
 		// degrades to "reads stale/undefined content" (the pre-S5 behavior) instead of a
 		// validation error.
 		if (!(desc.usageMask & static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eTransferDst))) {
-			static bool warned = false;
-			if (!warned) {
+			// Logs every distinct key this hits, not just the first (a plain "warned once"
+			// static bool used to swallow the name of whichever key actually hit this,
+			// leaving no way to tell which Desc() needs fixing without a debugger) -- still
+			// only once per key, so a steady-state frame doesn't spam this every frame.
+			static std::unordered_set<ResourceId> warnedKeys;
+			if (key == nullptr || warnedKeys.insert(key).second) {
 				spdlog::warn(
-					"ClearImageToZero: skipping zero-init clear for a texture whose desc lacks "
+					"ClearImageToZero: skipping zero-init clear for '{}', whose desc lacks "
 					"eTransferDst usage -- add it to this key's Desc() to fix (see "
-					"GTAOTextureDesc for the pattern)."
+					"GTAOTextureDesc for the pattern).",
+					key ? key->name : "<unknown key>"
 				);
-				warned = true;
 			}
 			return;
 		}
@@ -281,8 +287,13 @@ namespace brassica::graph {
 		const std::uint32_t layers = desc.layers ? desc.layers : 1;
 		const auto          range = vk::ImageSubresourceRange(AspectFor(format), 0, mips, 0, layers);
 
+		// Src comes from tracked state (ClearBufferToZero's pattern below), not eTopOfPipe --
+		// eTopOfPipe chains with nothing, so a prior read of this resource (e.g. a reader that
+		// ran before this frame decided the key needed zero-init) could still be in flight when
+		// the clear's layout transition starts.
 		vk::ImageMemoryBarrier2 toTransferDst{};
-		toTransferDst.setSrcStageMask(vk::PipelineStageFlagBits2::eTopOfPipe);
+		toTransferDst.setSrcStageMask(tex.GetLastStage() ? tex.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe);
+		toTransferDst.setSrcAccessMask(tex.GetLastAccess());
 		toTransferDst.setDstStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
 		toTransferDst.setDstAccessMask(vk::AccessFlagBits2::eTransferWrite);
 		toTransferDst.setOldLayout(tex.GetCurrentLayout());
@@ -430,7 +441,7 @@ namespace brassica::graph {
 					continue;
 				}
 
-				ClearImageToZero(cmd, *tex, r.access, recipe.domain);
+				ClearImageToZero(cmd, *tex, r.access, recipe.domain, r.key);
 			}
 		}
 	}
@@ -479,6 +490,17 @@ namespace brassica::graph {
 				if (!buf) {
 					continue;
 				}
+				// A persistent resource (ResourceDesc::persistent) exists specifically to survive
+				// frames its producer is inactive -- see that flag's own comment (Execution.hpp).
+				// Once it has real content, an inactive-producer frame reading it is the intended
+				// use, not an undefined gap: zeroing it here on every such frame would permanently
+				// defeat the entire reason it is marked persistent. Confirmed as a real bug, not
+				// hypothetical: FoliageBiomeTableTexture (a PredefinedTextureNode, Active only when
+				// its data actually changes) read back as all-zero every frame after the first --
+				// every biome's enabled flag reads false, so foliage renders nowhere.
+				if (buf->GetDesc().persistent && buf->HasDefinedContents()) {
+					continue;
+				}
 				ClearBufferToZero(cmd, *buf, realization->access, recipe.domain);
 				continue;
 			}
@@ -492,7 +514,11 @@ namespace brassica::graph {
 			if (!tex) {
 				continue;
 			}
-			ClearImageToZero(cmd, *tex, realization->access, recipe.domain);
+			// Same persistent-resource exemption as the buffer branch above.
+			if (tex->GetDesc().persistent && tex->HasDefinedContents()) {
+				continue;
+			}
+			ClearImageToZero(cmd, *tex, realization->access, recipe.domain, key);
 		}
 	}
 
@@ -611,6 +637,9 @@ namespace brassica::graph {
 
 					bool activeRendering = DynamicRenderingWrapper::Begin(vkCmd, m_registry, recipe);
 					nodeCtx.insideRendering = activeRendering;
+					nodeCtx.domain = recipe.domain;
+					nodeCtx.placedQueue = ExecutionDomain::Graphics; // the only queue this backend ever uses
+					nodeCtx.declared = recipe.realizations;
 					graph.ExecuteNode(nodeIndex, nodeCtx);
 					if (activeRendering) {
 						DynamicRenderingWrapper::End(vkCmd);

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -19,9 +20,23 @@ namespace brassica::graph {
 
 	namespace detail {
 
-		inline vk::ImageCreateInfo BuildImageCreateInfo(const ResourceDesc& desc) {
-			const bool is3D = desc.depth > 1;
-			return vk::ImageCreateInfo{
+		// concurrentFamilies: empty (every call site but the registry/alias-pool ones that pass
+		// PhysicalResourceRegistry::ConcurrentFamilies()) means EXCLUSIVE, unchanged from before
+		// this parameter existed. >= 2 entries means this device has more than one real queue
+		// family in play across Graphics/Compute/Transfer (DistinctQueueFamilies, Execution.hpp)
+		// and this resource may genuinely be touched from more than one of them -- CONCURRENT
+		// sharing is this engine's only queue-family-ownership story (see MemoryBarrier's removed
+		// srcQueueFamily/dstQueueFamily fields): there is no real ownership-transfer barrier
+		// anywhere, so an EXCLUSIVE resource touched cross-queue would be a validation error the
+		// moment two distinct families exist. setQueueFamilyIndices stores a pointer into
+		// concurrentFamilies' own backing storage -- safe here only because every caller uses the
+		// returned create-info synchronously, before concurrentFamilies goes out of scope (the
+		// create-info's own lifetime is equally synchronous: VMA/vkCreateImage/vkCreateBuffer
+		// consume it immediately, never retain it).
+		inline vk::ImageCreateInfo
+		BuildImageCreateInfo(const ResourceDesc& desc, std::span<const std::uint32_t> concurrentFamilies = {}) {
+			const bool          is3D = desc.depth > 1;
+			vk::ImageCreateInfo info{
 				{},
 				is3D ? vk::ImageType::e3D : vk::ImageType::e2D,
 				static_cast<vk::Format>(
@@ -34,16 +49,28 @@ namespace brassica::graph {
 				vk::ImageTiling::eOptimal,
 				desc.usageMask ? vk::ImageUsageFlags(desc.usageMask)
 							   : (vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment),
+				vk::SharingMode::eExclusive,
 			};
+			if (concurrentFamilies.size() > 1) {
+				info.sharingMode = vk::SharingMode::eConcurrent;
+				info.setQueueFamilyIndices(concurrentFamilies);
+			}
+			return info;
 		}
 
-		inline vk::BufferCreateInfo BuildBufferCreateInfo(const ResourceDesc& desc) {
-			return vk::BufferCreateInfo{
+		inline vk::BufferCreateInfo
+		BuildBufferCreateInfo(const ResourceDesc& desc, std::span<const std::uint32_t> concurrentFamilies = {}) {
+			vk::BufferCreateInfo info{
 				{},
 				desc.byteSize ? desc.byteSize : 1,
 				desc.usageMask ? vk::BufferUsageFlags(desc.usageMask) : vk::BufferUsageFlagBits::eStorageBuffer,
 				vk::SharingMode::eExclusive,
 			};
+			if (concurrentFamilies.size() > 1) {
+				info.sharingMode = vk::SharingMode::eConcurrent;
+				info.setQueueFamilyIndices(concurrentFamilies);
+			}
+			return info;
 		}
 
 		inline std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment) {
@@ -63,10 +90,17 @@ namespace brassica::graph {
 	public:
 		enum class Ownership : std::uint8_t { Owning, Imported, Aliased };
 
-		// Owning: fresh allocation.
-		PhysicalTexture(vk::Device device, VmaAllocator allocator, const ResourceDesc& desc):
+		// Owning: fresh allocation. concurrentFamilies: forwarded straight to CreateImage, used
+		// only for this one synchronous call -- see BuildImageCreateInfo's comment
+		// (PhysicalResource.hpp) for why it's never stored as a member.
+		PhysicalTexture(
+			vk::Device                     device,
+			VmaAllocator                   allocator,
+			const ResourceDesc&            desc,
+			std::span<const std::uint32_t> concurrentFamilies = {}
+		):
 			m_device(device), m_allocator(allocator), m_desc(desc), m_ownership(Ownership::Owning) {
-			CreateImage(/*existingAllocation=*/nullptr, /*offsetInBlock=*/0);
+			CreateImage(/*existingAllocation=*/nullptr, /*offsetInBlock=*/0, concurrentFamilies);
 			CreateView();
 		}
 
@@ -78,12 +112,13 @@ namespace brassica::graph {
 		// "wait on everything, assume it wrote" is always safe, tracking the exact prior
 		// occupant's stage/access is not attempted.
 		PhysicalTexture(
-			vk::Device          device,
-			VmaAllocator        allocator,
-			VmaAllocation       aliasedMemory,
-			vk::DeviceSize      offsetInBlock,
-			const ResourceDesc& desc,
-			bool                memoryWasReused = false
+			vk::Device                     device,
+			VmaAllocator                   allocator,
+			VmaAllocation                  aliasedMemory,
+			vk::DeviceSize                 offsetInBlock,
+			const ResourceDesc&            desc,
+			bool                           memoryWasReused = false,
+			std::span<const std::uint32_t> concurrentFamilies = {}
 		):
 			m_device(device),
 			m_allocator(allocator),
@@ -94,7 +129,7 @@ namespace brassica::graph {
 				memoryWasReused ? (vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
 								: vk::AccessFlags2{}
 			) {
-			CreateImage(aliasedMemory, offsetInBlock);
+			CreateImage(aliasedMemory, offsetInBlock, concurrentFamilies);
 			CreateView();
 		}
 
@@ -221,6 +256,21 @@ namespace brassica::graph {
 			m_lastAccess = access;
 		}
 
+		// Which GPU queue(s) contributed to the tracked lastStage/lastAccess above since it was
+		// last fully overwritten (as opposed to OR-accumulated by a read-after-read skip -- see
+		// BarrierTranslator's EmitImageBarrier). A mask, not a single "last queue" scalar: two
+		// different queues can both read this resource via the RAR-skip path with no barrier
+		// between them, and a later write on either queue must still know BOTH contributed --
+		// only BarrierTranslator's cross-queue sanitization path (an explicit opt-in each caller
+		// requests, see TranslateAndDispatch's currentQueue parameter) ever reads this; every
+		// existing single-queue call site leaves it unread and unaffected. Defaults to every GPU
+		// queue (Graphics|Compute|Transfer): the same "assume the worst until proven otherwise"
+		// reasoning as the Aliased-memory-reused and Imported-with-defined-contents constructors
+		// below, which seed lastStage/lastAccess the same conservative way.
+		[[nodiscard]] std::uint8_t GetQueueTouchMask() const { return m_queueTouchMask; }
+
+		void SetQueueTouchMask(std::uint8_t mask) { m_queueTouchMask = mask; }
+
 		// Whether this resource, as this key, has meaningful content to preserve. False for a
 		// resource nothing has written yet -- the signal DynamicRenderingWrapper::Begin uses to
 		// force AttachmentLoadOp::eClear rather than eLoad even for a ReadWrite access, since
@@ -271,8 +321,12 @@ namespace brassica::graph {
 		}
 
 	private:
-		void CreateImage(VmaAllocation existingAllocation, vk::DeviceSize offsetInBlock) {
-			vk::ImageCreateInfo imageInfo = detail::BuildImageCreateInfo(m_desc);
+		void CreateImage(
+			VmaAllocation                  existingAllocation,
+			vk::DeviceSize                 offsetInBlock,
+			std::span<const std::uint32_t> concurrentFamilies = {}
+		) {
+			vk::ImageCreateInfo imageInfo = detail::BuildImageCreateInfo(m_desc, concurrentFamilies);
 			VkImageCreateInfo   cImageInfo = static_cast<VkImageCreateInfo>(imageInfo);
 			VkImage             rawImage = VK_NULL_HANDLE;
 
@@ -381,6 +435,7 @@ namespace brassica::graph {
 		vk::ImageLayout         m_currentLayout{vk::ImageLayout::eUndefined};
 		vk::PipelineStageFlags2 m_lastStage{};
 		vk::AccessFlags2        m_lastAccess{};
+		std::uint8_t            m_queueTouchMask{kAllQueuesTouchMask};
 		bool                    m_hasDefinedContents{false};
 		std::uint32_t           m_sampledBindlessIndex{0};
 		std::uint32_t           m_storageBindlessIndex{0};
@@ -412,11 +467,12 @@ namespace brassica::graph {
 		// AlignUp(desc.byteSize, sliceAlignment) * ringSlots bytes -- desc.byteSize itself stays
 		// each slot's *logical* size, which is what a consumer's copy/read region should use.
 		PhysicalBuffer(
-			vk::Device          device,
-			VmaAllocator        allocator,
-			const ResourceDesc& desc,
-			std::uint32_t       ringSlots = 1,
-			std::uint64_t       sliceAlignment = 16
+			vk::Device                     device,
+			VmaAllocator                   allocator,
+			const ResourceDesc&            desc,
+			std::uint32_t                  ringSlots = 1,
+			std::uint64_t                  sliceAlignment = 16,
+			std::span<const std::uint32_t> concurrentFamilies = {}
 		):
 			m_device(device),
 			m_allocator(allocator),
@@ -426,19 +482,20 @@ namespace brassica::graph {
 			m_sliceStride(
 				desc.hostAccess == HostAccess::Mapped ? detail::AlignUp(desc.byteSize, sliceAlignment) : desc.byteSize
 			) {
-			CreateBuffer(nullptr, 0);
+			CreateBuffer(nullptr, 0, concurrentFamilies);
 		}
 
 		// memoryWasReused: see PhysicalTexture's aliased constructor comment -- same conservative
 		// seed, same reason (a memory dependency against a prior occupant that no graph edge
 		// connects to this object).
 		PhysicalBuffer(
-			vk::Device          device,
-			VmaAllocator        allocator,
-			VmaAllocation       aliasedMemory,
-			vk::DeviceSize      offsetInBlock,
-			const ResourceDesc& desc,
-			bool                memoryWasReused = false
+			vk::Device                     device,
+			VmaAllocator                   allocator,
+			VmaAllocation                  aliasedMemory,
+			vk::DeviceSize                 offsetInBlock,
+			const ResourceDesc&            desc,
+			bool                           memoryWasReused = false,
+			std::span<const std::uint32_t> concurrentFamilies = {}
 		):
 			m_device(device),
 			m_allocator(allocator),
@@ -450,7 +507,7 @@ namespace brassica::graph {
 				memoryWasReused ? (vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
 								: vk::AccessFlags2{}
 			) {
-			CreateBuffer(aliasedMemory, offsetInBlock);
+			CreateBuffer(aliasedMemory, offsetInBlock, concurrentFamilies);
 		}
 
 		// hasDefinedContents: see PhysicalTexture's imported constructor comment. No layout
@@ -583,6 +640,11 @@ namespace brassica::graph {
 			m_lastAccess = access;
 		}
 
+		// See PhysicalTexture::GetQueueTouchMask -- same contract.
+		[[nodiscard]] std::uint8_t GetQueueTouchMask() const { return m_queueTouchMask; }
+
+		void SetQueueTouchMask(std::uint8_t mask) { m_queueTouchMask = mask; }
+
 		[[nodiscard]] bool HasDefinedContents() const { return m_hasDefinedContents; }
 
 		void SetHasDefinedContents(bool defined) { m_hasDefinedContents = defined; }
@@ -600,8 +662,12 @@ namespace brassica::graph {
 		void SetBindlessIndex(std::uint32_t index) { m_bindlessIndex = index; }
 
 	private:
-		void CreateBuffer(VmaAllocation existingAllocation, vk::DeviceSize offsetInBlock) {
-			vk::BufferCreateInfo bufferInfo = detail::BuildBufferCreateInfo(m_desc);
+		void CreateBuffer(
+			VmaAllocation                  existingAllocation,
+			vk::DeviceSize                 offsetInBlock,
+			std::span<const std::uint32_t> concurrentFamilies = {}
+		) {
+			vk::BufferCreateInfo bufferInfo = detail::BuildBufferCreateInfo(m_desc, concurrentFamilies);
 
 			VkBufferCreateInfo cBufferInfo = static_cast<VkBufferCreateInfo>(bufferInfo);
 			// The real allocation may be larger than m_desc.byteSize when this is a Mapped ring
@@ -674,6 +740,7 @@ namespace brassica::graph {
 
 		vk::PipelineStageFlags2 m_lastStage{};
 		vk::AccessFlags2        m_lastAccess{};
+		std::uint8_t            m_queueTouchMask{kAllQueuesTouchMask};
 		bool                    m_hasDefinedContents{false};
 		std::uint32_t           m_bindlessIndex{0};
 	};
@@ -708,6 +775,11 @@ namespace brassica::graph {
 			m_lastAccess = access;
 		}
 
+		// See PhysicalTexture::GetQueueTouchMask -- same contract.
+		[[nodiscard]] std::uint8_t GetQueueTouchMask() const { return m_queueTouchMask; }
+
+		void SetQueueTouchMask(std::uint8_t mask) { m_queueTouchMask = mask; }
+
 		// Same meaning as PhysicalTexture::GetBindlessIndex, but the caller (PhysicalRegistry's
 		// RegisterImportedAccelerationStructure) must carry this forward itself across a rebuild:
 		// unlike a texture, a new AS handle always replaces this object outright rather than
@@ -721,6 +793,7 @@ namespace brassica::graph {
 		vk::AccelerationStructureKHR m_as{};
 		vk::PipelineStageFlags2      m_lastStage{};
 		vk::AccessFlags2             m_lastAccess{};
+		std::uint8_t                 m_queueTouchMask{kAllQueuesTouchMask};
 		std::uint32_t                m_bindlessIndex{0};
 	};
 
@@ -736,9 +809,19 @@ namespace brassica::graph {
 
 		// Binds a new image to a reused block if one whose occupant's lifetime has fully ended
 		// is big enough, otherwise allocates a fresh block sized to this resource.
-		std::shared_ptr<PhysicalTexture>
-		Acquire(const ResourceDesc& desc, std::size_t firstStage, std::size_t lastStage) {
-			vk::ImageCreateInfo  imageInfo = detail::BuildImageCreateInfo(desc);
+		//
+		// concurrentFamilies must be the same list for the sizing query below and for the
+		// PhysicalTexture actually bound to the block -- VkDeviceImageMemoryRequirements requires
+		// the create-info passed here to match what the resource is really created with, and
+		// sharingMode/queueFamilyIndexCount is part of that create-info (BuildImageCreateInfo,
+		// above).
+		std::shared_ptr<PhysicalTexture> Acquire(
+			const ResourceDesc&            desc,
+			std::size_t                    firstStage,
+			std::size_t                    lastStage,
+			std::span<const std::uint32_t> concurrentFamilies = {}
+		) {
+			vk::ImageCreateInfo  imageInfo = detail::BuildImageCreateInfo(desc, concurrentFamilies);
 			const vk::DeviceSize requiredSize = m_device
 													.getImageMemoryRequirements(
 														vk::DeviceImageMemoryRequirements{&imageInfo}
@@ -751,7 +834,8 @@ namespace brassica::graph {
 					// memoryWasReused=true: this block held a different resource before this
 					// one, so the new PhysicalTexture seeds a conservative "wait on everything"
 					// state -- see the constructor comment.
-					return std::make_shared<PhysicalTexture>(m_device, m_allocator, block.allocation, 0, desc, true);
+					return std::make_shared<
+						PhysicalTexture>(m_device, m_allocator, block.allocation, 0, desc, true, concurrentFamilies);
 				}
 			}
 
@@ -774,7 +858,8 @@ namespace brassica::graph {
 				throw std::runtime_error("Failed to allocate aliasing memory block via VMA!");
 			}
 			m_blocks.push_back(Block{allocation, requiredSize, lastStage});
-			return std::make_shared<PhysicalTexture>(m_device, m_allocator, allocation, 0, desc, false);
+			return std::make_shared<
+				PhysicalTexture>(m_device, m_allocator, allocation, 0, desc, false, concurrentFamilies);
 		}
 
 		// Frees every block's memory. Safe to call only once nothing still references a
@@ -815,9 +900,15 @@ namespace brassica::graph {
 	public:
 		BufferAliasPool(vk::Device device, VmaAllocator allocator): m_device(device), m_allocator(allocator) {}
 
-		std::shared_ptr<PhysicalBuffer>
-		Acquire(const ResourceDesc& desc, std::size_t firstStage, std::size_t lastStage) {
-			vk::BufferCreateInfo bufferInfo = detail::BuildBufferCreateInfo(desc);
+		// Same concurrentFamilies-must-match-the-sizing-query requirement as
+		// ImageAliasPool::Acquire -- see that comment.
+		std::shared_ptr<PhysicalBuffer> Acquire(
+			const ResourceDesc&            desc,
+			std::size_t                    firstStage,
+			std::size_t                    lastStage,
+			std::span<const std::uint32_t> concurrentFamilies = {}
+		) {
+			vk::BufferCreateInfo bufferInfo = detail::BuildBufferCreateInfo(desc, concurrentFamilies);
 			const vk::DeviceSize requiredSize = m_device
 													.getBufferMemoryRequirements(
 														vk::DeviceBufferMemoryRequirements{&bufferInfo}
@@ -827,7 +918,8 @@ namespace brassica::graph {
 			for (auto& block : m_blocks) {
 				if (block.lastOccupantStage < firstStage && block.size >= requiredSize) {
 					block.lastOccupantStage = lastStage;
-					return std::make_shared<PhysicalBuffer>(m_device, m_allocator, block.allocation, 0, desc, true);
+					return std::make_shared<
+						PhysicalBuffer>(m_device, m_allocator, block.allocation, 0, desc, true, concurrentFamilies);
 				}
 			}
 
@@ -847,7 +939,8 @@ namespace brassica::graph {
 				throw std::runtime_error("Failed to allocate aliasing memory block via VMA!");
 			}
 			m_blocks.push_back(Block{allocation, requiredSize, lastStage});
-			return std::make_shared<PhysicalBuffer>(m_device, m_allocator, allocation, 0, desc, false);
+			return std::make_shared<
+				PhysicalBuffer>(m_device, m_allocator, allocation, 0, desc, false, concurrentFamilies);
 		}
 
 		void Reset() {
@@ -895,14 +988,14 @@ namespace brassica::graph {
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
 			// eTransferDst: this is the most commonly reused color-shaped preset, so it's the
-			// most likely one a future History<K> pair (PhysicalRegistry::ProvisionTemporalPairs)
-			// ends up allocated with -- ZeroInitializeUndefinedReads (PhysicalExecutionBackend.hpp)
-			// clears an undefined History slot's first frame via clearColorImage, which requires
-			// this bit on the destination image regardless of what else it's used for.
-			// eTransferSrc: general-purpose readback capability (GPU numeric test probes copying a
-			// rendered target to a host-visible buffer via vkCmdCopyImageToBuffer), same reasoning
-			// as eTransferDst above -- cheap to carry on every color target, not worth a separate
-			// preset.
+		    // most likely one a future History<K> pair (PhysicalRegistry::ProvisionTemporalPairs)
+		    // ends up allocated with -- ZeroInitializeUndefinedReads (PhysicalExecutionBackend.hpp)
+		    // clears an undefined History slot's first frame via clearColorImage, which requires
+		    // this bit on the destination image regardless of what else it's used for.
+		    // eTransferSrc: general-purpose readback capability (GPU numeric test probes copying a
+		    // rendered target to a host-visible buffer via vkCmdCopyImageToBuffer), same reasoning
+		    // as eTransferDst above -- cheap to carry on every color target, not worth a separate
+		    // preset.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled |
 				vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc
@@ -918,10 +1011,10 @@ namespace brassica::graph {
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
 			// eSampled alongside eDepthStencilAttachment: without it, Read<GBufferDepth> isn't
-			// actually expressible -- a node declaring it would sample a view created without
-			// VK_IMAGE_USAGE_SAMPLED_BIT. Latent until now only because no shipped node reads depth.
-			// eTransferDst: same reasoning as ColorAttachmentDesc's -- needed for
-			// ZeroInitializeUndefinedReads to clear a depth-shaped History<K> pair's first frame.
+		    // actually expressible -- a node declaring it would sample a view created without
+		    // VK_IMAGE_USAGE_SAMPLED_BIT. Latent until now only because no shipped node reads depth.
+		    // eTransferDst: same reasoning as ColorAttachmentDesc's -- needed for
+		    // ZeroInitializeUndefinedReads to clear a depth-shaped History<K> pair's first frame.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled |
 				vk::ImageUsageFlagBits::eTransferDst
@@ -941,12 +1034,12 @@ namespace brassica::graph {
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
 			// eStorage: the mask is written via imageStore from a compute shader, not through
-			// dynamic rendering -- see AttachmentRoleFor's comment (ResourceState.hpp) for why the
-			// read side still resolves to ShadingRate rather than Storage despite this bit.
-			// eTransferDst: this desc is exactly what a History<ShadingRateMap> pair allocates
-			// with (PhysicalRegistry::ProvisionTemporalPairs), and ZeroInitializeUndefinedReads
-			// (PhysicalExecutionBackend.hpp) clears an undefined History slot's first frame via
-			// clearColorImage, which requires the destination layout's usage to include this bit.
+		    // dynamic rendering -- see AttachmentRoleFor's comment (ResourceState.hpp) for why the
+		    // read side still resolves to ShadingRate rather than Storage despite this bit.
+		    // eTransferDst: this desc is exactly what a History<ShadingRateMap> pair allocates
+		    // with (PhysicalRegistry::ProvisionTemporalPairs), and ZeroInitializeUndefinedReads
+		    // (PhysicalExecutionBackend.hpp) clears an undefined History slot's first frame via
+		    // clearColorImage, which requires the destination layout's usage to include this bit.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR | vk::ImageUsageFlagBits::eStorage |
 				vk::ImageUsageFlagBits::eTransferDst
@@ -965,12 +1058,12 @@ namespace brassica::graph {
 			.height = height,
 			.formatCode = static_cast<std::uint32_t>(format),
 			// eTransferDst: same reasoning as ColorAttachmentDesc's own copy of this comment -- a
-			// History<K> pair (PhysicalRegistry::ProvisionTemporalPairs) built on this desc needs
-			// ZeroInitializeUndefinedReads (PhysicalExecutionBackend.hpp) to be able to
-			// clearColorImage its first frame's undefined slot, which requires this bit on the
-			// destination image regardless of what else it's used for. Confirmed missing the hard
-			// way: the first real (non-test) pairing of History<K> with this desc produced exactly
-			// the validation errors this bit prevents, cascading into a real GPU hang.
+		    // History<K> pair (PhysicalRegistry::ProvisionTemporalPairs) built on this desc needs
+		    // ZeroInitializeUndefinedReads (PhysicalExecutionBackend.hpp) to be able to
+		    // clearColorImage its first frame's undefined slot, which requires this bit on the
+		    // destination image regardless of what else it's used for. Confirmed missing the hard
+		    // way: the first real (non-test) pairing of History<K> with this desc produced exactly
+		    // the validation errors this bit prevents, cascading into a real GPU hang.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
 				vk::ImageUsageFlagBits::eTransferDst
@@ -982,9 +1075,9 @@ namespace brassica::graph {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Buffer,
 			// eTransferDst: lets a real cmd.copyBuffer (StagedStorageBufferDesc's staging-ring
-			// path, or Util.hpp's UploadBufferImmediate) target this buffer directly -- without
-			// it, every uniform buffer this preset creates is a live
-			// VUID-vkCmdCopyBuffer-dstBuffer-00120 the moment anything tries to upload into it.
+		    // path, or Util.hpp's UploadBufferImmediate) target this buffer directly -- without
+		    // it, every uniform buffer this preset creates is a live
+		    // VUID-vkCmdCopyBuffer-dstBuffer-00120 the moment anything tries to upload into it.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eTransferDst
 			),
@@ -996,7 +1089,7 @@ namespace brassica::graph {
 		return ResourceDesc{
 			.kind = ResourceDesc::Kind::Buffer,
 			// eTransferDst: same reason as UniformBufferDesc above -- ParticleSystemNode's
-			// typeBufferNode is exactly this preset, uploaded via HostWriteNode/WriteSpan.
+		    // typeBufferNode is exactly this preset, uploaded via HostWriteNode/WriteSpan.
 			.usageMask = static_cast<std::uint32_t>(
 				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst
 			),

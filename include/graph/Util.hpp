@@ -87,7 +87,7 @@ namespace brassica::graph {
 			if (finalDesc.byteSize == 0) {
 				finalDesc = StorageBufferDesc(sizeBytes);
 			}
-			destBuffer = std::make_shared<PhysicalBuffer>(device, allocator, finalDesc);
+			destBuffer = std::make_shared<PhysicalBuffer>(device, allocator, finalDesc, 1, 16, m_concurrentFamilies);
 			m_buffers[resolvedId] = destBuffer;
 		}
 		destBuffer->SetHasDefinedContents(true);
@@ -155,7 +155,7 @@ namespace brassica::graph {
 					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
 				);
 			}
-			destTexture = std::make_shared<PhysicalTexture>(device, allocator, texDesc);
+			destTexture = std::make_shared<PhysicalTexture>(device, allocator, texDesc, m_concurrentFamilies);
 			AssignAndWriteBindlessIndices(*destTexture);
 			m_textures[resolvedId] = destTexture;
 		} else {
@@ -283,10 +283,11 @@ namespace brassica::graph {
 	}
 
 	inline std::span<std::byte> PhysicalResourceRegistry::BeginHostWrite(
-		ResourceId    id,
-		std::size_t   sizeBytes,
-		std::uint64_t frameIndex,
-		bool          insideRendering
+		ResourceId      id,
+		std::size_t     sizeBytes,
+		std::uint64_t   frameIndex,
+		bool            insideRendering,
+		ExecutionDomain domain
 	) {
 		const ResourceId resolvedId = ResolveId(id);
 
@@ -310,6 +311,20 @@ namespace brassica::graph {
 					"command, which vkCmdCopyBuffer/vkCmdCopyBufferToImage can't do between "
 					"vkCmdBeginRendering/vkCmdEndRendering. Use HostAccess::Mapped for this "
 					"resource instead, or move the write to a node whose domain isn't Graphics."
+				);
+			}
+			// EndHostWrite's real copy always executes at the transfer stage -- see this
+			// override's declaration (Execution.hpp) for why only a Transfer-domain caller's
+			// Acquire pre-barrier actually leaves tracked state agreeing with that. Any other
+			// domain would silently desync tracked state from the real GPU access instead of
+			// failing loudly here.
+			if (domain != ExecutionDomain::Transfer) {
+				throw std::runtime_error(
+					"BeginHostWrite: a Staged write to '" + std::string(resolvedId->name) +
+					"' was attempted from a node whose domain (index " + std::to_string(static_cast<int>(domain)) +
+					" into ExecutionDomain -- Graphics=0/Compute=1/Transfer=2/Host=3) isn't "
+					"Transfer. Staged writes are only correct from Transfer-domain nodes. Use "
+					"HostAccess::Mapped instead, or move this node to Domain(Transfer)."
 				);
 			}
 			(void)desc;

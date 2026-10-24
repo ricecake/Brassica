@@ -178,6 +178,15 @@ namespace brassica {
 			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 			bufferInfo.size = bufferSize;
 			bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			// Same reasoning as HiZDownsampleNode's identical counter buffer: node-private,
+			// out-of-registry, and HEFT can move this node's SPD dispatch between queues across
+			// frames -- design plan's S4.
+			const auto concurrentFamilies = services.physicalRegistry->ConcurrentFamilies();
+			if (concurrentFamilies.size() > 1) {
+				bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+				bufferInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(concurrentFamilies.size());
+				bufferInfo.pQueueFamilyIndices = concurrentFamilies.data();
+			}
 
 			VmaAllocationCreateInfo allocCreateInfo{};
 			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;

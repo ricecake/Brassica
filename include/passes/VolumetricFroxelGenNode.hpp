@@ -103,18 +103,14 @@ namespace brassica {
 			genPush.fogParams = glm::vec4(0.003f, 0.003f, 0.0f, static_cast<float>(p.terrainGridParams.w));
 		}
 
-		// No Read<TerrainClipmapTexture/TerrainMinMaxTexture>() here, matching this node's own
-		// pre-conversion Recipe exactly (it never realized either, despite the removed Resources
-		// declaring both) -- and deliberately so now too: neither key is catalog-converted yet
-		// (a later S2b batch), and TerrainGenNode's Prepare phase schedules before this node's
-		// LightPreparation, so an empty-desc realization here would win via lesson #10's last-
-		// writer-wins and corrupt the real terrain descs. See GTAONode.hpp/CloudShadowGenNode.hpp
-		// for the same reasoning. CloudShadowMap and TerrainWeatherBiomeTexture, by contrast, are
-		// both safe to Read<>: both are catalog-converted (CloudShadowGenNode.hpp/
-		// ResourceKeys.hpp), and both are real genuine data dependencies this node's shader
-		// already reads (cloudShadowIndex, weatherBiomeIndex) -- declaring them as real edges is
-		// what makes Provision/barrier synthesis actually order this node after their producers,
-		// instead of relying on nothing.
+		// TerrainClipmapTexture/TerrainMinMaxTexture are now both catalog-converted (own
+		// Desc(FrameContext) methods, ResourceKeys.hpp) -- the empty-desc/last-writer-wins
+		// corruption risk this comment used to warn about was specifically a pre-conversion
+		// hazard (Provision() prefers a converted key's own catalog desc over a realization's,
+		// SetupBuilder.hpp), which closed once conversion landed. DeferredNode/FoliageNode/
+		// ParticleSystemNode/TerrainNode/WaterNode already Read<> both with no .Desc() override;
+		// this node was the one straggler still reading them undeclared via ctx.Index<>() below
+		// (NodeContext's undeclared-access guard, Execution.hpp, is what caught it).
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Create<VolumetricCascade0Scattering>();
@@ -127,6 +123,11 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<TerrainClipmapTexture>();
+			r.Read<TerrainMinMaxTexture>();
+			// shaders/volumetric_froxel_gen.comp loops uLights[] directly (min(uLightCount, 32u))
+			// for point/spot lighting, not just through SkyViewLUT/CloudShadowMap.
+			r.Read<LightsBuffer>();
 			r.Read<TerrainShadowMap>();
 		}
 

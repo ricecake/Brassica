@@ -46,7 +46,7 @@ namespace brassica::graph {
 	// since released the registry's own reference -- real shared ownership, not just a
 	// same-frame borrow.
 	class PhysicalResourceRegistry: public ManagerBase<PhysicalResourceRegistry, PhysicalResourceRegistryState>,
-	                                public ResourceServices {
+									public ResourceServices {
 	public:
 		using State = PhysicalResourceRegistryState;
 
@@ -92,6 +92,16 @@ namespace brassica::graph {
 		}
 
 		void SetQueue(vk::Queue queue) { m_queue = queue; }
+
+		// Drives every VK_SHARING_MODE_CONCURRENT decision this registry makes (ProvisionTexture/
+		// ProvisionBuffer, the alias pools, UploadBufferImmediate/UploadTextureImmediate) --
+		// design plan's S4, "Queue-family ownership." Call once real queue families are known
+		// (Engine::Init, after queueSet itself is populated); a registry that never calls this
+		// keeps every resource EXCLUSIVE, identical to before this existed -- DistinctQueueFamilies
+		// of a default-constructed QueueSet is empty, same as this member's own default.
+		void SetQueueSet(const QueueSet& queues) { m_concurrentFamilies = DistinctQueueFamilies(queues); }
+
+		[[nodiscard]] std::span<const std::uint32_t> ConcurrentFamilies() const { return m_concurrentFamilies; }
 
 		[[nodiscard]] vk::Device GetDevice() const { return m_device; }
 
@@ -328,8 +338,13 @@ namespace brassica::graph {
 		// ResourceServices: NodeContext::Write<K>/WriteSpan<K> call through to these. Defined in
 		// Util.hpp, same as the three above -- the real bodies need vk::Buffer(Image)Copy/VMA,
 		// which would bloat this class if inlined here.
-		std::span<std::byte>
-		BeginHostWrite(ResourceId id, std::size_t sizeBytes, std::uint64_t frameIndex, bool insideRendering) override;
+		std::span<std::byte> BeginHostWrite(
+			ResourceId      id,
+			std::size_t     sizeBytes,
+			std::uint64_t   frameIndex,
+			bool            insideRendering,
+			ExecutionDomain domain
+		) override;
 
 		void EndHostWrite(ResourceId id, CommandBuffer cmd) override;
 
@@ -456,12 +471,12 @@ namespace brassica::graph {
 		// offer just never gets the catalog-preferred desc, falling back to whatever a legacy
 		// node realization supplied, same as before the catalog existed.
 		void Provision(
-			const Schedule&            schedule,
-			std::span<const Recipe>    recipes,
-			std::uint64_t              frameIndex,
-			bool                       enableAliasing = true,
+			const Schedule&             schedule,
+			std::span<const Recipe>     recipes,
+			std::uint64_t               frameIndex,
+			bool                        enableAliasing = true,
 			std::span<const NodeHandle> nodes = {},
-			const FrameContext&        ctx = {}
+			const FrameContext&         ctx = {}
 		) {
 			ProvisionTemporalPairs(recipes, frameIndex, ctx);
 
@@ -654,10 +669,12 @@ namespace brassica::graph {
 							effective.desc = *catalogDesc;
 						}
 
-						if (auto prevIt = realizationsToProvision.find(resolvedKey); prevIt != realizationsToProvision.end() &&
-							!DescsFullyMatch(prevIt->second.desc, effective.desc)) {
+						const bool currEmpty = DescsFullyMatch(effective.desc, ResourceDesc{});
+
+						if (auto prevIt = realizationsToProvision.find(resolvedKey);
+						    prevIt != realizationsToProvision.end() &&
+						    !DescsFullyMatch(prevIt->second.desc, effective.desc)) {
 							const bool prevEmpty = DescsFullyMatch(prevIt->second.desc, ResourceDesc{});
-							const bool currEmpty = DescsFullyMatch(effective.desc, ResourceDesc{});
 							// A builder node's Read<K>()/Modify<K>() on a key with no catalog entry
 							// (not yet converted, or converted but nothing registered it in THIS
 							// run -- an isolated test with a fake producer, most likely) carries an
@@ -684,6 +701,22 @@ namespace brassica::graph {
 							if (currEmpty && !prevEmpty) {
 								continue; // keep the existing non-empty entry
 							}
+						} else if (currEmpty && prevIt == realizationsToProvision.end()) {
+							// Same "an empty desc is simply ignored for provisioning purposes" rule
+							// as above, but for the case the comment there didn't cover: this key's
+							// *only* realization so far this frame is this empty one -- there is no
+							// non-empty prevIt to lose to. Falling through used to insert the empty
+							// desc anyway, and ProvisionTexture/Buffer's ImageDescMatches would then
+							// see it mismatch against whatever real desc is already physically
+							// allocated (width/format/usage all zero) and destroy+recreate the
+							// resource from garbage. Confirmed as a real bug, not hypothetical:
+							// FoliageBiomeTableTexture's producer (a PredefinedTextureNode) is only
+							// Active on the frame its data actually changes, so on every other frame
+							// FoliageNode's bare Read<FoliageBiomeTableTexture>() (no .Desc(), and
+							// this key isn't catalog-converted) was the sole realization reaching
+							// here -- silently wiping the texture's real eTransferDst usage down to
+							// 0 the very next frame. Leave whatever's already provisioned alone.
+							continue;
 						}
 
 						realizationsToProvision[resolvedKey] = effective;
@@ -858,13 +891,13 @@ namespace brassica::graph {
 			}
 			vk::DescriptorImageInfo imageInfo{{}, view, layout};
 			vk::WriteDescriptorSet  write{
-				m_bindless.set,
-				binding,
-				index,
-				1,
-				vk::DescriptorType::eSampledImage,
-				&imageInfo,
-			};
+                m_bindless.set,
+                binding,
+                index,
+                1,
+                vk::DescriptorType::eSampledImage,
+                &imageInfo,
+            };
 			m_device.updateDescriptorSets(write, {});
 		}
 
@@ -876,13 +909,13 @@ namespace brassica::graph {
 			// (DeriveImageState's Storage-usage branches, ResourceState.hpp, agree).
 			vk::DescriptorImageInfo imageInfo{{}, view, vk::ImageLayout::eGeneral};
 			vk::WriteDescriptorSet  write{
-				m_bindless.set,
-				m_bindless.storageImageBinding,
-				index,
-				1,
-				vk::DescriptorType::eStorageImage,
-				&imageInfo,
-			};
+                m_bindless.set,
+                m_bindless.storageImageBinding,
+                index,
+                1,
+                vk::DescriptorType::eStorageImage,
+                &imageInfo,
+            };
 			m_device.updateDescriptorSets(write, {});
 		}
 
@@ -910,14 +943,14 @@ namespace brassica::graph {
 			}
 			vk::DescriptorBufferInfo bufferInfo{buffer, 0, size};
 			vk::WriteDescriptorSet   write{
-				m_bindless.set,
-				m_bindless.storageBufferBinding,
-				index,
-				1,
-				vk::DescriptorType::eStorageBuffer,
-				nullptr,
-				&bufferInfo,
-			};
+                m_bindless.set,
+                m_bindless.storageBufferBinding,
+                index,
+                1,
+                vk::DescriptorType::eStorageBuffer,
+                nullptr,
+                &bufferInfo,
+            };
 			m_device.updateDescriptorSets(write, {});
 		}
 
@@ -1048,7 +1081,7 @@ namespace brassica::graph {
 					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
 				),
 			};
-			m_fallbackTexture = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
+			m_fallbackTexture = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc, m_concurrentFamilies);
 			const std::uint32_t index = m_sampledArena.Allocate();
 			m_fallbackTexture->SetSampledBindlessIndex(index);
 			WriteSampledImageDescriptor(
@@ -1083,8 +1116,9 @@ namespace brassica::graph {
 		// decision, so a false positive here only ever produces a spurious warning, never a bug.
 		static bool DescsFullyMatch(const ResourceDesc& a, const ResourceDesc& b) {
 			return a.kind == b.kind && a.width == b.width && a.height == b.height && a.depth == b.depth &&
-				a.mips == b.mips && a.layers == b.layers && a.formatCode == b.formatCode && a.usageMask == b.usageMask &&
-				a.byteSize == b.byteSize && a.hostAccess == b.hostAccess && a.persistent == b.persistent;
+				a.mips == b.mips && a.layers == b.layers && a.formatCode == b.formatCode &&
+				a.usageMask == b.usageMask && a.byteSize == b.byteSize && a.hostAccess == b.hostAccess &&
+				a.persistent == b.persistent;
 		}
 
 		// Diagnostic-only name lookup -- nodes is empty for a caller that built its own
@@ -1101,7 +1135,8 @@ namespace brassica::graph {
 		// by the time those loops see K or History<K>, m_textures/m_buffers already holds this
 		// frame's correctly-assigned slot for each, and ProvisionTexture/ProvisionBuffer's own
 		// desc-match early return (see below) leaves it untouched rather than reprovisioning it.
-		void ProvisionTemporalPairs(std::span<const Recipe> recipes, std::uint64_t frameIndex, const FrameContext& ctx) {
+		void
+		ProvisionTemporalPairs(std::span<const Recipe> recipes, std::uint64_t frameIndex, const FrameContext& ctx) {
 			std::unordered_map<ResourceId, ResourceId>   historyIdForBase;
 			std::unordered_map<ResourceId, ResourceDesc> descForBase;
 			for (const auto& recipe : recipes) {
@@ -1132,8 +1167,10 @@ namespace brassica::graph {
 				if (desc.kind == ResourceDesc::Kind::Buffer) {
 					auto& pair = m_temporalBufferPairs[base];
 					if (!pair[0]) {
-						pair[0] = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc);
-						pair[1] = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc);
+						pair[0] =
+							std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc, 1, 16, m_concurrentFamilies);
+						pair[1] =
+							std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc, 1, 16, m_concurrentFamilies);
 					}
 					m_buffers[base] = pair[parity];
 					m_buffers[historyId] = pair[1 - parity];
@@ -1153,8 +1190,8 @@ namespace brassica::graph {
 							RetireBindlessIndices(*pair[0], frameIndex);
 							RetireBindlessIndices(*pair[1], frameIndex);
 						}
-						pair[0] = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
-						pair[1] = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc);
+						pair[0] = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc, m_concurrentFamilies);
+						pair[1] = std::make_shared<PhysicalTexture>(m_device, m_allocator, desc, m_concurrentFamilies);
 						// Must assign bindless indices itself -- otherwise a History<K> pair would
 						// silently never get one at all.
 						AssignAndWriteBindlessIndices(*pair[0]);
@@ -1214,8 +1251,13 @@ namespace brassica::graph {
 			// comment (Execution.hpp) for why a pool block can't track this resource's real lifetime
 			// once it starts hitting the desc-match early return above.
 			std::shared_ptr<PhysicalTexture> tex = (enableAliasing && !desc.persistent)
-				? m_imagePool.Acquire(desc, lifetime.firstPass, lifetime.lastPass)
-				: std::make_shared<PhysicalTexture>(m_device, m_allocator, desc); // This should handle mips?
+				? m_imagePool.Acquire(desc, lifetime.firstPass, lifetime.lastPass, m_concurrentFamilies)
+				: std::make_shared<PhysicalTexture>(
+					  m_device,
+					  m_allocator,
+					  desc,
+					  m_concurrentFamilies
+				  ); // This should handle mips?
 
 			AssignAndWriteBindlessIndices(*tex);
 
@@ -1278,11 +1320,12 @@ namespace brassica::graph {
 			// Same persistent-bypass reasoning as ProvisionTexture above.
 			std::shared_ptr<PhysicalBuffer> newBuffer;
 			if (enableAliasing && !hostWrite && !desc.persistent) {
-				newBuffer = m_bufferPool.Acquire(desc, lifetime.firstPass, lifetime.lastPass);
+				newBuffer = m_bufferPool.Acquire(desc, lifetime.firstPass, lifetime.lastPass, m_concurrentFamilies);
 			} else if (hostWrite) {
-				newBuffer = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc, ringSlots);
+				newBuffer =
+					std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc, ringSlots, 16, m_concurrentFamilies);
 			} else {
-				newBuffer = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc);
+				newBuffer = std::make_shared<PhysicalBuffer>(m_device, m_allocator, desc, 1, 16, m_concurrentFamilies);
 			}
 
 			if (existingIt != m_buffers.end() && !existingIt->second->IsImported()) {
@@ -1310,12 +1353,13 @@ namespace brassica::graph {
 			std::erase_if(m_retiringBuffers, [&](const auto& entry) { return entry.first <= frameIndex; });
 		}
 
-		vk::Device      m_device{};
-		VmaAllocator    m_allocator = nullptr;
-		vk::Queue       m_queue{};
-		ImageAliasPool  m_imagePool;
-		BufferAliasPool m_bufferPool;
-		ResourceCatalog m_catalog;
+		vk::Device                 m_device{};
+		VmaAllocator               m_allocator = nullptr;
+		vk::Queue                  m_queue{};
+		std::vector<std::uint32_t> m_concurrentFamilies;
+		ImageAliasPool             m_imagePool;
+		BufferAliasPool            m_bufferPool;
+		ResourceCatalog            m_catalog;
 
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalTexture>>               m_textures;
 		std::unordered_map<ResourceId, std::shared_ptr<PhysicalBuffer>>                m_buffers;

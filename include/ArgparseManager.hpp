@@ -7,6 +7,7 @@
 #include <argparse/argparse.hpp>
 
 #include "IManager.hpp"
+#include "Scheduler.hpp"
 
 namespace brassica {
 
@@ -86,6 +87,8 @@ namespace brassica {
 		[[nodiscard]] std::string GetTerrainMapPath() const;
 		[[nodiscard]] bool        GetAggressiveValidation() const;
 		[[nodiscard]] bool        GetPrintRenderGraph() const;
+		[[nodiscard]] graph::QueuePlacementMode GetQueuePlacement() const;
+		[[nodiscard]] bool                      GetSplitAliasedQueues() const;
 
 		argparse::ArgumentParser& GetParser() { return m_parser; }
 

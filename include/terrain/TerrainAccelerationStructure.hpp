@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
+#include <vector>
 
 #include "vulkan/vulkan.hpp"
 #include <glm/glm.hpp>
@@ -30,7 +32,7 @@ namespace brassica {
 	};
 
 	class TerrainAccelerationStructure
-	    : public ManagerBase<TerrainAccelerationStructure, TerrainAccelerationStructureState> {
+		: public ManagerBase<TerrainAccelerationStructure, TerrainAccelerationStructureState> {
 	public:
 		using State = TerrainAccelerationStructureState;
 
@@ -60,9 +62,20 @@ namespace brassica {
 		TerrainAccelerationStructure(const TerrainAccelerationStructure&) = delete;
 		TerrainAccelerationStructure& operator=(const TerrainAccelerationStructure&) = delete;
 
-		void Init(vk::Instance instance, vk::Device device, VmaAllocator alloc = VK_NULL_HANDLE) {
+		// concurrentFamilies: stored (not forwarded by-value as a one-shot param) because
+		// InitAccelerationStructures can run again later via SetAllocator, below, with no other
+		// way to learn it a second time. See BuildBufferCreateInfo's comment (PhysicalResource.hpp)
+		// for what this is for -- TerrainTLAS and its backing buffer are the design plan's S4
+		// out-of-registry CONCURRENT sites that live here.
+		void Init(
+			vk::Instance                   instance,
+			vk::Device                     device,
+			VmaAllocator                   alloc = VK_NULL_HANDLE,
+			std::span<const std::uint32_t> concurrentFamilies = {}
+		) {
 			this->device = device;
 			this->allocator = alloc;
+			m_concurrentFamilies.assign(concurrentFamilies.begin(), concurrentFamilies.end());
 			dls.init(instance, device);
 			if (allocator != VK_NULL_HANDLE) {
 				InitAccelerationStructures();
@@ -105,9 +118,10 @@ namespace brassica {
 			vk::DeviceAddress deviceAddress{0};
 		};
 
-		vk::Device            device{nullptr};
-		VmaAllocator          allocator{VK_NULL_HANDLE};
-		DispatchLoaderDynamic dls;
+		vk::Device                 device{nullptr};
+		VmaAllocator               allocator{VK_NULL_HANDLE};
+		DispatchLoaderDynamic      dls;
+		std::vector<std::uint32_t> m_concurrentFamilies;
 
 		BufferResource               aabbBuffer;
 		BufferResource               blasBuffer;

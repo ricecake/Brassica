@@ -55,6 +55,18 @@ namespace brassica {
 			.help("Print the graphviz formatted output of the render graph and exit")
 			.default_value(false)
 			.implicit_value(true);
+
+		m_parser.add_argument("--queue-placement")
+			.help("Render graph queue placement: graphics-only, force-domain, or heft (default)")
+			.default_value(std::string("heft"));
+
+		m_parser.add_argument("--split-aliased-queues")
+			.help(
+				"Keep --queue-placement's multi-queue path even when the device's queue families "
+				"collapse to one real queue (no actual overlap, but exercises segment-splitting)"
+			)
+			.default_value(false)
+			.implicit_value(true);
 	}
 
 	void ArgparseManager::Initialize() {
@@ -164,6 +176,29 @@ namespace brassica {
 		if (!m_argsParsed)
 			return false;
 		return m_parser.get<bool>("--print-render-graph");
+	}
+
+	graph::QueuePlacementMode ArgparseManager::GetQueuePlacement() const {
+		if (!m_argsParsed) {
+			return graph::QueuePlacementMode::Heft;
+		}
+		const std::string value = m_parser.get<std::string>("--queue-placement");
+		if (value == "graphics-only") {
+			return graph::QueuePlacementMode::GraphicsOnly;
+		}
+		if (value == "force-domain") {
+			return graph::QueuePlacementMode::ForceDomain;
+		}
+		if (value != "heft") {
+			spdlog::warn("ArgparseManager: unrecognized --queue-placement '{}', defaulting to heft", value);
+		}
+		return graph::QueuePlacementMode::Heft;
+	}
+
+	bool ArgparseManager::GetSplitAliasedQueues() const {
+		if (!m_argsParsed)
+			return false;
+		return m_parser.get<bool>("--split-aliased-queues");
 	}
 
 } // namespace brassica

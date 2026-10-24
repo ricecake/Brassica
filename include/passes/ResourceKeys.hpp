@@ -233,6 +233,15 @@ namespace brassica {
 	// plain tag; there's nothing for a Desc() to usefully describe.
 	struct AutoExposureBuffer {};
 
+	// Frame set binding 2 (shaders/lighting.glsl's LightsBuffer, uLights[]/uLightCount) -- the
+	// one genuinely hybrid frame-set buffer: Engine::DrawFrame's CPU upload
+	// (LightManager::GetLightsSSBOData) writes it fresh every frame *before* graph execution,
+	// then ParticleBehaviorNode's firefly particles write real dynamic lights into it *on top*
+	// (shaders/particle_behavior.comp's LIGHTS_BUFFER_WRITABLE path) during graph execution.
+	// Imported, same reasoning and the same tag-only shape as AutoExposureBuffer just above --
+	// Provision skips an imported key's realization regardless of desc.
+	struct LightsBuffer {};
+
 	// TonemapComputeNode's bloom/local-tonemap mip chain: mip N is ctx.width/2 (then height)
 	// halved N more times, floored to 1 -- same formula at every one of the 16 keys below, just
 	// a different (and, for the Ltm pair, duplicated) mip index. kMip is a type-level constant,
@@ -380,6 +389,14 @@ namespace brassica {
 
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainBiomeDesc(numLODs); }
 	};
+
+	// TerrainManager's host-visible readback staging buffer (TerrainReadbackNode's
+	// Modify<>, terrain/TerrainManager.hpp) -- imported, same tag-only shape as
+	// AutoExposureBuffer/LightsBuffer: the real allocation is owned and sized by TerrainManager
+	// itself (1MB, comfortably covering the 128x128 RGBA32F window this is actually used for),
+	// registered once at Engine::InitVulkan time since (unlike those per-FRAME_OVERLAP-slot
+	// buffers) this one handle never changes.
+	struct TerrainReadbackStaging {};
 
 	// Moved from TerrainBiomeNode.hpp (same reasoning as TerrainClipmapDesc/TerrainMinMaxDesc's
 	// move from terrain/TerrainManager.hpp in S2b batch 2): a key's Desc() lives here, so the
