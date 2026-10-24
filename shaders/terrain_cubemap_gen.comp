@@ -1,0 +1,54 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "terrain.glsl"
+#include "terrain/generation.glsl"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform CubemapGenPushConstants {
+	uint cubemapStorageIdx;       // storage image index for TerrainCubemapTexture
+	uint cubemapMinMaxStorageIdx; // storage image index for TerrainCubemapMinMaxTexture, mip 0
+	uint cubemapBiomeStorageIdx;  // storage image index for TerrainCubemapBiomeTexture
+	uint dim;                     // face width/height (8192)
+} push;
+
+void main() {
+	uvec3 globalId = gl_GlobalInvocationID;
+	if (globalId.x >= push.dim || globalId.y >= push.dim || globalId.z >= 6u) {
+		return;
+	}
+
+	uint dim = push.dim;
+	uint face = globalId.z;
+	vec2 uv = (vec2(globalId.xy) + 0.5) / float(dim);
+
+	vec3 dir = cubeFaceUVToDirection(uv, face);
+
+	// Convert 3D unit direction to planet spherical coordinates
+	float theta = atan(dir.x, dir.z);
+	float phi   = asin(clamp(dir.y, -1.0, 1.0));
+	vec2 worldXZ = vec2(theta, phi) * FAKE_PLANET_RADIUS;
+
+	TerrainConfig con = TerrainConfig(0.00001, -500.0, 2000.0, 0.14, 0.5);
+	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
+
+	float h = 0.0;
+	float biome = 0.0;
+	float waterLevel = 0.0;
+	float ridgeMap = 0.0;
+	float substrate = 0.0;
+	vec3 normal = vec3(0.0, 1.0, 0.0);
+
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
+
+	float variance = abs(ridgeMap);
+	vec2 octNormal = directionToOctahedralUV(normal);
+
+	ivec3 storeCoord = ivec3(globalId.xy, face);
+
+	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.cubemapStorageIdx)], storeCoord, vec4(h, variance, octNormal.x, octNormal.y));
+	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.cubemapMinMaxStorageIdx)], storeCoord, vec4(h, h, 0.0, 0.0));
+	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.cubemapBiomeStorageIdx)], storeCoord, vec4(clamp(biome, 0.0, 1.0), waterLevel, ridgeMap, substrate));
+}

@@ -381,6 +381,52 @@ namespace brassica {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainBiomeDesc(numLODs); }
 	};
 
+	inline graph::ResourceDesc TerrainCubemapDesc() {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = 8192,
+			.height = 8192,
+			.mips = 1,
+			.layers = 6,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32B32A32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eTransferSrc
+			),
+			.persistent = true,
+		};
+	}
+
+	inline graph::ResourceDesc TerrainCubemapMinMaxDesc() {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = 8192,
+			.height = 8192,
+			.mips = 14,
+			.layers = 6,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+				vk::ImageUsageFlagBits::eTransferSrc
+			),
+			.persistent = true,
+		};
+	}
+
+	inline graph::ResourceDesc TerrainCubemapBiomeDesc() { return TerrainCubemapDesc(); }
+
+	struct TerrainCubemapTexture {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainCubemapDesc(); }
+	};
+
+	struct TerrainCubemapMinMaxTexture {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainCubemapMinMaxDesc(); }
+	};
+
+	struct TerrainCubemapBiomeTexture {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return TerrainCubemapBiomeDesc(); }
+	};
+
 	// Moved from TerrainBiomeNode.hpp (same reasoning as TerrainClipmapDesc/TerrainMinMaxDesc's
 	// move from terrain/TerrainManager.hpp in S2b batch 2): a key's Desc() lives here, so the
 	// constants/helper it calls have to live where ResourceKeys.hpp can see them without

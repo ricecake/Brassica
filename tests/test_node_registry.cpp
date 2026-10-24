@@ -21,6 +21,7 @@
 // 28 -> 26: ParticleSystemNode sub-nodes dynamically registered, added CloudShadowGenNode.
 // 26 -> 27: Added TerrainShadowNode.
 // 27 -> 26: Unified AtmosphereCompositeNode into VolumetricRenderNode.
+// 26 -> 27: Added TerrainCubemapNode.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 26);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 27);
 }

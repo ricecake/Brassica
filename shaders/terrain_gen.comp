@@ -28,7 +28,7 @@ void main() {
 	uint dim = push.gridParams.w;
 	uint lod = globalId.z;
 
-	if (globalId.x >= dim || globalId.y >= dim || lod >= push.gridParams.x) {
+	if (globalId.x >= dim || globalId.y >= dim || lod >= min(push.gridParams.x, 8u)) {
 		return;
 	}
 

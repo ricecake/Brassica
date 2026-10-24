@@ -4,6 +4,7 @@
 #include "doctest/doctest.h"
 
 #include "graph/Graph.hpp"
+#include "passes/TerrainCubemapNode.hpp"
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainMinMaxDownsampleNode.hpp"
 #include "passes/TerrainShadowNode.hpp"
@@ -12,11 +13,13 @@ using namespace brassica;
 
 TEST_CASE("TerrainShadowNode registers, compiles graph dependencies, and orders after TerrainMinMaxDownsampleNode") {
 	TerrainGenNode              genNode;
+	TerrainCubemapNode          cubemapNode;
 	TerrainMinMaxDownsampleNode downsampleNode;
 	TerrainShadowNode           shadowNode;
 
 	graph::Graph g;
 	g.RegisterRef(genNode);
+	g.RegisterRef(cubemapNode);
 	g.RegisterRef(downsampleNode);
 	g.RegisterRef(shadowNode);
 

@@ -20,6 +20,7 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  cubemapMinMaxIndex;
 }
 params;
 
@@ -118,7 +119,7 @@ void main() {
 				for (int i = 0; i < 3; i++) {
 					vec2 t = vec2(float(i), float(j)) * 0.5;
 					vec2 sampleXZ = mix(worldMinXZ, worldMaxXZ, t);
-					vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, sampleXZ, sampleLOD, params.gridParams.w);
+					vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, params.cubemapMinMaxIndex, sampleXZ, sampleLOD, params.gridParams.w);
 					tileMinHeight = min(tileMinHeight, minMax.x);
 				}
 			}

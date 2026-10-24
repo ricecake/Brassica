@@ -128,6 +128,8 @@ namespace brassica {
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
 			r.Read<TerrainShadowMap>();
+			r.Read<TerrainCubemapTexture>();
+			r.Read<TerrainCubemapMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -163,6 +165,8 @@ namespace brassica {
 			std::uint32_t cloudShadowIndex = ctx.Index<CloudShadowMap>();
 			std::uint32_t weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			std::uint32_t shadowMapIndex = ctx.Index<TerrainShadowMap>();
+			std::uint32_t cubemapIndex = ctx.Index<TerrainCubemapTexture>();
+			std::uint32_t cubemapMinMaxIndex = ctx.Index<TerrainCubemapMinMaxTexture>();
 
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
@@ -171,8 +175,8 @@ namespace brassica {
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
-			genPush.indices1.z = pack16(shadowMapIndex, 0u);
-			genPush.indices1.w = 0u;
+			genPush.indices1.z = pack16(shadowMapIndex, cubemapIndex);
+			genPush.indices1.w = pack16(cubemapMinMaxIndex, 0u);
 
 			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {
