@@ -42,7 +42,7 @@ const float MIN_TEMP = -20.0;       // Celsius at Pole
 const float LAPSE_RATE = 25.0;      // Temp drop per 1.0 elevation unit
 const float CONDENSATION_RATE = 0.75;
 const float DIFFUSION_RATE = 0.25;   // How fast groundwater spreads
-const float BASE_EVAPORATION = 0.095;
+const float BASE_EVAPORATION = 0.025;
 
 void main() {
 	ivec2 pos = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + push.cellOffset);
