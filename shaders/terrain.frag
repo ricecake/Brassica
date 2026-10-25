@@ -29,10 +29,19 @@ void main() {
 	vec2 worldXZ = worldPos.xz;
 	float camDist = length(inPosition);
 
-	// Progressive multi-tier distance fading for general terrain texturing:
-	float microFade  = 1.0 - smoothstep(15.0, 120.0, camDist);
-	float mediumFade = 1.0 - smoothstep(40.0, 400.0, camDist);
-	float macroFade  = 1.0 - smoothstep(100.0, 1000.0, camDist);
+	// OrganicMacroCell mCell = generateOrganicMacroCell(worldXZ, 0.5, 3);
+	OrganicPlateData mCell = getOrganicPlate(worldXZ*(0.5+0.5*cross_noise_fbm(worldPos*0.00001, 2, sin(uTime+0.5*dot_noise(worldPos*0.01, uTime))*0.001).xz), 0.0125, 3.0);
+
+
+	// Progressive multi-tier distance fading for normal perturbations (tapers off faster to avoid specular shimmer/aliasing):
+	float microNormalFade  = 1.0 - smoothstep(15.0, 120.0, camDist);
+	float mediumNormalFade = 1.0 - smoothstep(40.0, 400.0, camDist);
+	float macroNormalFade  = 1.0 - smoothstep(100.0, 1000.0, camDist);
+
+	// Progressive multi-tier distance fading for coloration (remains visible much farther into the distance):
+	float microColorFade   = 1.0 - smoothstep(25.0, 350.0, camDist);
+	float mediumColorFade  = 1.0 - smoothstep(80.0, 1200.0, camDist);
+	float macroColorFade   = 1.0 - smoothstep(200.0, 3000.0, camDist);
 
 	vec3 N = normalize(inNormal);
 	vec3 finalAlbedo = inAlbedo.rgb;
@@ -78,7 +87,8 @@ void main() {
 		// 2. Patches of green moss / damp vegetation on wet cliff ledges and crevices
 		if (rockW > 0.01 && moisture > 0.20) {
 			float ledgeFactor = smoothstep(0.25, 0.75, N.y);
-			float mossNoise = psrdnoise(worldXZ * 1.5);
+			vec3 dummyGrad;
+			float mossNoise = dot_noise(vec3(worldXZ * 1.5, 0.0), 0.0, dummyGrad);
 			float mossAmount = rockW * ledgeFactor * smoothstep(0.25, 0.65, moisture) * smoothstep(-0.3, 0.4, mossNoise);
 			vec3 mossColor = mix(vec3(0.18, 0.40, 0.14), vec3(0.10, 0.52, 0.12), moisture);
 			finalAlbedo = mix(finalAlbedo, mossColor, mossAmount * 0.75);
@@ -139,51 +149,56 @@ void main() {
 			float fNoise1 = 0.0;
 			float fNoise2 = 0.0;
 
+			vec2 squatWarpedXZ = worldXZ + vec2(sin(worldXZ.y * 0.25), cos(worldXZ.x * 0.25)) * 1.2;
+			mat3 microWarpGrad;
+			vec3 microNoiseWarp = cross_noise_fbm(worldPos, 3, mCell.regionID*mCell.edgeDist, microWarpGrad);
+			vec3 warp = (microWarpGrad*microNoiseWarp);
+
+
 			if (treeType == 0u) { // Pine / Evergreen: Conical peaked crowns with vertical branch texture
-				// Frequencies tied to physical sizes: crown ~6m (0.166), branch ~2m (0.50), needle tuft ~0.5m (2.0)
-				vec2 g1, g2, g3;
-				fNoise1 = psrdnoise(worldXZ * 0.166, vec2(0.0), 0.0, g1);
-				fNoise2 = psrdnoise(worldXZ * 0.500, vec2(0.0), 0.0, g2);
-				float fn3 = psrdnoise(worldXZ * 2.000, vec2(0.0), 0.0, g3);
+				vec3 g1, g2, g3;
+				fNoise1 = dot_noise(warp+vec3(squatWarpedXZ * 0.166, 0.0), 0.0, g1);
+				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.500, 0.0), 0.0, g2);
+				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 2.000, 0.0), 0.0, g3);
 
-				forestGrad = g1 * (1.3 * 0.50 * macroCanopyFade) +
-				             g2 * (0.35 * mediumCanopyFade) +
-				             g3 * (0.15 * microCanopyFade);
+				forestGrad = g1.xz * (1.3 * 0.50 * macroCanopyFade) +
+				             g2.xz * (0.35 * mediumCanopyFade) +
+				             g3.xz * (0.15 * microCanopyFade);
 			} else if (treeType == 2u) { // Tropical / Palm: Broad umbrella domes
-				// Frequencies tied to physical sizes: dome ~10m (0.10), fronds ~3m (0.33), frond blade ~0.8m (1.25)
-				vec2 g1, g2, g3;
-				fNoise1 = psrdnoise(worldXZ * 0.100, vec2(0.0), 0.0, g1);
-				fNoise2 = psrdnoise(worldXZ * 0.333, vec2(0.0), 0.0, g2);
-				float fn3 = psrdnoise(worldXZ * 1.250, vec2(0.0), 0.0, g3);
+				vec3 g1, g2, g3;
+				fNoise1 = dot_noise(warp+vec3(squatWarpedXZ * 0.100, 0.0), 0.0, g1);
+				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.333, 0.0), 0.0, g2);
+				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 1.250, 0.0), 0.0, g3);
 
-				forestGrad = g1 * (0.50 * macroCanopyFade) +
-				             g2 * (0.35 * mediumCanopyFade) +
-				             g3 * (0.20 * microCanopyFade);
+				forestGrad = g1.xz * (0.50 * macroCanopyFade) +
+				             g2.xz * (0.35 * mediumCanopyFade) +
+				             g3.xz * (0.20 * microCanopyFade);
 			} else if (treeType == 3u) { // Cactus / Arid Scrub: Scattered columnar bumps
-				// Frequencies tied to physical sizes: shrub ~3m (0.33), column ~1m (1.0)
-				vec2 g2, g3;
-				fNoise2 = psrdnoise(worldXZ * 0.333, vec2(0.0), 0.0, g2);
-				float fn3 = psrdnoise(worldXZ * 1.000, vec2(0.0), 0.0, g3);
+				vec3 g2, g3;
+				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.333, 0.0), 0.0, g2);
+				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 1.000, 0.0), 0.0, g3);
 
-				forestGrad = g2 * (0.60 * mediumCanopyFade) +
-				             g3 * (0.40 * microCanopyFade);
+				forestGrad = g2.xz * (0.60 * mediumCanopyFade) +
+				             g3.xz * (0.40 * microCanopyFade);
 			} else { // Deciduous: Rounded canopy clusters
-				// Frequencies tied to physical sizes: crown ~8m (0.125), cluster ~2.5m (0.40), leaf tuft ~0.6m (1.66)
-				vec2 g1, g2, g3;
-				fNoise1 = psrdnoise(worldXZ * 0.125, vec2(0.0), 0.0, g1);
-				fNoise2 = psrdnoise(worldXZ * 0.400, vec2(0.0), 0.0, g2);
-				float fn3 = psrdnoise(worldXZ * 1.666, vec2(0.0), 0.0, g3);
+				vec3 g1, g2, g3;
+				fNoise1 = dot_noise(warp+vec3(squatWarpedXZ * 0.125, 0.0), 0.0, g1);
+				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.400, 0.0), 0.0, g2);
+				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 1.666, 0.0), 0.0, g3);
 
-				forestGrad = g1 * (0.45 * macroCanopyFade) +
-				             g2 * (0.35 * mediumCanopyFade) +
-				             g3 * (0.20 * microCanopyFade);
+				forestGrad = g1.xz * (0.45 * macroCanopyFade) +
+				             g2.xz * (0.35 * mediumCanopyFade) +
+				             g3.xz * (0.20 * microCanopyFade);
 			}
 
 			perturbedGradSum += forestGrad * proxyAmount;
 
 			// Gap crevice shadowing between adjacent tree crowns
+			// float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
 			float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
+			crownCrevice *= smoothstep(0.0, 0.05, mCell.edgeDist);
 			vec3 canopyColor = mix(leafColor * 0.55, leafColor * 1.15, crownCrevice);
+			canopyColor *= mix(1.0, 10.0, pow(mCell.edgeDist, 2.0));
 
 			// Blend canopy color and increase surface roughness in dense forest areas
 			finalAlbedo = mix(finalAlbedo, canopyColor, proxyAmount * 0.70);
@@ -192,87 +207,87 @@ void main() {
 	}
 
 	// -------------------------------------------------------------------------
-	// 2. Macro Tier (0m - 1000m): Broad geological shape & cliff normal structure
+	// 2. Macro Tier: Broad geological shape & cliff normal structure
 	// -------------------------------------------------------------------------
-	if (macroFade > 0.001) {
-		vec2 mGrad1, mGrad2;
-		float mNoise1 = psrdnoise(worldXZ * 0.25, vec2(0.0), 0.0, mGrad1);
-		float mNoise2 = psrdnoise(worldXZ * 0.8,  vec2(0.0), 0.0, mGrad2);
-		float macroNoise = mNoise1 * 0.65 + mNoise2 * 0.35;
-		vec2 macroGrad = mGrad1 * 0.65 + mGrad2 * 0.35;
+	if (macroColorFade > 0.001 || macroNormalFade > 0.001) {
+		vec3 macroGrad3D;
+		float macroNoise = dot_noise(vec3(worldXZ * 0.35, 0.0), 0.0, macroGrad3D);
+		vec2 macroGrad = macroGrad3D.xz;
 
-		float macroWeight = macroFade * 0.35;
+		float macroColorWeight  = macroColorFade * 0.35;
+		float macroNormalWeight = macroNormalFade * 0.35;
+
 		if (rockW > 0.001) {
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (0.8 + 0.35 * smoothstep(-0.5, 0.5, macroNoise)), rockW * macroWeight);
-			perturbedGradSum += macroGrad * 0.35 * rockW * macroWeight;
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (0.8 + 0.35 * smoothstep(-0.5, 0.5, macroNoise)), rockW * macroColorWeight);
+			perturbedGradSum += macroGrad * 0.35 * rockW * macroNormalWeight;
 		}
 		if (grassW > 0.001) {
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (0.9 + 0.2 * macroNoise), grassW * macroWeight);
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (0.9 + 0.2 * macroNoise), grassW * macroColorWeight);
 		}
 	}
 
 	// -------------------------------------------------------------------------
-	// 3. Medium Tier (0m - 400m): Rock strata, sand ripples & grass ground normals
+	// 3. Medium Tier: Rock strata, sand ripples & grass ground normals
 	// -------------------------------------------------------------------------
-	if (mediumFade > 0.001) {
-		float mediumWeight = mediumFade * 0.55;
+	if (mediumColorFade > 0.001 || mediumNormalFade > 0.001) {
+		vec3 mediumGrad3D;
+		mat3 microWarpGrad;
+		vec3 microNoiseWarp = cross_noise(worldPos, 0.0, microWarpGrad);
+		vec3 warp = 2*(microWarpGrad*microNoiseWarp);
+
+		float mediumNoise = dot_noise(warp+vec3(worldXZ * 3.2, 0.0), 0.0, mediumGrad3D);
+		vec2 mediumGrad = mediumGrad3D.xz;
+
+		float mediumColorWeight  = mediumColorFade * 0.55;
+		float mediumNormalWeight = mediumNormalFade * 0.55;
 
 		if (grassW > 0.001) {
-			vec2 gGrad1;
-			float gNoise1 = psrdnoise(worldXZ * 3.5, vec2(0.0), 0.0, gGrad1);
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.15 * gNoise1), grassW * mediumWeight);
-			perturbedGradSum += gGrad1 * 0.22 * grassW * mediumWeight;
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.15 * mediumNoise), grassW * mediumColorWeight);
+			perturbedGradSum += mediumGrad * 0.22 * grassW * mediumNormalWeight;
 		}
 
 		if (rockW > 0.001) {
-			vec2 rGrad1, rGrad2;
-			float rNoise1 = psrdnoise(worldXZ * 2.5, vec2(0.0), 0.0, rGrad1);
-			float rNoise2 = psrdnoise(worldXZ * 8.0, vec2(0.0), 0.0, rGrad2);
-			float rockNoise = rNoise1 * 0.6 + rNoise2 * 0.4;
-			vec2 rockGrad = rGrad1 * 0.6 + rGrad2 * 0.4;
-
-			perturbedGradSum += rockGrad * 0.35 * rockW * mediumWeight;
-			float crevice = smoothstep(-0.5, 0.5, rockNoise);
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (0.75 + 0.25 * crevice), rockW * mediumWeight);
+			perturbedGradSum += mediumGrad * 0.35 * rockW * mediumNormalWeight;
+			float crevice = smoothstep(-0.5, 0.5, mediumNoise);
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (0.75 + 0.25 * crevice), rockW * mediumColorWeight);
 		}
 
 		if (sandW > 0.001) {
-			vec2 sGrad1;
-			float sNoise1 = psrdnoise(worldXZ * 6.0, vec2(0.0), 0.0, sGrad1);
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.08 * sNoise1), sandW * mediumWeight);
-			perturbedGradSum += sGrad1 * 0.15 * sandW * mediumWeight;
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.08 * mediumNoise), sandW * mediumColorWeight);
+			perturbedGradSum += mediumGrad * 0.15 * sandW * mediumNormalWeight;
 		}
 	}
 
 	// -------------------------------------------------------------------------
-	// 4. Micro Tier (0m - 120m): Fine soil texture & bumpy close-up ground
+	// 4. Micro Tier: Fine soil texture & bumpy close-up ground
 	// -------------------------------------------------------------------------
-	if (microFade > 0.001) {
-		float microWeight = microFade;
+	if (microColorFade > 0.001 || microNormalFade > 0.001) {
+		vec3 microGrad3D;
+		mat3 microWarpGrad;
+		vec3 microNoiseWarp = cross_noise(worldPos, 0.0, microWarpGrad);
+		float microNoise = dot_noise(0.5*(microWarpGrad*microNoiseWarp)+vec3(worldXZ * 12.0, 0.0), 0.0, microGrad3D);
+		vec2 microGrad = microGrad3D.xz;
+
+		float microColorWeight  = microColorFade;
+		float microNormalWeight = microNormalFade;
 
 		if (grassW > 0.001) {
-			vec2 gGrad2;
-			float gNoise2 = psrdnoise(worldXZ * 11.0, vec2(0.0), 0.0, gGrad2);
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.1 * gNoise2), grassW * microWeight);
-			roughness = mix(roughness, clamp(roughness + 0.1 * gNoise2, 0.4, 0.95), grassW * microWeight);
-			perturbedGradSum += gGrad2 * 0.25 * grassW * microWeight;
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.1 * microNoise), grassW * microColorWeight);
+			roughness = mix(roughness, clamp(roughness + 0.1 * microNoise, 0.4, 0.95), grassW * microColorWeight);
+			perturbedGradSum += microGrad * 0.25 * grassW * microNormalWeight;
 		}
 
 		if (rockW > 0.001) {
-			vec2 rGrad3;
-			float rNoise3 = psrdnoise(worldXZ * 24.0, vec2(0.0), 0.0, rGrad3);
-			perturbedGradSum += rGrad3 * 0.25 * rockW * microWeight;
+			perturbedGradSum += microGrad * 0.25 * rockW * microNormalWeight;
 		}
 
 		if (sandW > 0.001) {
-			float sNoise2 = psrdnoise(worldXZ * 20.0);
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.05 * sNoise2), sandW * microWeight);
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.05 * microNoise), sandW * microColorWeight);
 		}
 
 		if (snowW > 0.001) {
-			float snowNoise = psrdnoise(worldXZ * 15.0);
-			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.05 * snowNoise), snowW * microWeight);
-			glint = mix(glint, clamp(glint + 0.3 * step(0.7, snowNoise), 0.0, 1.0), snowW * microWeight);
+			finalAlbedo = mix(finalAlbedo, finalAlbedo * (1.0 + 0.05 * microNoise), snowW * microColorWeight);
+			glint = mix(glint, clamp(glint + 0.3 * step(0.7, microNoise), 0.0, 1.0), snowW * microColorWeight);
 		}
 	}
 
@@ -310,6 +325,8 @@ void main() {
 		roughness = sqrt(clamp(roughness * roughness + toksvigVariance, 0.0, 1.0));
 	}
 
+	// finalAlbedo.r = mCell.regionID;
+	// finalAlbedo *= smoothstep(0, 0.1, mCell.edgeDist);
 	outPosition = vec4(inPosition, 0.0);
 	outNormal   = vec4(normalize(N), 1.0);
 	outAlbedo   = vec4(finalAlbedo, inAlbedo.a > 0.0 ? inAlbedo.a : 1.0);

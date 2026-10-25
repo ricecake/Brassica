@@ -179,6 +179,9 @@ void main() {
 
 	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+	// OrganicMacroCell mCell = generateOrganicMacroCell(morphedWorldXZ, 200.0, 3);
+	// OrganicPlateData mCell = getOrganicPlate(uCameraPosition.xz+relWorldPos.xz, 0.125, 3.0);
+	// relWorldPos.y += 35.0*mCell.edgeDist;
 
 	outPosition[vertexIndex] = relWorldPos;
 	outNormal[vertexIndex] = normal;

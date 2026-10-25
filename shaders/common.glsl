@@ -431,3 +431,102 @@ OrganicMacroCell generateOrganicMacroCell(vec2 gridOriginSkew, float scale, floa
 
     return cell;
 }
+
+// --- Required Helper Functions ---
+
+float cross2d(vec2 a, vec2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453123);
+}
+
+float sdLine(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+float getRadius(vec2 v_skew, vec2 v_cart, vec2 target_cart, float lobes) {
+    vec2 dir = target_cart - v_cart;
+    float theta = atan(dir.y, dir.x);
+    float offset = hash21(v_skew) * 6.2831853;
+    return 0.5 + 0.25 * sin(lobes * theta + offset);
+}
+
+vec2 getEdgePoint(vec2 vA_skew, vec2 vA, vec2 vB_skew, vec2 vB, float lobes) {
+    float rA = getRadius(vA_skew, vA, vB, lobes);
+    float rB = getRadius(vB_skew, vB, vA, lobes);
+    float t = rA / max(rA + rB, 0.0001);
+    return mix(vA, vB, t);
+}
+
+struct OrganicPlateData {
+    vec2 regionVertex; // The skewed grid coordinate identifying the plate
+    float regionID;    // A 0.0 - 1.0 hash unique to this specific plate
+    float edgeDist;    // The explicit distance to the generated straight-line boundary
+};
+
+OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
+    vec2 p = worldPos * scale;
+
+    // 1. Map Cartesian space to the specific Simplex Triangle
+    const float F2 = 0.36602540378;
+    const float G2 = 0.21132486540;
+
+    vec2 s = p + (p.x + p.y) * F2;
+    vec2 i = floor(s);
+    vec2 f = s - i;
+
+    vec2 i1 = (f.x > f.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+
+    vec2 v0_skew = i;
+    vec2 v1_skew = i + i1;
+    vec2 v2_skew = i + vec2(1.0, 1.0);
+
+    vec2 v0 = v0_skew - (v0_skew.x + v0_skew.y) * G2;
+    vec2 v1 = v1_skew - (v1_skew.x + v1_skew.y) * G2;
+    vec2 v2 = v2_skew - (v2_skew.x + v2_skew.y) * G2;
+
+    // 2. Evaluate the function exactly on the 3 edges of this triangle
+    vec2 p01 = getEdgePoint(v0_skew, v0, v1_skew, v1, lobes);
+    vec2 p12 = getEdgePoint(v1_skew, v1, v2_skew, v2, lobes);
+    vec2 p20 = getEdgePoint(v2_skew, v2, v0_skew, v0, lobes);
+
+    // 3. Define the central convergence point
+    vec2 center = (p01 + p12 + p20) / 3.0;
+
+    // 4. Identify which of the 3 sub-regions the fragment falls into
+    vec2 closest_v = v0_skew;
+
+    bool sign01_p = cross2d(p01 - center, p - center) > 0.0;
+    bool sign01_v0 = cross2d(p01 - center, v0 - center) > 0.0;
+    bool sign20_p = cross2d(p20 - center, p - center) > 0.0;
+    bool sign20_v0 = cross2d(p20 - center, v0 - center) > 0.0;
+
+    if (sign01_p == sign01_v0 && sign20_p == sign20_v0) {
+        closest_v = v0_skew;
+    } else {
+        bool sign12_p = cross2d(p12 - center, p - center) > 0.0;
+        bool sign12_v1 = cross2d(p12 - center, v1 - center) > 0.0;
+        bool sign01_v1 = cross2d(p01 - center, v1 - center) > 0.0;
+
+        if (sign12_p == sign12_v1 && sign01_p == sign01_v1) {
+            closest_v = v1_skew;
+        } else {
+            closest_v = v2_skew;
+        }
+    }
+
+    // 5. Populate and return the struct
+    OrganicPlateData data;
+    data.regionVertex = closest_v;
+    data.regionID = hash21(closest_v + 123.456);
+
+    data.edgeDist = min(sdLine(p, center, p01),
+                    min(sdLine(p, center, p12),
+                        sdLine(p, center, p20)));
+
+    return data;
+}

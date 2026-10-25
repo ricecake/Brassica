@@ -251,6 +251,34 @@ vec3 EvaluateStepLighting(
 }
 */
 
+float heightFraction(vec3 worldPos, float distFromCam) {
+	float distSq = distFromCam * distFromCam;
+	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+	float adjustedY = worldPos.y + dropOff;
+
+	return (adjustedY - 5000.0) / 15000.0;
+}
+
+// Define height gradients for different cloud types:
+// vec4(bottom_fade_start, bottom_fade_end, top_fade_start, top_fade_end)
+const vec4 stratusGrad       = vec4(0.0, 0.1, 0.2, 0.3);
+const vec4 stratocumulusGrad = vec4(0.0, 0.1, 0.5, 0.7);
+const vec4 cumulusGrad       = vec4(0.0, 0.1, 0.8, 1.0);
+
+float GetDensityHeightGradientForPoint(float heightFraction, float cloudType) {
+    float stratus = max(0.0, 1.0 - cloudType * 2.0);
+    float stratocumulus = 1.0 - abs(cloudType - 0.5) * 2.0;
+    float cumulus = max(0.0, (cloudType - 0.5) * 2.0);
+
+    vec4 cloudGradient = stratusGrad * stratus +
+                         stratocumulusGrad * stratocumulus +
+                         cumulusGrad * cumulus;
+
+    return smoothstep(cloudGradient.x, cloudGradient.y, heightFraction) -
+           smoothstep(cloudGradient.z, cloudGradient.w, heightFraction);
+}
+
+
 // Assumes footprints: C0 (20km), C1 (80km), C2 (320km)
 float sampleCloudCascades(vec3 worldPos, float distFromCam) {
 	float distSq = distFromCam * distFromCam;
@@ -339,8 +367,14 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 		float weatherMoisture = weatherSample.b;
 
 		if (weatherCoverage > 0.01) {
-			float baseDensity = sampleCloudCascades(p_cloud, distFromCam) * weatherCoverage;
+			float heightFraction = heightFraction(p_cloud, distFromCam);
+			weatherCoverage = pow(weatherCoverage, remapClamp(heightFraction, 0.7, 0.8, 1.0, mix(1.0, 0.5, weatherType)));
+
+			float baseDensity = sampleCloudCascades(p_cloud, distFromCam);
 			float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
+			float heightGradient = GetDensityHeightGradientForPoint(heightFraction, weatherType);
+
+			density = density * heightGradient * weatherCoverage;
 
 			if (density > 0.0) {
 				float extinction = max(0.0, density * (0.005 + 0.02 * weatherMoisture));
