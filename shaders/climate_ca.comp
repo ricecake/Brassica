@@ -276,7 +276,10 @@ void main() {
 	float normTemp = clamp((tempC - MIN_TEMP) / (MAX_TEMP - MIN_TEMP), 0.0, 1.0);
 	float normMoisture = clamp(next1.groundwater, 0.0, 1.0);
 	float precipType = (normTemp < 0.25) ? 1.0 : ((normTemp < 0.35) ? 0.5 : 0.0);
-	WhittakerBiome wb = evaluateWhittakerBiome(normTemp, normMoisture, lightningPropensity, precipType);
+
+	vec4 prevBiomeData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.biomeOutStorageIdx)], pos);
+	float prevBiomeIndex = (prevBiomeData.a > 0.0 || prevBiomeData.r > 0.0) ? round(prevBiomeData.r * 9.0) : -1.0;
+	WhittakerBiome wb = evaluateWhittakerBiomeWithHysteresis(normTemp, normMoisture, lightningPropensity, precipType, prevBiomeIndex);
 
 	// Biome map format stored in image:
 	// r = Normalized Biome Index (0..1), g = Roughness, b = Snow Cover, a = Moisture
