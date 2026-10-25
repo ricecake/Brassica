@@ -90,11 +90,13 @@ void main() {
 	float thunderstormSeverity = clamp(moistureContent * tempGrad * 0.3 + abs(curl) * 0.2 + shear * 0.2 + convergenceBoost, 0.0, 1.0);
 	float lightningPropensity = clamp(thunderstormSeverity * cloudCoverage, 0.0, 1.0);
 
+	ivec2 outCoord = ivec2(pixel);
+	vec4 prevBiomeData = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.biomeOutStorageIdx)], outCoord);
+	float prevBiomeIndex = (prevBiomeData.a > 0.0 || prevBiomeData.r > 0.0) ? round(prevBiomeData.r * 9.0) : -1.0;
+
 	// Whittaker Biome derivation
 	float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
-	WhittakerBiome wb = evaluateWhittakerBiome(temp, moistureContent, thunderstormSeverity, precipType);
-
-	ivec2 outCoord = ivec2(pixel);
+	WhittakerBiome wb = evaluateWhittakerBiomeWithHysteresis(temp, moistureContent, thunderstormSeverity, precipType, prevBiomeIndex);
 
 	// Store Weather Map output: r = Coverage, g = Weather Type, b = Moisture Content, a = Lightning Propensity
 	imageStore(
