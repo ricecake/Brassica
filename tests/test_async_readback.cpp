@@ -53,23 +53,53 @@ TEST_CASE("TerrainManager Bilinear Height Interpolation") {
 	CHECK(mgr.GetInterpolatedGroundHeight(glm::vec2(10.0f, 10.0f), kFallback) == kFallback);
 	CHECK(mgr.GetCachedGroundHeight(kFallback) == kFallback);
 
-	// Verify grid origin math and texel alignment
-	constexpr float texelSize = 0.5f;
-	constexpr int   dim = 1024;
-	constexpr int   kReadbackWidth = 128;
+	// Initialize manager
+	mgr.Initialize();
 
-	glm::vec2 camPos2D(500.0f, 300.0f);
-	glm::vec2 camGrid = glm::floor(camPos2D / texelSize);
+	constexpr float texelSize = constants::Class::Terrain::BaseTexelSize; // 0.5f
+	constexpr float dim = static_cast<float>(constants::Class::Terrain::MapDim); // 1088.0f
 
-	int camU = static_cast<int>(camGrid.x) % dim;
-	if (camU < 0) camU += dim;
+	// Test PlanReadback origin calculation for positive world position (unclamped vs clamped)
+	glm::vec2 camPos2D(500.0f, 500.0f);
+	mgr.PlanReadback(camPos2D);
 
-	int minU = std::clamp(camU - kReadbackWidth / 2, 0, dim - kReadbackWidth);
-	int g_x0 = static_cast<int>(camGrid.x) - (camU - minU);
+	CHECK(mgr.HasPendingReadback());
+	const auto& pending = mgr.GetPendingReadback();
 
-	float originWorldX = (static_cast<float>(g_x0) + 0.5f) * texelSize;
-	float gx = (camPos2D.x - originWorldX) / texelSize;
+	float gx = (camPos2D.x - pending.originWorld.x) / texelSize;
+	float gz = (camPos2D.y - pending.originWorld.y) / texelSize;
 
-	// Camera at 500.0m is at fractional offset 103.5 in the 128-wide readback grid (clamped at upper boundary minU = 896)
-	CHECK(gx == doctest::Approx(103.5f));
+	// Camera at 500.0m, 500.0m is centered precisely at offset 63.5 in the 128x128 readback grid
+	CHECK(gx == doctest::Approx(63.5f));
+	CHECK(gz == doctest::Approx(63.5f));
+
+	// Test PlanReadback origin calculation for clamped boundary case (centerV < 64)
+	glm::vec2 camPosClamped(500.0f, 300.0f);
+	TerrainManager mgrClamp;
+	mgrClamp.Initialize();
+	mgrClamp.PlanReadback(camPosClamped);
+
+	CHECK(mgrClamp.HasPendingReadback());
+	const auto& pendingClamp = mgrClamp.GetPendingReadback();
+
+	float gxClamp = (camPosClamped.x - pendingClamp.originWorld.x) / texelSize;
+	float gzClamp = (camPosClamped.y - pendingClamp.originWorld.y) / texelSize;
+
+	CHECK(gxClamp == doctest::Approx(63.5f));
+	CHECK(gzClamp == doctest::Approx(55.5f)); // centerV = 56, minV clamped to 0
+
+	// Test PlanReadback origin calculation for negative world position
+	glm::vec2 camPosNegative(-500.0f, -500.0f);
+	TerrainManager mgrNeg;
+	mgrNeg.Initialize();
+	mgrNeg.PlanReadback(camPosNegative);
+
+	CHECK(mgrNeg.HasPendingReadback());
+	const auto& pendingNeg = mgrNeg.GetPendingReadback();
+
+	float gxNeg = (camPosNegative.x - pendingNeg.originWorld.x) / texelSize;
+	float gzNeg = (camPosNegative.y - pendingNeg.originWorld.y) / texelSize;
+
+	CHECK(gxNeg == doctest::Approx(63.5f));
+	CHECK(gzNeg == doctest::Approx(63.5f));
 }
