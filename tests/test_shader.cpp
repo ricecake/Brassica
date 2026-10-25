@@ -237,6 +237,95 @@ TEST_CASE("External Lygia Shader Include Resolution") {
 	std::filesystem::remove_all(testDir);
 }
 
+TEST_CASE("Terrain Area Bounds and Variance Shader Function Compiles and Evaluates") {
+	brassica::Shader::ClearConstants();
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
+	std::string computeSource = R"(#version 460
+#include "terrain/generation.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) buffer OutputBuffer {
+	float minH;
+	float maxH;
+	float variance;
+	float geomError;
+} outBuf;
+
+void main() {
+	TerrainConfig config = TerrainConfig(0.00001, -500.0, 2000.0, 0.14, 0.5);
+	vec3 p0 = vec3(-100.0, 0.0, -100.0);
+	vec3 p1 = vec3(100.0, 0.0, -100.0);
+	vec3 p2 = vec3(0.0, 0.0, 100.0);
+
+	float minH = 0.0;
+	float maxH = 0.0;
+	float variance = 0.0;
+
+	float err = evaluate_terrain_triangle_bounds(
+		p0, p1, p2, 0.1, 0.75, config,
+		minH, maxH, variance
+	);
+
+	float minH2D = 0.0;
+	float maxH2D = 0.0;
+	float var2D = 0.0;
+	float err2D = evaluate_terrain_triangle_bounds(
+		p0.xz, p1.xz, p2.xz, 0.1, 0.75, config,
+		minH2D, maxH2D, var2D
+	);
+
+	float minHAlias = 0.0;
+	float maxHAlias = 0.0;
+	float varAlias = 0.0;
+	float errAlias = evaluate_terrain_area_bounds(
+		p0, p1, p2, 0.1, 0.75, config,
+		minHAlias, maxHAlias, varAlias
+	);
+
+	outBuf.minH = minH;
+	outBuf.maxH = maxH;
+	outBuf.variance = variance + var2D * 0.00001 + varAlias * 0.00001;
+	outBuf.geomError = err + (err2D - err) * 0.00001 + (errAlias - err) * 0.00001;
+}
+)";
+
+	brassica::Shader shader;
+	std::filesystem::path testShaderPath = std::filesystem::current_path() / "test_terrain_bounds.comp";
+	{
+		std::ofstream out(testShaderPath);
+		out << computeSource;
+	}
+
+	bool loaded = shader.LoadFromFile(testShaderPath.string());
+	CHECK(loaded);
+	if (loaded) {
+		shaderc::Compiler       compiler;
+		shaderc::CompileOptions options;
+		options.SetOptimizationLevel(shaderc_optimization_level_performance);
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+
+		auto res = compiler.CompileGlslToSpv(
+			shader.GetSource(),
+			shaderc_glsl_compute_shader,
+			"test_terrain_bounds.comp",
+			options
+		);
+		if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
+			MESSAGE("test_terrain_bounds.comp error: ", res.GetErrorMessage());
+		}
+		CHECK(res.GetCompilationStatus() == shaderc_compilation_status_success);
+	}
+
+	std::filesystem::remove(testShaderPath);
+	brassica::Shader::ClearConstants();
+}
+
 TEST_CASE("Missing Shader Include Throws Exception and Logs Search Paths") {
 	std::filesystem::path testDir = std::filesystem::current_path() / "test_missing_include";
 	std::filesystem::create_directories(testDir);
