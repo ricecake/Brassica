@@ -124,12 +124,12 @@ vec2 sampleTerrainMinMaxMip(
 ) {
 	float baseTexelSize = (uCameraPosition.w > 0.0) ? uCameraPosition.w : 0.5;
 	float ts = baseTexelSize * getLODScale(float(level));
+	float dim = float((textureDim > 0u) ? textureDim : 1088u);
+
+	vec2 worldGrid = floor(worldXZ / ts);
+	vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
 
 	if (mip == 0u) {
-		float dim = float((textureDim > 0u) ? textureDim : 1088u);
-		vec2 worldGrid = floor(worldXZ / ts);
-		vec2 texelCoord = mod(worldGrid + dim * 0.5, dim);
-
 		// Mip 0 is TerrainGenNode's raw per-texel height (min == max there -- no dilation
 		// baked in on write). Dilate here on read instead, mirroring exactly the {pix, pix+1}
 		// toroidally-wrapped 2x2 combine shaders/terrain_downsample.comp's SpdLoadSourceImage
@@ -159,12 +159,7 @@ vec2 sampleTerrainMinMaxMip(
 		return vec2(min(min(a.x, b.x), min(c.x, d.x)), max(max(a.y, b.y), max(c.y, d.y)));
 	}
 
-	// Downsampled mips (1..10) were built for the 1024x1024 sub-portion
-	float downsampleDim = 1024.0;
-	vec2 worldGrid = floor(worldXZ / ts);
-	vec2 texelCoord = mod(worldGrid + downsampleDim * 0.5, downsampleDim);
-
-	int  mipDim = max(1, int(downsampleDim) >> int(mip));
+	int  mipDim = max(1, int(dim) >> int(mip));
 	ivec2 mipTexel = clamp(ivec2(texelCoord) >> int(mip), ivec2(0), ivec2(mipDim - 1));
 
 	return texelFetch(

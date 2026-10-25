@@ -184,10 +184,12 @@ void main() {
 				uint ly = i / gridDim;
 
 				uint writeIdx = baseIdx + i;
-				payload.relMeshletMinXZ[writeIdx] = relMinB.xz + vec2(lx, ly) * subSize;
-				payload.renderLOD[writeIdx] = targetLOD;
-				payload.morphLOD[writeIdx] = lodLevel;
-				payload.childXY[writeIdx] = (ly << 16) | lx; // Track local grid position
+				if (writeIdx < 512u) {
+					payload.relMeshletMinXZ[writeIdx] = relMinB.xz + vec2(lx, ly) * subSize;
+					payload.renderLOD[writeIdx] = targetLOD;
+					payload.morphLOD[writeIdx] = lodLevel;
+					payload.childXY[writeIdx] = (ly << 16) | lx; // Track local grid position
+				}
 			}
 		}
 	}
@@ -195,6 +197,6 @@ void main() {
 	barrier();
 
 	if (threadID == 0) {
-		EmitMeshTasksEXT(meshletCount, 1, 1);
+		EmitMeshTasksEXT(min(meshletCount, 512u), 1, 1);
 	}
 }

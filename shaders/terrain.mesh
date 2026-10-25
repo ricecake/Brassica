@@ -337,7 +337,7 @@ void main() {
 
 			vec2 dist = abs(quadCenterRel - prevRelSnap);
 
-			if (max(dist.x, dist.y) < prevExtent - (meshletSize * 0.01)) {
+			if (max(dist.x, dist.y) < prevExtent - (parentMeshletSize * 0.01)) {
 				cullQuad = true;
 			}
 		}
