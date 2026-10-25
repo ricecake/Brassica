@@ -60,8 +60,8 @@ vec2 fetchMip0MinMax(ivec2 pix, uint slice) {
 }
 
 vec4 SpdLoadSourceImage(ivec2 pix, uint slice) {
-	uint dim = (cb.textureDim > 0u) ? cb.textureDim : 1024u;
-	ivec2 pixNext = ivec2((uvec2(pix) + 1u) & (dim - 1u));
+	uint dim = (cb.textureDim > 0u) ? cb.textureDim : 1088u;
+	ivec2 pixNext = ivec2((uvec2(pix) + 1u) % dim);
 
 	vec2 a = fetchMip0MinMax(ivec2(pix.x, pix.y), slice);
 	vec2 b = fetchMip0MinMax(ivec2(pixNext.x, pix.y), slice);
@@ -161,8 +161,8 @@ bool tileAxisDirty(uint tileOrigin, uint start, uint count, uint dim) {
 }
 
 void main() {
-	uint dim = (cb.textureDim > 0u) ? cb.textureDim : 1024u;
-	uint tilesPerAxis = max(1u, dim / 64u);
+	uint dim = (cb.textureDim > 0u) ? cb.textureDim : 1088u;
+	uint tilesPerAxis = max(1u, (dim + 63u) / 64u);
 	uint slice = gl_WorkGroupID.z;
 
 	TerrainClipmapUpdate update = terrainClipmapUpdateFor(slice, dim, cb.isFullRebuild != 0u);
