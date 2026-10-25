@@ -96,7 +96,7 @@ namespace brassica {
 	void TerrainManager::PlanReadback(glm::vec2 camPos2D) {
 		hasPendingReadback = false;
 
-		if (readbackInFlight || !readbackStagingBuffer) {
+		if (readbackInFlight) {
 			return;
 		}
 		if (hasReadbackData) {
@@ -108,26 +108,26 @@ namespace brassica {
 
 		constexpr int kReadbackWidth = 128;
 		constexpr int kReadbackHeight = 128;
-		int           dim = static_cast<int>(constants::Class::Terrain::MapDim); // 1024
+		int           dim = static_cast<int>(constants::Class::Terrain::MapDim);
 		float         texelSize = baseTexelSize > 0.0001f ? baseTexelSize : 0.5f;
-		glm::vec2     camGrid = glm::floor(camPos2D / texelSize);
 
-		int camU = static_cast<int>(camGrid.x) % dim;
-		int camV = static_cast<int>(camGrid.y) % dim;
-		if (camU < 0)
-			camU += dim;
-		if (camV < 0)
-			camV += dim;
+		// Calculate continuous clipmap texture coordinates for camPos2D matching sampleToroidalUV in GLSL:
+		// texelCoord = mod(worldXZ / texelSize + dim * 0.5, dim)
+		glm::vec2 centerTexelCoord = glm::mod(camPos2D / texelSize + glm::vec2(static_cast<float>(dim) * 0.5f), glm::vec2(static_cast<float>(dim)));
+		int centerU = static_cast<int>(glm::floor(centerTexelCoord.x));
+		int centerV = static_cast<int>(glm::floor(centerTexelCoord.y));
 
-		int minU = std::clamp(camU - kReadbackWidth / 2, 0, dim - kReadbackWidth);
-		int minV = std::clamp(camV - kReadbackHeight / 2, 0, dim - kReadbackHeight);
+		int minU = std::clamp(centerU - kReadbackWidth / 2, 0, dim - kReadbackWidth);
+		int minV = std::clamp(centerV - kReadbackHeight / 2, 0, dim - kReadbackHeight);
 
-		int g_x0 = static_cast<int>(camGrid.x) - (camU - minU);
-		int g_y0 = static_cast<int>(camGrid.y) - (camV - minV);
+		// Calculate world space position of element (0, 0) in the 128x128 readback region (center of texel (minU, minV)):
+		// baseGrid = (K - 0.5) * dim, where K = floor((camPos2D / texelSize + dim * 0.5) / dim)
+		glm::vec2 K = glm::floor((camPos2D / texelSize + glm::vec2(static_cast<float>(dim) * 0.5f)) / static_cast<float>(dim));
+		glm::vec2 baseGrid = (K - glm::vec2(0.5f)) * static_cast<float>(dim);
 
 		glm::vec2 originWorld(
-			(static_cast<float>(g_x0) + 0.5f) * texelSize,
-			(static_cast<float>(g_y0) + 0.5f) * texelSize
+			(baseGrid.x + static_cast<float>(minU) + 0.5f) * texelSize,
+			(baseGrid.y + static_cast<float>(minV) + 0.5f) * texelSize
 		);
 
 		size_t requiredBytes = static_cast<size_t>(kReadbackWidth) * kReadbackHeight * sizeof(glm::vec4);
