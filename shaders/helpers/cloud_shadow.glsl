@@ -23,29 +23,42 @@ vec4 sampleCloudShadow(uint cloudShadowIndex, uint clipmapIndex, vec3 p, vec3 su
 	vec2 shadowUV = (projXZ - centerXZ) / shadowMapExtent + 0.5;
 	shadowUV = clamp(shadowUV, 0.0005, 0.9995);
 
-	float y = p.y;
-	vec4 s0, s1;
-	float mixVal = 0.0;
-	if (y >= 20000.0) {
-		return SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 0.0));
-	} else if (y >= 12500.0) {
-		s0 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 0.0));
-		s1 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 1.0));
-		mixVal = (20000.0 - y) / 7500.0;
-	} else if (y >= 5000.0) {
-		s0 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 1.0));
-		s1 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 2.0));
-		mixVal = (12500.0 - y) / 7500.0;
-	} else if (y >= 2500.0) {
-		s0 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 2.0));
-		s1 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 3.0));
-		mixVal = (5000.0 - y) / 2500.0;
-	} else {
-		s0 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 3.0));
-		s1 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 4.0));
-		mixVal = (2500.0 - clamp(y, groundY, 2500.0)) / max(1.0, 2500.0 - groundY);
+	vec4 s0_top = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 0.0));
+	float cloudStartHeight = s0_top.g;
+	float cloudEndHeight = s0_top.b;
+
+	if (p.y >= cloudStartHeight) {
+		return vec4(0.0, 0.0, 0.0, 1.0);
 	}
-	return mix(s0, s1, clamp(mixVal, 0.0, 1.0));
+
+	if (p.y <= cloudEndHeight) {
+		return SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 4.0));
+	}
+
+	float hFraction = clamp((cloudStartHeight - p.y) / max(1.0, cloudStartHeight - cloudEndHeight), 0.0, 1.0);
+
+	vec4 sa, sb;
+	float localT = 0.0;
+
+	if (hFraction <= 0.25) {
+		sa = s0_top;
+		sb = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 1.0));
+		localT = hFraction / 0.25;
+	} else if (hFraction <= 0.50) {
+		sa = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 1.0));
+		sb = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 2.0));
+		localT = (hFraction - 0.25) / 0.25;
+	} else if (hFraction <= 0.75) {
+		sa = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 2.0));
+		sb = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 3.0));
+		localT = (hFraction - 0.50) / 0.25;
+	} else {
+		sa = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 3.0));
+		sb = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 4.0));
+		localT = (hFraction - 0.75) / 0.25;
+	}
+
+	return mix(sa, sb, clamp(localT, 0.0, 1.0));
 }
 
 vec4 sampleCloudShadow(uint cloudShadowIndex, vec3 p, vec3 sunDir, vec3 cameraPos, float shadowMapExtent) {
