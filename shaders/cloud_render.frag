@@ -23,11 +23,15 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	uint  skyViewIndex;
 	uint  weatherBiomeIndex;
 	uint  cloudShadowIndex;
+	uint  clipmapIndex;
 	float cirrusOpacity;
+	uint  _pad0;
+	uint  _pad1;
+	uint  _pad2;
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
-	return sampleCloudShadow(push.cloudShadowIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
+	return sampleCloudShadow(push.cloudShadowIndex, push.clipmapIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
 }
 
 vec3 getTransmittance(float r, float mu) {

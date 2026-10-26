@@ -185,7 +185,7 @@ void main() {
 			}
 
 			if (params.cloudShadowIndex > 0u && lightDir.y > 0.001) {
-				vec4 cloudShadowData = sampleCloudShadow(params.cloudShadowIndex, pos, lightDir, uCameraPosition.xyz, 320000.0);
+				vec4 cloudShadowData = sampleCloudShadow(params.cloudShadowIndex, params.clipmapIndex, pos, lightDir, uCameraPosition.xyz, 320000.0);
 				shadowMask *= cloudShadowData.a;
 			}
 

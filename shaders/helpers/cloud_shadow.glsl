@@ -2,8 +2,9 @@
 #define HELPERS_CLOUD_SHADOW_GLSL
 
 #include "bindless.glsl"
+#include "terrain.glsl"
 
-vec4 sampleCloudShadow(uint cloudShadowIndex, vec3 p, vec3 sunDir, vec3 cameraPos, float shadowMapExtent) {
+vec4 sampleCloudShadow(uint cloudShadowIndex, uint clipmapIndex, vec3 p, vec3 sunDir, vec3 cameraPos, float shadowMapExtent) {
 	if (cloudShadowIndex == 0u || cloudShadowIndex == 0xFFFFFFFFu) return vec4(0.0, 0.0, 0.0, 1.0);
 	float sunLen = length(sunDir);
 	if (sunLen < 0.001) return vec4(0.0, 0.0, 0.0, 1.0);
@@ -11,7 +12,12 @@ vec4 sampleCloudShadow(uint cloudShadowIndex, vec3 p, vec3 sunDir, vec3 cameraPo
 	if (sDir.y <= 0.001) return vec4(0.0, 0.0, 100.0, 0.0);
 
 	float raySunY = max(sDir.y, 0.05);
-	vec2 projXZ = p.xz - (max(p.y, 0.0) / raySunY) * sDir.xz;
+
+	float dropOff = terrainDropOff(p.xz);
+	float terrainH = (clipmapIndex > 0u && clipmapIndex != 0xFFFFFFFFu) ? sampleTerrainClipmap(clipmapIndex, p.xz, 0u, 1088u).r : 0.0;
+	float groundY = terrainH - dropOff;
+
+	vec2 projXZ = p.xz - (max(0.0, p.y - groundY) / raySunY) * sDir.xz;
 	vec2 centerXZ = cameraPos.xz - sDir.xz * clamp(10000.0 / raySunY, 0.0, 100000.0);
 
 	vec2 shadowUV = (projXZ - centerXZ) / shadowMapExtent + 0.5;
@@ -37,9 +43,13 @@ vec4 sampleCloudShadow(uint cloudShadowIndex, vec3 p, vec3 sunDir, vec3 cameraPo
 	} else {
 		s0 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 3.0));
 		s1 = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 4.0));
-		mixVal = (2500.0 - clamp(y, 0.0, 2500.0)) / 2500.0;
+		mixVal = (2500.0 - clamp(y, groundY, 2500.0)) / max(1.0, 2500.0 - groundY);
 	}
 	return mix(s0, s1, clamp(mixVal, 0.0, 1.0));
+}
+
+vec4 sampleCloudShadow(uint cloudShadowIndex, vec3 p, vec3 sunDir, vec3 cameraPos, float shadowMapExtent) {
+	return sampleCloudShadow(cloudShadowIndex, 0u, p, sunDir, cameraPos, shadowMapExtent);
 }
 
 #endif // HELPERS_CLOUD_SHADOW_GLSL

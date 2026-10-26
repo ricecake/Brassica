@@ -37,7 +37,9 @@ namespace brassica {
 		std::uint32_t skyViewIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t cloudShadowIndex{0};
+		std::uint32_t clipmapIndex{0};
 		float         cirrusOpacity{0.0125f};
+		std::uint32_t _pad[3]{0};
 	};
 
 	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
@@ -100,6 +102,7 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<TerrainClipmapTexture>();
 			r.Modify<HdrColor>();
 			r.After<CirrusNode>();
 		}
@@ -115,6 +118,7 @@ namespace brassica {
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
+			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};
