@@ -4,6 +4,7 @@
 #include "bindless.glsl"
 #include "atmosphere/common.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -13,6 +14,8 @@ layout(push_constant) uniform CloudShadowGenPushConstants {
 	vec4  cameraPos;             // xyz = camera position, w = shadowMapExtent (320000.0)
 	vec4  fogParams;             // x = fog density, y = fog height falloff, z = fog base height
 	uint  weatherBiomeIndex;     // bindless index for weather map
+	uint  clipmapIndex;          // bindless index for TerrainClipmapTexture
+	uint  minMaxIndex;           // bindless index for TerrainMinMaxTexture
 	uint  shadowMapStorageIdx;   // bindless index for storage image array
 } push;
 
@@ -85,86 +88,133 @@ void main() {
 
 	float sunLen = length(push.sunDir.xyz);
 
-	// Layer 0: Top of cloud layer (20,000m) - unoccluded baseline
-	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 0), vec4(0.0, 0.0, 0.0, 1.0));
+	vec4 emptyData = vec4(20000.0, 0.0, 0.0, 1.0);
+	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 0), emptyData);
 
-	if (sunLen < 0.001) {
+	if (sunLen < 0.001 || push.sunDir.y <= 0.001) {
 		vec4 nightData = vec4(0.0, 0.0, 100.0, 0.0);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 1), nightData);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 2), nightData);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 3), nightData);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 4), nightData);
+		for (int l = 1; l <= 4; ++l) {
+			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, l), nightData);
+		}
 		return;
 	}
 
 	vec3 sunDir = push.sunDir.xyz / sunLen;
-
-	if (sunDir.y <= 0.001) {
-		vec4 nightData = vec4(0.0, 0.0, 100.0, 0.0);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 1), nightData);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 2), nightData);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 3), nightData);
-		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 4), nightData);
-		return;
-	}
-
 	float raySunY = max(sunDir.y, 0.05);
+
 	vec2 centerXZ = push.cameraPos.xz - sunDir.xz * clamp(10000.0 / raySunY, 0.0, 100000.0);
 	vec2 worldXZ = centerXZ + (gridUV - 0.5) * shadowExtent;
 
-	vec3 p_ground = vec3(worldXZ.x, 0.0, worldXZ.y);
+	float dropOff = terrainDropOff(worldXZ);
+	float terrainH = (push.clipmapIndex > 0u && push.clipmapIndex != 0xFFFFFFFFu) ? sampleTerrainClipmap(push.clipmapIndex, worldXZ, 0u, 1088u).r : 0.0;
+	float groundY = terrainH - dropOff;
+
+	vec3 p_ground = vec3(worldXZ.x, groundY, worldXZ.y);
 	float topY = 20000.0;
-	vec3 p_top = p_ground + (topY / raySunY) * sunDir;
-	float totalDist = topY / raySunY;
+	float rayHeightSpan = max(0.0, topY - groundY);
+	vec3 p_top = p_ground + (rayHeightSpan / raySunY) * sunDir;
+	float maxRayDist = rayHeightSpan / raySunY;
+
+	float distToTerrain = maxRayDist;
+	if (push.minMaxIndex > 0u && push.minMaxIndex != 0xFFFFFFFFu) {
+		TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(push.minMaxIndex, 1088u, 11u, 0.0);
+		traceTerrainOcclusion(occCtx, p_top, -sunDir, maxRayDist, distToTerrain);
+	}
+
+	vec3 p_terrain = p_top + distToTerrain * (-sunDir);
+	float terrainIntersectionY = p_terrain.y;
 
 	const int numSteps = 64;
-	float stepSize = totalDist / float(numSteps);
+	float stepSize = distToTerrain / float(numSteps);
 
-	float maxExt = 0.0;
-	float optDepth = 0.0;
-	float distTraveled = 0.0;
-
-	bool savedL1 = false;
-	bool savedL2 = false;
-	bool savedL3 = false;
+	float cloudStartDist = -1.0;
+	float cloudStartHeight = topY;
+	const float kCloudThreshold = 0.0001;
 
 	for (int i = 0; i < numSteps; ++i) {
 		float t = (float(i) + 0.5) * stepSize;
 		vec3 p = p_top + t * (-sunDir);
-		float currentY = p.y;
+		if (p.y < terrainIntersectionY) break;
 
 		float cloudExt = sampleCloudExtinction(p, push.cameraPos.xyz);
 		float fogDiff = max(0.0, p.y - push.fogParams.z);
 		float fogExt = push.fogParams.x * exp(-push.fogParams.y * fogDiff);
 		float ext = cloudExt + fogExt;
-		maxExt = max(maxExt, ext);
-		optDepth += ext * stepSize;
-		distTraveled += stepSize;
 
+		if (ext > kCloudThreshold) {
+			cloudStartDist = t;
+			cloudStartHeight = p.y;
+			break;
+		}
+	}
+
+	if (cloudStartDist < 0.0) {
+		vec4 clearDataMeta = vec4(topY, terrainIntersectionY, 0.0, 1.0);
+		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 0), clearDataMeta);
+		vec4 clearLayer = vec4(0.0, 0.0, 0.0, 1.0);
+		for (int l = 1; l <= 4; ++l) {
+			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, l), clearLayer);
+		}
+		return;
+	}
+
+	float activeRayLen = max(1.0, distToTerrain - cloudStartDist);
+	vec3 p_cloudStart = p_top + cloudStartDist * (-sunDir);
+
+	float activeStepSize = activeRayLen / float(numSteps);
+	float maxExt = 0.0;
+	float optDepth = 0.0;
+	float distTraveled = 0.0;
+
+	float fractionTargets[5] = float[5](0.0, 0.25, 0.50, 0.75, 1.00);
+	bool savedLayer[5] = bool[5](false, false, false, false, false);
+
+	// Layer 0: Metadata layer (r = cloudStartHeight, g = cloudEndHeight, b = 0.0 optical depth, a = 1.0 transmittance)
+	vec4 layer0Data = vec4(cloudStartHeight, terrainIntersectionY, 0.0, 1.0);
+	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 0), layer0Data);
+	savedLayer[0] = true;
+
+	for (int i = 0; i < numSteps; ++i) {
+		float t = (float(i) + 0.5) * activeStepSize;
+		vec3 p = p_cloudStart + t * (-sunDir);
+		if (p.y < terrainIntersectionY) break;
+
+		float cloudExt = sampleCloudExtinction(p, push.cameraPos.xyz);
+		float fogDiff = max(0.0, p.y - push.fogParams.z);
+		float fogExt = push.fogParams.x * exp(-push.fogParams.y * fogDiff);
+		float ext = cloudExt + fogExt;
+
+		maxExt = max(maxExt, ext);
+		optDepth += ext * activeStepSize;
+		distTraveled += activeStepSize;
+
+		float currentFraction = clamp(float(i + 1) / float(numSteps), 0.0, 1.0);
 		float avgExt = optDepth / max(distTraveled, 0.001);
 		float transmittance = exp(-optDepth);
 
-		if (!savedL1 && currentY <= 12500.0) {
-			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 1), vec4(maxExt, avgExt, optDepth, transmittance));
-			savedL1 = true;
+		vec4 layerData = vec4(maxExt, avgExt, optDepth, transmittance);
+
+		if (!savedLayer[1] && currentFraction >= fractionTargets[1]) {
+			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 1), layerData);
+			savedLayer[1] = true;
 		}
-		if (!savedL2 && currentY <= 5000.0) {
-			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 2), vec4(maxExt, avgExt, optDepth, transmittance));
-			savedL2 = true;
+		if (!savedLayer[2] && currentFraction >= fractionTargets[2]) {
+			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 2), layerData);
+			savedLayer[2] = true;
 		}
-		if (!savedL3 && currentY <= 2500.0) {
-			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 3), vec4(maxExt, avgExt, optDepth, transmittance));
-			savedL3 = true;
+		if (!savedLayer[3] && currentFraction >= fractionTargets[3]) {
+			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 3), layerData);
+			savedLayer[3] = true;
 		}
 	}
 
 	float avgExt = optDepth / max(distTraveled, 0.001);
-	float transmittance = exp(-optDepth);
-	vec4 finalData = vec4(maxExt, avgExt, optDepth, transmittance);
+	float finalTransmittance = exp(-optDepth);
+	vec4 finalData = vec4(maxExt, avgExt, optDepth, finalTransmittance);
 
-	if (!savedL1) imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 1), finalData);
-	if (!savedL2) imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 2), finalData);
-	if (!savedL3) imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 3), finalData);
-	// Layer 4: Ground level / totals (0m)
-	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 4), finalData);
+	for (int l = 1; l <= 4; ++l) {
+		if (!savedLayer[l]) {
+			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, l), finalData);
+		}
+	}
 }
