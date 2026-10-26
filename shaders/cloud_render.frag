@@ -23,11 +23,15 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	uint  skyViewIndex;
 	uint  weatherBiomeIndex;
 	uint  cloudShadowIndex;
+	uint  clipmapIndex;
 	float cirrusOpacity;
+	uint  _pad0;
+	uint  _pad1;
+	uint  _pad2;
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
-	return sampleCloudShadow(push.cloudShadowIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
+	return sampleCloudShadow(push.cloudShadowIndex, push.clipmapIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
 }
 
 vec3 getTransmittance(float r, float mu) {
@@ -422,14 +426,30 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 					currentScatChaos *= 0.5;
 				}
 
+				// --- Ground Upwelling ---
+				vec3 averageTerrainAlbedo = vec3(0.18, 0.16, 0.12);
+				vec3 upwellingBase = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * averageTerrainAlbedo * (1.0 / 3.14159265);
+				float upwellingOpticalDepth = stepDensity * clamp(heightFraction, 0.0, 1.0) * 15000.0;
+				vec3 groundUpwelling = upwellingBase * exp(-upwellingOpticalDepth * 0.1);
+
+				// --- Backscatter & Top Diffuse Illumination ---
+				// When viewed from above (cosTheta < 0, looking down), direct sunlight entering the top of the cloud
+				// undergoes multiple scattering near the top surface and is diffusely backscattered out towards the camera.
+				float topLighting = smoothstep(0.1, 0.9, heightFraction);
+				float backscatterWeight = max(0.0, -cosTheta) * topLighting;
+				float isotropicPhase = 1.0 / (4.0 * 3.14159265);
+				vec3 diffuseTopBackscatter = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * isotropicPhase * (0.8 + 1.2 * backscatterWeight) * exp(-opticalDepthToLight);
+
 				const float powderScale = 300.0;
 				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * powderScale));
 
-				// Tie ambient glow loosely to sunRadiance so they scale together under HDR
-				vec3 ambientGlow = sunRadiance * vec3(0.02, 0.03, 0.04) * powder;
+				// Sky and ground ambient blend
+				vec3 skyAmbient = sunRadiance * vec3(0.04, 0.06, 0.09) * max(0.1, sunDir.y) * heightFraction;
+				vec3 groundAmbient = groundUpwelling * (1.0 - heightFraction);
+				vec3 ambientGlow = (skyAmbient + groundAmbient) * powder;
 
 				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering;
-                vec3 stepScattering = directLight + ambientGlow;
+				vec3 stepScattering = directLight + ambientGlow + diffuseTopBackscatter * powder;
 				// vec3 stepScattering = (sunRadiance * msScattering) + ambientGlow;
 
 				// FIX: Removed the `/ max(stepDensity, 0.0001)` that was blowing up the light

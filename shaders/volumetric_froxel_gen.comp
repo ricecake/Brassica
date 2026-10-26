@@ -185,7 +185,7 @@ void main() {
 			float cloudTransmittance = 1.0;
 
 			if (cloudShadowIndex > 0u && cloudShadowIndex != 0xFFFFu && push.sunDir.y > 0.001) {
-				cloudShadowData = sampleCloudShadow(cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
+				cloudShadowData = sampleCloudShadow(cloudShadowIndex, clipmapIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
 				// Emphasize cloud shadow contrast
 				cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.8);
 				shadowTerm *= cloudTransmittance;
