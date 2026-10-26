@@ -434,10 +434,6 @@ OrganicMacroCell generateOrganicMacroCell(vec2 gridOriginSkew, float scale, floa
 
 // --- Required Helper Functions ---
 
-float cross2d(vec2 a, vec2 b) {
-    return a.x * b.y - a.y * b.x;
-}
-
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453123);
 }

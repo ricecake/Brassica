@@ -16,6 +16,10 @@ mat3 diag(vec3 v) {
     );
 }
 
+float cross2d(vec2 a, vec2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
 vec3 get_curl(mat3 J) {
     // Curl = ( dFz/dy - dFy/dz,  dFx/dz - dFz/dx,  dFy/dx - dFx/dy )
     // In GLSL: J[col][row] -> J[1][2] is dFz/dy
