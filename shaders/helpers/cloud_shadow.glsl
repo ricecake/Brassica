@@ -24,8 +24,8 @@ vec4 sampleCloudShadow(uint cloudShadowIndex, uint clipmapIndex, vec3 p, vec3 su
 	shadowUV = clamp(shadowUV, 0.0005, 0.9995);
 
 	vec4 s0_top = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 0.0));
-	float cloudStartHeight = s0_top.g;
-	float cloudEndHeight = s0_top.b;
+	float cloudStartHeight = s0_top.r;
+	float cloudEndHeight = s0_top.g;
 
 	if (p.y >= cloudStartHeight) {
 		return vec4(0.0, 0.0, 0.0, 1.0);
@@ -35,13 +35,16 @@ vec4 sampleCloudShadow(uint cloudShadowIndex, uint clipmapIndex, vec3 p, vec3 su
 		return SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 4.0));
 	}
 
-	float hFraction = clamp((cloudStartHeight - p.y) / max(1.0, cloudStartHeight - cloudEndHeight), 0.0, 1.0);
+	float activeRange = max(1.0, cloudStartHeight - cloudEndHeight);
+	float hFraction = clamp((cloudStartHeight - p.y) / activeRange, 0.0, 1.0);
+
+	vec4 s_entrance = vec4(0.0, 0.0, 0.0, 1.0);
 
 	vec4 sa, sb;
 	float localT = 0.0;
 
 	if (hFraction <= 0.25) {
-		sa = s0_top;
+		sa = s_entrance;
 		sb = SAMPLE_ARRAY_CLAMP(cloudShadowIndex, vec3(shadowUV, 1.0));
 		localT = hFraction / 0.25;
 	} else if (hFraction <= 0.50) {

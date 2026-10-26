@@ -88,7 +88,7 @@ void main() {
 
 	float sunLen = length(push.sunDir.xyz);
 
-	vec4 emptyData = vec4(0.0, 20000.0, 0.0, 1.0);
+	vec4 emptyData = vec4(20000.0, 0.0, 0.0, 1.0);
 	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 0), emptyData);
 
 	if (sunLen < 0.001 || push.sunDir.y <= 0.001) {
@@ -149,9 +149,11 @@ void main() {
 	}
 
 	if (cloudStartDist < 0.0) {
-		vec4 clearData = vec4(0.0, topY, terrainIntersectionY, 1.0);
-		for (int l = 0; l <= 4; ++l) {
-			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, l), clearData);
+		vec4 clearDataMeta = vec4(topY, terrainIntersectionY, 0.0, 1.0);
+		imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 0), clearDataMeta);
+		vec4 clearLayer = vec4(0.0, 0.0, 0.0, 1.0);
+		for (int l = 1; l <= 4; ++l) {
+			imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, l), clearLayer);
 		}
 		return;
 	}
@@ -167,7 +169,8 @@ void main() {
 	float fractionTargets[5] = float[5](0.0, 0.25, 0.50, 0.75, 1.00);
 	bool savedLayer[5] = bool[5](false, false, false, false, false);
 
-	vec4 layer0Data = vec4(0.0, cloudStartHeight, terrainIntersectionY, 1.0);
+	// Layer 0: Metadata layer (r = cloudStartHeight, g = cloudEndHeight, b = 0.0 optical depth, a = 1.0 transmittance)
+	vec4 layer0Data = vec4(cloudStartHeight, terrainIntersectionY, 0.0, 1.0);
 	imageStore(uImageArraysGenericWrite[nonuniformEXT(push.shadowMapStorageIdx)], ivec3(vox, 0), layer0Data);
 	savedLayer[0] = true;
 
