@@ -1,6 +1,35 @@
 #include "helpers/constants.glsl"
 #include "helpers/math.glsl"
 
+mat3 rotate_offsets(vec3 dir) {
+    // 'dir' is your normalized custom input vector
+    float s = dir.z >= 0.0 ? 1.0 : -1.0;
+    float a = -1.0 / (s + dir.z);
+    float b = dir.x * dir.y * a;
+
+    vec3 right = vec3(1.0 + s * dir.x * dir.x * a, s * b, -s * dir.x);
+    vec3 up    = vec3(b, s + dir.y * dir.y * a, -dir.y);
+
+    // Hardware handles mat3 * vec3 extremely efficiently
+    mat3 basis = mat3(right, up, dir);
+    return basis;
+}
+
+const vec3 base_offset_1 = vec3(1.0, 1.3, 1.7);
+const vec3 base_offset_2 = vec3(1.1, 0.7, 1.5);
+float dot_noise_dir(vec3 p, float phase, vec3 dir) {
+	vec3 rotated_p1 = GOLD * p;
+	vec3 rotated_p2 = PHI * p * GOLD;
+
+    mat3 basis = rotate_offsets(dir);
+
+	// Offset the components differently so they animate out of phase
+    vec3 cos_phase = rotated_p1 + phase * length(base_offset_1)*normalize(basis * base_offset_1);
+    vec3 sin_phase = rotated_p2 + phase * length(base_offset_2)*normalize(basis * base_offset_2);
+
+	return dot(cos(cos_phase), sin(sin_phase));
+}
+
 float dot_noise(vec3 p, float phase) {
 	vec3 rotated_p1 = GOLD * p;
 	vec3 rotated_p2 = PHI * p * GOLD;
