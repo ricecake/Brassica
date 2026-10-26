@@ -327,6 +327,8 @@ void main() {
 
 	// finalAlbedo.r = mCell.regionID;
 	// finalAlbedo *= smoothstep(0, 0.1, mCell.edgeDist);
+	// finalAlbedo = vec3(0.5+0.5*(dot_noise_dir(worldPos*0.25, uTime, normalize(cross(vec3(sin(uTime*0.1),1,0), normalize(N))))*0.25), 0, 0);
+	// finalAlbedo = vec3(0.5+0.5*(dot_noise(worldPos*0.25, uTime)*0.25), 0, 0);
 	outPosition = vec4(inPosition, 0.0);
 	outNormal   = vec4(normalize(N), 1.0);
 	outAlbedo   = vec4(finalAlbedo, inAlbedo.a > 0.0 ? inAlbedo.a : 1.0);
