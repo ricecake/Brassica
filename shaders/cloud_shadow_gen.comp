@@ -4,6 +4,7 @@
 #include "bindless.glsl"
 #include "atmosphere/common.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -13,7 +14,9 @@ layout(push_constant) uniform CloudShadowGenPushConstants {
 	vec4  cameraPos;             // xyz = camera position, w = shadowMapExtent (320000.0)
 	vec4  fogParams;             // x = fog density, y = fog height falloff, z = fog base height
 	uint  weatherBiomeIndex;     // bindless index for weather map
+	uint  clipmapIndex;          // bindless index for TerrainClipmapTexture
 	uint  shadowMapStorageIdx;   // bindless index for storage image array
+	uint  _pad;
 } push;
 
 float sampleCloudCascades(vec3 worldPos, float distFromCam) {
@@ -112,10 +115,15 @@ void main() {
 	vec2 centerXZ = push.cameraPos.xz - sunDir.xz * clamp(10000.0 / raySunY, 0.0, 100000.0);
 	vec2 worldXZ = centerXZ + (gridUV - 0.5) * shadowExtent;
 
-	vec3 p_ground = vec3(worldXZ.x, 0.0, worldXZ.y);
+	float dropOff = terrainDropOff(worldXZ);
+	float terrainH = (push.clipmapIndex > 0u && push.clipmapIndex != 0xFFFFFFFFu) ? sampleTerrainClipmap(push.clipmapIndex, worldXZ, 0u, 1088u).r : 0.0;
+	float groundY = terrainH - dropOff;
+
+	vec3 p_ground = vec3(worldXZ.x, groundY, worldXZ.y);
 	float topY = 20000.0;
-	vec3 p_top = p_ground + (topY / raySunY) * sunDir;
-	float totalDist = topY / raySunY;
+	float rayHeightSpan = max(0.0, topY - groundY);
+	vec3 p_top = p_ground + (rayHeightSpan / raySunY) * sunDir;
+	float totalDist = rayHeightSpan / raySunY;
 
 	const int numSteps = 64;
 	float stepSize = totalDist / float(numSteps);
@@ -123,6 +131,8 @@ void main() {
 	float maxExt = 0.0;
 	float optDepth = 0.0;
 	float distTraveled = 0.0;
+	bool shadowRecordingStarted = false;
+	const float kCloudThreshold = 0.0001;
 
 	bool savedL1 = false;
 	bool savedL2 = false;
@@ -133,15 +143,28 @@ void main() {
 		vec3 p = p_top + t * (-sunDir);
 		float currentY = p.y;
 
+		if (currentY < groundY) {
+			break;
+		}
+
 		float cloudExt = sampleCloudExtinction(p, push.cameraPos.xyz);
 		float fogDiff = max(0.0, p.y - push.fogParams.z);
 		float fogExt = push.fogParams.x * exp(-push.fogParams.y * fogDiff);
 		float ext = cloudExt + fogExt;
-		maxExt = max(maxExt, ext);
-		optDepth += ext * stepSize;
-		distTraveled += stepSize;
 
-		float avgExt = optDepth / max(distTraveled, 0.001);
+		if (!shadowRecordingStarted) {
+			if (cloudExt > kCloudThreshold || ext > kCloudThreshold) {
+				shadowRecordingStarted = true;
+			}
+		}
+
+		if (shadowRecordingStarted) {
+			maxExt = max(maxExt, ext);
+			optDepth += ext * stepSize;
+			distTraveled += stepSize;
+		}
+
+		float avgExt = shadowRecordingStarted ? (optDepth / max(distTraveled, 0.001)) : 0.0;
 		float transmittance = exp(-optDepth);
 
 		if (!savedL1 && currentY <= 12500.0) {
@@ -158,7 +181,7 @@ void main() {
 		}
 	}
 
-	float avgExt = optDepth / max(distTraveled, 0.001);
+	float avgExt = shadowRecordingStarted ? (optDepth / max(distTraveled, 0.001)) : 0.0;
 	float transmittance = exp(-optDepth);
 	vec4 finalData = vec4(maxExt, avgExt, optDepth, transmittance);
 
