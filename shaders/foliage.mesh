@@ -1024,22 +1024,15 @@ void emitTreeItem(
 	inout uint vCount,
 	inout uint pCount
 ) {
-	if (biomeIdx == 7u) {
+	uint treeType = getWhittakerTreeType(biomeIdx, temp, moisture);
+	if (treeType == 3u) {
 		emitCactusItem(basePos, heightScale, widthScale, angle, itemSeed, terrainNormal, fade, vCount, pCount);
-	} else if (biomeIdx == 8u || biomeIdx == 9u) {
+	} else if (treeType == 2u) {
 		emitPalmTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
-	} else if (biomeIdx == 0u || biomeIdx == 1u || biomeIdx == 2u) {
+	} else if (treeType == 0u) {
 		emitPineTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
-	} else if (biomeIdx == 4u || biomeIdx == 5u || biomeIdx == 6u) {
-		emitDeciduousTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
 	} else {
-		if (moisture < 0.25) {
-			emitCactusItem(basePos, heightScale, widthScale, angle, itemSeed, terrainNormal, fade, vCount, pCount);
-		} else if (temp < 0.4) {
-			emitPineTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
-		} else {
-			emitDeciduousTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
-		}
+		emitDeciduousTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
 	}
 }
 

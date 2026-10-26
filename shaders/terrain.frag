@@ -30,7 +30,7 @@ void main() {
 	float camDist = length(inPosition);
 
 	// OrganicMacroCell mCell = generateOrganicMacroCell(worldXZ, 0.5, 3);
-	OrganicPlateData mCell = getOrganicPlate(worldXZ*(0.5+0.5*cross_noise_fbm(worldPos*0.00001, 2, sin(uTime+0.5*dot_noise(worldPos*0.01, uTime))*0.001).xz), 0.0125, 3.0);
+	OrganicPlateData mCell = getOrganicPlate(worldXZ*(0.5+0.5*cross_noise_fbm(worldPos*0.00005, 2, sin(uTime*0.001+0.5*dot_noise(worldPos*0.0005, 0.01*uTime))*0.1).xz), 0.00025, 3.0);
 
 
 	// Progressive multi-tier distance fading for normal perturbations (tapers off faster to avoid specular shimmer/aliasing):
@@ -106,30 +106,23 @@ void main() {
 		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
 		uint biomeIdx = uint(clamp(wb.biomeIndex, 0.0, 9.0));
 
-		// Determine forest density and appropriate tree species canopy profile:
-		// 0: Pine/Evergreen (Taiga/Tundra/Rainforest)
-		// 1: Deciduous (Temperate Deciduous/Woodland)
-		// 2: Palm/Tropical (Tropical Rainforest/Savanna)
-		// 3: Cactus/Arid Shrub (Subtropical Desert)
-		uint treeType = 1u;
-		float forestDensity = smoothstep(0.20, 0.70, moisture) * smoothstep(0.50, 0.88, N.y);
+		// Determine forest density and appropriate tree species canopy profile using unified tree selection:
+		// 0: Pine/Evergreen, 1: Deciduous, 2: Palm/Tropical, 3: Cactus/Arid Shrub
+		uint treeType = getWhittakerTreeType(biomeIdx, temp, moisture);
+		float forestDensity = smoothstep(0.25, 0.75, moisture) * smoothstep(0.50, 0.88, N.y);
 		vec3 leafColor = vec3(0.18, 0.48, 0.14); // Default deciduous
 
-		if (biomeIdx == 7u || moisture < 0.25) {
-			treeType = 3u; // Cactus / Arid Scrub
-			forestDensity = smoothstep(0.10, 0.35, moisture) * 0.4;
+		if (treeType == 3u) {
+			forestDensity = smoothstep(0.10, 0.35, moisture) * 0.4 * smoothstep(0.50, 0.88, N.y);
 			leafColor = vec3(0.22, 0.45, 0.24);
-		} else if (biomeIdx == 8u || biomeIdx == 9u || (temp > 0.70 && moisture > 0.60)) {
-			treeType = 2u; // Palm / Tropical Canopy
-			forestDensity = smoothstep(0.30, 0.80, moisture);
+		} else if (treeType == 2u) {
+			forestDensity = smoothstep(0.30, 0.80, moisture) * smoothstep(0.50, 0.88, N.y);
 			leafColor = vec3(0.15, 0.55, 0.20);
-		} else if (biomeIdx == 0u || biomeIdx == 1u || biomeIdx == 2u || temp < 0.38) {
-			treeType = 0u; // Pine / Evergreen
-			forestDensity = smoothstep(0.20, 0.65, moisture);
+		} else if (treeType == 0u) {
+			forestDensity = smoothstep(0.20, 0.65, moisture) * smoothstep(0.50, 0.88, N.y);
 			leafColor = vec3(0.08, 0.30, 0.12);
 		} else {
-			treeType = 1u; // Deciduous
-			forestDensity = smoothstep(0.25, 0.75, moisture);
+			forestDensity = smoothstep(0.25, 0.75, moisture) * smoothstep(0.50, 0.88, N.y);
 			leafColor = vec3(0.18, 0.48, 0.14);
 		}
 
@@ -196,9 +189,9 @@ void main() {
 			// Gap crevice shadowing between adjacent tree crowns
 			// float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
 			float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
-			crownCrevice *= smoothstep(0.0, 0.05, mCell.edgeDist);
+			crownCrevice *= pow(smoothstep(0.0, fNoise1, mCell.edgeDist), 0.3);
 			vec3 canopyColor = mix(leafColor * 0.55, leafColor * 1.15, crownCrevice);
-			canopyColor *= mix(1.0, 10.0, pow(mCell.edgeDist, 2.0));
+			canopyColor *= mix(1.0, 10.0*mCell.regionID, pow(mCell.edgeDist, 2.0));
 
 			// Blend canopy color and increase surface roughness in dense forest areas
 			finalAlbedo = mix(finalAlbedo, canopyColor, proxyAmount * 0.70);
