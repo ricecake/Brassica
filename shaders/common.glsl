@@ -466,6 +466,8 @@ struct OrganicPlateData {
     vec2 regionVertex; // The skewed grid coordinate identifying the plate
     float regionID;    // A 0.0 - 1.0 hash unique to this specific plate
     float edgeDist;    // The explicit distance to the generated straight-line boundary
+    vec2 regionCenter;
+    vec2 nearestCentroid;
 };
 
 OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
@@ -498,7 +500,8 @@ OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
     vec2 center = (p01 + p12 + p20) / 3.0;
 
     // 4. Identify which of the 3 sub-regions the fragment falls into
-    vec2 closest_v = v0_skew;
+    vec2 closest_v_skew = v0_skew;
+    vec2 closest_v = v0;
 
     bool sign01_p = cross2d(p01 - center, p - center) > 0.0;
     bool sign01_v0 = cross2d(p01 - center, v0 - center) > 0.0;
@@ -506,23 +509,28 @@ OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
     bool sign20_v0 = cross2d(p20 - center, v0 - center) > 0.0;
 
     if (sign01_p == sign01_v0 && sign20_p == sign20_v0) {
-        closest_v = v0_skew;
+        closest_v_skew = v0_skew;
+        closest_v = v0;
     } else {
         bool sign12_p = cross2d(p12 - center, p - center) > 0.0;
         bool sign12_v1 = cross2d(p12 - center, v1 - center) > 0.0;
         bool sign01_v1 = cross2d(p01 - center, v1 - center) > 0.0;
 
         if (sign12_p == sign12_v1 && sign01_p == sign01_v1) {
-            closest_v = v1_skew;
+            closest_v_skew = v1_skew;
+            closest_v = v1;
         } else {
-            closest_v = v2_skew;
+            closest_v_skew = v2_skew;
+            closest_v = v2;
         }
     }
 
     // 5. Populate and return the struct
     OrganicPlateData data;
-    data.regionVertex = closest_v;
-    data.regionID = hash21(closest_v + 123.456);
+    data.regionVertex = closest_v_skew;
+    data.regionID = hash21(closest_v_skew + 123.456);
+    data.regionCenter = closest_v;
+    data.nearestCentroid = center-(center.x+center.y)*G2;
 
     data.edgeDist = min(sdLine(p, center, p01),
                     min(sdLine(p, center, p12),
