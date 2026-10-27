@@ -79,6 +79,19 @@ TEST_CASE("Shader Constants Registration") {
 	CHECK(brassica::Shader::GetReplacements().empty());
 }
 
+TEST_CASE("Shader::RegisterDefaultConstants Registers Default Samplers") {
+	brassica::Shader::ClearConstants();
+	brassica::Shader::RegisterDefaultConstants();
+
+	auto& replacements = brassica::Shader::GetReplacements();
+	CHECK(replacements["[[BRASSICA_SAMPLER_NEAREST_CLAMP]]"] == "0");
+	CHECK(replacements["[[BRASSICA_SAMPLER_LINEAR_CLAMP]]"] == "1");
+	CHECK(replacements["[[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]]"] == "2");
+	CHECK(replacements["[[BRASSICA_SAMPLER_NEAREST_REPEAT]]"] == "3");
+
+	brassica::Shader::ClearConstants();
+}
+
 TEST_CASE("Shader Recursive Include Processing, Guards, Comments, and Interpolation") {
 	std::filesystem::path testDir = std::filesystem::current_path() / "test_includes_dir";
 	std::filesystem::create_directories(testDir);
@@ -234,6 +247,63 @@ TEST_CASE("External Lygia Shader Include Resolution") {
 	CHECK(!source.empty());
 	CHECK(source.find("#version 460") != std::string::npos);
 
+	std::filesystem::remove_all(testDir);
+}
+
+TEST_CASE("Shader::ResolveShader Resolves Variable Interpolation Instances and Compiles") {
+	std::filesystem::path testDir = std::filesystem::current_path() / "test_resolve_interpolation_dir";
+	std::filesystem::path inDir = testDir / "input";
+	std::filesystem::path outDir = testDir / "output";
+	std::filesystem::create_directories(inDir);
+	std::filesystem::create_directories(outDir);
+
+	std::filesystem::path incPath = inDir / "custom_inc.glsl";
+	{
+		std::ofstream out(incPath);
+		out << "#define MY_VALUE [[CUSTOM_VAL]]\n";
+		out << "#define SAMPLER_IDX [[BRASSICA_SAMPLER_NEAREST_CLAMP]]\n";
+	}
+
+	std::filesystem::path fragPath = inDir / "interpolation_test.frag";
+	{
+		std::ofstream out(fragPath);
+		out << "#version 460\n";
+		out << "#include \"custom_inc.glsl\"\n";
+		out << "layout(location = 0) out vec4 outColor;\n";
+		out << "void main() { outColor = vec4(float(MY_VALUE), float(SAMPLER_IDX), 0.0, 1.0); }\n";
+	}
+
+	brassica::Shader::ClearConstants();
+	brassica::Shader::RegisterConstant("CUSTOM_VAL", "100");
+
+	bool resolved = brassica::Shader::ResolveShader(fragPath.string(), outDir.string());
+	CHECK(resolved);
+
+	std::filesystem::path expectedOutFile = outDir / "resolved_interpolation_test.frag";
+	CHECK(std::filesystem::exists(expectedOutFile));
+
+	if (std::filesystem::exists(expectedOutFile)) {
+		std::ifstream in(expectedOutFile);
+		std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+		// Check that variable interpolations were replaced
+		CHECK(content.find("#define MY_VALUE 100") != std::string::npos);
+		CHECK(content.find("#define SAMPLER_IDX 0") != std::string::npos);
+		CHECK(content.find("[[CUSTOM_VAL]]") == std::string::npos);
+		CHECK(content.find("[[BRASSICA_SAMPLER_NEAREST_CLAMP]]") == std::string::npos);
+
+		// Check that the resolved source can be compiled cleanly by shaderc
+		shaderc::Compiler       compiler;
+		shaderc::CompileOptions options;
+		options.SetOptimizationLevel(shaderc_optimization_level_performance);
+		options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+		options.SetTargetSpirv(shaderc_spirv_version_1_5);
+
+		auto result = compiler.CompileGlslToSpv(content, shaderc_glsl_fragment_shader, "resolved_interpolation_test.frag", options);
+		CHECK(result.GetCompilationStatus() == shaderc_compilation_status_success);
+	}
+
+	brassica::Shader::ClearConstants();
 	std::filesystem::remove_all(testDir);
 }
 

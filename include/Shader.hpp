@@ -29,6 +29,8 @@ namespace brassica {
 
 		static void ClearConstants();
 
+		static void RegisterDefaultConstants();
+
 		static std::unordered_map<std::string, std::string>& GetReplacements();
 
 		static bool ResolveShader(const std::string& shaderPath, const std::string& outputPath);

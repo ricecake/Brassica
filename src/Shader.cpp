@@ -390,11 +390,40 @@ namespace brassica {
 		GetReplacements().clear();
 	}
 
+	void Shader::RegisterDefaultConstants() {
+		auto& replacements = GetReplacements();
+		if (replacements.find("[[BRASSICA_SAMPLER_NEAREST_CLAMP]]") == replacements.end()) {
+			RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+		}
+		if (replacements.find("[[BRASSICA_SAMPLER_LINEAR_CLAMP]]") == replacements.end()) {
+			RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+		}
+		if (replacements.find("[[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]]") == replacements.end()) {
+			RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+		}
+		if (replacements.find("[[BRASSICA_SAMPLER_NEAREST_REPEAT]]") == replacements.end()) {
+			RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+		}
+	}
+
 	bool Shader::ResolveShader(const std::string& shaderPath, const std::string& outputPath) {
+		RegisterDefaultConstants();
+
 		Shader shader;
 		if (!shader.LoadFromFile(shaderPath)) {
 			spdlog::error("Failed to load shader for resolution: {}", shaderPath);
 			return false;
+		}
+
+		const std::string& resolvedSource = shader.GetSource();
+
+		size_t unresolvedPos = resolvedSource.find("[[");
+		if (unresolvedPos != std::string::npos) {
+			size_t endPos = resolvedSource.find("]]", unresolvedPos);
+			std::string unresolvedTag = (endPos != std::string::npos)
+				? resolvedSource.substr(unresolvedPos, endPos - unresolvedPos + 2)
+				: "[[...";
+			spdlog::warn("Shader '{}' contains unresolved variable interpolation tag: {}", shaderPath, unresolvedTag);
 		}
 
 		namespace fs = std::filesystem;
@@ -420,7 +449,7 @@ namespace brassica {
 				spdlog::error("Failed to open output file for writing: {}", targetFilePath.string());
 				return false;
 			}
-			outFile << shader.GetSource();
+			outFile << resolvedSource;
 			outFile.close();
 			spdlog::info("Successfully resolved shader '{}' -> '{}'", shaderPath, targetFilePath.string());
 			return true;
