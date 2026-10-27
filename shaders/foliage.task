@@ -13,7 +13,7 @@ layout(push_constant) uniform FoliagePushConstants {
 	uvec4 gridParams; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
 	uint  clipmapIndex;
 	uint  minMaxIndex;
-	uint  biomeIndex; // reserved -- see FoliageNode.hpp
+	uint  pageTableIndex;
 	uint  weatherBiomeIndex;
 	float windTime;
 	float lodBaseRange;
@@ -33,18 +33,18 @@ layout(push_constant) uniform FoliagePushConstants {
 	uint  biomeTableIndex;
 	float baseScale;
 	float waterLevel;
-	uint  terrainNumLevels;
-	uint  foliageFlags; // bit 0: terrain occlusion culling
+	uint  foliageFlags;
 	uint  hizIndex;
 	uint  passIndex;
 	float clumpDensity;
 	float bladeDensity;
+	uint  meshletBufferIndex;
 }
 params;
 
-// Each surviving tile now hands its clumps a continuous density/fade curve (foliage.mesh) instead
-// of a precomputed step count -- the task shader's only remaining job is deciding which tiles are
-// worth emitting at all (frustum/parent-nesting/occlusion), not how dense they'll be.
+// Each surviving tile hands its clumps a continuous density/fade curve (foliage.mesh) instead
+// of a precomputed step count -- the task shader's job is deciding which tiles are
+// worth emitting at all (frustum/parent-nesting/occlusion).
 struct FoliageTaskPayload {
 	vec2  relTileMinXZ[32];
 	float tileSize[32];
@@ -121,19 +121,24 @@ void main() {
 			}
 		}
 
+		uint terrainNumLevels = (params.foliageFlags >> 8u) & 0xFFu;
+		if (terrainNumLevels == 0u) terrainNumLevels = 8u;
+
+		bool enableTerrainCull = (params.foliageFlags & 1u) != 0u;
+		bool enableHiZCull = (params.foliageFlags & 2u) != 0u;
+
 		// Self-occlusion cull: a tile fully hidden behind nearer, higher scene geometry or terrain is never worth
 		// dispatching a mesh workgroup for. Skipped for the nearest ring (lodLevel 0).
-		// Toggle via FoliageState::enableOcclusionCulling (foliageFlags bit 0).
-		if (visible && lodLevel >= 1u && (params.foliageFlags & 1u) != 0u) {
-			if (params.hizIndex > 0u) {
+		if (visible && lodLevel >= 1u) {
+			if (enableHiZCull && params.hizIndex > 0u) {
 				if (isAABBOccludedByHiZ(relMinB, relMaxB, viewProjRel, params.hizIndex)) {
 					visible = false;
 				}
-			} else if (params.minMaxIndex > 0u) {
+			} else if (enableTerrainCull && params.minMaxIndex > 0u) {
 				TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 					params.minMaxIndex,
 					params.gridParams.w,
-					params.terrainNumLevels,
+					terrainNumLevels,
 					params.waterLevel
 				);
 				vec3 worldMinB = relMinB + uCameraPosition.xyz;
@@ -158,8 +163,7 @@ void main() {
 	barrier();
 
 	if (threadID == 0) {
-		// 16 clumps per tile -- see foliage.mesh, which now gives each clump its own mesh
-		// workgroup/vertex budget instead of sharing one 128-vertex budget across a whole tile.
+		// 16 clumps per tile -- Pass 0/1 process small things per clump; Pass 2 processes big things (1 item per clump).
 		EmitMeshTasksEXT(min(tileCount, 32u) * 16u, 1, 1);
 	}
 }

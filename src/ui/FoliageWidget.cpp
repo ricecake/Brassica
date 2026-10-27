@@ -96,6 +96,12 @@ namespace brassica::ui {
 						modified = true;
 					}
 
+					bool hizCulling = (props.enableHiZCulling != 0u);
+					if (ImGui::Checkbox("HiZ Occlusion Culling", &hizCulling)) {
+						props.enableHiZCulling = hizCulling ? 1u : 0u;
+						modified = true;
+					}
+
 					if (modified) {
 						mgr->SetGlobalProperties(props);
 					}

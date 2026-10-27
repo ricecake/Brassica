@@ -28,10 +28,7 @@ namespace brassica {
 		glm::uvec4    gridParams{8u, 16u, 2048u, 1024u}; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
-		// Reserved: TerrainBiomeTexture's per-location value is hardcoded to 0 in
-		// terrain_gen.comp. The real per-location biome signal is weatherBiomeIndex below, via
-		// evaluateWhittakerBiome (helpers/whittaker.glsl) -> biomeTableIndex's per-biome row.
-		std::uint32_t biomeIndex{0};
+		std::uint32_t pageTableIndex{0}; // bindless index for LargeFoliagePageTableBuffer
 		std::uint32_t weatherBiomeIndex{0};
 		float         windTime{0.0f};
 		float         lodBaseRange{20.0f};
@@ -52,12 +49,12 @@ namespace brassica {
 		std::uint32_t biomeTableIndex{0};
 		float         baseScale{0.5f};
 		float         waterLevel{0.0f};
-		std::uint32_t terrainNumLevels{8};
-		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling
+		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling, bit 1: HiZ occlusion culling, bits 8..15: terrainNumLevels
 		std::uint32_t hizIndex{0};     // bindless index for History<HiZTexture>
 		std::uint32_t passIndex{0};    // Pass 0: Grass, Pass 1: Understory/Flowers/Bushes, Pass 2: Trees
 		float         clumpDensity{1.0f};
 		float         bladeDensity{1.0f};
+		std::uint32_t meshletBufferIndex{0}; // bindless index for LargeFoliageMeshletBuffer
 	};
 
 	static_assert(sizeof(FoliagePushConstants) == 128, "FoliagePushConstants size must be 128 bytes");
@@ -118,8 +115,8 @@ namespace brassica {
 			// gridParams.w previously stayed at its hardcoded default (1088) forever -- never
 			// synced to the real terrain texture size, so foliage sampled slightly wrong texels.
 			push.gridParams.w = p.terrainGridParams.w;
-			push.terrainNumLevels = p.terrainGridParams.x;
 			push.waterLevel = p.waterLevel;
+			uint32_t numLevels = p.terrainGridParams.x;
 			if (ServiceLocator::Instance().Has<IFoliageManager>()) {
 				auto mgr = ServiceLocator::Instance().Get<IFoliageManager>();
 				enabled = mgr->IsEnabled();
@@ -139,7 +136,9 @@ namespace brassica {
 				push.windMultiplier = props.windMultiplier;
 				push.rigidityMultiplier = props.rigidityMultiplier;
 				push.baseScale = props.baseScale;
-				push.foliageFlags = (props.enableOcclusionCulling != 0u) ? 1u : 0u;
+				push.foliageFlags = ((props.enableOcclusionCulling != 0u) ? 1u : 0u) |
+				                    ((props.enableHiZCulling != 0u) ? 2u : 0u) |
+				                    ((numLevels & 0xFFu) << 8u);
 				push.clumpDensity = props.clumpDensity;
 				push.bladeDensity = props.bladeDensity;
 
@@ -182,15 +181,18 @@ namespace brassica {
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
 			r.Read<FoliageBiomeTableTexture>();
+			r.Read<LargeFoliagePageTableBuffer>();
+			r.Read<LargeFoliageMeshletBuffer>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push.hizIndex = ctx.Index<graph::History<HiZTexture>>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
-			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.biomeTableIndex = ctx.Index<FoliageBiomeTableTexture>();
+			push.pageTableIndex = ctx.Index<LargeFoliagePageTableBuffer>();
+			push.meshletBufferIndex = ctx.Index<LargeFoliageMeshletBuffer>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

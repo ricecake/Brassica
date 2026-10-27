@@ -43,12 +43,15 @@ namespace brassica {
 		std::array<GrassProperties, kFoliageBiomeCount>                           m_biomeProps{};
 		FoliageState                                                              m_state{};
 		graph::PredefinedTextureNode<FoliageBiomeTableTexture, SubPhase::Prepare> m_biomeTableNode;
+		graph::PredefinedBufferNode<LargeFoliagePageTableBuffer, LargeFoliagePageTableEntry, SubPhase::Prepare> m_pageTableNode;
+		graph::PredefinedBufferNode<LargeFoliageMeshletBuffer, LargeFoliageMeshletGPU, SubPhase::Prepare>       m_meshletNode;
 
 		void PopulateDefaults();
 		// Rebuilds m_biomeTableNode's pixel data from m_biomeProps -- called whenever a biome's
 		// properties change, not just once at startup, so the UI's "Per-Biome Grass Properties"
 		// panel actually reaches the GPU instead of dead-ending in m_biomeProps the way it used to.
 		void SyncTableNode();
+		void SyncLargeFoliageBuffers();
 	};
 
 } // namespace brassica
