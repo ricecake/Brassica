@@ -35,6 +35,9 @@ layout(push_constant) uniform FoliagePushConstants {
 	uint  terrainNumLevels;
 	uint  foliageFlags; // bit 0: terrain occlusion culling
 	uint  hizIndex; // unused here -- HiZ occlusion is task-shader-only; keeps layout matching foliage.task
+	uint  passIndex;
+	float clumpDensity;
+	float bladeDensity;
 }
 params;
 
@@ -55,7 +58,7 @@ layout(location = 5) out float outFade[]; // per-item LOD fade -- foliage.frag's
 
 // One texel-row per Whittaker biome index (FoliageBiomeTableTexture, FoliageManager-owned):
 // texel 0 colorTop, 1 colorBottom, 2 (height,width,density,flowerRatio),
-// 3 (rigidity,heightVariance,widthVariance,windInfluence), 4 (colorVariability,enabled,_,_).
+// 3 (rigidity,heightVariance,widthVariance,windInfluence), 4 (colorVariability,enabled,clumpDensity,bladeDensity).
 vec4 fetchBiomeTexel(uint biomeTableIndex, uint biomeIdx, uint texelX) {
 	return texelFetch(
 		sampler2D(uTextures2D[nonuniformEXT(biomeTableIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
@@ -617,8 +620,9 @@ void emitBushItem(
 void emitPalmTreeItem(
 	vec3 basePos, float heightScale, float widthScale, float angle, vec3 sway, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
 ) {
-	float treeHeight = (6.0 + pcg_hash(itemSeed + 2u) * 2.5) * params.lengthMultiplier * fade;
-	float trunkRadius = (0.22 + pcg_hash(itemSeed + 3u) * 0.08) * params.widthMultiplier * fade;
+	float heightVar = mix(0.4, 2.5, pcg_hash(itemSeed + 2u));
+	float treeHeight = 6.5 * heightVar * heightScale * params.lengthMultiplier * fade;
+	float trunkRadius = 0.22 * sqrt(heightVar) * widthScale * params.widthMultiplier * fade;
 
 	vec4 trunkColor = vec4(0.42, 0.35, 0.25, 1.0);
 	vec4 frondColor = vec4(0.18, 0.65, 0.20, 1.0);
@@ -725,8 +729,9 @@ void emitPalmTreeItem(
 void emitPineTreeItem(
 	vec3 basePos, float heightScale, float widthScale, float angle, vec3 sway, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
 ) {
-	float treeHeight = (5.5 + pcg_hash(itemSeed + 2u) * 3.0) * params.lengthMultiplier * fade;
-	float trunkRadius = (0.20 + pcg_hash(itemSeed + 3u) * 0.08) * params.widthMultiplier * fade;
+	float heightVar = mix(0.4, 2.5, pcg_hash(itemSeed + 2u));
+	float treeHeight = 6.0 * heightVar * heightScale * params.lengthMultiplier * fade;
+	float trunkRadius = 0.20 * sqrt(heightVar) * widthScale * params.widthMultiplier * fade;
 
 	vec4 barkColor = vec4(0.28, 0.20, 0.14, 1.0);
 	vec4 needleColor = vec4(0.08, 0.32, 0.12, 1.0);
@@ -824,8 +829,9 @@ void emitPineTreeItem(
 void emitDeciduousTreeItem(
 	vec3 basePos, float heightScale, float widthScale, float angle, vec3 sway, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
 ) {
-	float treeHeight = (5.0 + pcg_hash(itemSeed + 2u) * 2.5) * params.lengthMultiplier * fade;
-	float crownWidth = (3.2 + pcg_hash(itemSeed + 3u) * 1.2) * params.widthMultiplier * fade;
+	float heightVar = mix(0.4, 2.5, pcg_hash(itemSeed + 2u));
+	float treeHeight = 5.5 * heightVar * heightScale * params.lengthMultiplier * fade;
+	float crownWidth = 3.2 * sqrt(heightVar) * widthScale * params.widthMultiplier * fade;
 
 	vec4 barkColor = vec4(0.36, 0.28, 0.18, 1.0);
 	vec4 leafBottomColor = vec4(0.12, 0.42, 0.08, 1.0);
@@ -905,8 +911,9 @@ void emitDeciduousTreeItem(
 void emitCactusItem(
 	vec3 basePos, float heightScale, float widthScale, float angle, uint itemSeed, vec3 terrainNormal, float fade, inout uint vCount, inout uint pCount
 ) {
-	float cactusHeight = (2.5 + pcg_hash(itemSeed + 2u) * 1.5) * params.lengthMultiplier * fade;
-	float columnRadius = (0.20 + pcg_hash(itemSeed + 3u) * 0.08) * params.widthMultiplier * fade;
+	float heightVar = mix(0.5, 2.0, pcg_hash(itemSeed + 2u));
+	float cactusHeight = 3.0 * heightVar * heightScale * params.lengthMultiplier * fade;
+	float columnRadius = 0.20 * sqrt(heightVar) * widthScale * params.widthMultiplier * fade;
 
 	vec4 cactusColor = vec4(0.22, 0.48, 0.26, 1.0);
 
@@ -1101,19 +1108,18 @@ void main() {
 		return;
 	}
 
-	float lodRange = max(params.lodBaseRange, 1.0);
-	uint  bladesInTile = 64u;
-	if (lodLevel >= 4u || distToCam > lodRange * 7.5) {
-		bladesInTile = 8u;
-	} else if (lodLevel >= 2u || distToCam > lodRange * 3.0) {
-		bladesInTile = 16u;
-	} else if (lodLevel >= 1u || distToCam > lodRange * 1.5) {
-		bladesInTile = 32u;
-	}
-	float biomeDensity = max(bHWDF.z, 0.0);
-	uint  scaledBlades = uint(round(float(bladesInTile) * params.densityMultiplier * biomeDensity));
-	uint  itemsPerClump = clamp(scaledBlades / 16u, 1u, 4u);
+	// Evaluate forest patch noise (multi-frequency FBM) to group trees into natural forest patches.
+	// forestNoise: 0.0 = open field core, 0.4-0.6 = forest outskirt / transition, 0.8+ = core forest.
+	float forestNoise = clamp(dot_noise_fbm(vec3(clumpCenterWorld * 0.003, 0.0), 3, 0.0) * 0.5 + 0.5, 0.0, 1.0);
 
+	// Clump density: controls clump probability and spacing across grid cells
+	float effectiveClumpDensity = params.clumpDensity * bCVE.z;
+	if (pcg_hash(cellSeed + 99u) > clamp(effectiveClumpDensity, 0.05, 1.0)) {
+		SetMeshOutputsEXT(0u, 0u);
+		return;
+	}
+
+	float lodRange = max(params.lodBaseRange, 1.0);
 	float ringHalfExtent = max(tileSize * float(max(params.gridParams.y, 1u)) * 0.5, 1.0);
 	float fade = 1.0 - smoothstep(ringHalfExtent * 0.7, ringHalfExtent, distToCam);
 
@@ -1123,52 +1129,131 @@ void main() {
 		sin(params.windTime * (2.5 * windScale) + clumpCenterRel.x * 0.15 + clumpCenterRel.y * 0.15) *
 		(0.25 * windScale / rigidity);
 
+	// Blade density: controls the number of items/blades per clump and how tightly packed they are
+	float effectiveBladeDensity = params.bladeDensity * bCVE.w;
+
+	uint itemsPerClump = 1u;
+	if (params.passIndex == 0u) {
+		// Pass 0 (Grass / Seaweed): emit multiple blades per clump meshlet
+		itemsPerClump = uint(clamp(round(4.0 * params.densityMultiplier * effectiveBladeDensity), 1.0, 10.0));
+	} else if (params.passIndex == 1u) {
+		// Pass 1 (Understory / Flowers / Ferns / Bushes / Rocks)
+		itemsPerClump = uint(clamp(round(2.0 * params.densityMultiplier * effectiveBladeDensity), 1.0, 3.0));
+	} else {
+		// Pass 2 (Trees / Overstory): 1 tree per clump meshlet
+		itemsPerClump = 1u;
+	}
+
 	uint vCount = 0u;
 	uint pCount = 0u;
 
 	for (uint b = 0u; b < itemsPerClump; ++b) {
 		uint  itemSeed = cellSeed + b * 17u + 1000u;
 		float angle = pcg_hash(itemSeed) * TAU;
-		float radius = pcg_hash(itemSeed + 1u) * cellStep * 0.4;
+
+		// Intra-clump blade spacing: higher blade density packs blades closer to the clump center
+		float maxIntraRadius = cellStep * 0.45 / (0.5 + 0.5 * effectiveBladeDensity);
+		float radius = pcg_hash(itemSeed + 1u) * maxIntraRadius;
 		vec2  offset = vec2(cos(angle), sin(angle)) * radius;
 
 		vec2 itemWorldXZ = clumpCenterWorld + offset;
 		vec2 itemRelXZ = clumpCenterRel + offset;
 
-		uint foliageType = 0u; // 0 Grass, 1 Fern, 2 Flower, 3 Rock, 4 Seaweed, 5 Bush
+		uint foliageType = 0u; // 0 Grass, 1 Fern, 2 Flower, 3 Rock, 4 Seaweed, 5 Bush, 6 Tree
 
 		if (isUnderwater) {
 			float underwaterChoice = pcg_hash(itemSeed + 4u);
 			foliageType = (underwaterChoice < 0.75) ? 4u : 3u;
 		} else {
+			// Spatial vegetation distribution based on forestNoise:
+			// - Open fields (forestNoise < 0.35): Dense grass, sparse flowers & rocks.
+			// - Forest outskirts (0.35 <= forestNoise < 0.55): High proportion of flowers and ferns, increasing bushes.
+			// - Entering forest (0.55 <= forestNoise < 0.72): Increasing trees, high bushes, decreasing grass & flowers.
+			// - Core forest (forestNoise >= 0.72): Primarily ferns and trees.
 			float sel = pcg_hash(itemSeed + 4u);
-			float cumulative = params.flowerRatio * bHWDF.w;
-			if (sel < cumulative) {
-				foliageType = 2u;
+
+			float grassWeight;
+			float flowerWeight;
+			float fernWeight;
+			float bushWeight;
+			float treeWeight;
+			float rockWeight = params.rockRatio;
+
+			if (forestNoise < 0.35) {
+				// Open field core
+				grassWeight = 0.85;
+				flowerWeight = params.flowerRatio * 0.8;
+				fernWeight = 0.05;
+				bushWeight = 0.05;
+				treeWeight = 0.0;
+			} else if (forestNoise < 0.55) {
+				// Forest outskirts: high flowers & ferns, rising bushes
+				grassWeight = 0.45;
+				flowerWeight = params.flowerRatio * 2.2;
+				fernWeight = params.fernRatio * 1.8;
+				bushWeight = params.bushRatio * 1.5;
+				treeWeight = params.treeRatio * 0.3;
+			} else if (forestNoise < 0.72) {
+				// Entering forest area: increasing tree density, decreasing grass/flowers, high bush
+				grassWeight = 0.15;
+				flowerWeight = params.flowerRatio * 0.6;
+				fernWeight = params.fernRatio * 2.0;
+				bushWeight = params.bushRatio * 2.2;
+				treeWeight = params.treeRatio * 1.8;
 			} else {
-				cumulative += params.fernRatio;
-				if (sel < cumulative) {
-					foliageType = 1u;
+				// Core of tree area: primarily ferns and trees
+				grassWeight = 0.05;
+				flowerWeight = 0.02;
+				fernWeight = params.fernRatio * 3.0;
+				bushWeight = params.bushRatio * 0.8;
+				treeWeight = params.treeRatio * 3.5;
+			}
+
+			float totalW = grassWeight + flowerWeight + fernWeight + bushWeight + treeWeight + rockWeight;
+			sel *= totalW;
+
+			if (sel < grassWeight) {
+				foliageType = 0u;
+			} else {
+				float cum = grassWeight + flowerWeight;
+				if (sel < cum) {
+					foliageType = 2u;
 				} else {
-					cumulative += params.rockRatio;
-					if (sel < cumulative) {
-						foliageType = 3u;
+					cum += fernWeight;
+					if (sel < cum) {
+						foliageType = 1u;
 					} else {
-						cumulative += params.seaweedRatio;
-						if (sel < cumulative) {
-							foliageType = 4u;
-						} else {
-							cumulative += params.bushRatio;
-						if (sel < cumulative) {
+						cum += bushWeight;
+						if (sel < cum) {
 							foliageType = 5u;
 						} else {
-							cumulative += params.treeRatio;
-							foliageType = (sel < cumulative) ? 6u : 0u;
-						}
+							cum += treeWeight;
+							if (sel < cum) {
+								foliageType = 6u;
+							} else {
+								foliageType = 3u;
+							}
 						}
 					}
 				}
 			}
+		}
+
+		// Pass filtering:
+		// Pass 0: Grass (0) & Seaweed (4)
+		// Pass 1: Ferns (1), Flowers (2), Rocks (3), Bushes (5)
+		// Pass 2: Trees (6)
+		bool matchPass = false;
+		if (params.passIndex == 0u) {
+			matchPass = (foliageType == 0u || foliageType == 4u);
+		} else if (params.passIndex == 1u) {
+			matchPass = (foliageType == 1u || foliageType == 2u || foliageType == 3u || foliageType == 5u);
+		} else if (params.passIndex == 2u) {
+			matchPass = (foliageType == 6u);
+		}
+
+		if (!matchPass) {
+			continue;
 		}
 
 		uint itemVerts;
@@ -1199,9 +1284,6 @@ void main() {
 
 		vec3  basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
 		float heightScale = bHWDF.x * fade;
-		// Must shrink with fade the same way heightScale does -- leaving width full-size while
-		// height shrinks toward the LOD ring's outer edge turns each item into a tall thin sliver
-		// right before it fades out, instead of shrinking uniformly.
 		float widthScale = bHWDF.y * fade;
 		vec3  sway = vec3(windStrength, 0.0, windStrength);
 

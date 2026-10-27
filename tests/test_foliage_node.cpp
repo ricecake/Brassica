@@ -24,6 +24,8 @@ TEST_CASE("FoliageManager state and global properties") {
 	props.lodBaseRange = 500.0f;
 	props.maxLODs = 10u;
 	props.tilesPerRow = 24u;
+	props.clumpDensity = 2.0f;
+	props.bladeDensity = 1.5f;
 	mgr.SetGlobalProperties(props);
 
 	brassica::GlobalGrassProperties updatedProps = mgr.GetGlobalProperties();
@@ -36,6 +38,8 @@ TEST_CASE("FoliageManager state and global properties") {
 	CHECK(updatedProps.lodBaseRange == doctest::Approx(500.0f));
 	CHECK(updatedProps.maxLODs == 10u);
 	CHECK(updatedProps.tilesPerRow == 24u);
+	CHECK(updatedProps.clumpDensity == doctest::Approx(2.0f));
+	CHECK(updatedProps.bladeDensity == doctest::Approx(1.5f));
 
 	// All 10 biomes are enabled by default -- a biome's weather classification can legitimately
 	// drift into any of them over a long session (shaders/helpers/whittaker.glsl), and one left
@@ -64,6 +68,8 @@ TEST_CASE("FoliageNode registration and push constants sync") {
 	props.treeRatio = 0.5f;
 	props.maxLODs = 12u;
 	props.tilesPerRow = 16u;
+	props.clumpDensity = 1.8f;
+	props.bladeDensity = 2.2f;
 	foliageMgr->SetGlobalProperties(props);
 
 	brassica::FoliageNode node;
@@ -80,6 +86,8 @@ TEST_CASE("FoliageNode registration and push constants sync") {
 	CHECK(node.push.gridParams.y == 16u);
 	CHECK(node.push.gridParams.z == 12u * 16u * 16u);
 	CHECK(node.push.hizIndex == 0u);
+	CHECK(node.push.clumpDensity == doctest::Approx(1.8f));
+	CHECK(node.push.bladeDensity == doctest::Approx(2.2f));
 
 	brassica::ServiceLocator::SetInstance(nullptr);
 }

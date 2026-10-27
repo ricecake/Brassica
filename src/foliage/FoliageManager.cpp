@@ -58,6 +58,9 @@ namespace brassica {
 			.baseTileSize = m_state.baseTileSize,
 			.maxLODs = m_state.maxLODs,
 			.tilesPerRow = m_state.tilesPerRow,
+			.enableOcclusionCulling = m_state.enableOcclusionCulling ? 1u : 0u,
+			.clumpDensity = m_state.clumpDensity,
+			.bladeDensity = m_state.bladeDensity,
 		};
 	}
 
@@ -80,6 +83,9 @@ namespace brassica {
 		m_state.baseTileSize = props.baseTileSize;
 		m_state.maxLODs = props.maxLODs;
 		m_state.tilesPerRow = props.tilesPerRow;
+		m_state.enableOcclusionCulling = (props.enableOcclusionCulling != 0);
+		m_state.clumpDensity = props.clumpDensity;
+		m_state.bladeDensity = props.bladeDensity;
 	}
 
 	FoliageState FoliageManager::GetState() const {
@@ -262,7 +268,7 @@ namespace brassica {
 			row[1] = p.colorBottom;
 			row[2] = glm::vec4(p.height, p.width, p.density, p.flowerRatio);
 			row[3] = glm::vec4(p.rigidity, p.heightVariance, p.widthVariance, p.windInfluence);
-			row[4] = glm::vec4(p.colorVariability, p.enabled != 0u ? 1.0f : 0.0f, 0.0f, 0.0f);
+			row[4] = glm::vec4(p.colorVariability, p.enabled != 0u ? 1.0f : 0.0f, p.clumpDensity, p.bladeDensity);
 		}
 
 		// hostAccess defaults to None -- without Staged here, BeginHostWrite (PhysicalRegistry.hpp)

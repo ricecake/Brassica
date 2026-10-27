@@ -36,6 +36,9 @@ layout(push_constant) uniform FoliagePushConstants {
 	uint  terrainNumLevels;
 	uint  foliageFlags; // bit 0: terrain occlusion culling
 	uint  hizIndex;
+	uint  passIndex;
+	float clumpDensity;
+	float bladeDensity;
 }
 params;
 

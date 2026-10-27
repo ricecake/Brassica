@@ -38,6 +38,8 @@ namespace brassica::ui {
 					bool modified = false;
 
 					modified |= ImGui::SliderFloat("Density Multiplier", &props.densityMultiplier, 0.0f, 5.0f, "%.2f");
+					modified |= ImGui::SliderFloat("Clump Density", &props.clumpDensity, 0.1f, 5.0f, "%.2f");
+					modified |= ImGui::SliderFloat("Blade Density", &props.bladeDensity, 0.1f, 5.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Length Multiplier", &props.lengthMultiplier, 0.1f, 5.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Width Multiplier", &props.widthMultiplier, 0.1f, 5.0f, "%.2f");
 					modified |= ImGui::SliderFloat("Wind Multiplier", &props.windMultiplier, 0.0f, 5.0f, "%.2f");
@@ -132,6 +134,8 @@ namespace brassica::ui {
 					bModified |= ImGui::SliderFloat("Height", &bProps.height, 0.1f, 5.0f, "%.2f");
 					bModified |= ImGui::SliderFloat("Width", &bProps.width, 0.01f, 0.5f, "%.3f");
 					bModified |= ImGui::SliderFloat("Density", &bProps.density, 0.0f, 2.0f, "%.2f");
+					bModified |= ImGui::SliderFloat("Clump Density##Biome", &bProps.clumpDensity, 0.1f, 5.0f, "%.2f");
+					bModified |= ImGui::SliderFloat("Blade Density##Biome", &bProps.bladeDensity, 0.1f, 5.0f, "%.2f");
 					bModified |= ImGui::SliderFloat("Flower Ratio##Biome", &bProps.flowerRatio, 0.0f, 1.0f, "%.2f");
 
 					if (bModified) {
