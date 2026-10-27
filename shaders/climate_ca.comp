@@ -257,7 +257,7 @@ void main() {
 	vec2 flowPos = vec2(pos) - (visualWind * uTime * 0.05);
 
 	// 4. Sample a noise function
-	float cloudNoise = dot_noise_fbm(vec3(flowPos.x, 0.0, flowPos.y) * 0.01, 3, 0.05 * uTime);
+	float cloudNoise = dot_noise_fbm(vec3(flowPos.x, 0.0, flowPos.y) * 0.01, 3, 0.005 * uTime);
 
 	// 5. Modulate base coverage
 	float cloudCoverage = clamp(baseCoverage * (cloudNoise * 1.5), 0.0, 1.0);
