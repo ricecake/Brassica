@@ -1,0 +1,78 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "cbt.glsl"
+
+layout(push_constant) uniform CBTPush {
+	uint bitfieldIdx;
+	uint poolIdx;
+	uint commandsIdx;
+	uint pageTableIdx;
+	uint cacheIdx;
+	uint activeBisectorCount;
+} params;
+
+layout(std430, buffer_reference) buffer BisectorPool {
+	Bisector bisectors[];
+};
+
+layout(std430, buffer_reference) buffer CommandsBuffer {
+	uint       splitCount;
+	uint       mergeCount;
+	uint       freePageHead;
+	uint       freePageCount;
+	CBTCommand commands[];
+};
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+	if (idx >= params.activeBisectorCount) return;
+
+	BisectorPool pool = BisectorPool(uSSBOBuffers[params.poolIdx]);
+	CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.commandsIdx]);
+
+	CBTCommand c = cmd.commands[idx];
+	if (c.type == 1u) {
+		// Split bisector in place into child 0, updating vertices and ID
+		Bisector parent = pool.bisectors[idx];
+		vec2 m = (parent.v0 + parent.v1) * 0.5;
+
+		Bisector child0;
+		child0.id = (parent.id << 1UL) | 0UL;
+		child0.depth = parent.depth + 1u;
+		child0.rootIdx = parent.rootIdx;
+		child0.twin = parent.twin;
+		child0.next = parent.next;
+		child0.prev = parent.prev;
+		child0.cachePage = CBT_INVALID_PAGE;
+		child0.padding = 0u;
+		child0.v0 = m;
+		child0.v1 = parent.v2;
+		child0.v2 = parent.v0;
+
+		pool.bisectors[idx] = child0;
+	} else if (c.type == 2u) {
+		// Merge child back to parent
+		Bisector child = pool.bisectors[idx];
+		if (child.depth > 0u) {
+			Bisector parent;
+			parent.id = child.id >> 1UL;
+			parent.depth = child.depth - 1u;
+			parent.rootIdx = child.rootIdx;
+			parent.twin = child.twin;
+			parent.next = child.next;
+			parent.prev = child.prev;
+			parent.cachePage = CBT_INVALID_PAGE;
+			parent.padding = 0u;
+			// Re-decode base root vertices
+			parent.v0 = child.v2;
+			parent.v1 = (child.v0 * 2.0) - child.v2;
+			parent.v2 = child.v1;
+
+			pool.bisectors[idx] = parent;
+		}
+	}
+}

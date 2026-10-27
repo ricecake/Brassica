@@ -1,408 +1,139 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
 #include "bindless.glsl"
 #include "common.glsl"
-#include "terrain.glsl"
-#include "lygia/generative/psrdnoise.glsl"
+#include "cbt.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
-layout(triangles, max_vertices = 141, max_primitives = 240) out;
+layout(triangles, max_vertices = 121, max_primitives = 100) out;
 
 layout(push_constant) uniform TerrainPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 gridParams;
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
-}
-params;
+	uint  cbtBitfieldIndex;
+	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+	uint  _pad0;
+} params;
 
 struct TaskPayload {
-    vec2 relMeshletMinXZ[512];
-    uint renderLOD[512];
-    uint morphLOD[512];
-    uint childXY[512];         // NEW: (cy << 16) | cx
+	uint64_t bisectorID[32];
+	uint     cachePage[32];
+	uint     depth[32];
+	vec2     v0[32];
+	vec2     v1[32];
+	vec2     v2[32];
+	uint     twinDepth[32];
+	uint     nextDepth[32];
+	uint     prevDepth[32];
 };
 
 taskPayloadSharedEXT TaskPayload payload;
-shared vec3 sharedPos[121];
+
 layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
 layout(location = 2) out vec4 outAlbedo[];
 layout(location = 3) out vec4 outMaterial[];
 layout(location = 4) out vec4 outMaterialWeights[];
 
+layout(std430, buffer_reference) buffer GeometryCacheBuffer {
+	GeometryCacheHeader headers[];
+};
 
-vec3 getTerrainMapColor(float h, vec3 normal) {
-    vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
-    float hillshade = clamp(dot(normal, lightDir), 0.2, 1.0);
-
-    vec3 col;
-    if (h < 0.0) {
-        float bathy = clamp(-h / 1000.0, 0.0, 1.0);
-        col = mix(vec3(0.93, 0.85, 0.69), vec3(0.87, 0.72, 0.53), bathy);
-    } else {
-        float alt = h / 2500.0;
-        if (alt < 0.1) {
-            col = mix(vec3(0.18, 0.52, 0.22), vec3(0.35, 0.65, 0.25), alt / 0.1);
-        } else if (alt < 0.4) {
-            col = mix(vec3(0.35, 0.65, 0.25), vec3(0.75, 0.70, 0.40), (alt - 0.1) / 0.3);
-        } else if (alt < 0.8) {
-            col = mix(vec3(0.75, 0.70, 0.40), vec3(0.55, 0.45, 0.35), (alt - 0.4) / 0.4);
-        } else {
-            col = mix(vec3(0.55, 0.45, 0.35), vec3(0.95, 0.95, 0.98), clamp((alt - 0.8) / 0.4, 0.0, 1.0));
-        }
-        col *= hillshade;
-    }
-    return col;
+float evaluate_mesh_height(vec2 pos2D) {
+	vec2 p = pos2D * 0.0001;
+	float h = sin(p.x * 3.0) * cos(p.y * 3.0) * 150.0;
+	h += sin(p.x * 12.0 + 1.5) * cos(p.y * 12.0) * 45.0;
+	return h;
 }
 
-
 void main() {
-	SetMeshOutputsEXT(141, 240);
+	SetMeshOutputsEXT(121, 100);
 
-	float baseMeshletSize = 32.0;
 	uint taskIndex = gl_WorkGroupID.x;
-	vec2 relMeshletMinXZ = payload.relMeshletMinXZ[taskIndex];
-	uint lodLevel = payload.renderLOD[taskIndex];
-	uint morphLOD = payload.morphLOD[taskIndex]; // Use for outer boundary checks
-	float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
-	float parentMeshletSize = baseMeshletSize * getLODScale(float(morphLOD));
+	vec2 v0 = payload.v0[taskIndex];
+	vec2 v1 = payload.v1[taskIndex];
+	vec2 v2 = payload.v2[taskIndex];
+	uint depth = payload.depth[taskIndex];
+	uint twinDepth = payload.twinDepth[taskIndex];
+	uint cachePage = payload.cachePage[taskIndex];
 
 	uint lx = gl_LocalInvocationID.x;
 	uint ly = gl_LocalInvocationID.y;
-	uint vertexIndex = ly * 11 + lx;
+	uint vertexIndex = ly * 11u + lx;
 
-	uint meshletsPerRow = params.gridParams.y;
-	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
+	float fu = float(lx) / 10.0;
+	float fv = float(ly) / 10.0;
 
-	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
-	vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
-	vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
+	// Barycentric interpolation over right triangle (v0, v1, v2)
+	vec2 pos2D = v0 * (1.0 - fu - fv) + v1 * fu + v2 * fv;
 
-	float outerDist = (float(params.gridParams.y) * 0.5) * parentMeshletSize;
-
-	vec2 localPos = vec2(float(lx) / 10.0, float(ly) / 10.0) * meshletSize;
-	vec2 relBaseXZ = relMeshletMinXZ + localPos;
-
-	vec2 offsetDist = abs(relBaseXZ);
-	float distToCam = max(offsetDist.x, offsetDist.y);
-
-	float alpha = 0.0;
-	vec2 relMorphedXZ = relBaseXZ;
-	float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
-	vec2 worldBaseXZ = uCameraPosition.xz + relBaseXZ;
-	vec2 worldTargetXZ = floor(worldBaseXZ / targetGrid + 0.5) * targetGrid;
-	vec2 relTargetXZ = worldTargetXZ - uCameraPosition.xz;
-
-
-	if (morphLOD < params.gridParams.x - 1 && outerDist > 0.0) {
-		float morphWidth = 2 * texelSize;
-		float morphStart = max(0.0, outerDist - morphWidth);
-
-		if (distToCam > morphStart) {
-			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
-			// alpha = 0.5*round(2.0*alpha * alpha * (3.0 - 2.0 * alpha));
-			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
-
-			// relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
-		}
-	}
-	vec2 morphedWorldXZ = uCameraPosition.xz + relMorphedXZ;
-
-	vec4 texSample = sampleTerrainClipmap(
-		params.clipmapIndex,
-		morphedWorldXZ,
-		morphLOD,
-		params.gridParams.w
-	);
-	float height = texSample.r;
-	vec3 normal = octahedralUVToDirection(texSample.ba);
-
-	if (alpha > 0.0) {
-		vec4 texNext = sampleTerrainClipmap(
-			params.clipmapIndex,
-			morphedWorldXZ,
-			morphLOD + 1,
-			params.gridParams.w
-		);
-		height = mix(height, texNext.r - 0.01, alpha);
-		vec3 normalNext = octahedralUVToDirection(texNext.ba);
-		normal = normalize(mix(normal, normalNext, alpha));
+	// Halfedge Edge Stitching: snap T-junction edge vertices along hypotenuse v0-v1 if twinDepth < depth
+	if (twinDepth < depth && (lx + ly == 10u)) {
+		float edgeFactor = float(lx) / 10.0;
+		pos2D = mix(v0, v1, edgeFactor);
 	}
 
-	uint lodDiff = morphLOD - lodLevel;
-	uint gridDim = 1u << lodDiff;
-	uint cx = payload.childXY[taskIndex] & 0xFFFFu;
-	uint cy = payload.childXY[taskIndex] >> 16u;
-
-	bool isTopMacroEdge = (ly == 0) && (cy == 0);
-	bool isBottomMacroEdge = (ly == 10) && (cy == gridDim - 1);
-	bool isLeftMacroEdge = (lx == 0) && (cx == 0);
-	bool isRightMacroEdge = (lx == 10) && (cx == gridDim - 1);
-
-	// bool isOddBoundaryInternal = ((lx % 2 != 0) && (isTopMacroEdge || isBottomMacroEdge)) ||
-	//                      ((ly % 2 != 0) && (isLeftMacroEdge || isRightMacroEdge));
-
-	// if (isOddBoundaryInternal) {
-	// 	vec2 localA = vec2(float(lx - (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly - (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
-	// 	vec2 localB = vec2(float(lx + (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly + (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
-
-	// 	vec2 relBaseA = relMeshletMinXZ + localA;
-	// 	vec2 relBaseB = relMeshletMinXZ + localB;
-
-	// 	vec2 worldA = uCameraPosition.xz + relBaseA;
-	// 	vec2 worldB = uCameraPosition.xz + relBaseB;
-
-	// 	float hA = sampleTerrainClipmap(params.clipmapIndex, worldA, morphLOD, params.gridParams.w).r;
-	// 	float hB = sampleTerrainClipmap(params.clipmapIndex, worldB, morphLOD, params.gridParams.w).r;
-
-	// 	height = (hA + hB) * 0.5;
-	// }
-
-	float distSq = dot(relMorphedXZ, relMorphedXZ);
-	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-	vec3 relWorldPos = vec3(relMorphedXZ.x, height - dropOff - uCameraPosition.y, relMorphedXZ.y);
-
-	sharedPos[vertexIndex] = relWorldPos;
-	barrier();
-
-	bool isOddBoundary = ((lx % 2 != 0) && (ly == 0 || ly == 10)) ||
-	                     ((ly % 2 != 0) && (lx == 0 || lx == 10));
-
-	if (isOddBoundary) {
-		uint neighborA = (ly == 0 || ly == 10) ? vertexIndex - 1 : vertexIndex - 11;
-		uint neighborB = (ly == 0 || ly == 10) ? vertexIndex + 1 : vertexIndex + 11;
-		relWorldPos = (sharedPos[neighborA] + sharedPos[neighborB]) * 0.5;
+	float height = evaluate_mesh_height(pos2D);
+	if (cachePage != CBT_INVALID_PAGE && params.cbtCacheIndex > 0u) {
+		GeometryCacheBuffer cache = GeometryCacheBuffer(uSSBOBuffers[params.cbtCacheIndex]);
+		height = cache.headers[cachePage].avgHeight;
 	}
-	// OrganicPlateData mCell = getOrganicPlate(uCameraPosition.xz+relWorldPos.xz, 0.125, 3.0);
-	// vec3 warp = cross_noise_fbm(relWorldPos, 3, uTime*0.0001);
-	// vec3 pOffset = 2*mCell.edgeDist*warp*((dot_noise_dir(relWorldPos*0.125, uTime*0.5, warp)*6.5));
+
+	float dropOff = cbt_apply_fake_curvature(pos2D);
+
+	vec3 relWorldPos = vec3(pos2D.x - uCameraPosition.x, height + dropOff - uCameraPosition.y, pos2D.y - uCameraPosition.z);
+	vec3 normal = vec3(0.0, 1.0, 0.0);
 
 	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
-	// gl_MeshVerticesEXT[vertexIndex].gl_Position = (uProjMatrix * vec4(viewPos+pOffset, 1.0));
-	// OrganicMacroCell mCell = generateOrganicMacroCell(morphedWorldXZ, 200.0, 3);
-	// OrganicPlateData mCell = getOrganicPlate(uCameraPosition.xz+relWorldPos.xz, 0.125, 3.0);
-	// relWorldPos.y += 35.0*mCell.edgeDist;
 
 	outPosition[vertexIndex] = relWorldPos;
 	outNormal[vertexIndex] = normal;
 
-	vec3 absWorldPos = uCameraPosition.xyz + relWorldPos;
-
-	float geoBiome = 0.5;
-	float localWaterLevel = params.waterLevel;
-	float ridgeMap = 0.0;
-	float substrate = 0.0;
-
-	if (params.biomeIndex > 0u) {
-		vec4 biomeSample = sampleTerrainBiome(params.biomeIndex, morphedWorldXZ, morphLOD, params.gridParams.w);
-		geoBiome = biomeSample.r;
-		localWaterLevel = biomeSample.g;
-		ridgeMap = biomeSample.b;
-		substrate = biomeSample.a;
-	}
-
-	vec3 regionalRockColor = getGeologicalRockColor(geoBiome);
-
-	vec3 baseColor = getTerrainMapColor(height, normal);
+	vec3 baseColor = vec3(0.25, 0.55, 0.20);
 	float roughness = 0.75;
 	float metallic = 0.0;
-	float glint = 0.0;
-
-	float slopeFactor = smoothstep(0.80, 0.30, normal.y);
-	float rockWeight = max(slopeFactor * 0.85, smoothstep(0.2, 0.8, ridgeMap * 0.5));
-	if (rockWeight > 0.0) {
-		baseColor = mix(baseColor, regionalRockColor, rockWeight);
-		roughness = mix(roughness, 0.85, rockWeight);
-		metallic = mix(metallic, 0.02, rockWeight);
-	}
-
-	float sandWeight = 0.0;
-	if (normal.y > 0.4) {
-		float distToWater = abs(height - localWaterLevel);
-		if (distToWater < 6.0) {
-			float shoreFactor = (1.0 - smoothstep(0.0, 6.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
-			sandWeight = shoreFactor * 0.85;
-			vec3 sandColor = mix(vec3(0.82, 0.75, 0.55), regionalRockColor * 1.15, 0.25);
-			baseColor = mix(baseColor, sandColor, sandWeight);
-			roughness = mix(roughness, 0.75, sandWeight);
-		}
-	}
-
-	if (height < localWaterLevel) {
-		float depth = localWaterLevel - height;
-		vec3 wetSand = vec3(0.65, 0.60, 0.45);
-		vec3 shallowReef = vec3(0.35, 0.60, 0.50);
-		vec3 deepOceanBed = vec3(0.12, 0.16, 0.20);
-
-		vec3 seafloorColor = mix(wetSand, shallowReef, smoothstep(0.5, 5.0, depth));
-		seafloorColor = mix(seafloorColor, deepOceanBed, smoothstep(12.0, 45.0, depth));
-		float waterBedWeight = smoothstep(0.0, 3.0, depth);
-		sandWeight = max(sandWeight, waterBedWeight);
-		baseColor = mix(baseColor, seafloorColor, waterBedWeight);
-		roughness = mix(roughness, 0.50, smoothstep(0.0, 5.0, depth));
-	}
-
-	float snowWeight = 0.0;
-	if (params.weatherBiomeIndex > 0u) {
-		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, absWorldPos);
-		float temp = weatherSample.g;
-		float moisture = weatherSample.b;
-		float severity = weatherSample.a;
-		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
-
-		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
-		if (wb.snowCover > 0.01) {
-			snowWeight = wb.snowCover * smoothstep(0.2, 0.6, normal.y);
-			vec3 snowColor = vec3(0.92, 0.95, 0.98);
-			baseColor = mix(baseColor, snowColor, snowWeight);
-			roughness = mix(roughness, 0.30, snowWeight);
-		}
-	}
-
-	float grassWeight = clamp(1.0 - max(rockWeight, max(sandWeight, snowWeight)), 0.0, 1.0);
-	vec4 matWeights = vec4(grassWeight, rockWeight, sandWeight, snowWeight);
 
 	outAlbedo[vertexIndex] = vec4(baseColor, 1.0);
-	outMaterial[vertexIndex] = vec4(metallic, roughness, glint, 0.0);
-	outMaterialWeights[vertexIndex] = matWeights;
+	outMaterial[vertexIndex] = vec4(metallic, roughness, 0.0, 0.0);
+	outMaterialWeights[vertexIndex] = vec4(0.8, 0.2, 0.0, 0.0);
 
-	// Only generate skirts on the absolute outer edges of the macro-slot
-	bool drawSkirtTop = (ly == 0) && (cy == 0);
-	bool drawSkirtBottom = (ly == 10) && (cy == gridDim - 1);
-	bool drawSkirtLeft = (lx == 0) && (cx == 0);
-	bool drawSkirtRight = (lx == 10) && (cx == gridDim - 1);
+	if (lx < 10u && ly < 10u) {
+		uint vA = ly * 11u + lx;
+		uint vB = ly * 11u + (lx + 1u);
+		uint vC = (ly + 1u) * 11u + lx;
+		uint vD = (ly + 1u) * 11u + (lx + 1u);
 
-	bool isBoundarySample = (lx % 2 == 0) && (ly % 2 == 0) && (lx == 0 || lx == 10 || ly == 0 || ly == 10);
-	if (isBoundarySample) {
-		uint skirtID;
-		if (ly == 0) {
-			skirtID = lx / 2;
-		} else if (ly == 10) {
-			skirtID = 6 + lx / 2;
-		} else if (lx == 0) {
-			skirtID = 12 + (ly / 2 - 1);
-		} else {
-			skirtID = 16 + (ly / 2 - 1);
-		}
-		uint skirtIdx = 121 + skirtID;
-
-		vec2 outDir = vec2(0.0);
-		if (lx == 0)  outDir.x -= 1.0;
-		if (lx == 10) outDir.x += 1.0;
-		if (ly == 0)  outDir.y -= 1.0;
-		if (ly == 10) outDir.y += 1.0;
-		if (length(outDir) > 0.0) {
-			outDir = normalize(outDir);
-		}
-
-		// float overlapWidth = (1.0 / 3.0) * meshletSize;
-
-		// vec3 out3D = vec3(outDir.x, 0.0, outDir.y);
-		// vec3 proj = out3D - dot(out3D, normal) * normal;
-		// float lenP = length(proj);
-		// vec3 tangentOut = (lenP > 0.001) ? (proj / lenP) : out3D;
-		// vec3 relSkirtPos = relWorldPos + tangentOut * overlapWidth - normal * (0.05 * overlapWidth);
-
-		float overlapWidth = (1.0 / 3.0) * meshletSize;
-		vec3 relSkirtPos = relWorldPos - vec3(0.0, overlapWidth, 0.0);
-
-		vec3 skirtViewPos = mat3(uViewMatrix) * relSkirtPos;
-		gl_MeshVerticesEXT[skirtIdx].gl_Position = uProjMatrix * vec4(skirtViewPos, 1.0);
-		outPosition[skirtIdx] = relSkirtPos;
-		outNormal[skirtIdx] = normal;
-		outAlbedo[skirtIdx] = vec4(baseColor, 1.0);
-		outMaterial[skirtIdx] = vec4(metallic, roughness, glint, 0.0);
-		outMaterialWeights[skirtIdx] = matWeights;
-	}
-
-	if (lx < 10 && ly < 10) {
-		uint quadIdx = ly * 10 + lx;
-		uint v0 = ly * 11 + lx;
-		uint v1 = ly * 11 + (lx + 1);
-		uint v2 = (ly + 1) * 11 + lx;
-		uint v3 = (ly + 1) * 11 + (lx + 1);
-
-		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
-		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
-
-		bool cullQuad = false;
-		if (morphLOD > 0) {
-			float prevMeshletSize = baseMeshletSize * getLODScale(float(morphLOD - 1));
-			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(morphLOD - 1));
-			vec2  prevRelSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize - uCameraPosition.xz;
-			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
-
-			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
-			vec2 quadCenterRel = relMeshletMinXZ + quadCenterLocal;
-
-			vec2 dist = abs(quadCenterRel - prevRelSnap);
-
-			if (max(dist.x, dist.y) < prevExtent - (parentMeshletSize * 0.01)) {
-				cullQuad = true;
+		if (lx + ly < 10u) {
+			uint lowerIdx = 0u;
+			for (uint r = 0u; r < ly; ++r) {
+				lowerIdx += (10u - r) + (9u - r);
 			}
+			lowerIdx += lx * 2u;
+
+			gl_PrimitiveTriangleIndicesEXT[lowerIdx] = uvec3(vA, vB, vC);
+			gl_MeshPrimitivesEXT[lowerIdx].gl_CullPrimitiveEXT = false;
 		}
 
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 0].gl_CullPrimitiveEXT = cullQuad;
-		gl_MeshPrimitivesEXT[quadIdx * 2 + 1].gl_CullPrimitiveEXT = cullQuad;
-	}
+		if (lx + ly < 9u) {
+			uint upperIdx = 0u;
+			for (uint r = 0u; r < ly; ++r) {
+				upperIdx += (10u - r) + (9u - r);
+			}
+			upperIdx += lx * 2u + 1u;
 
-	if (ly == 0 && lx < 10 && lx % 2 == 0) { // Top edge
-		uint s = lx / 2;
-		uint v0 = lx;
-		uint v1 = lx + 2;
-		uint k0 = 121 + s;
-		uint k1 = 121 + s + 1;
-		uint primIdx = 200 + s * 2;
-
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
-	}
-
-	if (ly == 10 && lx < 10 && lx % 2 == 0) { // Bottom edge
-		uint s = lx / 2;
-		uint v0 = 110 + lx;
-		uint v1 = 110 + lx + 2;
-		uint k0 = 121 + 6 + s;
-		uint k1 = 121 + 6 + s + 1;
-		uint primIdx = 210 + s * 2;
-
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
-	}
-
-	if (lx == 0 && ly < 10 && ly % 2 == 0) { // Left edge
-		uint s = ly / 2;
-		uint v0 = ly * 11;
-		uint v1 = (ly + 2) * 11;
-		uint k0 = (s == 0) ? 121 : (121 + 12 + (s - 1));
-		uint k1 = (s + 1 == 5) ? 127 : (121 + 12 + s);
-		uint primIdx = 220 + s * 2;
-
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v1, k1, v0);
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v0, k1, k0);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
-	}
-
-	if (lx == 10 && ly < 10 && ly % 2 == 0) { // Right edge
-		uint s = ly / 2;
-		uint v0 = ly * 11 + 10;
-		uint v1 = (ly + 2) * 11 + 10;
-		uint k0 = (s == 0) ? 126 : (121 + 16 + (s - 1));
-		uint k1 = (s + 1 == 5) ? 132 : (121 + 16 + s);
-		uint primIdx = 230 + s * 2;
-
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 0] = uvec3(v0, k0, v1);
-		gl_PrimitiveTriangleIndicesEXT[primIdx + 1] = uvec3(v1, k0, k1);
-		gl_MeshPrimitivesEXT[primIdx + 0].gl_CullPrimitiveEXT = false;
-		gl_MeshPrimitivesEXT[primIdx + 1].gl_CullPrimitiveEXT = false;
+			gl_PrimitiveTriangleIndicesEXT[upperIdx] = uvec3(vB, vD, vC);
+			gl_MeshPrimitivesEXT[upperIdx].gl_CullPrimitiveEXT = false;
+		}
 	}
 }

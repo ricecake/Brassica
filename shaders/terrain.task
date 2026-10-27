@@ -1,40 +1,50 @@
 #version 460
 #extension GL_EXT_mesh_shader : require
 #extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 #include "bindless.glsl"
 #include "common.glsl"
-#include "terrain.glsl"
+#include "cbt.glsl"
 #include "helpers/culling.glsl"
 
-// Self-occlusion cull: skip emitting a sub-tile fully hidden behind a nearer, higher ridge.
-// Toggle via shader hot-reload, no C++ change needed.
-#ifndef TERRAIN_TASK_TERRAIN_OCCLUSION
-#define TERRAIN_TASK_TERRAIN_OCCLUSION 1
-#endif
-
 layout(push_constant) uniform TerrainPushConstants {
-	uvec4 gridParams; // x = numLODs, y = meshletsPerRow, z = totalMeshlets, w = textureDim
+	uvec4 gridParams;
 	uint  clipmapIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
-}
-params;
+	uint  cbtPoolIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+} params;
 
 struct TaskPayload {
-    vec2 relMeshletMinXZ[512];
-    uint renderLOD[512];
-    uint morphLOD[512];
-    uint childXY[512];         // NEW: (cy << 16) | cx
+	uint64_t bisectorID[32];
+	uint     cachePage[32];
+	uint     depth[32];
+	vec2     v0[32];
+	vec2     v1[32];
+	vec2     v2[32];
+	uint     twinDepth[32];
+	uint     nextDepth[32];
+	uint     prevDepth[32];
 };
 
 taskPayloadSharedEXT TaskPayload payload;
 
 shared uint meshletCount;
+
+layout(std430, buffer_reference) buffer BisectorPool {
+	Bisector bisectors[];
+};
+
+layout(std430, buffer_reference) buffer GeometryCacheBuffer {
+	GeometryCacheHeader headers[];
+};
 
 void main() {
 	uint threadID = gl_LocalInvocationID.x;
@@ -44,152 +54,48 @@ void main() {
 	}
 	barrier();
 
-	uint meshletID = gl_WorkGroupID.x * 32 + threadID;
+	uint bisectorIdx = gl_WorkGroupID.x * 32u + threadID;
 
 	bool visible = false;
-	uint lodLevel = 0;
+	if (bisectorIdx < params.activeBisectorCount && params.cbtPoolIndex > 0u) {
+		BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
+		Bisector b = pool.bisectors[bisectorIdx];
 
-	if (meshletID < params.gridParams.z) {
-		uint meshletsPerRow = params.gridParams.y;
-		uint totalPerLOD = meshletsPerRow * meshletsPerRow;
-		lodLevel = min(meshletID / totalPerLOD, params.gridParams.x - 1);
-		uint localID = meshletID % totalPerLOD;
+		vec2 center2D = (b.v0 + b.v1 + b.v2) / 3.0;
+		float drop0 = cbt_apply_fake_curvature(b.v0);
+		float drop1 = cbt_apply_fake_curvature(b.v1);
+		float drop2 = cbt_apply_fake_curvature(b.v2);
 
-		uint row = localID / meshletsPerRow;
-		uint col = localID % meshletsPerRow;
-
-		float baseMeshletSize = 32.0;
-		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
-		float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
-
-		vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
-		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
-
-		vec3 relMinB = vec3(
-			relCameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-			-500.0 - uCameraPosition.y,
-			relCameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
-		);
-		vec3 relMaxB = relMinB + vec3(meshletSize, 2500.0, meshletSize);
-
-		if (params.minMaxIndex > 0u) {
-			vec2 centerXZ = cameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5 + vec2(0.5)) * meshletSize;
-			// vec2 minMax = sampleTerrainMinMax(
-			// 	params.minMaxIndex,
-			// 	centerXZ,
-			// 	lodLevel,
-			// 	params.gridParams.w
-			// );
-			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, centerXZ, lodLevel, 5, params.gridParams.w);
-			relMinB.y = minMax.x - 100.0 - uCameraPosition.y;
-			relMaxB.y = minMax.y + 100.0 - uCameraPosition.y;
+		vec2 minMaxH = vec2(-100.0, 500.0);
+		if (params.cbtCacheIndex > 0u && b.cachePage != CBT_INVALID_PAGE) {
+			GeometryCacheBuffer cache = GeometryCacheBuffer(uSSBOBuffers[params.cbtCacheIndex]);
+			minMaxH = cache.headers[b.cachePage].minMax;
 		}
 
-		vec2 maxRel = max(abs(relMinB.xz), abs(relMaxB.xz));
-		float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
-		relMinB.y -= maxDropOff;
+		vec3 p0 = vec3(b.v0.x, minMaxH.x + drop0 - uCameraPosition.y, b.v0.y);
+		vec3 p1 = vec3(b.v1.x, minMaxH.y + drop1 - uCameraPosition.y, b.v1.y);
+		vec3 p2 = vec3(b.v2.x, minMaxH.y + drop2 - uCameraPosition.y, b.v2.y);
 
-		bool skipHorizonCull = (lodLevel <= 1 || max(maxRel.x, maxRel.y) < meshletSize * 2.5);
-		if (skipHorizonCull) {
-			relMinB.y = min(relMinB.y, -1000.0 - uCameraPosition.y);
-			relMaxB.y = max(relMaxB.y, 3000.0 - uCameraPosition.y);
-		}
+		vec3 relMinB = min(p0, min(p1, p2));
+		vec3 relMaxB = max(p0, max(p1, p2));
 
 		mat4 viewRel = mat4(mat3(uViewMatrix));
 		mat4 viewProjRel = uProjMatrix * viewRel;
 
 		visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(100.0, 300.0, 100.0), -200.0);
 
-		// Gentle horizon cull: skip it for the near/low-LOD tiles above, whose Y bounds were
-		// just artificially widened to a fixed [-1000,3000] band -- feeding that fabricated
-		// height into the horizon test would produce a meaningless result.
-		if (visible && !skipHorizonCull) {
-			vec2  closestXZ = clamp(vec2(0.0), relMinB.xz, relMaxB.xz);
-			float tileDist = length(closestXZ);
-			float camAltitude = uCameraPosition.y - params.waterLevel;
-			float tileMaxYAboveRef = (relMaxB.y + uCameraPosition.y) - params.waterLevel;
-			float slack = meshletSize * 4.0 + 500.0;
-			if (isBeyondHorizon(tileDist, tileMaxYAboveRef, camAltitude, slack)) {
-				visible = false;
-			}
-		}
-
-		if (visible && lodLevel > 0) {
-			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
-			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
-			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;
-			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
-
-			bool insideX = relMinB.x >= prevRelSnap.x - prevExtent && relMaxB.x <= prevRelSnap.x + prevExtent;
-			bool insideZ = relMinB.z >= prevRelSnap.y - prevExtent && relMaxB.z <= prevRelSnap.y + prevExtent;
-
-			if (insideX && insideZ) {
-				visible = false;
-			}
-		}
-
-#if TERRAIN_TASK_TERRAIN_OCCLUSION
-		// Only for tiles the near/low-LOD widening above never touches (skipHorizonCull's same
-		// lodLevel<=1 band stays untouched here too) -- a near tile is never worth the march.
-		if (visible && lodLevel >= 2u && params.minMaxIndex > 0u) {
-			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
-				params.minMaxIndex,
-				params.gridParams.w,
-				params.gridParams.x,
-				params.waterLevel
-			);
-			vec3 worldMinB = relMinB + uCameraPosition.xyz;
-			vec3 worldMaxB = relMaxB + uCameraPosition.xyz;
-			worldMaxB.y += meshletSize * 0.1 + 20.0; // ridge-edge slack so edges don't flicker
-			float occlusionSlack = meshletSize * 2.0 + 100.0;
-			if (isAABBOccludedByTerrain(occCtx, worldMinB, worldMaxB, occlusionSlack)) {
-				visible = false;
-			}
-		}
-#endif
-
 		if (visible) {
-			// 1. Sample Variance
-			vec2 centerXZ = uCameraPosition.xz + relMinB.xz + (meshletSize * 0.5);
-			float variance = sampleTerrainClipmap(params.clipmapIndex, centerXZ, lodLevel, params.gridParams.w).g;
-
-			// 2. Calculate Screen-Space Error (SSE)
-			float nodeSpacing = meshletSize / 10.0;
-			float geomError = variance * nodeSpacing * 2.5; // Scale to your specific heightmap amplitude
-
-			vec3 closestPoint = clamp(vec3(0.0), relMinB, relMaxB); // Camera is at 0,0,0
-			float dist = max(length(closestPoint), 1.0);
-
-			float K = 1000.0; // Pass ScreenHeight / (2 * tan(FOV/2)) via push constants later
-			float sse = (geomError * K) / dist;
-
-			// 3. Determine Subdivision (Target LOD)
-			uint targetLOD = lodLevel;
-			if (sse > 4.0 && lodLevel >= 2) targetLOD = lodLevel - 2; // Subdivide into 16
-			else if (sse > 1.5 && lodLevel >= 1) targetLOD = lodLevel - 1; // Subdivide into 4
-
-			// 4. Allocate and Emit
-			uint lodDiff = lodLevel - targetLOD;
-			uint emitCount = 1 << (lodDiff * 2); // 1, 4, or 16 meshlets
-
-			uint baseIdx = atomicAdd(meshletCount, emitCount);
-
-			float subSize = baseMeshletSize * getLODScale(float(targetLOD));
-			uint gridDim = 1 << lodDiff;
-
-			// Inside the emit loop in terrain.task
-			for (uint i = 0; i < emitCount; i++) {
-				uint lx = i % gridDim;
-				uint ly = i / gridDim;
-
-				uint writeIdx = baseIdx + i;
-				if (writeIdx < 512u) {
-					payload.relMeshletMinXZ[writeIdx] = relMinB.xz + vec2(lx, ly) * subSize;
-					payload.renderLOD[writeIdx] = targetLOD;
-					payload.morphLOD[writeIdx] = lodLevel;
-					payload.childXY[writeIdx] = (ly << 16) | lx; // Track local grid position
-				}
+			uint writeIdx = atomicAdd(meshletCount, 1u);
+			if (writeIdx < 32u) {
+				payload.bisectorID[writeIdx] = b.id;
+				payload.cachePage[writeIdx] = b.cachePage;
+				payload.depth[writeIdx] = b.depth;
+				payload.v0[writeIdx] = b.v0;
+				payload.v1[writeIdx] = b.v1;
+				payload.v2[writeIdx] = b.v2;
+				payload.twinDepth[writeIdx] = b.depth;
+				payload.nextDepth[writeIdx] = b.depth;
+				payload.prevDepth[writeIdx] = b.depth;
 			}
 		}
 	}
@@ -197,6 +103,6 @@ void main() {
 	barrier();
 
 	if (threadID == 0) {
-		EmitMeshTasksEXT(min(meshletCount, 512u), 1, 1);
+		EmitMeshTasksEXT(min(meshletCount, 32u), 1, 1);
 	}
 }

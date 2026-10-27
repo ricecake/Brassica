@@ -24,13 +24,6 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	// Mirrors terrain.task/terrain.mesh's shared push_constant block exactly. clipmapIndex is the
-	// only field the old TerrainPushConstants didn't have -- the terrain clipmap moved from
-	// TerrainPass's own set-1 combined-image-sampler binding to a bindless index here, same
-	// change DeferredNode already made. terrain.task doesn't read clipmapIndex (it doesn't sample
-	// the clipmap at all), but still shares this struct: a stage only needs to declare the
-	// prefix of a push-constant block it actually uses, and every existing field's offset is
-	// unchanged since clipmapIndex is strictly appended at the end.
 	struct TerrainPushConstants {
 		glm::uvec4 gridParams{
 			constants::Class::Terrain::DefaultMaxLODs,
@@ -43,27 +36,14 @@ namespace brassica {
 		std::uint32_t biomeIndex{0};
 		float         waterLevel{0.0f};
 		std::uint32_t weatherBiomeIndex{0};
+		std::uint32_t cbtPoolIndex{0};
+		std::uint32_t cbtCacheIndex{0};
+		std::uint32_t activeBisectorCount{2};
 	};
 
-	static_assert(sizeof(TerrainPushConstants) == 36, "TerrainPushConstants size must be 36 bytes");
+	static_assert(sizeof(TerrainPushConstants) == 48, "TerrainPushConstants size must be 48 bytes");
 
-	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
-	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
-	// every sampled input is a bindless index, resolved through NodeContext::Index<K>() below.
-	// The BLAS/TLAS build stays entirely out-of-band, unchanged, now owned by
-	// TerrainAccelerationStructure (terrain/TerrainAccelerationStructure.hpp) rather than a
-	// class that also used to own a pipeline.
-	//
-	// Like GradientNode/DeferredNode, reconstructed fresh every frame -- pipelineLibrary/
-	// taskShader/meshShader/fragShader point at Engine-owned, persistent state, and
-	// ResolveCached makes re-resolving the same request every frame a cache hit.
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
-		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
-		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
-		// VRS-ignoring behavior -- the old hand-rolled pipeline never chained the VRS pNext at
-		// all, so this is a deliberately pixel-identical port; flipping it to honor the mesh
-		// shader's own per-primitive gl_PrimitiveShadingRateEXT writes is a separate,
-		// separately-validated follow-up.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eBack,
 			.depthTest = true,
@@ -76,6 +56,16 @@ namespace brassica {
 		TaskShader                    taskShader;
 		MeshShader                    meshShader;
 		FragmentShader                fragShader;
+		ComputeShader                 cbtResetCounterComp;
+		ComputeShader                 cbtCachePointersComp;
+		ComputeShader                 cbtResetCommandsComp;
+		ComputeShader                 cbtGenerateCommandsComp;
+		ComputeShader                 cbtReserveBlocksComp;
+		ComputeShader                 cbtFillBlocksComp;
+		ComputeShader                 cbtUpdateNeighborsComp;
+		ComputeShader                 cbtUpdateBitfieldComp;
+		ComputeShader                 cbtSumReductionComp;
+		ComputeShader                 cbtTerrainBakeComp;
 		TerrainAccelerationStructure* terrainAS = nullptr;
 		TerrainPushConstants          push{};
 
@@ -84,7 +74,17 @@ namespace brassica {
 			terrainAS = services.terrainAS;
 			if (!taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task") ||
 			    !meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh") ||
-			    !fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag")) {
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag") ||
+			    !cbtResetCounterComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_reset_counter.comp") ||
+			    !cbtCachePointersComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_cache_pointers.comp") ||
+			    !cbtResetCommandsComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_reset_commands.comp") ||
+			    !cbtGenerateCommandsComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_generate_commands.comp") ||
+			    !cbtReserveBlocksComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_reserve_blocks.comp") ||
+			    !cbtFillBlocksComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_fill_blocks.comp") ||
+			    !cbtUpdateNeighborsComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_update_neighbors.comp") ||
+			    !cbtUpdateBitfieldComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_update_bitfield.comp") ||
+			    !cbtSumReductionComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_sum_reduction.comp") ||
+			    !cbtTerrainBakeComp.CompileComputeFromFile(services.device, "shaders/terrain/cbt_terrain_bake.comp")) {
 				spdlog::critical("TerrainNode shader compilation failed.");
 				throw std::runtime_error("TerrainNode shader compilation failed.");
 			}
@@ -105,12 +105,32 @@ namespace brassica {
 			watcher.RegisterShader(&taskShader);
 			watcher.RegisterShader(&meshShader);
 			watcher.RegisterShader(&fragShader);
+			watcher.RegisterShader(&cbtResetCounterComp);
+			watcher.RegisterShader(&cbtCachePointersComp);
+			watcher.RegisterShader(&cbtResetCommandsComp);
+			watcher.RegisterShader(&cbtGenerateCommandsComp);
+			watcher.RegisterShader(&cbtReserveBlocksComp);
+			watcher.RegisterShader(&cbtFillBlocksComp);
+			watcher.RegisterShader(&cbtUpdateNeighborsComp);
+			watcher.RegisterShader(&cbtUpdateBitfieldComp);
+			watcher.RegisterShader(&cbtSumReductionComp);
+			watcher.RegisterShader(&cbtTerrainBakeComp);
 		}
 
 		void Destroy(vk::Device device) {
 			taskShader.Destroy(device);
 			meshShader.Destroy(device);
 			fragShader.Destroy(device);
+			cbtResetCounterComp.Destroy(device);
+			cbtCachePointersComp.Destroy(device);
+			cbtResetCommandsComp.Destroy(device);
+			cbtGenerateCommandsComp.Destroy(device);
+			cbtReserveBlocksComp.Destroy(device);
+			cbtFillBlocksComp.Destroy(device);
+			cbtUpdateNeighborsComp.Destroy(device);
+			cbtUpdateBitfieldComp.Destroy(device);
+			cbtSumReductionComp.Destroy(device);
+			cbtTerrainBakeComp.Destroy(device);
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
@@ -118,13 +138,6 @@ namespace brassica {
 			push.waterLevel = p.waterLevel;
 		}
 
-		// clearColor = {0,0,0,0}, not the default opaque black: deferred.frag reads
-		// albedo.a < 0.01 as "no terrain rendered at this pixel, show the gradient background
-		// instead" (see ResourceRealization::clearColor's comment, Execution.hpp). Applied to
-		// all four color targets, matching this node's pre-conversion Recipe exactly, even
-		// though only albedo's alpha is actually read. Read<TerrainClipmapTexture/MinMaxTexture/
-		// BiomeTexture/WeatherBiomeTexture>() are all safe now (the last one restored in S4 --
-		// catalog-converted since batch 5, just never re-added then).
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Create<GBufferPosition>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
@@ -136,6 +149,11 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Create<CBTBitfieldBuffer>();
+			r.Create<CBTBisectorPoolBuffer>();
+			r.Create<CBTCommandsBuffer>();
+			r.Create<CBTPageTableBuffer>();
+			r.Create<CBTGeometryCacheBuffer>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -143,6 +161,43 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.cbtPoolIndex = ctx.StorageIndex<CBTBisectorPoolBuffer>();
+			push.cbtCacheIndex = ctx.StorageIndex<CBTGeometryCacheBuffer>();
+			push.activeBisectorCount = 2; // Initial root bisectors
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+
+			// Dispatch CBT compute passes
+			uint32_t computeGroups = (push.activeBisectorCount + 63) / 64;
+			render::BindCompute(ctx, *pipelineLibrary, cbtResetCounterComp, push);
+			vkCmd.dispatch(1, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtCachePointersComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtResetCommandsComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtGenerateCommandsComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtReserveBlocksComp, push);
+			vkCmd.dispatch(1, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtFillBlocksComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtUpdateNeighborsComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtUpdateBitfieldComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtSumReductionComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
+
+			render::BindCompute(ctx, *pipelineLibrary, cbtTerrainBakeComp, push);
+			vkCmd.dispatch(computeGroups, 1, 1);
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{
@@ -166,8 +221,7 @@ namespace brassica {
 				return;
 			}
 
-			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			uint32_t          taskGroupCount = (push.gridParams.z + 31) / 32;
+			uint32_t taskGroupCount = (push.activeBisectorCount + 31) / 32;
 			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
 			}

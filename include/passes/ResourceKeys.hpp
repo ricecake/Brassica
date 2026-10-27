@@ -576,4 +576,40 @@ namespace brassica {
 
 	struct MaterialBuffer {};
 
+	// CBTv2 Terrain Storage Buffers
+	struct CBTBitfieldBuffer {
+		std::size_t sizeInBytes = 1024 * 1024; // 1 MB bitfield
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return graph::StorageBufferDesc(sizeInBytes);
+		}
+	};
+
+	struct CBTBisectorPoolBuffer {
+		std::size_t sizeInBytes = 128 * 1024 * 128; // ~16 MB bisector pool
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return graph::StorageBufferDesc(sizeInBytes);
+		}
+	};
+
+	struct CBTCommandsBuffer {
+		std::size_t sizeInBytes = 128 * 1024 * 16; // Split/merge commands buffer
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return graph::StorageBufferDesc(sizeInBytes);
+		}
+	};
+
+	struct CBTPageTableBuffer {
+		std::size_t sizeInBytes = 64 * 1024 * 16; // Page table
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return graph::StorageBufferDesc(sizeInBytes);
+		}
+	};
+
+	struct CBTGeometryCacheBuffer {
+		std::size_t sizeInBytes = 4096 * 2048; // Cache pages store
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return graph::StorageBufferDesc(sizeInBytes);
+		}
+	};
+
 } // namespace brassica
