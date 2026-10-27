@@ -21,6 +21,16 @@ int main(int argc, char** argv) {
 		.help("Path to output directory or file")
 		.default_value(std::string(""));
 
+	program.add_argument("-D", "--define")
+		.help("Register constant for variable interpolation (e.g. -D NAME=VALUE or -D NAME)")
+		.append()
+		.default_value(std::vector<std::string>{});
+
+	program.add_argument("-C", "--constant")
+		.help("Register constant for variable interpolation (e.g. -C NAME=VALUE or -C NAME)")
+		.append()
+		.default_value(std::vector<std::string>{});
+
 	program.add_argument("pos_input")
 		.help("Positional input shader file or directory")
 		.default_value(std::string(""))
@@ -60,6 +70,28 @@ int main(int argc, char** argv) {
 	if (!fs::exists(inFsPath)) {
 		spdlog::error("Input path does not exist: {}", inputPath);
 		return 1;
+	}
+
+	brassica::Shader::RegisterDefaultConstants();
+
+	auto processDefinitions = [](const std::vector<std::string>& defs) {
+		for (const auto& def : defs) {
+			size_t eqPos = def.find('=');
+			if (eqPos != std::string::npos) {
+				std::string name = def.substr(0, eqPos);
+				std::string val = def.substr(eqPos + 1);
+				brassica::Shader::RegisterConstant(name, val);
+			} else {
+				brassica::Shader::RegisterConstant(def, "1");
+			}
+		}
+	};
+
+	if (program.is_used("-D")) {
+		processDefinitions(program.get<std::vector<std::string>>("-D"));
+	}
+	if (program.is_used("-C")) {
+		processDefinitions(program.get<std::vector<std::string>>("-C"));
 	}
 
 	bool   isSuccess = true;

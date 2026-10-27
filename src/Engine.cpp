@@ -2302,10 +2302,7 @@ namespace brassica {
 		bindlessSamplers[2] = makeSampler(vk::Filter::eLinear, vk::SamplerAddressMode::eRepeat, true);
 		bindlessSamplers[3] = makeSampler(vk::Filter::eNearest, vk::SamplerAddressMode::eRepeat, false);
 
-		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
-		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
-		Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
-		Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+		Shader::RegisterDefaultConstants();
 
 		std::array<vk::DescriptorImageInfo, 4> samplerInfos{};
 		for (std::uint32_t i = 0; i < 4; ++i) {
