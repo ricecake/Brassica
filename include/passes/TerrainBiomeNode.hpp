@@ -191,42 +191,37 @@ namespace brassica {
 				);
 				insertComputeBarrier(vkCmd);
 
-				// Run full grid iterations on startup to settle climate, moisture, vegetation, and biomes
-				constexpr std::uint32_t kStartupFullIterations = 40;
-				bool currentPingPong = false; // Start with Map A -> Map B
-
-				for (std::uint32_t iter = 0; iter < kStartupFullIterations; ++iter) {
-					std::uint32_t inStateIdx1 = currentPingPong ? weatherMapBIdx : weatherMapAIdx;
-					std::uint32_t inStateIdx2 = currentPingPong ? biomeMapBIdx : biomeMapAIdx;
-					std::uint32_t outStateIdx1 = currentPingPong ? weatherMapAIdx : weatherMapBIdx;
-					std::uint32_t outStateIdx2 = currentPingPong ? biomeMapAIdx : biomeMapBIdx;
-
-					DispatchCompute2D(
-						ctx,
-						caShader,
-						ClimateCAPushConstants{
-							.inMapStorageIdx1 = inStateIdx1,
-							.inMapStorageIdx2 = inStateIdx2,
-							.outMapStorageIdx1 = outStateIdx1,
-							.outMapStorageIdx2 = outStateIdx2,
-							.weatherOutStorageIdx = mainWeatherIdx,
-							.biomeOutStorageIdx = mainBiomeIdx,
-							.textureDim = textureDim,
-							.cellOffset = 0,
-							.cellsPerUpdate = textureDim, // Full grid update
-							.pad = 0
-						},
-						textureDim,
-						textureDim
-					);
-					insertComputeBarrier(vkCmd);
-					currentPingPong = !currentPingPong;
-				}
-
-				pingPongState = currentPingPong;
 				cellOffset = 0;
+				std::uint32_t cellsToProcess = std::min(cellsPerUpdate, textureDim - cellOffset);
+
+				// First Cellular Automata partial update step from Map A -> Map B, writing outputs to main weather and biome maps
+				DispatchCompute2D(
+					ctx,
+					caShader,
+					ClimateCAPushConstants{
+						.inMapStorageIdx1 = weatherMapAIdx,
+						.inMapStorageIdx2 = biomeMapAIdx,
+						.outMapStorageIdx1 = weatherMapBIdx,
+						.outMapStorageIdx2 = biomeMapBIdx,
+						.weatherOutStorageIdx = mainWeatherIdx,
+						.biomeOutStorageIdx = mainBiomeIdx,
+						.textureDim = textureDim,
+						.cellOffset = cellOffset,
+						.cellsPerUpdate = cellsToProcess,
+						.pad = 0
+					},
+					textureDim,
+					cellsToProcess
+				);
+
+				cellOffset += cellsToProcess;
+				if (cellOffset >= textureDim) {
+					cellOffset = 0;
+					pingPongState = true;
+				} else {
+					pingPongState = false;
+				}
 				hasEverGenerated = true;
-				forceRegeneration = false;
 			} else {
 				std::uint32_t inStateIdx1 = pingPongState ? weatherMapBIdx : weatherMapAIdx;
 				std::uint32_t inStateIdx2 = pingPongState ? biomeMapBIdx : biomeMapAIdx;
