@@ -30,6 +30,8 @@ namespace brassica {
 		float     windInfluence{1.0f};
 		uint32_t  enabled{1};
 		float     flowerRatio{0.1f};
+		float     clumpDensity{1.0f};
+		float     bladeDensity{1.0f};
 	};
 
 	struct GlobalGrassProperties {
@@ -52,6 +54,8 @@ namespace brassica {
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
 		uint32_t enableOcclusionCulling{1};
+		float    clumpDensity{1.0f};
+		float    bladeDensity{1.0f};
 	};
 
 	struct FoliageState {
@@ -74,6 +78,8 @@ namespace brassica {
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
 		bool     enableOcclusionCulling{true};
+		float    clumpDensity{1.0f};
+		float    bladeDensity{1.0f};
 
 		auto GetReflection() {
 			return std::make_tuple(
@@ -115,6 +121,22 @@ namespace brassica {
 					"Wind Multiplier",
 					&FoliageState::windMultiplier,
 					0.0f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"clumpDensity",
+					"Clump Density",
+					&FoliageState::clumpDensity,
+					0.1f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"bladeDensity",
+					"Blade Density",
+					&FoliageState::bladeDensity,
+					0.1f,
 					5.0f,
 					UIHint::Slider
 				),
@@ -181,6 +203,22 @@ namespace brassica {
 					"Wind Multiplier",
 					&FoliageState::windMultiplier,
 					0.0f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"clumpDensity",
+					"Clump Density",
+					&FoliageState::clumpDensity,
+					0.1f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"bladeDensity",
+					"Blade Density",
+					&FoliageState::bladeDensity,
+					0.1f,
 					5.0f,
 					UIHint::Slider
 				),

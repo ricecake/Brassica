@@ -48,17 +48,19 @@ namespace brassica {
 		float         densityMultiplier{1.0f};
 		float         windMultiplier{1.0f};
 		float         rigidityMultiplier{1.0f};
-		// Appended, not interleaved -- see feedback_push_constant_struct_editing. These replace
-		// what used to be padding0/padding1 (same offsets, same size) plus a real append after.
+		// Appended, not interleaved -- see feedback_push_constant_struct_editing.
 		std::uint32_t biomeTableIndex{0};
 		float         baseScale{0.5f};
 		float         waterLevel{0.0f};
 		std::uint32_t terrainNumLevels{8};
 		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling
 		std::uint32_t hizIndex{0};     // bindless index for History<HiZTexture>
+		std::uint32_t passIndex{0};    // Pass 0: Grass, Pass 1: Understory/Flowers/Bushes, Pass 2: Trees
+		float         clumpDensity{1.0f};
+		float         bladeDensity{1.0f};
 	};
 
-	static_assert(sizeof(FoliagePushConstants) == 116, "FoliagePushConstants size must be 116 bytes");
+	static_assert(sizeof(FoliagePushConstants) == 128, "FoliagePushConstants size must be 128 bytes");
 
 	// S4: no kPhase -- see EntityNode.hpp's identical reasoning (TerrainNode's Create-before-
 	// accessor orders this node after it, and every reader of the shared GBuffer keys gets a
@@ -138,6 +140,8 @@ namespace brassica {
 				push.rigidityMultiplier = props.rigidityMultiplier;
 				push.baseScale = props.baseScale;
 				push.foliageFlags = (props.enableOcclusionCulling != 0u) ? 1u : 0u;
+				push.clumpDensity = props.clumpDensity;
+				push.bladeDensity = props.bladeDensity;
 
 				push.gridParams.x = props.maxLODs;
 				push.gridParams.y = props.tilesPerRow;
@@ -194,24 +198,31 @@ namespace brassica {
                 vk::Format::eR16G16B16A16Sfloat,
                 vk::Format::eR8G8B8A8Srgb
             };
-			render::ResolvedPipeline resolved = render::BindGraphics(
-				ctx,
-				*pipelineLibrary,
-				stages,
-				kPipelineState,
-				colorFormats,
-				push,
-				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
-				vk::Format::eD32Sfloat
-			);
-			if (!resolved.pipeline) {
-				return;
-			}
-
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			uint32_t          taskGroupCount = (push.gridParams.z + 31) / 32;
-			if (dls && dls->vkCmdDrawMeshTasksEXT) {
-				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, *dls);
+
+			// Dispatch multi-pass foliage rendering:
+			// Pass 0: Grass & Seaweed (Groundcover)
+			// Pass 1: Flowers, Ferns, Rocks & Bushes (Understory)
+			// Pass 2: Trees & Cacti (Overstory)
+			for (uint32_t pass = 0; pass < 3; ++pass) {
+				push.passIndex = pass;
+				render::ResolvedPipeline resolved = render::BindGraphics(
+					ctx,
+					*pipelineLibrary,
+					stages,
+					kPipelineState,
+					colorFormats,
+					push,
+					vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+					vk::Format::eD32Sfloat
+				);
+				if (!resolved.pipeline) {
+					continue;
+				}
+				if (dls && dls->vkCmdDrawMeshTasksEXT) {
+					vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, *dls);
+				}
 			}
 		}
 	};
