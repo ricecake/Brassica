@@ -16,6 +16,7 @@ namespace brassica {
 		m_state = FoliageState{};
 		PopulateDefaults();
 		SyncTableNode();
+		SyncLargeFoliageBuffers();
 	}
 
 	bool FoliageManager::IsEnabled() const {
@@ -59,6 +60,7 @@ namespace brassica {
 			.maxLODs = m_state.maxLODs,
 			.tilesPerRow = m_state.tilesPerRow,
 			.enableOcclusionCulling = m_state.enableOcclusionCulling ? 1u : 0u,
+			.enableHiZCulling = m_state.enableHiZCulling ? 1u : 0u,
 			.clumpDensity = m_state.clumpDensity,
 			.bladeDensity = m_state.bladeDensity,
 		};
@@ -84,6 +86,7 @@ namespace brassica {
 		m_state.maxLODs = props.maxLODs;
 		m_state.tilesPerRow = props.tilesPerRow;
 		m_state.enableOcclusionCulling = (props.enableOcclusionCulling != 0);
+		m_state.enableHiZCulling = (props.enableHiZCulling != 0);
 		m_state.clumpDensity = props.clumpDensity;
 		m_state.bladeDensity = props.bladeDensity;
 	}
@@ -253,6 +256,80 @@ namespace brassica {
 
 	void FoliageManager::RegisterTableNode(graph::Graph& frameGraph) {
 		frameGraph.RegisterRef(m_biomeTableNode);
+		frameGraph.RegisterRef(m_pageTableNode);
+		frameGraph.RegisterRef(m_meshletNode);
+	}
+
+	void FoliageManager::SyncLargeFoliageBuffers() {
+		std::array<LargeFoliagePageTableEntry, 4> pages{};
+		std::array<LargeFoliageMeshletGPU, 4> meshlets{};
+
+		// Variety 0: Pine Tree
+		pages[0] = LargeFoliagePageTableEntry{
+			.meshletOffset = 0u,
+			.meshletCount = 1u,
+			.vertexOffset = 0u,
+			.primitiveOffset = 0u,
+			.scaleAndRadius = glm::vec4(1.0f, 1.0f, 1.0f, 6.0f),
+			.varietyParams = glm::uvec4(0u, 0u, 0u, 0u),
+		};
+		meshlets[0] = LargeFoliageMeshletGPU{
+			.vertexOffset = 0u,
+			.vertexCount = 26u,
+			.primitiveOffset = 0u,
+			.primitiveCount = 21u,
+		};
+
+		// Variety 1: Palm Tree
+		pages[1] = LargeFoliagePageTableEntry{
+			.meshletOffset = 1u,
+			.meshletCount = 1u,
+			.vertexOffset = 26u,
+			.primitiveOffset = 21u,
+			.scaleAndRadius = glm::vec4(1.0f, 1.0f, 1.0f, 6.5f),
+			.varietyParams = glm::uvec4(1u, 0u, 0u, 0u),
+		};
+		meshlets[1] = LargeFoliageMeshletGPU{
+			.vertexOffset = 26u,
+			.vertexCount = 40u,
+			.primitiveOffset = 21u,
+			.primitiveCount = 28u,
+		};
+
+		// Variety 2: Deciduous Tree
+		pages[2] = LargeFoliagePageTableEntry{
+			.meshletOffset = 2u,
+			.meshletCount = 1u,
+			.vertexOffset = 66u,
+			.primitiveOffset = 49u,
+			.scaleAndRadius = glm::vec4(1.0f, 1.0f, 1.0f, 5.5f),
+			.varietyParams = glm::uvec4(2u, 0u, 0u, 0u),
+		};
+		meshlets[2] = LargeFoliageMeshletGPU{
+			.vertexOffset = 66u,
+			.vertexCount = 60u,
+			.primitiveOffset = 49u,
+			.primitiveCount = 98u,
+		};
+
+		// Variety 3: Cactus
+		pages[3] = LargeFoliagePageTableEntry{
+			.meshletOffset = 3u,
+			.meshletCount = 1u,
+			.vertexOffset = 126u,
+			.primitiveOffset = 147u,
+			.scaleAndRadius = glm::vec4(1.0f, 1.0f, 1.0f, 3.0f),
+			.varietyParams = glm::uvec4(3u, 0u, 0u, 0u),
+		};
+		meshlets[3] = LargeFoliageMeshletGPU{
+			.vertexOffset = 126u,
+			.vertexCount = 20u,
+			.primitiveOffset = 147u,
+			.primitiveCount = 14u,
+		};
+
+		m_pageTableNode.SetData(pages);
+		m_meshletNode.SetData(meshlets);
 	}
 
 	void FoliageManager::SyncTableNode() {

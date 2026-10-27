@@ -576,4 +576,8 @@ namespace brassica {
 
 	struct MaterialBuffer {};
 
+	struct LargeFoliagePageTableBuffer {};
+
+	struct LargeFoliageMeshletBuffer {};
+
 } // namespace brassica

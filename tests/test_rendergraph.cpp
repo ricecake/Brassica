@@ -64,12 +64,14 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 	frameGraph.Register<graph::Import<LightsBuffer>>();
 	frameGraph.Register<graph::Import<graph::History<HiZTexture>>>();
-	// FoliageBiomeTableTexture's real producer is a PredefinedTextureNode instance owned by
-	// FoliageManager (FoliageManager::RegisterTableNode, called alongside RegisterAllInto in
+	// FoliageBiomeTableTexture's and LargeFoliage*Buffer's real producers are PredefinedNode instances
+	// owned by FoliageManager (FoliageManager::RegisterTableNode, called alongside RegisterAllInto in
 	// Engine.cpp's real graph builds) -- not part of EngineNodeRegistry's auto-registered set,
 	// so this test has no FoliageManager to register it the real way. Same category as the
-	// other Import<>s above: a key whose producer lives outside the auto-registered set.
+	// other Import<>s above: keys whose producers live outside the auto-registered set.
 	frameGraph.Register<graph::Import<FoliageBiomeTableTexture>>();
+	frameGraph.Register<graph::Import<LargeFoliagePageTableBuffer>>();
+	frameGraph.Register<graph::Import<LargeFoliageMeshletBuffer>>();
 
 	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
 

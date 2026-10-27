@@ -26,9 +26,11 @@ TEST_CASE("FoliageManager state and global properties") {
 	props.tilesPerRow = 24u;
 	props.clumpDensity = 2.0f;
 	props.bladeDensity = 1.5f;
+	props.enableHiZCulling = 1u;
 	mgr.SetGlobalProperties(props);
 
 	brassica::GlobalGrassProperties updatedProps = mgr.GetGlobalProperties();
+	CHECK(updatedProps.enableHiZCulling == 1u);
 	CHECK(updatedProps.densityMultiplier == doctest::Approx(2.5f));
 	CHECK(updatedProps.lengthMultiplier == doctest::Approx(1.2f));
 	CHECK(updatedProps.rockRatio == doctest::Approx(0.12f));
@@ -70,13 +72,17 @@ TEST_CASE("FoliageNode registration and push constants sync") {
 	props.tilesPerRow = 16u;
 	props.clumpDensity = 1.8f;
 	props.bladeDensity = 2.2f;
+	props.enableOcclusionCulling = 1u;
+	props.enableHiZCulling = 1u;
 	foliageMgr->SetGlobalProperties(props);
 
 	brassica::FoliageNode node;
-	brassica::render::NodeFrameParams frameParams{.time = 12.34f};
+	brassica::render::NodeFrameParams frameParams{.terrainGridParams = glm::uvec4(8u, 16u, 2048u, 1088u), .time = 12.34f};
 	node.SetFrameParams(frameParams);
 
 	CHECK(node.push.windTime == doctest::Approx(12.34f));
+	CHECK((node.push.foliageFlags & 1u) == 1u);
+	CHECK((node.push.foliageFlags & 2u) == 2u);
 	CHECK(node.push.lodBaseRange == doctest::Approx(800.0f));
 	CHECK(node.push.rockRatio == doctest::Approx(0.3f));
 	CHECK(node.push.seaweedRatio == doctest::Approx(0.2f));

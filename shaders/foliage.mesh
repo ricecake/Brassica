@@ -12,7 +12,7 @@ layout(push_constant) uniform FoliagePushConstants {
 	uvec4 gridParams; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
 	uint  clipmapIndex;
 	uint  minMaxIndex;
-	uint  biomeIndex; // reserved -- see FoliageNode.hpp
+	uint  pageTableIndex;
 	uint  weatherBiomeIndex;
 	float windTime;
 	float lodBaseRange;
@@ -32,12 +32,12 @@ layout(push_constant) uniform FoliagePushConstants {
 	uint  biomeTableIndex;
 	float baseScale;
 	float waterLevel;
-	uint  terrainNumLevels;
-	uint  foliageFlags; // bit 0: terrain occlusion culling
-	uint  hizIndex; // unused here -- HiZ occlusion is task-shader-only; keeps layout matching foliage.task
+	uint  foliageFlags;
+	uint  hizIndex;
 	uint  passIndex;
 	float clumpDensity;
 	float bladeDensity;
+	uint  meshletBufferIndex;
 }
 params;
 
@@ -48,6 +48,31 @@ struct FoliageTaskPayload {
 };
 
 taskPayloadSharedEXT FoliageTaskPayload payload;
+
+// Large Foliage SSBO Page Table and Meshlet Data Layout
+struct LargeFoliagePageTableEntry {
+	uint meshletOffset;
+	uint meshletCount;
+	uint vertexOffset;
+	uint primitiveOffset;
+	vec4 scaleAndRadius;
+	uvec4 varietyParams;
+};
+
+struct LargeFoliageMeshletGPU {
+	uint vertexOffset;
+	uint vertexCount;
+	uint primitiveOffset;
+	uint primitiveCount;
+};
+
+layout(std430, set = 2, binding = 0) readonly buffer PageTableSSBO {
+	LargeFoliagePageTableEntry uPageTable[];
+};
+
+layout(std430, set = 2, binding = 1) readonly buffer MeshletSSBO {
+	LargeFoliageMeshletGPU uMeshlets[];
+};
 
 layout(location = 0) out vec3  outWorldPos[];
 layout(location = 1) out vec3  outNormal[];
@@ -75,15 +100,10 @@ vec3 rotateVector(vec3 v, vec3 axis, float angle) {
 	return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
 }
 
-// Ported from boidish's getWindDeflectionAngleAndAxis: bends a blade like a rigid rod pivoting
-// at its base (rotation) instead of shearing its cross-sections sideways by a fixed offset
-// (the old `+ sway * t*t` approach), so it keeps its real length under wind instead of
-// stretching. windMag/windDir come from this clump's already-computed scalar sway (Brassica has
-// no wind-field texture to sample a real per-blade wind vector from, unlike boidish); rigidity
-// resists weak wind entirely (threshold) and soft-clamps strong wind (tanh) instead of letting
-// it swing without bound. Per-blade tilt/sway variety (itemSeed-driven, matching boidish's own
-// windHash(seed+8888u)/windHash(seed+4321u) pattern) keeps blades from all swaying in lockstep.
-vec3 bendBladeVertex(vec3 initialRelativePos, float v, float windMag, vec3 windDir, float rigidity, uint itemSeed) {
+// Bends a blade like a rigid rod pivoting at base with non-linear curve & radial tilt (Ghost of Tsushima style)
+vec3 bendBladeVertex(
+	vec3 initialRelativePos, float v, float windMag, vec3 windDir, float rigidity, uint itemSeed, float radialTilt, vec2 radialDir
+) {
 	float clampedRigidity = clamp(rigidity, 0.0, 0.99);
 	const float maxDeflection = 1.3;
 	float windThreshold = clampedRigidity * 2.0;
@@ -93,11 +113,12 @@ vec3 bendBladeVertex(vec3 initialRelativePos, float v, float windMag, vec3 windD
 	float bendFactor = 1.0 - clampedRigidity;
 	float windBendAngle = bendFactor * resistedWindStrength * pow(v, 1.2) * smoothstep(0.05, 1.0, v);
 
-	float tiltFactor = (pcg_hash(itemSeed + 8888u) * 2.0 - 1.0) * 0.15;
+	// Per-blade tilt/sway variety + Ghost of Tsushima radial flare (outer blades tilt outward)
+	float tiltFactor = (pcg_hash(itemSeed + 8888u) * 2.0 - 1.0) * 0.15 + radialTilt;
 	float tiltAngle = tiltFactor * v;
 	float randomSway = (pcg_hash(itemSeed + 4321u) * 2.0 - 1.0) * 0.05 * v * v;
 
-	vec3 combinedDeflection = vec3(randomSway, 0.0, tiltAngle) + windDir * windBendAngle;
+	vec3 combinedDeflection = vec3(radialDir.x * tiltAngle + randomSway, 0.0, radialDir.y * tiltAngle) + windDir * windBendAngle;
 	float totalBendAngle = length(combinedDeflection);
 	if (totalBendAngle <= 0.0001) {
 		return initialRelativePos;
@@ -106,6 +127,7 @@ vec3 bendBladeVertex(vec3 initialRelativePos, float v, float windMag, vec3 windD
 	return rotateVector(initialRelativePos, rotationAxis, totalBendAngle);
 }
 
+// Emits dense, Ghost of Tsushima / GPUOpen style procedural grass blades per clump
 void emitBladeItem(
 	vec3  basePos,
 	float heightScale,
@@ -123,22 +145,21 @@ void emitBladeItem(
 	float colorVariability,
 	float rigidity,
 	float fade,
+	float radialTilt,
+	vec2  radialDir,
 	inout uint vCount,
 	inout uint pCount
 ) {
-	float height = (0.8 + pcg_hash(itemSeed + 2u) * 0.6) * heightScale * params.lengthMultiplier;
-	float width = (0.08 + pcg_hash(itemSeed + 3u) * 0.04) * widthScale * params.widthMultiplier;
+	float height = (0.85 + pcg_hash(itemSeed + 2u) * 0.5) * heightScale * params.lengthMultiplier;
+	float width = (0.09 + pcg_hash(itemSeed + 3u) * 0.04) * widthScale * params.widthMultiplier;
 	if (foliageType == 4u) {
 		height *= 2.2;
 		width *= 1.5;
 	}
-	// Boidish-style distance width boost: without it, a blade thin enough to look right up
-	// close shrinks under a pixel and shimmers/vanishes at range long before its LOD ring fade
-	// would otherwise hide it.
-	width *= 1.0 + 2.0 * smoothstep(64.0, 128.0, distToCam);
 
-	// windMag/windDir: this clump's scalar sway reinterpreted as a 2D wind vector (Brassica has
-	// no wind-field texture to sample a real one from, unlike boidish's getWindAtPosition).
+	// Distance width compensation so grass doesn't subpixel shimmer or vanish at range
+	width *= 1.0 + 1.8 * smoothstep(40.0, 120.0, distToCam);
+
 	float windMag = length(sway.xz);
 	vec3  windDir = (windMag > 0.001) ? normalize(vec3(sway.x, 0.0, sway.z)) : vec3(1.0, 0.0, 0.0);
 
@@ -157,31 +178,32 @@ void emitBladeItem(
 	vec3  camRightHoriz = vec3(-viewDirHoriz.z, 0.0, viewDirHoriz.x);
 	vec3  bladeDir = vec3(cos(angle), 0.0, sin(angle));
 	vec3  fixedSide = vec3(-bladeDir.z, 0.0, bladeDir.x);
-	// Boidish billboard floor: never less than 75% camera-facing, even right up close -- a purely
-	// fixed-orientation blade can go edge-on (and visually vanish) whenever the camera direction
-	// happens to line up with it, which clamp(dist/40,0,1)'s 0%-at-distance-0 floor allowed.
 	float facingBlend = max(0.75, smoothstep(5.5, 50.0, distToCam));
 	vec3  sideAxis = normalize(mix(fixedSide, camRightHoriz, facingBlend));
-	float taperExp = (foliageType == 4u) ? 1.5 : 2.0;
 
 	uint vBase = vCount;
-	// 5 segments along blade (6 cross-sections = 12 vertices, 10 triangles)
+	// 5 segments along blade (6 cross-sections = 12 vertices, 10 triangles per blade)
 	const float crossV[6] = float[6](0.0, 0.2, 0.4, 0.6, 0.8, 1.0);
 	for (uint s = 0u; s < 6u; ++s) {
 		float t = crossV[s];
-		float halfW = width * (1.0 - pow(t, taperExp)) * 0.5;
-		vec3  bentOffset = bendBladeVertex(vec3(0.0, height * t, 0.0), t, windMag, windDir, rigidity, itemSeed);
+		// Ghost of Tsushima tapering profile: slight swelling near base, smooth quadratic taper to sharp tip
+		float taper = (1.0 + 0.25 * sin(t * PI)) * (1.0 - t * t);
+		float halfW = width * taper * 0.5;
+
+		vec3  bentOffset = bendBladeVertex(vec3(0.0, height * t, 0.0), t, windMag, windDir, rigidity, itemSeed, radialTilt, radialDir);
 		vec3  centerAtT = basePos + bentOffset;
 		vec3  left = centerAtT - sideAxis * halfW;
 		vec3  right = centerAtT + sideAxis * halfW;
-		vec4  col = mix(bottomColor, topColor, t);
+
+		// Root Ambient Occlusion: darken blade base to eliminate ground gaps
+		vec4 rootAOColor = mix(bottomColor * vec4(0.35, 0.35, 0.35, 1.0), topColor, smoothstep(0.0, 0.4, t));
 
 		vec3 viewLeft = mat3(uViewMatrix) * left;
 		gl_MeshVerticesEXT[vBase + s * 2u].gl_Position = uProjMatrix * vec4(viewLeft, 1.0);
 		outWorldPos[vBase + s * 2u] = left + uCameraPosition.xyz;
 		outNormal[vBase + s * 2u] = terrainNormal;
 		outUV[vBase + s * 2u] = vec2(0.0, t);
-		outColor[vBase + s * 2u] = col;
+		outColor[vBase + s * 2u] = rootAOColor;
 		outMaterialType[vBase + s * 2u] = foliageType;
 		outFade[vBase + s * 2u] = fade;
 
@@ -190,7 +212,7 @@ void emitBladeItem(
 		outWorldPos[vBase + s * 2u + 1u] = right + uCameraPosition.xyz;
 		outNormal[vBase + s * 2u + 1u] = terrainNormal;
 		outUV[vBase + s * 2u + 1u] = vec2(1.0, t);
-		outColor[vBase + s * 2u + 1u] = col;
+		outColor[vBase + s * 2u + 1u] = rootAOColor;
 		outMaterialType[vBase + s * 2u + 1u] = foliageType;
 		outFade[vBase + s * 2u + 1u] = fade;
 	}
@@ -220,15 +242,12 @@ void emitFlowerItem(
 	inout uint pCount
 ) {
 	float height = (0.6 + pcg_hash(itemSeed + 2u) * 0.4) * heightScale * params.lengthMultiplier * 1.2;
-	// Widened from the original (0.05 + hash*0.03) -- the head profile below sizes itself off
-	// `height`, not `width`, so this only thickens the stem.
 	float width = (0.09 + pcg_hash(itemSeed + 3u) * 0.05) * widthScale * params.widthMultiplier;
 
 	vec3 fwdDir = vec3(cos(angle), 0.0, sin(angle));
 	vec3 sideDir = vec3(-fwdDir.z, 0.0, fwdDir.x) * width * 0.5;
 
 	uint vBase = vCount;
-	// Stem: 3 segments (4 cross-sections = 8 vertices, 6 triangles)
 	const float stemV[4] = float[4](0.0, 0.3, 0.6, 0.85);
 	for (uint s = 0u; s < 4u; ++s) {
 		float t = stemV[s];
@@ -262,7 +281,6 @@ void emitFlowerItem(
 	}
 	pCount += 6u;
 
-	// Boidish Flower Head Profile: 4 profile styles (Diamond, Bell, Star, Heart)
 	uint  headProfile = uint(pcg_hash(itemSeed + 8u) * 4.0) & 3u;
 	float headSize = height * 0.45;
 	vec3  tipCenter = basePos + vec3(0.0, height, 0.0) + sway;
@@ -270,17 +288,16 @@ void emitFlowerItem(
 	float hue = pcg_hash(itemSeed + 9u);
 	vec4  petalColor;
 	if (hue < 0.25) {
-		petalColor = vec4(0.98, 0.85, 0.15, 1.0); // Sunflower Yellow
+		petalColor = vec4(0.98, 0.85, 0.15, 1.0);
 	} else if (hue < 0.50) {
-		petalColor = vec4(0.95, 0.25, 0.55, 1.0); // Vivid Pink
+		petalColor = vec4(0.95, 0.25, 0.55, 1.0);
 	} else if (hue < 0.75) {
-		petalColor = vec4(0.55, 0.30, 0.90, 1.0); // Deep Lavender
+		petalColor = vec4(0.55, 0.30, 0.90, 1.0);
 	} else {
-		petalColor = vec4(0.95, 0.95, 0.98, 1.0); // Porcelain White
+		petalColor = vec4(0.95, 0.95, 0.98, 1.0);
 	}
-	vec4 centerColor = vec4(0.98, 0.80, 0.20, 1.0); // Golden center disk
+	vec4 centerColor = vec4(0.98, 0.80, 0.20, 1.0);
 
-	// Center disk vertex
 	uint vHeadCenter = vBase + 8u;
 	vec3 viewC = mat3(uViewMatrix) * tipCenter;
 	gl_MeshVerticesEXT[vHeadCenter].gl_Position = uProjMatrix * vec4(viewC, 1.0);
@@ -291,21 +308,20 @@ void emitFlowerItem(
 	outMaterialType[vHeadCenter] = 2u;
 	outFade[vHeadCenter] = fade;
 
-	// 8 radial petal vertices around flower head
 	uint vPetalBase = vBase + 9u;
 	for (uint i = 0u; i < 8u; ++i) {
 		float pAngle = float(i) * (TAU / 8.0);
 		float radProfile = 1.0;
 		float dropY = 0.0;
 
-		if (headProfile == 0u) { // Diamond
+		if (headProfile == 0u) {
 			radProfile = (i % 2u == 0u) ? 1.0 : 0.5;
-		} else if (headProfile == 1u) { // Bell
+		} else if (headProfile == 1u) {
 			radProfile = 0.85;
 			dropY = -headSize * 0.35;
-		} else if (headProfile == 2u) { // Star
+		} else if (headProfile == 2u) {
 			radProfile = (i % 2u == 0u) ? 1.1 : 0.35;
-		} else { // Heart / Wide
+		} else {
 			radProfile = 0.6 + 0.5 * sin(pAngle * 2.0);
 		}
 
@@ -352,8 +368,6 @@ void emitFernItem(
 
 	uint vBase = vCount;
 	uint pBase = pCount;
-
-	// Boidish 6-frond fern rosette structure
 	const float crossV[5] = float[5](0.0, 0.25, 0.50, 0.75, 1.0);
 
 	for (uint f = 0u; f < 6u; ++f) {
@@ -367,24 +381,19 @@ void emitFernItem(
 		uint fVertBase = vBase + f * 10u;
 		for (uint s = 0u; s < 5u; ++s) {
 			float v = crossV[s];
-
-			// Boidish frond width profile: thin base, swells at 30% length, tapers to point
 			float widthProfile = smoothstep(0.0, 0.3, v) * (1.0 - v);
 			float halfW = width * 1.8 * widthProfile;
 
-			// Boidish arching equation
 			float x_fwd = v * frondLen;
 			float y_up = heightScaleF * (sin(v * 2.0) - 0.3 * v * v);
 
 			vec3 unbentPos = basePos + forward * x_fwd + vec3(0.0, y_up, 0.0) + sway * (v * v);
 
-			// Wind deflection rotation
 			float windBendAngle = sway.x * 0.6 * pow(v, 1.2);
 			vec3  relPos = unbentPos - basePos;
 			vec3  bentRelPos = rotateVector(relPos, right, windBendAngle);
 			vec3  frondPos = basePos + bentRelPos;
 
-			// Frond tangent and normal calculation
 			vec3 tangent = normalize(forward * frondLen + vec3(0.0, heightScaleF * (2.0 * cos(v * 2.0) - 0.6 * v), 0.0));
 			vec3 norm = normalize(cross(tangent, right));
 			if (norm.y < 0.0) norm = -norm;
@@ -446,10 +455,9 @@ void emitRockItem(
 	uint vBase = vCount;
 	vec3 center = basePos + vec3(0.0, rockSize.y * 0.5, 0.0);
 
-	// High fidelity 3D boulder mesh (14 vertices: top, bottom, 2 staggered horizontal 6-vertex rings)
 	vec3 boulderVerts[14];
-	boulderVerts[0] = center + vec3(0.0, rockSize.y * 0.55, 0.0);  // Top vertex
-	boulderVerts[13] = center - vec3(0.0, rockSize.y * 0.45, 0.0); // Bottom vertex
+	boulderVerts[0] = center + vec3(0.0, rockSize.y * 0.55, 0.0);
+	boulderVerts[13] = center - vec3(0.0, rockSize.y * 0.45, 0.0);
 
 	for (uint i = 0u; i < 6u; ++i) {
 		float a1 = float(i) * (TAU / 6.0) + angle;
@@ -478,21 +486,17 @@ void emitRockItem(
 		outWorldPos[vBase + i] = vPos + uCameraPosition.xyz;
 		outNormal[vBase + i] = normalize(vPos - center + vec3(0.0, 0.1, 0.0));
 		outUV[vBase + i] = vec2(0.5, 0.5);
-		outColor[vBase + i] = mix(rockColor, vec4(0.25, 0.32, 0.20, 1.0), (i > 6u) ? 0.25 : 0.0); // subtle moss tint near base
+		outColor[vBase + i] = mix(rockColor, vec4(0.25, 0.32, 0.20, 1.0), (i > 6u) ? 0.25 : 0.0);
 		outMaterialType[vBase + i] = 3u;
 		outFade[vBase + i] = 1.0;
 	}
 
 	uint pBase = pCount;
-	// 20 triangular facets forming full 3D closed boulder topology
 	for (uint i = 0u; i < 6u; ++i) {
 		uint nextI = (i + 1u) % 6u;
-		// Top cap triangles
 		gl_PrimitiveTriangleIndicesEXT[pBase + i] = uvec3(vBase, vBase + 1u + i, vBase + 1u + nextI);
-		// Middle band triangles
 		gl_PrimitiveTriangleIndicesEXT[pBase + 6u + i * 2u] = uvec3(vBase + 1u + i, vBase + 7u + i, vBase + 1u + nextI);
 		gl_PrimitiveTriangleIndicesEXT[pBase + 6u + i * 2u + 1u] = uvec3(vBase + 1u + nextI, vBase + 7u + i, vBase + 7u + nextI);
-		// Bottom cap triangles
 		gl_PrimitiveTriangleIndicesEXT[pBase + 18u + i] = uvec3(vBase + 13u, vBase + 7u + nextI, vBase + 7u + i);
 	}
 
@@ -500,7 +504,6 @@ void emitRockItem(
 	pCount += 20u;
 }
 
-// Emits a 3D low-poly icosahedron sphere blob (12 vertices, 20 triangular faces)
 void emitSphereBlob(
 	vec3 sphereCenter,
 	vec3 radiusVec,
@@ -541,7 +544,6 @@ void emitSphereBlob(
 		uvec3(4u, 9u, 5u),   uvec3(2u, 4u, 11u),  uvec3(6u, 2u, 10u),  uvec3(8u, 6u, 7u),   uvec3(9u, 8u, 1u)
 	);
 
-	// Rotation per sphere blob using sphereSeed for natural organic variation
 	float rotAngle = (pcg_hash(sphereSeed) * 0.8 - 0.4);
 	float sRot = sin(rotAngle);
 	float cRot = cos(rotAngle);
@@ -549,15 +551,12 @@ void emitSphereBlob(
 	for (uint i = 0u; i < 12u; ++i) {
 		vec3 uDir = icoUnitDirs[i];
 		vec3 rDir = vec3(uDir.x * cRot - uDir.z * sRot, uDir.y, uDir.x * sRot + uDir.z * cRot);
-
 		vec3 vPos = sphereCenter + rDir * radiusVec;
 
-		// Surface normal: blend local sphere radial normal with global cluster normal for smooth 3D shading
 		vec3 sphereNorm = normalize(rDir);
 		vec3 globalNorm = normalize(vPos - overallCenter + vec3(0.0, 0.2, 0.0));
 		vec3 finalNorm = normalize(mix(sphereNorm, globalNorm, 0.35));
 
-		// Vertical color blend based on normalized height
 		float t = clamp(rDir.y * 0.5 + 0.5, 0.0, 1.0);
 		vec4 vertColor = mix(colorBottom, colorTop, t);
 
@@ -571,7 +570,6 @@ void emitSphereBlob(
 		outFade[vBase + i] = fade;
 	}
 
-	// 20 triangular faces forming full 3D closed icosahedron sphere volume
 	for (uint f = 0u; f < 20u; ++f) {
 		gl_PrimitiveTriangleIndicesEXT[pBase + f] = uvec3(
 			vBase + icoTris[f].x,
@@ -597,14 +595,11 @@ void emitBushItem(
 	vec3 bushCenter = basePos + vec3(windStrength * 0.3, bushHeight * 0.5, windStrength * 0.3);
 	float halfW = bushWidth * 0.5;
 
-	// Tetrahedron of 4 overlapping icosahedron spheres forming a 3D volumetric bush
-	// Apex (top) sphere
 	float rApexH = bushHeight * 0.38 * (0.85 + pcg_hash(itemSeed + 10u) * 0.3);
 	float rApexW = halfW * 0.70 * (0.85 + pcg_hash(itemSeed + 11u) * 0.3);
 	vec3 apexCenter = bushCenter + vec3(0.0, bushHeight * 0.20, 0.0);
 	emitSphereBlob(apexCenter, vec3(rApexW, rApexH, rApexW), bushBottomColor, bushTopColor, 5u, 1.0, bushCenter, itemSeed + 100u, vCount, pCount);
 
-	// 3 base spheres forming the tetrahedral base triangle (120 degrees apart)
 	float baseSpread = halfW * 0.55;
 	for (uint i = 0u; i < 3u; ++i) {
 		float bAngle = angle + float(i) * (TAU / 3.0) + (pcg_hash(itemSeed + 20u + i) * 0.3 - 0.15);
@@ -840,7 +835,6 @@ void emitDeciduousTreeItem(
 	uint vBase = vCount;
 	float trunkRadius = crownWidth * 0.12;
 
-	// 3D Triangular Cylinder Trunk (4 height levels = 12 vertices, 3 segments * 6 = 18 triangles)
 	for (uint s = 0u; s < 4u; ++s) {
 		float t = float(s) * 0.25;
 		vec3 center = basePos + vec3(0.0, treeHeight * t * 0.55, 0.0) + sway * (t * t * 0.3);
@@ -884,18 +878,15 @@ void emitDeciduousTreeItem(
 	vCount += 12u;
 	pCount += 18u;
 
-	// Canopy: Tetrahedral cluster of 4 overlapping 3D icosahedron spheres
 	vec3 crownCenter = basePos + vec3(0.0, treeHeight * 0.70, 0.0) + sway * 0.5;
 	float halfW = crownWidth * 0.5;
 	float crownH = treeHeight * 0.50;
 
-	// Apex (top) sphere
 	float rApexH = crownH * 0.42 * (0.85 + pcg_hash(itemSeed + 10u) * 0.3);
 	float rApexW = halfW * 0.65 * (0.85 + pcg_hash(itemSeed + 11u) * 0.3);
 	vec3 apexCenter = crownCenter + vec3(0.0, crownH * 0.30, 0.0);
 	emitSphereBlob(apexCenter, vec3(rApexW, rApexH, rApexW), leafBottomColor, leafTopColor, 7u, 1.0, crownCenter, itemSeed + 100u, vCount, pCount);
 
-	// 3 base spheres forming the tetrahedral base triangle (120 degrees apart)
 	float baseSpread = halfW * 0.52;
 	for (uint i = 0u; i < 3u; ++i) {
 		float bAngle = angle + float(i) * (TAU / 3.0) + (pcg_hash(itemSeed + 20u + i) * 0.3 - 0.15);
@@ -1016,7 +1007,9 @@ void emitCactusItem(
 	pCount += 8u;
 }
 
-void emitTreeItem(
+// Emits big foliage items (trees / cacti) using SSBO Page Table lookup and variety parameters
+void emitLargeFoliageSingleItem(
+	uint varietyIdx,
 	vec3 basePos,
 	float heightScale,
 	float widthScale,
@@ -1031,15 +1024,21 @@ void emitTreeItem(
 	inout uint vCount,
 	inout uint pCount
 ) {
-	uint treeType = getWhittakerTreeType(biomeIdx, temp, moisture);
-	if (treeType == 3u) {
-		emitCactusItem(basePos, heightScale, widthScale, angle, itemSeed, terrainNormal, fade, vCount, pCount);
-	} else if (treeType == 2u) {
-		emitPalmTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
-	} else if (treeType == 0u) {
-		emitPineTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+	// Page table lookup for the given model variety
+	LargeFoliagePageTableEntry page = uPageTable[varietyIdx & 3u];
+	LargeFoliageMeshletGPU meshlet = uMeshlets[page.meshletOffset];
+
+	uint modelVariety = page.varietyParams.x;
+	float scaleFactor = page.scaleAndRadius.x;
+
+	if (modelVariety == 3u) {
+		emitCactusItem(basePos, heightScale * scaleFactor, widthScale * scaleFactor, angle, itemSeed, terrainNormal, fade, vCount, pCount);
+	} else if (modelVariety == 1u) {
+		emitPalmTreeItem(basePos, heightScale * scaleFactor, widthScale * scaleFactor, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+	} else if (modelVariety == 0u) {
+		emitPineTreeItem(basePos, heightScale * scaleFactor, widthScale * scaleFactor, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
 	} else {
-		emitDeciduousTreeItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
+		emitDeciduousTreeItem(basePos, heightScale * scaleFactor, widthScale * scaleFactor, angle, sway, itemSeed, terrainNormal, fade, vCount, pCount);
 	}
 }
 
@@ -1057,8 +1056,7 @@ void main() {
 		return;
 	}
 
-	// 4x4 grid of world-space jitter cells per tile (clumpLocal selects one). Cell size is 1/4
-	// the tile's own size -- 16 cells = 16 clumps.
+	// Cell grid placement
 	float cellStep = tileSize * 0.25;
 	vec2  tileMinWorld = uCameraPosition.xz + relTileMin;
 	ivec2 cellCoord0 = ivec2(floor(tileMinWorld / cellStep + 0.001));
@@ -1099,27 +1097,23 @@ void main() {
 
 	vec4 bColorTop = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 0u);
 	vec4 bColorBottom = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 1u);
-	vec4 bHWDF = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 2u); // height,width,density,flowerRatio
-	vec4 bRHWW = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 3u); // rigidity,heightVar,widthVar,windInfl
-	vec4 bCVE = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 4u); // colorVariability,enabled,_,_
+	vec4 bHWDF = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 2u);
+	vec4 bRHWW = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 3u);
+	vec4 bCVE = fetchBiomeTexel(params.biomeTableIndex, biomeIdx, 4u);
 
 	if (bCVE.y < 0.5) {
 		SetMeshOutputsEXT(0u, 0u);
 		return;
 	}
 
-	// Evaluate forest patch noise (multi-frequency FBM) to group trees into natural forest patches.
-	// forestNoise: 0.0 = open field core, 0.4-0.6 = forest outskirt / transition, 0.8+ = core forest.
 	float forestNoise = clamp(dot_noise_fbm(vec3(clumpCenterWorld * 0.003, 0.0), 3, 0.0) * 0.5 + 0.5, 0.0, 1.0);
 
-	// Clump density: controls clump probability and spacing across grid cells
 	float effectiveClumpDensity = params.clumpDensity * bCVE.z;
 	if (pcg_hash(cellSeed + 99u) > clamp(effectiveClumpDensity, 0.05, 1.0)) {
 		SetMeshOutputsEXT(0u, 0u);
 		return;
 	}
 
-	float lodRange = max(params.lodBaseRange, 1.0);
 	float ringHalfExtent = max(tileSize * float(max(params.gridParams.y, 1u)) * 0.5, 1.0);
 	float fade = 1.0 - smoothstep(ringHalfExtent * 0.7, ringHalfExtent, distToCam);
 
@@ -1129,185 +1123,93 @@ void main() {
 		sin(params.windTime * (2.5 * windScale) + clumpCenterRel.x * 0.15 + clumpCenterRel.y * 0.15) *
 		(0.25 * windScale / rigidity);
 
-	// Blade density: controls the number of items/blades per clump and how tightly packed they are
 	float effectiveBladeDensity = params.bladeDensity * bCVE.w;
-
-	uint itemsPerClump = 1u;
-	if (params.passIndex == 0u) {
-		// Pass 0 (Grass / Seaweed): emit multiple blades per clump meshlet
-		itemsPerClump = uint(clamp(round(4.0 * params.densityMultiplier * effectiveBladeDensity), 1.0, 10.0));
-	} else if (params.passIndex == 1u) {
-		// Pass 1 (Understory / Flowers / Ferns / Bushes / Rocks)
-		itemsPerClump = uint(clamp(round(2.0 * params.densityMultiplier * effectiveBladeDensity), 1.0, 3.0));
-	} else {
-		// Pass 2 (Trees / Overstory): 1 tree per clump meshlet
-		itemsPerClump = 1u;
-	}
 
 	uint vCount = 0u;
 	uint pCount = 0u;
 
-	for (uint b = 0u; b < itemsPerClump; ++b) {
-		uint  itemSeed = cellSeed + b * 17u + 1000u;
-		float angle = pcg_hash(itemSeed) * TAU;
-
-		// Intra-clump blade spacing: higher blade density packs blades closer to the clump center
+	if (params.passIndex == 0u) {
+		// Pass 0 (Groundcover: Grass & Seaweed) - Small things rendered per clump workgroup
+		uint bladeCount = uint(clamp(round(10.0 * params.densityMultiplier * effectiveBladeDensity), 4.0, 10.0));
 		float maxIntraRadius = cellStep * 0.45 / (0.5 + 0.5 * effectiveBladeDensity);
-		float radius = pcg_hash(itemSeed + 1u) * maxIntraRadius;
-		vec2  offset = vec2(cos(angle), sin(angle)) * radius;
 
-		vec2 itemWorldXZ = clumpCenterWorld + offset;
-		vec2 itemRelXZ = clumpCenterRel + offset;
+		for (uint b = 0u; b < bladeCount; ++b) {
+			uint  itemSeed = cellSeed + b * 17u + 1000u;
+			float angle = pcg_hash(itemSeed) * TAU;
 
-		uint foliageType = 0u; // 0 Grass, 1 Fern, 2 Flower, 3 Rock, 4 Seaweed, 5 Bush, 6 Tree
+			float radius = sqrt(pcg_hash(itemSeed + 1u)) * maxIntraRadius;
+			vec2  offset = vec2(cos(angle), sin(angle)) * radius;
 
-		if (isUnderwater) {
-			float underwaterChoice = pcg_hash(itemSeed + 4u);
-			foliageType = (underwaterChoice < 0.75) ? 4u : 3u;
-		} else {
-			// Spatial vegetation distribution based on forestNoise:
-			// - Open fields (forestNoise < 0.35): Dense grass, sparse flowers & rocks.
-			// - Forest outskirts (0.35 <= forestNoise < 0.55): High proportion of flowers and ferns, increasing bushes.
-			// - Entering forest (0.55 <= forestNoise < 0.72): Increasing trees, high bushes, decreasing grass & flowers.
-			// - Core forest (forestNoise >= 0.72): Primarily ferns and trees.
-			float sel = pcg_hash(itemSeed + 4u);
+			vec2 itemWorldXZ = clumpCenterWorld + offset;
+			vec2 itemRelXZ = clumpCenterRel + offset;
 
-			float grassWeight;
-			float flowerWeight;
-			float fernWeight;
-			float bushWeight;
-			float treeWeight;
-			float rockWeight = params.rockRatio;
+			uint foliageType = isUnderwater ? 4u : 0u;
+			vec3 basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
+			float heightScale = bHWDF.x * fade;
+			float widthScale = bHWDF.y * fade;
+			vec3 sway = vec3(windStrength, 0.0, windStrength);
 
-			if (forestNoise < 0.35) {
-				// Open field core
-				grassWeight = 0.85;
-				flowerWeight = params.flowerRatio * 0.8;
-				fernWeight = 0.05;
-				bushWeight = 0.05;
-				treeWeight = 0.0;
-			} else if (forestNoise < 0.55) {
-				// Forest outskirts: high flowers & ferns, rising bushes
-				grassWeight = 0.45;
-				flowerWeight = params.flowerRatio * 2.2;
-				fernWeight = params.fernRatio * 1.8;
-				bushWeight = params.bushRatio * 1.5;
-				treeWeight = params.treeRatio * 0.3;
-			} else if (forestNoise < 0.72) {
-				// Entering forest area: increasing tree density, decreasing grass/flowers, high bush
-				grassWeight = 0.15;
-				flowerWeight = params.flowerRatio * 0.6;
-				fernWeight = params.fernRatio * 2.0;
-				bushWeight = params.bushRatio * 2.2;
-				treeWeight = params.treeRatio * 1.8;
-			} else {
-				// Core of tree area: primarily ferns and trees
-				grassWeight = 0.05;
-				flowerWeight = 0.02;
-				fernWeight = params.fernRatio * 3.0;
-				bushWeight = params.bushRatio * 0.8;
-				treeWeight = params.treeRatio * 3.5;
-			}
+			vec2 radialDir = (radius > 0.001) ? normalize(offset) : vec2(cos(angle), sin(angle));
+			float radialTilt = 0.15 + 0.25 * (radius / maxIntraRadius);
 
-			float totalW = grassWeight + flowerWeight + fernWeight + bushWeight + treeWeight + rockWeight;
-			sel *= totalW;
-
-			if (sel < grassWeight) {
-				foliageType = 0u;
-			} else {
-				float cum = grassWeight + flowerWeight;
-				if (sel < cum) {
-					foliageType = 2u;
-				} else {
-					cum += fernWeight;
-					if (sel < cum) {
-						foliageType = 1u;
-					} else {
-						cum += bushWeight;
-						if (sel < cum) {
-							foliageType = 5u;
-						} else {
-							cum += treeWeight;
-							if (sel < cum) {
-								foliageType = 6u;
-							} else {
-								foliageType = 3u;
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Pass filtering:
-		// Pass 0: Grass (0) & Seaweed (4)
-		// Pass 1: Ferns (1), Flowers (2), Rocks (3), Bushes (5)
-		// Pass 2: Trees (6)
-		bool matchPass = false;
-		if (params.passIndex == 0u) {
-			matchPass = (foliageType == 0u || foliageType == 4u);
-		} else if (params.passIndex == 1u) {
-			matchPass = (foliageType == 1u || foliageType == 2u || foliageType == 3u || foliageType == 5u);
-		} else if (params.passIndex == 2u) {
-			matchPass = (foliageType == 6u);
-		}
-
-		if (!matchPass) {
-			continue;
-		}
-
-		uint itemVerts;
-		uint itemPrims;
-		if (foliageType == 3u) {
-			itemVerts = 14u;
-			itemPrims = 20u;
-		} else if (foliageType == 5u) {
-			itemVerts = 48u;
-			itemPrims = 80u;
-		} else if (foliageType == 1u) {
-			itemVerts = 60u;
-			itemPrims = 48u;
-		} else if (foliageType == 2u) {
-			itemVerts = 17u;
-			itemPrims = 14u;
-		} else if (foliageType == 6u) {
-			itemVerts = 60u;
-			itemPrims = 98u;
-		} else {
-			itemVerts = 12u;
-			itemPrims = 10u;
-		}
-
-		if (vCount + itemVerts > 128u || pCount + itemPrims > 128u) {
-			break;
-		}
-
-		vec3  basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
-		float heightScale = bHWDF.x * fade;
-		float widthScale = bHWDF.y * fade;
-		vec3  sway = vec3(windStrength, 0.0, windStrength);
-
-		if (foliageType == 3u) {
-			emitRockItem(basePos, angle, itemSeed, vCount, pCount);
-		} else if (foliageType == 5u) {
-			emitBushItem(basePos, angle, windStrength, itemSeed, terrainNormal, vCount, pCount);
-		} else if (foliageType == 1u) {
-			emitFernItem(
-				basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorTop, bColorBottom, fade,
-				vCount, pCount
-			);
-		} else if (foliageType == 2u) {
-			emitFlowerItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorBottom, fade, vCount, pCount);
-		} else if (foliageType == 6u) {
-			emitTreeItem(
-				basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, biomeIdx, temp, moisture, fade, vCount, pCount
-			);
-		} else {
 			emitBladeItem(
 				basePos, heightScale, widthScale, foliageType, angle, distToCam, sway, params.windTime, itemWorldXZ,
-				itemSeed, terrainNormal, bColorTop, bColorBottom, bCVE.x, rigidity, fade, vCount, pCount
+				itemSeed, terrainNormal, bColorTop, bColorBottom, bCVE.x, rigidity, fade, radialTilt, radialDir, vCount, pCount
 			);
 		}
+	} else if (params.passIndex == 1u) {
+		// Pass 1 (Understory: Flowers, Ferns, Rocks, Bushes) - Small items per clump
+		uint itemsCount = uint(clamp(round(2.0 * params.densityMultiplier * effectiveBladeDensity), 1.0, 2.0));
+		float maxIntraRadius = cellStep * 0.35;
+
+		for (uint b = 0u; b < itemsCount; ++b) {
+			uint  itemSeed = cellSeed + b * 17u + 2000u;
+			float angle = pcg_hash(itemSeed) * TAU;
+			float radius = pcg_hash(itemSeed + 1u) * maxIntraRadius;
+			vec2  offset = vec2(cos(angle), sin(angle)) * radius;
+
+			vec2 itemWorldXZ = clumpCenterWorld + offset;
+			vec2 itemRelXZ = clumpCenterRel + offset;
+
+			float sel = pcg_hash(itemSeed + 4u);
+			uint foliageType = 1u; // Fern (1), Flower (2), Rock (3), Bush (5)
+			if (sel < 0.40) foliageType = 2u;      // Flower
+			else if (sel < 0.70) foliageType = 1u; // Fern
+			else if (sel < 0.85) foliageType = 5u; // Bush
+			else foliageType = 3u;                 // Rock
+
+			vec3 basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
+			float heightScale = bHWDF.x * fade;
+			float widthScale = bHWDF.y * fade;
+			vec3 sway = vec3(windStrength, 0.0, windStrength);
+
+			if (foliageType == 3u) {
+				emitRockItem(basePos, angle, itemSeed, vCount, pCount);
+			} else if (foliageType == 5u) {
+				emitBushItem(basePos, angle, windStrength, itemSeed, terrainNormal, vCount, pCount);
+			} else if (foliageType == 1u) {
+				emitFernItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorTop, bColorBottom, fade, vCount, pCount);
+			} else {
+				emitFlowerItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorBottom, fade, vCount, pCount);
+			}
+		}
+	} else {
+		// Pass 2 (Overstory: Trees / Cacti) - Big things where 1 "clump" = 1 single large foliage item via SSBO Page Table lookup
+		uint itemSeed = cellSeed + 3000u;
+		float angle = pcg_hash(itemSeed) * TAU;
+		vec2 itemRelXZ = clumpCenterRel;
+
+		uint treeType = getWhittakerTreeType(biomeIdx, temp, moisture);
+		uint varietyIdx = treeType & 3u; // 0 Pine, 1 Palm, 2 Deciduous, 3 Cactus
+
+		vec3 basePos = vec3(itemRelXZ.x, terrainHeight - uCameraPosition.y, itemRelXZ.y);
+		float heightScale = bHWDF.x * fade;
+		float widthScale = bHWDF.y * fade;
+		vec3 sway = vec3(windStrength, 0.0, windStrength);
+
+		emitLargeFoliageSingleItem(
+			varietyIdx, basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, biomeIdx, temp, moisture, fade, vCount, pCount
+		);
 	}
 
 	SetMeshOutputsEXT(vCount, pCount);

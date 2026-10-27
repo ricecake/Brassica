@@ -34,6 +34,32 @@ namespace brassica {
 		float     bladeDensity{1.0f};
 	};
 
+	// Large Foliage Page Table entry in SSBO (std430 layout)
+	struct LargeFoliagePageTableEntry {
+		std::uint32_t meshletOffset{0};   // Offset into LargeFoliageMeshletBuffer
+		std::uint32_t meshletCount{0};    // Number of meshlets for this model variety
+		std::uint32_t vertexOffset{0};    // Vertex offset in SSBO
+		std::uint32_t primitiveOffset{0}; // Primitive/index offset in SSBO
+		glm::vec4     scaleAndRadius{1.0f, 1.0f, 1.0f, 2.0f}; // x,y,z scale / radius
+		glm::uvec4    varietyParams{0u, 0u, 0u, 0u}; // x = modelVariety (0 Pine, 1 Palm, 2 Deciduous, 3 Cactus)
+	};
+
+	// Meshlet vertex format for Large Foliage stored in SSBO
+	struct LargeFoliageVertexGPU {
+		glm::vec4 positionAndU{0.0f};                // xyz = local position, w = u
+		glm::vec4 normalAndV{0.0f, 1.0f, 0.0f, 0.0f}; // xyz = local normal, w = v
+		glm::vec4 color{1.0f};                       // rgba color
+		glm::uvec4 materialAndFlags{6u, 0u, 0u, 0u}; // x = material type
+	};
+
+	// Large Foliage Meshlet header in SSBO
+	struct LargeFoliageMeshletGPU {
+		std::uint32_t vertexOffset{0};
+		std::uint32_t vertexCount{0};
+		std::uint32_t primitiveOffset{0};
+		std::uint32_t primitiveCount{0};
+	};
+
 	struct GlobalGrassProperties {
 		float    lengthMultiplier{1.0f};
 		float    widthMultiplier{1.0f};
@@ -54,6 +80,7 @@ namespace brassica {
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
 		uint32_t enableOcclusionCulling{1};
+		uint32_t enableHiZCulling{1};
 		float    clumpDensity{1.0f};
 		float    bladeDensity{1.0f};
 	};
@@ -78,6 +105,7 @@ namespace brassica {
 		uint32_t maxLODs{8};
 		uint32_t tilesPerRow{16};
 		bool     enableOcclusionCulling{true};
+		bool     enableHiZCulling{true};
 		float    clumpDensity{1.0f};
 		float    bladeDensity{1.0f};
 
@@ -159,7 +187,8 @@ namespace brassica {
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),
-				MakeField("enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling)
+				MakeField("enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling),
+				MakeField("enableHiZCulling", "HiZ Occlusion Culling", &FoliageState::enableHiZCulling)
 			);
 		}
 
@@ -241,7 +270,8 @@ namespace brassica {
 				MakeField("baseTileSize", "Base Tile Size", &FoliageState::baseTileSize, 4.0f, 128.0f, UIHint::Slider),
 				MakeField("maxLODs", "Max LODs", &FoliageState::maxLODs, 1u, 16u, UIHint::Slider),
 				MakeField("tilesPerRow", "Tiles Per Row", &FoliageState::tilesPerRow, 4u, 64u, UIHint::Slider),
-				MakeField("enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling)
+				MakeField("enableOcclusionCulling", "Terrain Occlusion Culling", &FoliageState::enableOcclusionCulling),
+				MakeField("enableHiZCulling", "HiZ Occlusion Culling", &FoliageState::enableHiZCulling)
 			);
 		}
 	};
