@@ -4,6 +4,7 @@ scratch/**
 
 # Build artifacts
 build/
+release/
 bin/
 obj/
 terrain_cache/
