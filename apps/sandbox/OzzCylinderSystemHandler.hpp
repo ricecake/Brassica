@@ -72,6 +72,11 @@ namespace brassica {
 			}
 		}
 
+		void Cleanup(Engine& engine) override {
+			m_cylinders.clear();
+			m_cylinder = SkinnedCylinder{};
+		}
+
 		[[nodiscard]] const SkinnedCylinder& GetSkinnedCylinder() const { return m_cylinder; }
 
 	private:
