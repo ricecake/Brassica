@@ -6,13 +6,20 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 #include "bindless.glsl"
 #include "cbt.glsl"
 
-layout(push_constant) uniform CBTPush {
-	uint bitfieldIdx;
-	uint poolIdx;
-	uint commandsIdx;
-	uint pageTableIdx;
-	uint cacheIdx;
-	uint activeBisectorCount;
+layout(push_constant) uniform TerrainPushConstants {
+	uvec4 gridParams;
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
+	uint  cbtBitfieldIndex;
+	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+	uint  _pad0;
 } params;
 
 layout(std430, buffer_reference) buffer BisectorPool {
@@ -31,12 +38,11 @@ void main() {
 	uint idx = gl_GlobalInvocationID.x;
 	if (idx >= params.activeBisectorCount) return;
 
-	BisectorPool pool = BisectorPool(uSSBOBuffers[params.poolIdx]);
-	CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.commandsIdx]);
+	BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
+	CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.cbtCommandsIndex]);
 
 	CBTCommand c = cmd.commands[idx];
 	if (c.type == 1u) {
-		// Split bisector in place into child 0, updating vertices and ID
 		Bisector parent = pool.bisectors[idx];
 		vec2 m = (parent.v0 + parent.v1) * 0.5;
 
@@ -53,9 +59,25 @@ void main() {
 		child0.v1 = parent.v2;
 		child0.v2 = parent.v0;
 
+		Bisector child1;
+		child1.id = (parent.id << 1UL) | 1UL;
+		child1.depth = parent.depth + 1u;
+		child1.rootIdx = parent.rootIdx;
+		child1.twin = parent.twin;
+		child1.next = parent.next;
+		child1.prev = parent.prev;
+		child1.cachePage = CBT_INVALID_PAGE;
+		child1.padding = 0u;
+		child1.v0 = m;
+		child1.v1 = parent.v1;
+		child1.v2 = parent.v2;
+
+		uint newIdx = atomicAdd(cmd.splitCount, 1u) + params.activeBisectorCount;
 		pool.bisectors[idx] = child0;
+		if (newIdx < 131072u) {
+			pool.bisectors[newIdx] = child1;
+		}
 	} else if (c.type == 2u) {
-		// Merge child back to parent
 		Bisector child = pool.bisectors[idx];
 		if (child.depth > 0u) {
 			Bisector parent;
@@ -67,7 +89,6 @@ void main() {
 			parent.prev = child.prev;
 			parent.cachePage = CBT_INVALID_PAGE;
 			parent.padding = 0u;
-			// Re-decode base root vertices
 			parent.v0 = child.v2;
 			parent.v1 = (child.v0 * 2.0) - child.v2;
 			parent.v2 = child.v1;

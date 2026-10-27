@@ -7,13 +7,20 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 #include "common.glsl"
 #include "cbt.glsl"
 
-layout(push_constant) uniform CBTPush {
-	uint bitfieldIdx;
-	uint poolIdx;
-	uint commandsIdx;
-	uint pageTableIdx;
-	uint cacheIdx;
-	uint activeBisectorCount;
+layout(push_constant) uniform TerrainPushConstants {
+	uvec4 gridParams;
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
+	uint  cbtBitfieldIndex;
+	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+	uint  _pad0;
 } params;
 
 layout(std430, buffer_reference) buffer BisectorPool {
@@ -32,8 +39,8 @@ void main() {
 	uint idx = gl_GlobalInvocationID.x;
 	if (idx >= params.activeBisectorCount) return;
 
-	BisectorPool pool = BisectorPool(uSSBOBuffers[params.poolIdx]);
-	CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.commandsIdx]);
+	BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
+	CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.cbtCommandsIndex]);
 
 	Bisector b = pool.bisectors[idx];
 
@@ -49,22 +56,18 @@ void main() {
 	vec3 center3D = (p0 + p1 + p2) / 3.0;
 	float distToCam = max(length(center3D), 1.0);
 
-	float area = length(cross(p1 - p0, p2 - p0)) * 0.5;
-	float edgeLen = max(length(p1 - p0), max(length(p2 - p1), length(p0 - p2)));
-
-	// Target subdivision depth based on distance and edge length
 	uint targetDepth = uint(clamp(floor(18.0 - log2(distToCam / 50.0)), 0.0, float(CBT_MAX_DEPTH)));
 
 	if (b.depth < targetDepth && b.depth < CBT_MAX_DEPTH) {
 		cmd.commands[idx].bisectorIdx = idx;
-		cmd.commands[idx].type = 1u; // split
+		cmd.commands[idx].type = 1u;
 		atomicAdd(cmd.splitCount, 1u);
 	} else if (b.depth > targetDepth && b.depth > 0u) {
 		cmd.commands[idx].bisectorIdx = idx;
-		cmd.commands[idx].type = 2u; // merge
+		cmd.commands[idx].type = 2u;
 		atomicAdd(cmd.mergeCount, 1u);
 	} else {
 		cmd.commands[idx].bisectorIdx = idx;
-		cmd.commands[idx].type = 0u; // keep
+		cmd.commands[idx].type = 0u;
 	}
 }

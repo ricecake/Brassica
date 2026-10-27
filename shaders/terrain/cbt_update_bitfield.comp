@@ -6,13 +6,20 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 #include "bindless.glsl"
 #include "cbt.glsl"
 
-layout(push_constant) uniform CBTPush {
-	uint bitfieldIdx;
-	uint poolIdx;
-	uint commandsIdx;
-	uint pageTableIdx;
-	uint cacheIdx;
-	uint activeBisectorCount;
+layout(push_constant) uniform TerrainPushConstants {
+	uvec4 gridParams;
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
+	uint  cbtBitfieldIndex;
+	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+	uint  _pad0;
 } params;
 
 layout(std430, buffer_reference) buffer BitfieldBuffer {
@@ -27,8 +34,8 @@ void main() {
 	uint idx = gl_GlobalInvocationID.x;
 	if (idx >= params.activeBisectorCount) return;
 
-	BitfieldBuffer bf = BitfieldBuffer(uSSBOBuffers[params.bitfieldIdx]);
-	BisectorPool pool = BisectorPool(uSSBOBuffers[params.poolIdx]);
+	BitfieldBuffer bf = BitfieldBuffer(uSSBOBuffers[params.cbtBitfieldIndex]);
+	BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
 
 	uint heapIdx = (1u << pool.bisectors[idx].depth) + uint(pool.bisectors[idx].id & 0xFFFFFFFFUL);
 	uint wordIdx = heapIdx >> 5u;

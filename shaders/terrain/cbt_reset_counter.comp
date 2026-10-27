@@ -4,13 +4,22 @@
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 #include "bindless.glsl"
+#include "cbt.glsl"
 
-layout(push_constant) uniform CBTPush {
-	uint bitfieldIdx;
-	uint poolIdx;
-	uint commandsIdx;
-	uint pageTableIdx;
-	uint cacheIdx;
+layout(push_constant) uniform TerrainPushConstants {
+	uvec4 gridParams;
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
+	uint  cbtBitfieldIndex;
+	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+	uint  _pad0;
 } params;
 
 layout(std430, buffer_reference) buffer CommandsBuffer {
@@ -20,10 +29,48 @@ layout(std430, buffer_reference) buffer CommandsBuffer {
 	uint freePageCount;
 };
 
+layout(std430, buffer_reference) buffer BisectorPool {
+	Bisector bisectors[];
+};
+
 void main() {
 	if (gl_GlobalInvocationID.x == 0u) {
-		CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.commandsIdx]);
+		CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.cbtCommandsIndex]);
 		cmd.splitCount = 0u;
 		cmd.mergeCount = 0u;
+		if (cmd.freePageHead >= 2048u) {
+			cmd.freePageHead = 0u;
+		}
+
+		BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
+		if (pool.bisectors[0].id == 0UL) {
+			Bisector r0;
+			r0.id = 1UL;
+			r0.depth = 0u;
+			r0.rootIdx = 0u;
+			r0.twin = 1u;
+			r0.next = 1u;
+			r0.prev = 2u;
+			r0.cachePage = CBT_INVALID_PAGE;
+			r0.padding = 0u;
+			r0.v0 = vec2(-1500000.0, 1500000.0);
+			r0.v1 = vec2(1500000.0, -1500000.0);
+			r0.v2 = vec2(-1500000.0, -1500000.0);
+			pool.bisectors[0] = r0;
+
+			Bisector r1;
+			r1.id = 1UL;
+			r1.depth = 0u;
+			r1.rootIdx = 1u;
+			r1.twin = 0u;
+			r1.next = 4u;
+			r1.prev = 5u;
+			r1.cachePage = CBT_INVALID_PAGE;
+			r1.padding = 0u;
+			r1.v0 = vec2(1500000.0, -1500000.0);
+			r1.v1 = vec2(-1500000.0, 1500000.0);
+			r1.v2 = vec2(1500000.0, 1500000.0);
+			pool.bisectors[1] = r1;
+		}
 	}
 }
