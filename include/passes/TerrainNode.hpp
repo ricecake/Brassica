@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
@@ -72,6 +73,7 @@ namespace brassica {
 		ComputeShader                 cbtTerrainBakeComp;
 		TerrainAccelerationStructure* terrainAS = nullptr;
 		TerrainPushConstants          push{};
+		std::uint32_t                 m_activeBisectorCount{2};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -154,7 +156,7 @@ namespace brassica {
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
 			r.Create<CBTBitfieldBuffer>();
-			r.Create<CBTBisectorPoolBuffer>();
+			r.Create<CBTBisectorPoolBuffer>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
 			r.Create<CBTCommandsBuffer>();
 			r.Create<CBTPageTableBuffer>();
 			r.Create<CBTGeometryCacheBuffer>();
@@ -170,7 +172,7 @@ namespace brassica {
 			push.cbtCommandsIndex = ctx.StorageIndex<CBTCommandsBuffer>();
 			push.cbtPageTableIndex = ctx.StorageIndex<CBTPageTableBuffer>();
 			push.cbtCacheIndex = ctx.StorageIndex<CBTGeometryCacheBuffer>();
-			push.activeBisectorCount = 2; // Initial root bisectors
+			push.activeBisectorCount = std::clamp(m_activeBisectorCount, 2u, 131072u);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
@@ -179,7 +181,6 @@ namespace brassica {
 				vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead
 			};
 
-			// Dispatch CBT compute passes with memory barriers
 			uint32_t computeGroups = (push.activeBisectorCount + 63) / 64;
 
 			render::BindCompute(ctx, *pipelineLibrary, cbtResetCounterComp, push);

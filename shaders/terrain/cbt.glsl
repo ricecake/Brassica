@@ -35,11 +35,9 @@ struct PageTableEntry {
 
 struct GeometryCacheHeader {
 	vec2  minMax;
-	float avgHeight;
-	float padding;
+	float heights[121];
 };
 
-// Longest-edge bisection of a right triangle v0-v1-v2 (v0-v1 is hypotenuse)
 void cbt_bisect_triangle(vec2 v0, vec2 v1, vec2 v2, uint childBit, out vec2 outV0, out vec2 outV1, out vec2 outV2) {
 	vec2 m = (v0 + v1) * 0.5;
 	if (childBit == 0u) {
@@ -53,7 +51,6 @@ void cbt_bisect_triangle(vec2 v0, vec2 v1, vec2 v2, uint childBit, out vec2 outV
 	}
 }
 
-// Decodes bisector 2D vertices from root triangle and 64-bit bisector ID
 void cbt_decode_bisector_vertices(
 	uint64_t id,
 	uint depth,
@@ -75,7 +72,6 @@ void cbt_decode_bisector_vertices(
 	}
 }
 
-// Parabolic planet curvature drop-off calculation: z_drop = -d^2 / (2 * R)
 float cbt_apply_fake_curvature(vec2 worldXZ) {
 	vec2 rel = worldXZ - uCameraPosition.xz;
 	float distSq = dot(rel, rel);

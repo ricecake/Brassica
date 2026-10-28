@@ -30,5 +30,8 @@ layout(std430, buffer_reference) buffer CommandsBuffer {
 
 void main() {
 	if (gl_GlobalInvocationID.x == 0u) {
+		CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.cbtCommandsIndex]);
+		cmd.splitCount = clamp(cmd.splitCount, 0u, 16384u);
+		cmd.mergeCount = clamp(cmd.mergeCount, 0u, 16384u);
 	}
 }

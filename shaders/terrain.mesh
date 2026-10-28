@@ -65,6 +65,8 @@ void main() {
 	vec2 v2 = payload.v2[taskIndex];
 	uint depth = payload.depth[taskIndex];
 	uint twinDepth = payload.twinDepth[taskIndex];
+	uint nextDepth = payload.nextDepth[taskIndex];
+	uint prevDepth = payload.prevDepth[taskIndex];
 	uint cachePage = payload.cachePage[taskIndex];
 
 	uint lx = gl_LocalInvocationID.x;
@@ -73,20 +75,33 @@ void main() {
 
 	float fu = float(lx) / 10.0;
 	float fv = float(ly) / 10.0;
+	if (fu + fv > 1.0) {
+		float sum = fu + fv;
+		fu /= sum;
+		fv /= sum;
+	}
 
 	// Barycentric interpolation over right triangle (v0, v1, v2)
 	vec2 pos2D = v0 * (1.0 - fu - fv) + v1 * fu + v2 * fv;
 
-	// Halfedge Edge Stitching: snap T-junction edge vertices along hypotenuse v0-v1 if twinDepth < depth
-	if (twinDepth < depth && (lx + ly == 10u)) {
-		float edgeFactor = float(lx) / 10.0;
-		pos2D = mix(v0, v1, edgeFactor);
+	// Halfedge Edge Stitching along all three right triangle boundaries
+	if (twinDepth < depth && (ly == 0u)) {
+		float snappedU = floor(fu * 5.0 + 0.5) / 5.0;
+		pos2D = mix(v0, v1, snappedU);
+	}
+	if (nextDepth < depth && (lx + ly == 10u)) {
+		float snappedU = floor(fu * 5.0 + 0.5) / 5.0;
+		pos2D = mix(v1, v2, snappedU);
+	}
+	if (prevDepth < depth && (lx == 0u)) {
+		float snappedV = floor(fv * 5.0 + 0.5) / 5.0;
+		pos2D = mix(v2, v0, snappedV);
 	}
 
 	float height = evaluate_mesh_height(pos2D);
 	if (cachePage != CBT_INVALID_PAGE && params.cbtCacheIndex > 0u) {
 		GeometryCacheBuffer cache = GeometryCacheBuffer(uSSBOBuffers[params.cbtCacheIndex]);
-		height = cache.headers[cachePage].avgHeight;
+		height = cache.headers[cachePage].heights[vertexIndex];
 	}
 
 	float dropOff = cbt_apply_fake_curvature(pos2D);
@@ -114,26 +129,25 @@ void main() {
 		uint vC = (ly + 1u) * 11u + lx;
 		uint vD = (ly + 1u) * 11u + (lx + 1u);
 
-		if (lx + ly < 10u) {
-			uint lowerIdx = 0u;
-			for (uint r = 0u; r < ly; ++r) {
-				lowerIdx += (10u - r) + (9u - r);
-			}
-			lowerIdx += lx * 2u;
+		uint baseIdx = 0u;
+		for (uint r = 0u; r < ly; ++r) {
+			baseIdx += (10u - r) + (9u - r);
+		}
 
+		if (lx + ly < 10u) {
+			uint lowerIdx = baseIdx + lx * 2u;
 			gl_PrimitiveTriangleIndicesEXT[lowerIdx] = uvec3(vA, vB, vC);
 			gl_MeshPrimitivesEXT[lowerIdx].gl_CullPrimitiveEXT = false;
 		}
 
 		if (lx + ly < 9u) {
-			uint upperIdx = 0u;
-			for (uint r = 0u; r < ly; ++r) {
-				upperIdx += (10u - r) + (9u - r);
-			}
-			upperIdx += lx * 2u + 1u;
-
+			uint upperIdx = baseIdx + lx * 2u + 1u;
 			gl_PrimitiveTriangleIndicesEXT[upperIdx] = uvec3(vB, vD, vC);
 			gl_MeshPrimitivesEXT[upperIdx].gl_CullPrimitiveEXT = false;
+		} else if (lx + ly == 9u) {
+			uint upperIdx = baseIdx + lx * 2u + 1u;
+			gl_PrimitiveTriangleIndicesEXT[upperIdx] = uvec3(vA, vA, vA);
+			gl_MeshPrimitivesEXT[upperIdx].gl_CullPrimitiveEXT = true;
 		}
 	}
 }

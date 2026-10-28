@@ -47,7 +47,8 @@ float evaluate_cbt_procedural_height(vec2 pos2D) {
 	vec2 p = pos2D * 0.0001;
 	float h = sin(p.x * 3.0) * cos(p.y * 3.0) * 150.0;
 	h += sin(p.x * 12.0 + 1.5) * cos(p.y * 12.0) * 45.0;
-	h += sin(p.x * 48.0) * cos(p.y * 48.0 + 2.1) * 12.0;
+	h += sin(p.x * 48.0 + 0.8) * cos(p.y * 48.0 + 2.1) * 15.0;
+	h += sin(p.x * 192.0) * cos(p.y * 192.0) * 4.0;
 	return h;
 }
 
@@ -69,15 +70,23 @@ void main() {
 		pageTable.entries[pageIdx].flags = 1u;
 
 		Bisector b = pool.bisectors[idx];
-		float h0 = evaluate_cbt_procedural_height(b.v0);
-		float h1 = evaluate_cbt_procedural_height(b.v1);
-		float h2 = evaluate_cbt_procedural_height(b.v2);
+		float minH = 1e9;
+		float maxH = -1e9;
 
-		float minH = min(h0, min(h1, h2));
-		float maxH = max(h0, max(h1, h2));
-		float avgH = (h0 + h1 + h2) / 3.0;
+		for (uint ly = 0u; ly <= 10u; ++ly) {
+			for (uint lx = 0u; lx <= 10u; ++lx) {
+				float fu = float(lx) / 10.0;
+				float fv = float(ly) / 10.0;
+				vec2 pos2D = b.v0 * (1.0 - fu - fv) + b.v1 * fu + b.v2 * fv;
+				float h = evaluate_cbt_procedural_height(pos2D);
 
+				uint sampleIndex = ly * 11u + lx;
+				cache.headers[pageIdx].heights[sampleIndex] = h;
+
+				minH = min(minH, h);
+				maxH = max(maxH, h);
+			}
+		}
 		cache.headers[pageIdx].minMax = vec2(minH, maxH);
-		cache.headers[pageIdx].avgHeight = avgH;
 	}
 }

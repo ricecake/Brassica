@@ -31,4 +31,5 @@ void main() {
 	if (idx >= params.activeBisectorCount) return;
 
 	BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
+	pool.bisectors[idx].padding = idx;
 }
