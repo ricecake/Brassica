@@ -47,7 +47,15 @@ namespace brassica {
 		alignas(4) float cloudPhaseG2{-0.2f};
 		alignas(4) float cloudPhaseAlpha{0.5f};
 		alignas(4) float cloudPhaseIsotropic{0.52f};
-		alignas(4) float cloudPowderScale{300.0f};
+		// ambientBeerPowderScale: Brassica's own ambient-glow term (cloud_render.frag). The
+		// other 3 are beerPowder()'s own terms (shaders/common.glsl), previously hardcoded
+		// literals -- not the same quantity as ambientBeerPowderScale despite boidish naming
+		// its own equivalent of directBeerPowderScale "cloudPowderScale" too; see
+		// CloudLightingManager.hpp's header comment.
+		alignas(4) float ambientBeerPowderScale{300.0f};
+		alignas(4) float directBeerPowderScale{0.1f};
+		alignas(4) float cloudPowderMultiplier{50.0f};
+		alignas(4) float cloudPowderLocalScale{2.67f};
 		alignas(4) float cloudBeerPowderMix{0.5f};
 		alignas(4) float cloudShadowOpticalDepthMultiplier{1.0f};
 		alignas(4) float cloudSunLightScale{1.0f};
@@ -56,6 +64,9 @@ namespace brassica {
 		alignas(4) float cloudFlowSpeed{0.25f};
 		alignas(4) float cloudFlowDirection{3.14159265f};
 		alignas(4) float cloudFlowHeightScale{0.015f};
+		// Sun aureole (shared by SkyBackgroundNode's sky.frag) -- previously hardcoded
+		// push.sunDirAndAureole.w = 0.5f in SkyBackgroundNode::SetFrameParams, no UI at all.
+		alignas(4) float sunAureoleStrength{0.5f};
 
 		// Volumetric fog settings (VolumetricLightingManager) -- same rationale, previously in
 		// VolumetricFroxelGenPushConstants (fogParams.xyz plus mieHumidityBoost bit-cast through

@@ -498,7 +498,9 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 					float octaveStepDensity = stepDensity * currentExtinction;
 
 					float shadowTerm = mix(
-						beerPowder(octaveOpticalDepth, octaveStepDensity),
+						beerPowder(
+							octaveOpticalDepth, octaveStepDensity, u_directBeerPowderScale, u_cloudPowderMultiplier, u_cloudPowderLocalScale
+						),
 						exp(-octaveOpticalDepth),
 						u_cloudBeerPowderMix
 					);
@@ -526,7 +528,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float isotropicPhase = 1.0 / (4.0 * 3.14159265);
 				vec3 diffuseTopBackscatter = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * isotropicPhase * (0.8 + 1.2 * backscatterWeight) * exp(-opticalDepthToLight);
 
-				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * u_cloudPowderScale));
+				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * u_ambientBeerPowderScale));
 
 				// Directional ambient (helpers/ambient.glsl) standing in for a real SH probe
 				// grid -- LightingUBO already reserves uSHCoeffs[81] for one, nothing bakes it

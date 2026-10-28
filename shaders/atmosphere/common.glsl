@@ -44,7 +44,13 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	float cloudPhaseG2;
 	float cloudPhaseAlpha;
 	float cloudPhaseIsotropic;
-	float cloudPowderScale;
+	// ambientBeerPowderScale: Brassica's own ambient-glow term (cloud_render.frag). The other
+	// 3 are beerPowder()'s own terms (shaders/common.glsl's beerPowder function), previously
+	// hardcoded literals -- not the same quantity as ambientBeerPowderScale.
+	float ambientBeerPowderScale;
+	float directBeerPowderScale;
+	float cloudPowderMultiplier;
+	float cloudPowderLocalScale;
 	float cloudBeerPowderMix;
 	float cloudShadowOpticalDepthMultiplier;
 	float cloudSunLightScale;
@@ -53,6 +59,9 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	float cloudFlowSpeed;
 	float cloudFlowDirection;
 	float cloudFlowHeightScale;
+	// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
+	// literal with no settings surface.
+	float sunAureoleStrength;
 
 	// Volumetric fog settings (VolumetricLightingManager) -- same rationale, previously in
 	// VolumetricFroxelGenPushConstants (fogParams.xyz plus mieHumidityBoost bit-cast through a
@@ -99,7 +108,10 @@ u_atmosphere;
 #define u_cloudPhaseG2 u_atmosphere.cloudPhaseG2
 #define u_cloudPhaseAlpha u_atmosphere.cloudPhaseAlpha
 #define u_cloudPhaseIsotropic u_atmosphere.cloudPhaseIsotropic
-#define u_cloudPowderScale u_atmosphere.cloudPowderScale
+#define u_ambientBeerPowderScale u_atmosphere.ambientBeerPowderScale
+#define u_directBeerPowderScale u_atmosphere.directBeerPowderScale
+#define u_cloudPowderMultiplier u_atmosphere.cloudPowderMultiplier
+#define u_cloudPowderLocalScale u_atmosphere.cloudPowderLocalScale
 #define u_cloudBeerPowderMix u_atmosphere.cloudBeerPowderMix
 #define u_cloudShadowOpticalDepthMultiplier u_atmosphere.cloudShadowOpticalDepthMultiplier
 #define u_cloudSunLightScale u_atmosphere.cloudSunLightScale
@@ -108,6 +120,7 @@ u_atmosphere;
 #define u_cloudFlowSpeed u_atmosphere.cloudFlowSpeed
 #define u_cloudFlowDirection u_atmosphere.cloudFlowDirection
 #define u_cloudFlowHeightScale u_atmosphere.cloudFlowHeightScale
+#define u_sunAureoleStrength u_atmosphere.sunAureoleStrength
 #define u_fogDensity u_atmosphere.fogDensity
 #define u_fogHeightFalloff u_atmosphere.fogHeightFalloff
 #define u_fogBaseHeight u_atmosphere.fogBaseHeight

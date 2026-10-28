@@ -14,24 +14,33 @@ namespace brassica {
 	// CirrusNode, which already consumes it; CloudRenderPushConstants had an unused duplicate
 	// field of the same name that nothing ever read).
 	//
+	// ambientBeerPowderScale is Brassica's own separate ambient-glow term (cloud_render.frag's
+	// `1.0 - 1.0/(1.0+25*stepDensity*scale)`) -- NOT the same quantity as boidish's own
+	// cloud_powder_scale_, which only feeds beerPowder()'s d-scale term and is exposed here as
+	// directBeerPowderScale instead, so the two don't collide under one name.
+	//
 	// cloudFlowSpeed/Direction/HeightScale drive actual wind-advected sampling now (see
 	// getCloudAdvectionSpeed, cloud_render.frag) -- clouds didn't drift at all before this.
 	//
-	// Deliberately NOT included here (no attachment point in the current shader, flagging
-	// rather than silently dropping): cloudPowderMultiplier/cloudPowderLocalScale (the powder
-	// formula here doesn't match boidish's beerPowder shape), cloudShadowStepMultiplier (no
-	// raymarched-shadow-step fallback exists -- shadow comes entirely from the beer-opacity
-	// map), curlStrength/curlFrequency (needs multi-layer noise sampling Brassica's single
-	// volume doesn't have), colorVarianceScale/Strength and sunAureoleStrength (cosmetic
-	// effects with nothing to hook into yet -- no per-cloud tint pass, no sun-disc/aureole
-	// render).
+	// Deliberately NOT included (dead even in boidish itself, not a real parity target):
+	// cloudShadowStepMultiplier (zero GLSL consumers anywhere in boidish's own shader tree)
+	// and curlStrength/curlFrequency (only referenced from boidish's shaders/archive/, outside
+	// its live include chain, in 3 mutually-inconsistent formulas). colorVarianceScale/Strength
+	// belongs on AtmosphereManager instead -- it's a sky/scattering-coefficient shimmer, not a
+	// cloud setting, despite boidish grouping it under the same UI panel.
 	struct CloudLightingManagerState {
 		float cloudPhaseG1{0.8f};
 		float cloudPhaseG2{-0.2f};
 		float cloudPhaseAlpha{0.5f};
 		float cloudPhaseIsotropic{0.52f};
 
-		float cloudPowderScale{300.0f};
+		// Brassica's separate ambient-glow powder term (see comment above).
+		float ambientBeerPowderScale{300.0f};
+		// beerPowder()'s own terms (shaders/common.glsl) -- previously hardcoded literals
+		// (0.1, 50, 2.67) with no settings surface at all.
+		float directBeerPowderScale{0.1f};
+		float cloudPowderMultiplier{50.0f};
+		float cloudPowderLocalScale{2.67f};
 		float cloudBeerPowderMix{0.5f};
 
 		float cloudShadowOpticalDepthMultiplier{1.0f};
@@ -70,7 +79,36 @@ namespace brassica {
 					UIHint::Slider
 				),
 				MakeField(
-					"cloudPowderScale", "Powder Scale", &CloudLightingManagerState::cloudPowderScale, 0.0f, 2000.0f, UIHint::Slider
+					"ambientBeerPowderScale",
+					"Ambient Powder Scale",
+					&CloudLightingManagerState::ambientBeerPowderScale,
+					0.0f,
+					2000.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"directBeerPowderScale",
+					"Beer-Powder Depth Scale",
+					&CloudLightingManagerState::directBeerPowderScale,
+					0.0f,
+					1.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"cloudPowderMultiplier",
+					"Beer-Powder Multiplier",
+					&CloudLightingManagerState::cloudPowderMultiplier,
+					0.0f,
+					100.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"cloudPowderLocalScale",
+					"Beer-Powder Local Scale",
+					&CloudLightingManagerState::cloudPowderLocalScale,
+					0.0f,
+					10.0f,
+					UIHint::Slider
 				),
 				MakeField(
 					"cloudBeerPowderMix",
@@ -149,7 +187,10 @@ namespace brassica {
 			push.cloudPhaseG2 = m_state.cloudPhaseG2;
 			push.cloudPhaseAlpha = m_state.cloudPhaseAlpha;
 			push.cloudPhaseIsotropic = m_state.cloudPhaseIsotropic;
-			push.cloudPowderScale = m_state.cloudPowderScale;
+			push.ambientBeerPowderScale = m_state.ambientBeerPowderScale;
+			push.directBeerPowderScale = m_state.directBeerPowderScale;
+			push.cloudPowderMultiplier = m_state.cloudPowderMultiplier;
+			push.cloudPowderLocalScale = m_state.cloudPowderLocalScale;
 			push.cloudBeerPowderMix = m_state.cloudBeerPowderMix;
 			push.cloudShadowOpticalDepthMultiplier = m_state.cloudShadowOpticalDepthMultiplier;
 			push.cloudSunLightScale = m_state.cloudSunLightScale;

@@ -224,32 +224,18 @@ float smaxCubic(float a, float b, float k) {
 // 	return mix(hg, (1.0 / (4.0 * PI)), cloudPhaseIsotropic);
 // }
 
-// float beerPowder(float d, float local_d) {
-// 	// Approximation of multiple scattering (Beer-Powder law)
-// 	// Ensuring sunny side isn't black when d is small
-// 	return max(
-// 		exp(-d),
-// 		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (1.0 - exp(-local_d * cloudPowderLocalScale))
-// 	);
-// }
-
-float beerPowder(float d, float local_d) {
-	// Approximation of multiple scattering (Beer-Powder law)
-	// Ensuring sunny side isn't black when d is small
+// Approximation of multiple scattering (Beer-Powder law). Ensures the sunny side isn't black
+// when d is small. directScale/multiplier/localScale were hardcoded literals (0.1, 50, 2.67)
+// until CloudLightingManager's directBeerPowderScale/cloudPowderMultiplier/
+// cloudPowderLocalScale gave them a settings surface -- callers pass the UBO aliases
+// (u_directBeerPowderScale etc., atmosphere/common.glsl) since this file has no UBO access
+// of its own.
+float beerPowder(float d, float local_d, float directScale, float multiplier, float localScale) {
 	return max(
 		exp(-d),
-		exp(-d * 0.1) * 50 * (1.0 - exp(-local_d * 2.67))
+		exp(-d * directScale) * multiplier * (1.0 - exp(-local_d * localScale))
 	);
 }
-
-// vec3 beerPowder(vec3 d, vec3 local_d) {
-// 	// Approximation of multiple scattering (Beer-Powder law)
-// 	// Ensuring sunny side isn't black when d is small
-// 	return max(
-// 		exp(-d),
-// 		exp(-d * cloudPowderScale) * cloudPowderMultiplier * (vec3(1.0) - exp(-local_d * cloudPowderLocalScale))
-// 	);
-// }
 
 float schlickPhase(float cosTheta, float k) {
     float kCos = k * cosTheta;
