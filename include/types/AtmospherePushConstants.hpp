@@ -36,6 +36,34 @@ namespace brassica {
 		// the real SkyViewLUT radiance for that view direction (shaders/atmosphere/composite.frag),
 		// weighted by fog opacity. 1.0 = fully physically motivated blend.
 		alignas(4) float skyConvergenceStrength{1.0f};
+
+		// Cloud lighting settings (CloudLightingManager) -- previously threaded per-frame
+		// through NodeFrameParams into CloudRenderPushConstants/CirrusPushConstants, which kept
+		// pushing those structs toward the 128-byte guaranteed-safe push-constant ceiling for
+		// data that only changes when a UI slider moves, not per-draw. All plain floats, so
+		// (per std140) they pack tightly after skyConvergenceStrength with no alignment padding
+		// needed between them -- no vec3/vec4 fields in this section.
+		alignas(4) float cloudPhaseG1{0.8f};
+		alignas(4) float cloudPhaseG2{-0.2f};
+		alignas(4) float cloudPhaseAlpha{0.5f};
+		alignas(4) float cloudPhaseIsotropic{0.52f};
+		alignas(4) float cloudPowderScale{300.0f};
+		alignas(4) float cloudBeerPowderMix{0.5f};
+		alignas(4) float cloudShadowOpticalDepthMultiplier{1.0f};
+		alignas(4) float cloudSunLightScale{1.0f};
+		alignas(4) float cloudMoonLightScale{1.0f};
+		alignas(4) float cirrusOpacity{0.3f};
+		alignas(4) float cloudFlowSpeed{0.25f};
+		alignas(4) float cloudFlowDirection{3.14159265f};
+		alignas(4) float cloudFlowHeightScale{0.015f};
+
+		// Volumetric fog settings (VolumetricLightingManager) -- same rationale, previously in
+		// VolumetricFroxelGenPushConstants (fogParams.xyz plus mieHumidityBoost bit-cast through
+		// a spare uint slot to avoid growing that struct past 128 bytes).
+		alignas(4) float fogDensity{0.003f};
+		alignas(4) float fogHeightFalloff{0.003f};
+		alignas(4) float fogBaseHeight{0.0f};
+		alignas(4) float mieHumidityBoost{5.0f};
 	};
 
 } // namespace brassica

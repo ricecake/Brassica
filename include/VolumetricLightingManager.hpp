@@ -4,6 +4,7 @@
 
 #include "IManager.hpp"
 #include "ManagerReflection.hpp"
+#include "types/AtmospherePushConstants.hpp"
 
 namespace brassica {
 
@@ -63,6 +64,15 @@ namespace brassica {
 		[[nodiscard]] State GetState() const override { return m_state; }
 
 		void SetState(const State& state) override { m_state = state; }
+
+		// Copies this manager's settings into the shared AtmosphereUBO mirror (now the common
+		// settings UBO, not atmosphere-only) -- same pattern as AtmosphereManager::ApplyTo.
+		void ApplyTo(AtmospherePushConstants& push) const {
+			push.fogDensity = m_state.fogDensity;
+			push.fogHeightFalloff = m_state.fogHeightFalloff;
+			push.fogBaseHeight = m_state.fogBaseHeight;
+			push.mieHumidityBoost = m_state.mieHumidityBoost;
+		}
 
 	private:
 		State m_state{};

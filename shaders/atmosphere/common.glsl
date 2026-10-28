@@ -35,6 +35,32 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	// opacity -- see marchAtmosphereSegment's caller in composite.frag. 1.0 = fully physically
 	// motivated blend; 0.0 = old behavior (pure single/multi-scatter march, no convergence).
 	float skyConvergenceStrength;
+
+	// Cloud lighting settings (CloudLightingManager) -- previously threaded per-frame through
+	// NodeFrameParams into CloudRenderPushConstants/CirrusPushConstants, which kept pushing
+	// those structs toward the 128-byte guaranteed-safe push-constant ceiling for data that
+	// only changes when a UI slider moves, not per-draw.
+	float cloudPhaseG1;
+	float cloudPhaseG2;
+	float cloudPhaseAlpha;
+	float cloudPhaseIsotropic;
+	float cloudPowderScale;
+	float cloudBeerPowderMix;
+	float cloudShadowOpticalDepthMultiplier;
+	float cloudSunLightScale;
+	float cloudMoonLightScale;
+	float cirrusOpacity;
+	float cloudFlowSpeed;
+	float cloudFlowDirection;
+	float cloudFlowHeightScale;
+
+	// Volumetric fog settings (VolumetricLightingManager) -- same rationale, previously in
+	// VolumetricFroxelGenPushConstants (fogParams.xyz plus mieHumidityBoost bit-cast through a
+	// spare uint slot to avoid growing that struct past 128 bytes).
+	float fogDensity;
+	float fogHeightFalloff;
+	float fogBaseHeight;
+	float mieHumidityBoost;
 }
 u_atmosphere;
 
@@ -61,6 +87,34 @@ u_atmosphere;
 #define kWaterExtinction u_atmosphere.waterExtinctionBase
 #define u_skyConvergence u_atmosphere.skyConvergenceStrength
 #define kTopRadius (kEarthRadius + kAtmosphereHeight)
+
+// Cloud/volumetric settings aliases -- deliberately `u_`-prefixed, NOT bare field names: the
+// bare names (cloudPhaseG1, cirrusOpacity, mieHumidityBoost, ...) currently collide with
+// existing push-constant struct members and local variables of the exact same name in
+// cloud_render.frag/cirrus.frag/volumetric_froxel_gen.comp, which still declare their own
+// copies until each is migrated off push constants onto this UBO. A bare #define would
+// textually mangle those still-existing declarations into syntax errors the moment this header
+// is included (which all three already do) -- a real collision, not a hypothetical one, found
+// by checking before aliasing. These prefixed aliases are collision-free regardless of which
+// consumers have migrated yet, so this section can land and build cleanly on its own, with each
+// consumer's push-constant-field removal done as its own separate, verifiable change.
+#define u_cloudPhaseG1 u_atmosphere.cloudPhaseG1
+#define u_cloudPhaseG2 u_atmosphere.cloudPhaseG2
+#define u_cloudPhaseAlpha u_atmosphere.cloudPhaseAlpha
+#define u_cloudPhaseIsotropic u_atmosphere.cloudPhaseIsotropic
+#define u_cloudPowderScale u_atmosphere.cloudPowderScale
+#define u_cloudBeerPowderMix u_atmosphere.cloudBeerPowderMix
+#define u_cloudShadowOpticalDepthMultiplier u_atmosphere.cloudShadowOpticalDepthMultiplier
+#define u_cloudSunLightScale u_atmosphere.cloudSunLightScale
+#define u_cloudMoonLightScale u_atmosphere.cloudMoonLightScale
+#define u_cirrusOpacity u_atmosphere.cirrusOpacity
+#define u_cloudFlowSpeed u_atmosphere.cloudFlowSpeed
+#define u_cloudFlowDirection u_atmosphere.cloudFlowDirection
+#define u_cloudFlowHeightScale u_atmosphere.cloudFlowHeightScale
+#define u_fogDensity u_atmosphere.fogDensity
+#define u_fogHeightFalloff u_atmosphere.fogHeightFalloff
+#define u_fogBaseHeight u_atmosphere.fogBaseHeight
+#define u_mieHumidityBoost u_atmosphere.mieHumidityBoost
 
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {
 	float b = dot(ro, rd);

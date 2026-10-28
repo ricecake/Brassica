@@ -1531,8 +1531,12 @@ namespace brassica {
 		// Sync UI-tunable settings into the live push-constant struct before anything below
 		// reads it (the AtmosphereUBO upload and this frame's NodeFrameParams.atmosphere, used
 		// by the 3 LUT nodes' regen-on-change throttle). Previously `atmosphere` was just
-		// default-constructed once in Engine.hpp with no runtime surface at all.
+		// default-constructed once in Engine.hpp with no runtime surface at all. `atmosphere`/
+		// AtmosphereUBO is now the common settings UBO, not atmosphere-only -- cloud and
+		// volumetric settings land in the same struct/buffer instead of per-node push constants.
 		atmosphereManager.ApplyTo(atmosphere);
+		cloudLightingManager.ApplyTo(atmosphere);
+		volumetricLightingManager.ApplyTo(atmosphere);
 
 		FrameDetails frameDetails{
 			.deltaTime = deltaTime,
