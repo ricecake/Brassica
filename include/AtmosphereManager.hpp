@@ -37,6 +37,11 @@ namespace brassica {
 		// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
 		// literal with no settings surface at all.
 		float sunAureoleStrength{0.5f};
+		// Time-animated shimmer on the sky's rayleigh/mie scattering coefficients
+		// (sky_view_lut.comp) -- despite boidish grouping this under its cloud-lighting UI
+		// panel, it modulates sky/atmosphere scattering, not cloud density, so it lives here.
+		float colorVarianceScale{1.0f};
+		float colorVarianceStrength{0.5f};
 
 		glm::vec3 rayleighScattering{5.802e-3f, 13.558e-3f, 33.100e-3f};
 		float     mieScattering{3.996e-3f};
@@ -87,6 +92,22 @@ namespace brassica {
 					0.0f,
 					2.0f,
 					UIHint::Slider
+				),
+				MakeField(
+					"colorVarianceScale",
+					"Sky Color Variance Scale",
+					&AtmosphereManagerState::colorVarianceScale,
+					0.0f,
+					2.5f,
+					UIHint::Slider
+				),
+				MakeField(
+					"colorVarianceStrength",
+					"Sky Color Variance Strength",
+					&AtmosphereManagerState::colorVarianceStrength,
+					0.0f,
+					0.5f,
+					UIHint::Slider
 				)
 			);
 		}
@@ -125,6 +146,8 @@ namespace brassica {
 			push.mieExtinctionBase = m_state.mieExtinction;
 			push.ozoneAbsorptionBase = m_state.ozoneAbsorption;
 			push.sunAureoleStrength = m_state.sunAureoleStrength;
+			push.colorVarianceScale = m_state.colorVarianceScale;
+			push.colorVarianceStrength = m_state.colorVarianceStrength;
 		}
 
 		[[nodiscard]] float GetMultiScatScale() const { return m_state.multiScatScale; }

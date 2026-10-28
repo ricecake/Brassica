@@ -62,6 +62,10 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
 	// literal with no settings surface.
 	float sunAureoleStrength;
+	// Time-animated shimmer on sky_view_lut.comp's rayleigh/mie scattering coefficients --
+	// previously had no GLSL consumer in Brassica at all.
+	float colorVarianceScale;
+	float colorVarianceStrength;
 
 	// Volumetric fog settings (VolumetricLightingManager) -- same rationale, previously in
 	// VolumetricFroxelGenPushConstants (fogParams.xyz plus mieHumidityBoost bit-cast through a
@@ -121,6 +125,8 @@ u_atmosphere;
 #define u_cloudFlowDirection u_atmosphere.cloudFlowDirection
 #define u_cloudFlowHeightScale u_atmosphere.cloudFlowHeightScale
 #define u_sunAureoleStrength u_atmosphere.sunAureoleStrength
+#define u_colorVarianceScale u_atmosphere.colorVarianceScale
+#define u_colorVarianceStrength u_atmosphere.colorVarianceStrength
 #define u_fogDensity u_atmosphere.fogDensity
 #define u_fogHeightFalloff u_atmosphere.fogHeightFalloff
 #define u_fogBaseHeight u_atmosphere.fogBaseHeight

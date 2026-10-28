@@ -67,6 +67,10 @@ namespace brassica {
 		// Sun aureole (shared by SkyBackgroundNode's sky.frag) -- previously hardcoded
 		// push.sunDirAndAureole.w = 0.5f in SkyBackgroundNode::SetFrameParams, no UI at all.
 		alignas(4) float sunAureoleStrength{0.5f};
+		// Time-animated shimmer on sky_view_lut.comp's rayleigh/mie scattering coefficients --
+		// previously had no GLSL consumer in Brassica at all.
+		alignas(4) float colorVarianceScale{1.0f};
+		alignas(4) float colorVarianceStrength{0.5f};
 
 		// Volumetric fog settings (VolumetricLightingManager) -- same rationale, previously in
 		// VolumetricFroxelGenPushConstants (fogParams.xyz plus mieHumidityBoost bit-cast through
