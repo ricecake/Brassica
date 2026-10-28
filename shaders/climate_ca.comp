@@ -4,6 +4,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "helpers/whittaker.glsl"
+#include "helpers/wind.glsl"
 #include "clustered_lighting.glsl"
 
 layout(set = 1, binding = 3, rgba32f) uniform image2D uImageStorageRGBA32F[];
@@ -66,21 +67,10 @@ void main() {
 	float dayFactor = dot(lightDir, vec3(0, 1, 0));
 	float tempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(lat)) - (me1.elevation * LAPSE_RATE);
 
-	// 2. POSITIONAL WIND VECTOR
-	ivec2 windDir;
-	float absLat = abs(lat);
-	if (absLat < 0.33) {
-		windDir = ivec2(-1, int(sign(lat)) * -1);
-	} else if (absLat < 0.66) {
-		windDir = ivec2(1, int(sign(lat)) * 1);
-	} else {
-		windDir = ivec2(-1, 0);
-	}
-	vec3 wobble = clamp(cross_noise(vec3(pos.x, 0.0, pos.y) * 0.001, uTime * 0.01), 0.0, 1.0);
-	vec3 offsetDir = normalize(cross(vec3(windDir.x, 0.0, windDir.y), vec3(0, 1, 0)));
-	wobble = offsetDir * clamp(dot(wobble, offsetDir), 0.0, 1.0);
-	windDir += ivec2(wobble.x, wobble.y);
-	windDir = clamp(windDir, -1, 1);
+	// 2. POSITIONAL WIND VECTOR -- shared helpers/wind.glsl model, so the CA's own advection and
+	// the visual flow derived from it below agree instead of each inventing its own circulation.
+	vec2  prevailingWind = getPrevailingWind(lat);
+	ivec2 windDir = getDiscretizedWindOffset(prevailingWind, vec3(pos.x, 0.0, pos.y), uTime);
 
 	// 3. ADVECTION, GROUND WATER LEVEL & CONDENSATION
 	ivec2 upwindPos = pos - windDir;
@@ -242,25 +232,31 @@ void main() {
 	// 1. Calculate the stable macro-climate coverage probability
 	float baseCoverage = clamp(next1.airMoisture * 0.8 + rain * 2.0, 0.0, 1.0);
 
-	// 2. Create a continuous, blended wind velocity for visual flow
-	float hadleyWeight = 1.0 - smoothstep(0.25, 0.4, absLat);
-	float ferrelWeight = smoothstep(0.25, 0.4, absLat) * (1.0 - smoothstep(0.6, 0.7, absLat));
-	float polarWeight  = smoothstep(0.6, 0.7, absLat);
+	// 2. Flowing coordinates, using the same prevailingWind computed above for the CA's own
+	// advection -- previously recomputed an entire second hadley/ferrel/polar blend here that
+	// could (and did) disagree with the CA step's own wind.
+	vec2 flowPos = vec2(pos) - (prevailingWind * uTime * 0.05);
 
-	vec2 hadleyVec = vec2(-1.0, -sign(lat) * 0.5);
-	vec2 ferrelVec = vec2(1.0, sign(lat) * 0.5);
-	vec2 polarVec  = vec2(-1.0, 0.0);
-
-	vec2 visualWind = (hadleyVec * hadleyWeight) + (ferrelVec * ferrelWeight) + (polarVec * polarWeight);
-
-	// 3. Calculate flowing coordinates
-	vec2 flowPos = vec2(pos) - (visualWind * uTime * 0.05);
-
-	// 4. Sample a noise function
+	// 3. Sample noise for the coverage shape, plus a second, higher-frequency pass purely for
+	// edge texture/detail (not fed back into the CA's physical state, just the visual coverage
+	// derivation below).
 	float cloudNoise = dot_noise_fbm(vec3(flowPos.x, 0.0, flowPos.y) * 0.01, 3, 0.005 * uTime);
+	float detailNoise = dot_noise_fbm(vec3(flowPos.x, 0.0, flowPos.y) * 0.08, 2, 0.02 * uTime);
 
-	// 5. Modulate base coverage
-	float cloudCoverage = clamp(baseCoverage * (cloudNoise * 1.5), 0.0, 1.0);
+	// 4. Modulate base coverage with a smooth threshold instead of a raw multiply-then-clamp:
+	// the old `baseCoverage * (cloudNoise * 1.5)` snapped to 0 or to baseCoverage the moment
+	// cloudNoise crossed a fixed ratio, producing razor-sharp, binary-looking coverage edges.
+	// Thresholding noise against a coverage-dependent cutoff with a soft margin graduates the
+	// edge instead; the detail noise perturbs the cutoff itself for a wispier, less uniform
+	// boundary rather than a perfectly smooth one.
+	const float kCoverageSoftness = 1.0;
+	float coverageThreshold = mix(1.0, -1.0, baseCoverage);
+	float texturedNoise = cloudNoise + detailNoise * 0.3;
+	float cloudCoverage = smoothstep(
+		coverageThreshold - kCoverageSoftness,
+		coverageThreshold + kCoverageSoftness,
+		texturedNoise
+	);
 
 	float weatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0);
 	float moistureContent = clamp(next1.groundwater, 0.0, 1.0);

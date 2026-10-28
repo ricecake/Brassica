@@ -4,6 +4,7 @@
 #include "common.glsl"
 #include "helpers/octahedral.glsl"
 #include "helpers/astral.glsl"
+#include "helpers/wind.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -53,15 +54,16 @@ vec3 calculateCirrusColor(
 		rainfall = clamp(weatherSample.b, 0.0, 1.0);            // b = moisture content
 	}
 
-	// Advect cirrus clouds with 2D/3D atmospheric circulation wind map
-	float latitude = abs(surfaceDir.y);
-	float wEast = -0.012 * sin(3.0 * latitude * PI);
-	float wNorth = -0.004 * sin(2.0 * latitude * PI) * (surfaceDir.y >= 0.0 ? 1.0 : -1.0);
+	// Advect cirrus clouds using the shared prevailing-wind model (helpers/wind.glsl) instead of
+	// an independent sine-wave approximation, so cirrus drifts the same direction as the CA
+	// weather system's own wind (climate_ca.comp). surfaceDir.y is already signed sin-latitude,
+	// matching getPrevailingWind's expected [-1, 1] convention.
+	vec2 wind = getPrevailingWind(surfaceDir.y) * 0.01;
 
 	vec3 up = abs(surfaceDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
 	vec3 eastTang = normalize(cross(up, surfaceDir));
 	vec3 northTang = normalize(cross(surfaceDir, eastTang));
-	vec3 windDir3D = eastTang * wEast + northTang * wNorth;
+	vec3 windDir3D = eastTang * wind.x + northTang * wind.y;
 
 	vec3 advect3D = windDir3D * (uTime * 50000.0) + vec3(1.0, 0.0, 1.0) * (uTime * 0.2);
 	vec2 uv_cirrus = (p_cirrus.xz + advect3D.xz) * (0.00005 / worldScale);
