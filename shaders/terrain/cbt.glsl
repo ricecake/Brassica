@@ -2,6 +2,8 @@
 #define BRASSICA_CBT_GLSL
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
 
 #include "common.glsl"
 

@@ -2,6 +2,9 @@
 #define BRASSICA_BINDLESS_GLSL
 
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // Frame UBO in its own always-bound set 0 -- every shader gets ready access to camera/time/
 // frame data without declaring it as a graph resource dependency. Genuinely double-buffered on
@@ -89,6 +92,11 @@ layout(set = 1, binding = 3, rg32f) coherent uniform image2DArray uImageArraysRG
 // (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,
 // not a 2D-array pressed into service for a volume it was never shaped for.
 layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
+
+// Binding 6: SSBO Buffer Reference Catalog
+layout(set = 1, binding = 6) readonly buffer SSBOAddressCatalog {
+	uint64_t uSSBOBuffers[];
+};
 
 // Sampler catalog indices, written once by Engine::InitGlobalDescriptors and injected here via
 // Shader::RegisterConstant's [[NAME]] substitution -- GLSL and C++ read the same catalog by
