@@ -1326,10 +1326,6 @@ namespace brassica {
 				.multiScatScale = atmosphereManager.GetMultiScatScale(),
 				.cloudShadowIntensity = 0.5f,
 				.skyExposure = lightManager.GetSkyExposure(),
-				.fogDensity = volumetricLightingManager.GetState().fogDensity,
-				.fogHeightFalloff = volumetricLightingManager.GetState().fogHeightFalloff,
-				.fogBaseHeight = volumetricLightingManager.GetState().fogBaseHeight,
-				.mieHumidityBoost = volumetricLightingManager.GetState().mieHumidityBoost,
 				.registry = &registry,
 				.atmosphere = atmosphere,
 			};
@@ -1702,10 +1698,6 @@ namespace brassica {
 			.multiScatScale = atmosphereManager.GetMultiScatScale(),
 			.cloudShadowIntensity = 0.5f,
 			.skyExposure = lightManager.GetSkyExposure(),
-			.fogDensity = volumetricLightingManager.GetState().fogDensity,
-			.fogHeightFalloff = volumetricLightingManager.GetState().fogHeightFalloff,
-			.fogBaseHeight = volumetricLightingManager.GetState().fogBaseHeight,
-			.mieHumidityBoost = volumetricLightingManager.GetState().mieHumidityBoost,
 			.registry = &registry,
 			.atmosphere = atmosphere,
 		};

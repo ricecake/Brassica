@@ -63,16 +63,6 @@ namespace brassica::render {
 		float           multiScatScale{1.0f};
 		float           cloudShadowIntensity{0.5f};
 		float           skyExposure{1.0f};
-		// VolumetricFroxelGenNode's fog tuning -- previously hardcoded directly in its own
-		// SetFrameParams with no settings surface at all (VolumetricLightingManager).
-		float           fogDensity{0.003f};
-		float           fogHeightFalloff{0.003f};
-		float           fogBaseHeight{0.0f};
-		// Humidity (the weather map's moisture channel, sampled per-froxel) multiplies the fog's
-		// mie scattering/extinction by (1 + weatherMoisture * mieHumidityBoost) -- real
-		// atmospheric haze/mist thickens with moisture. This is the volumetric-lighting
-		// reinterpretation of boidish's humidity-to-mie coupling (see VolumetricLightingManager).
-		float           mieHumidityBoost{5.0f};
 		entt::registry* registry = nullptr;
 		// Not for shader delivery -- shaders read the real values from the global AtmosphereUBO
 		// (atmosphere/common.glsl, set 0 binding 4). This is here purely so

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstdint>
 
@@ -35,21 +34,19 @@ namespace brassica {
 		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 1.777f};     // xyz = camUp, w = aspect
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};      // xyz = sunDir, w = sunIntensity
 		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 0.6f};  // rgb = sunColor, w = phase anisotropy g
-		alignas(
-			16
-		) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 1024.0f}; // x = density, y = falloff, z = base, w = gridTextureDim
 		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu}; // x = scat0|1, y = scat2|ext0, z = ext1|2, w = noise|skyView
-		// x = clipmap|minMax, y = cloudShadow|weatherBiome, z = shadowMap|unused, w = bit-cast
-		// float mieHumidityBoost -- repurposing a confirmed-always-0, never-read uint slot
-		// instead of growing this struct past its current 128 bytes (no other push-constant
-		// struct in this codebase exceeds that, and it's the one size the Vulkan spec actually
-		// guarantees everywhere).
+		// x = clipmap|minMax, y = cloudShadow|weatherBiome, z = shadowMap|gridTextureDim, w = unused
+		// (previously held a bit-cast float mieHumidityBoost; that and fogParams's
+		// density/falloff/base now live on VolumetricLightingManager/AtmosphereUBO instead).
 		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu};
 	};
 
+	// fogParams (density/falloff/base) dropped entirely -- VolumetricLightingManager's settings
+	// now live on the shared AtmosphereUBO (u_fogDensity etc., shaders/atmosphere/common.glsl),
+	// not here. gridTextureDim moved into indices1.z's previously-unused high 16 bits.
 	static_assert(
-		sizeof(VolumetricFroxelGenPushConstants) == 128,
-		"VolumetricFroxelGenPushConstants must be exactly 128 bytes"
+		sizeof(VolumetricFroxelGenPushConstants) == 112,
+		"VolumetricFroxelGenPushConstants must be exactly 112 bytes"
 	);
 
 	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
@@ -97,7 +94,7 @@ namespace brassica {
 			genShader.Destroy(device);
 		}
 
-		float mieHumidityBoost{5.0f};
+		std::uint32_t gridTextureDim{0};
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			cameraPos = p.cameraPosition;
@@ -108,11 +105,7 @@ namespace brassica {
 			genPush.camUp = glm::vec4(p.cameraUp, p.aspectRatio);
 			genPush.sunDir = glm::vec4(p.sunDir, 1.0f);
 			genPush.sunColor = glm::vec4(p.sunRadiance, 0.6f); // w = anisotropy g
-			// x/y/z previously hardcoded here directly (VolumetricLightingManager, Engine.hpp,
-			// is the settings surface this used to be missing entirely).
-			genPush.fogParams =
-				glm::vec4(p.fogDensity, p.fogHeightFalloff, p.fogBaseHeight, static_cast<float>(p.terrainGridParams.w));
-			mieHumidityBoost = p.mieHumidityBoost;
+			gridTextureDim = p.terrainGridParams.w;
 		}
 
 		// TerrainClipmapTexture/TerrainMinMaxTexture are now both catalog-converted (own
@@ -184,8 +177,7 @@ namespace brassica {
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
-			genPush.indices1.z = pack16(shadowMapIndex, 0u);
-			genPush.indices1.w = std::bit_cast<std::uint32_t>(mieHumidityBoost);
+			genPush.indices1.z = pack16(shadowMapIndex, gridTextureDim);
 
 			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {

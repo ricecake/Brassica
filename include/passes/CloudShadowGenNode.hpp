@@ -26,7 +26,6 @@ namespace brassica {
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};
 		alignas(16) glm::uvec4 volumeIndices{0};
 		alignas(16) glm::vec4 cameraPos{0.0f};
-		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 0.6f};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};

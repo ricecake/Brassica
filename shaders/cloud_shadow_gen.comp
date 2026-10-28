@@ -12,7 +12,6 @@ layout(push_constant) uniform CloudShadowGenPushConstants {
 	vec4  sunDir;                // xyz = sun direction
 	uvec4 volumeIndices;         // x = sampled bindless index for CloudDetailVolume
 	vec4  cameraPos;             // xyz = camera position, w = shadowMapExtent (320000.0)
-	vec4  fogParams;             // x = fog density, y = fog height falloff, z = fog base height
 	uint  weatherBiomeIndex;     // bindless index for weather map
 	uint  clipmapIndex;          // bindless index for TerrainClipmapTexture
 	uint  minMaxIndex;           // bindless index for TerrainMinMaxTexture
@@ -132,8 +131,8 @@ void main() {
 		if (p.y < terrainIntersectionY) break;
 
 		float cloudExt = sampleCloudExtinction(p);
-		float fogDiff = max(0.0, p.y - push.fogParams.z);
-		float fogExt = push.fogParams.x * exp(-push.fogParams.y * fogDiff);
+		float fogDiff = max(0.0, p.y - u_fogBaseHeight);
+		float fogExt = u_fogDensity * exp(-u_fogHeightFalloff * fogDiff);
 		float ext = cloudExt + fogExt;
 
 		if (ext > kCloudThreshold) {
@@ -175,8 +174,8 @@ void main() {
 		if (p.y < terrainIntersectionY) break;
 
 		float cloudExt = sampleCloudExtinction(p);
-		float fogDiff = max(0.0, p.y - push.fogParams.z);
-		float fogExt = push.fogParams.x * exp(-push.fogParams.y * fogDiff);
+		float fogDiff = max(0.0, p.y - u_fogBaseHeight);
+		float fogExt = u_fogDensity * exp(-u_fogHeightFalloff * fogDiff);
 		float ext = cloudExt + fogExt;
 
 		maxExt = max(maxExt, ext);
