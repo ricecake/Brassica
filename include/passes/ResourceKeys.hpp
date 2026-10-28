@@ -119,7 +119,15 @@ namespace brassica {
 	// system. Big-picture cloud shape now comes entirely from the weather coverage map; this
 	// volume only supplies reusable shape/erosion detail, so it never needs camera-relative
 	// recentering -- see CloudVolumeGenNode.
+	// Lifetime::Persistent -- same reasoning as TransmittanceLUT/MultiScatteringLUT above:
+	// CloudVolumeGenNode only bakes this once (dirty-flag gated), so "this frame's producer is
+	// inactive" is the normal steady state, not "no valid data." Without this, every reader
+	// (CloudShadowGenNode, CloudRenderNode) sees no active writer preceding it once the node
+	// goes inactive after frame 1, and the zero-init path clears the whole volume to black every
+	// frame -- exactly the vanishing-texture bug this was found by.
 	struct CloudDetailVolume {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return CloudVolumeDesc(); }
 	};
 
