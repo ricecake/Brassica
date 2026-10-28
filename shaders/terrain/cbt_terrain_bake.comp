@@ -1,0 +1,92 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "cbt.glsl"
+
+layout(push_constant) uniform TerrainPushConstants {
+	uvec4 gridParams;
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
+	uint  cbtBitfieldIndex;
+	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+	uint  _pad0;
+} params;
+
+layout(std430, buffer_reference) buffer BisectorPool {
+	Bisector bisectors[];
+};
+
+layout(std430, buffer_reference) buffer CommandsBuffer {
+	uint       splitCount;
+	uint       mergeCount;
+	uint       freePageHead;
+	uint       freePageCount;
+	CBTCommand commands[];
+};
+
+layout(std430, buffer_reference) buffer PageTableBuffer {
+	PageTableEntry entries[];
+};
+
+layout(std430, buffer_reference) buffer GeometryCacheBuffer {
+	GeometryCacheHeader headers[];
+};
+
+float evaluate_cbt_procedural_height(vec2 pos2D) {
+	vec2 p = pos2D * 0.0001;
+	float h = sin(p.x * 3.0) * cos(p.y * 3.0) * 150.0;
+	h += sin(p.x * 12.0 + 1.5) * cos(p.y * 12.0) * 45.0;
+	h += sin(p.x * 48.0 + 0.8) * cos(p.y * 48.0 + 2.1) * 15.0;
+	h += sin(p.x * 192.0) * cos(p.y * 192.0) * 4.0;
+	return h;
+}
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+	if (idx >= params.activeBisectorCount) return;
+
+	BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
+	CommandsBuffer cmd = CommandsBuffer(uSSBOBuffers[params.cbtCommandsIndex]);
+	PageTableBuffer pageTable = PageTableBuffer(uSSBOBuffers[params.cbtPageTableIndex]);
+	GeometryCacheBuffer cache = GeometryCacheBuffer(uSSBOBuffers[params.cbtCacheIndex]);
+
+	if (pool.bisectors[idx].cachePage == CBT_INVALID_PAGE) {
+		uint pageIdx = atomicAdd(cmd.freePageHead, 1u) % 2048u;
+		pool.bisectors[idx].cachePage = pageIdx;
+
+		pageTable.entries[pageIdx].bisectorID = pool.bisectors[idx].id;
+		pageTable.entries[pageIdx].pageIndex = pageIdx;
+		pageTable.entries[pageIdx].flags = 1u;
+
+		Bisector b = pool.bisectors[idx];
+		float minH = 1e9;
+		float maxH = -1e9;
+
+		for (uint ly = 0u; ly <= 10u; ++ly) {
+			for (uint lx = 0u; lx <= 10u; ++lx) {
+				float fu = float(lx) / 10.0;
+				float fv = float(ly) / 10.0;
+				vec2 pos2D = b.v0 * (1.0 - fu - fv) + b.v1 * fu + b.v2 * fv;
+				float h = evaluate_cbt_procedural_height(pos2D);
+
+				uint sampleIndex = ly * 11u + lx;
+				cache.headers[pageIdx].heights[sampleIndex] = h;
+
+				minH = min(minH, h);
+				maxH = max(maxH, h);
+			}
+		}
+		cache.headers[pageIdx].minMax = vec2(minH, maxH);
+	}
+}

@@ -1,0 +1,36 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "cbt.glsl"
+
+layout(push_constant) uniform TerrainPushConstants {
+	uvec4 gridParams;
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  biomeIndex;
+	float waterLevel;
+	uint  weatherBiomeIndex;
+	uint  cbtBitfieldIndex;
+	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
+	uint  cbtCacheIndex;
+	uint  activeBisectorCount;
+	uint  _pad0;
+} params;
+
+layout(std430, buffer_reference) buffer BisectorPool {
+	Bisector bisectors[];
+};
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+	if (idx >= params.activeBisectorCount) return;
+
+	BisectorPool pool = BisectorPool(uSSBOBuffers[params.cbtPoolIndex]);
+	pool.bisectors[idx].next = (idx * 3u) + 1u;
+	pool.bisectors[idx].prev = (idx * 3u) + 2u;
+}
