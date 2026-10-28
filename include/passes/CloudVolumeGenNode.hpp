@@ -57,43 +57,16 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) { forceRegeneration = p.forceRegeneration; }
 
-		// TEMPORARY: diagnosing an every-frame redispatch reported from RenderDoc that static
-		// code reading couldn't explain (Active-gated Create<> is a documented-working pattern
-		// elsewhere, e.g. HostWriteNode). Remove once root-caused.
-		std::uint64_t setupCallCount{0};
-		std::uint64_t executeCallCount{0};
-
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
-			bool active = !hasGenerated || forceRegeneration;
-			r.Domain(graph::ExecutionDomain::Compute).Active(active);
+			r.Domain(graph::ExecutionDomain::Compute).Active(!hasGenerated || forceRegeneration);
 			r.Create<CloudDetailVolume>();
-			++setupCallCount;
-			if (setupCallCount <= 10 || active) {
-				spdlog::info(
-					"CloudVolumeGenNode::Setup call #{}: hasGenerated={} forceRegeneration={} -> "
-					"active={} (executeCallCount so far={})",
-					setupCallCount,
-					hasGenerated,
-					forceRegeneration,
-					active,
-					executeCallCount
-				);
-			}
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			++executeCallCount;
-			spdlog::info(
-				"CloudVolumeGenNode::Execute call #{} (hasGenerated was {} on entry)",
-				executeCallCount,
-				hasGenerated
-			);
-
 			push.outStorageIdx = ctx.StorageIndex<CloudDetailVolume>();
 
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
 			if (!resolved.pipeline) {
-				spdlog::warn("CloudVolumeGenNode::Execute call #{}: resolved.pipeline was null, skipping dispatch", executeCallCount);
 				return;
 			}
 
