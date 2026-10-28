@@ -17,9 +17,13 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
+	uint  cbtBitfieldIndex;
 	uint  cbtPoolIndex;
+	uint  cbtCommandsIndex;
+	uint  cbtPageTableIndex;
 	uint  cbtCacheIndex;
 	uint  activeBisectorCount;
+	uint  _pad0;
 } params;
 
 struct TaskPayload {
@@ -93,7 +97,7 @@ void main() {
 				payload.v0[writeIdx] = b.v0;
 				payload.v1[writeIdx] = b.v1;
 				payload.v2[writeIdx] = b.v2;
-				payload.twinDepth[writeIdx] = b.depth;
+				payload.twinDepth[writeIdx] = (b.depth > 0u) ? (b.depth - 1u) : 0u;
 				payload.nextDepth[writeIdx] = b.depth;
 				payload.prevDepth[writeIdx] = b.depth;
 			}

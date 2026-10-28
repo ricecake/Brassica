@@ -32,11 +32,6 @@ namespace brassica {
 		explicit SkinnedCylinder(const Parameters& params);
 		~SkinnedCylinder();
 
-		SkinnedCylinder(SkinnedCylinder&&) noexcept = default;
-		SkinnedCylinder& operator=(SkinnedCylinder&&) noexcept = default;
-		SkinnedCylinder(const SkinnedCylinder&) = delete;
-		SkinnedCylinder& operator=(const SkinnedCylinder&) = delete;
-
 		// Evaluates skeletal animation at specified time and updates skinned vertex positions and normals
 		void Update(float timeSeconds);
 
