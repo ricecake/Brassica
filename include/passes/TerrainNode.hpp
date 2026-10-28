@@ -167,11 +167,11 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
-			push.cbtBitfieldIndex = ctx.StorageIndex<CBTBitfieldBuffer>();
-			push.cbtPoolIndex = ctx.StorageIndex<CBTBisectorPoolBuffer>();
-			push.cbtCommandsIndex = ctx.StorageIndex<CBTCommandsBuffer>();
-			push.cbtPageTableIndex = ctx.StorageIndex<CBTPageTableBuffer>();
-			push.cbtCacheIndex = ctx.StorageIndex<CBTGeometryCacheBuffer>();
+			push.cbtBitfieldIndex = ctx.BufferIndex<CBTBitfieldBuffer>();
+			push.cbtPoolIndex = ctx.BufferIndex<CBTBisectorPoolBuffer>();
+			push.cbtCommandsIndex = ctx.BufferIndex<CBTCommandsBuffer>();
+			push.cbtPageTableIndex = ctx.BufferIndex<CBTPageTableBuffer>();
+			push.cbtCacheIndex = ctx.BufferIndex<CBTGeometryCacheBuffer>();
 			push.activeBisectorCount = std::clamp(m_activeBisectorCount, 2u, 131072u);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
