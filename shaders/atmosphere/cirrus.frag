@@ -19,7 +19,6 @@ layout(push_constant) uniform CirrusPushConstants {
 	uint  transmittanceIndex;
 	uint  skyViewIndex;
 	float cirrusAlt;
-	float cirrusOpacity;
 	uint  weatherBiomeIndex;
 } push;
 
@@ -79,7 +78,7 @@ vec3 calculateCirrusColor(
 	vec3  T_cirrus = max(getTransmittance(planetRadius + cirrusAlt, sunDir.y), vec3(0.001));
 	float cirrusPhase = mix(0.2, 1.0, pow(max(0.0, dot(worldRay, sunDir)), 3.0));
 
-	float baseOpacity = push.cirrusOpacity > 0.0 ? push.cirrusOpacity : 0.0125;
+	float baseOpacity = u_cirrusOpacity > 0.0 ? u_cirrusOpacity : 0.0125;
 	float opacity = baseOpacity * (0.6 + 1.4 * effectiveDensity);
 
 	vec3  cirrusLighting = (T_cirrus * sunRadiance * cirrusPhase * 5.0) + (skyRadiance * 0.5);

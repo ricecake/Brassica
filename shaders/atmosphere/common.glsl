@@ -89,15 +89,12 @@ u_atmosphere;
 #define kTopRadius (kEarthRadius + kAtmosphereHeight)
 
 // Cloud/volumetric settings aliases -- deliberately `u_`-prefixed, NOT bare field names: the
-// bare names (cloudPhaseG1, cirrusOpacity, mieHumidityBoost, ...) currently collide with
-// existing push-constant struct members and local variables of the exact same name in
-// cloud_render.frag/cirrus.frag/volumetric_froxel_gen.comp, which still declare their own
-// copies until each is migrated off push constants onto this UBO. A bare #define would
-// textually mangle those still-existing declarations into syntax errors the moment this header
-// is included (which all three already do) -- a real collision, not a hypothetical one, found
-// by checking before aliasing. These prefixed aliases are collision-free regardless of which
-// consumers have migrated yet, so this section can land and build cleanly on its own, with each
-// consumer's push-constant-field removal done as its own separate, verifiable change.
+// bare names (fogDensity, mieHumidityBoost, ...) still collide with existing push-constant
+// struct members/locals of the exact same name in volumetric_froxel_gen.comp (Stage C,
+// pending), which hasn't been migrated off push constants onto this UBO yet. cloud_render.frag
+// and cirrus.frag have already been migrated (CloudRenderPushConstants/CirrusPushConstants no
+// longer declare these fields) but the aliases stay `u_`-prefixed regardless, so this section
+// doesn't need touching again once volumetric_froxel_gen.comp's migration lands.
 #define u_cloudPhaseG1 u_atmosphere.cloudPhaseG1
 #define u_cloudPhaseG2 u_atmosphere.cloudPhaseG2
 #define u_cloudPhaseAlpha u_atmosphere.cloudPhaseAlpha

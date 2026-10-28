@@ -73,23 +73,6 @@ namespace brassica::render {
 		// atmospheric haze/mist thickens with moisture. This is the volumetric-lighting
 		// reinterpretation of boidish's humidity-to-mie coupling (see VolumetricLightingManager).
 		float           mieHumidityBoost{5.0f};
-		// CloudRenderNode/CirrusNode tuning -- previously either hardcoded local consts inside
-		// marchClouds() or (cirrusOpacity) a dead, never-read push-constant field (CloudLightingManager).
-		float           cloudPhaseG1{0.8f};
-		float           cloudPhaseG2{-0.2f};
-		float           cloudPhaseAlpha{0.5f};
-		float           cloudPhaseIsotropic{0.52f};
-		float           cloudPowderScale{300.0f};
-		float           cloudBeerPowderMix{0.5f};
-		float           cloudShadowOpticalDepthMultiplier{1.0f};
-		float           cloudSunLightScale{1.0f};
-		float           cloudMoonLightScale{1.0f};
-		float           cirrusOpacity{0.3f};
-		// Wind-driven advection of the cloud weather/volume sample position -- clouds didn't
-		// drift at all before this (getCloudAdvectionSpeed, cloud_render.frag).
-		float           cloudFlowSpeed{0.25f};
-		float           cloudFlowDirection{3.14159265f};
-		float           cloudFlowHeightScale{0.015f};
 		entt::registry* registry = nullptr;
 		// Not for shader delivery -- shaders read the real values from the global AtmosphereUBO
 		// (atmosphere/common.glsl, set 0 binding 4). This is here purely so

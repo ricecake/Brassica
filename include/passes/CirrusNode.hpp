@@ -38,7 +38,6 @@ namespace brassica {
 		std::uint32_t transmittanceIndex{0};
 		std::uint32_t skyViewIndex{0};
 		float         cirrusAlt{10.0f};
-		float         cirrusOpacity{0.0125f};
 		std::uint32_t weatherBiomeIndex{0};
 	};
 
@@ -88,7 +87,6 @@ namespace brassica {
 			push.sunDir = glm::vec4(p.sunDir, 0.0f);
 			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
 			push.worldScale = p.worldScale;
-			push.cirrusOpacity = p.cirrusOpacity;
 		}
 
 		// No Read<GBufferNormal/Material/Depth>() -- same lesson #2 over-claim as
