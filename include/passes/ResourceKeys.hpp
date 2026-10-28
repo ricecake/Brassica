@@ -114,15 +114,12 @@ namespace brassica {
 		};
 	}
 
-	struct CloudVolumeCascade0 {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return CloudVolumeDesc(); }
-	};
-
-	struct CloudVolumeCascade1 {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return CloudVolumeDesc(); }
-	};
-
-	struct CloudVolumeCascade2 {
+	// Single tileable detail-noise volume (periodic in all 3 axes, world-space period
+	// constants::Weather::kCloudVolumePeriod) replacing the former 3-cascade camera-snapped
+	// system. Big-picture cloud shape now comes entirely from the weather coverage map; this
+	// volume only supplies reusable shape/erosion detail, so it never needs camera-relative
+	// recentering -- see CloudVolumeGenNode.
+	struct CloudDetailVolume {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return CloudVolumeDesc(); }
 	};
 
@@ -413,6 +410,11 @@ namespace brassica {
 		constexpr std::uint32_t kBlendDitherDivisor = 8;
 		constexpr std::uint32_t kUpdateInterval = 300;
 		constexpr std::uint32_t kCellsPerUpdate = 512;
+
+		// World-space period (metres) of CloudDetailVolume's periodic tiling, in all 3 axes.
+		// Matches the former near cascade's footprint so existing noise-frequency tuning still
+		// reads at roughly the same visual scale.
+		constexpr float kCloudVolumePeriod = 20000.0f;
 	} // namespace constants::Weather
 
 	inline graph::ResourceDesc WeatherBiomeImageDesc(std::uint32_t dim) {

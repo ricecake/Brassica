@@ -24,7 +24,7 @@ namespace brassica {
 
 	struct CloudShadowGenPushConstants {
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};
-		alignas(16) glm::uvec4 cascadeSampledIdx{0};
+		alignas(16) glm::uvec4 volumeIndices{0};
 		alignas(16) glm::vec4 cameraPos{0.0f};
 		alignas(16) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 0.6f};
 		std::uint32_t weatherBiomeIndex{0};
@@ -70,25 +70,20 @@ namespace brassica {
 		}
 
 		// S4: no kPhase -- Read<TerrainWeatherBiomeTexture>() restored (catalog-converted since
-		// batch 5) orders it after TerrainBiomeNode's sole Modify, and Read<CloudVolumeCascade*>()
-		// orders it after CloudVolumeGenNode's sole Create of each, both via ordinary resource
-		// edges, so the SubPhase::LightPreparation placement was redundant.
+		// batch 5) orders it after TerrainBiomeNode's sole Modify, and Read<CloudDetailVolume>()
+		// orders it after CloudVolumeGenNode's sole Create, both via ordinary resource edges, so
+		// the SubPhase::LightPreparation placement was redundant.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Create<CloudShadowMap>();
-			r.Read<CloudVolumeCascade0>();
-			r.Read<CloudVolumeCascade1>();
-			r.Read<CloudVolumeCascade2>();
+			r.Read<CloudDetailVolume>();
 			r.Read<TerrainWeatherBiomeTexture>();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			push.cascadeSampledIdx.x = ctx.Index<CloudVolumeCascade0>();
-			push.cascadeSampledIdx.y = ctx.Index<CloudVolumeCascade1>();
-			push.cascadeSampledIdx.z = ctx.Index<CloudVolumeCascade2>();
-			push.cascadeSampledIdx.w = ctx.Index<TerrainWeatherBiomeTexture>();
+			push.volumeIndices.x = ctx.Index<CloudDetailVolume>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();

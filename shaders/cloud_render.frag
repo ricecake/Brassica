@@ -15,7 +15,6 @@ layout(location = 0) out vec4 outColor;
 layout(push_constant) uniform CloudRenderPushConstants {
 	vec4  sunDir;
 	vec4  sunRadianceAndSkyExp; // xyz = sunRadiance, w = skyExposure
-	uvec4 cascadeSampledIdx; // x, y, z = sampled bindless indices for cascades 0, 1, 2
 	uint  gPositionIndex;
 	uint  gAlbedoIndex;
 	uint  hdrColorIndex;
@@ -24,10 +23,10 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	uint  weatherBiomeIndex;
 	uint  cloudShadowIndex;
 	uint  clipmapIndex;
+	uint  volumeIndex; // sampled bindless index for CloudDetailVolume
 	float cirrusOpacity;
 	uint  _pad0;
 	uint  _pad1;
-	uint  _pad2;
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
@@ -283,8 +282,10 @@ float GetDensityHeightGradientForPoint(float heightFraction, float cloudType) {
 }
 
 
-// Assumes footprints: C0 (20km), C1 (80km), C2 (320km)
-float sampleCloudCascades(vec3 worldPos, float distFromCam) {
+// Single tileable detail volume (CloudDetailVolume, period CLOUD_VOLUME_PERIOD, all 3 axes) --
+// replaces the former 3-cascade camera-distance blend. Vertical floor/ceiling shaping is the
+// same curved-altitude gate the old cascades used; distFromCam only feeds that curvature.
+float sampleCloudVolume(vec3 worldPos, float distFromCam) {
 	float distSq = distFromCam * distFromCam;
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	float adjustedY = worldPos.y + dropOff;
@@ -294,35 +295,8 @@ float sampleCloudCascades(vec3 worldPos, float distFromCam) {
 	// Fixes the vertical streaks (Screenshot 3) by preventing Y-axis wrapping
 	if (uv_y < 0.0 || uv_y > 1.0) return 0.0;
 
-	// Fixes the axis-aligned boundaries (Screenshot 1 & 2) by forcing toroidal XZ wrapping
-	vec3 uvw0 = vec3(fract(worldPos.x / 20000.0),  uv_y, fract(worldPos.z / 20000.0));
-	vec3 uvw1 = vec3(fract(worldPos.x / 80000.0),  uv_y, fract(worldPos.z / 80000.0));
-	vec3 uvw2 = vec3(fract(worldPos.x / 320000.0), uv_y, fract(worldPos.z / 320000.0));
-
-	float density = 0.0;
-
-	// Blend radii must match the physical bounds (half the total width)
-	if (distFromCam < 10000.0) {
-		float d0 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, uvw0).r;
-		if (distFromCam > 8000.0) {
-			float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-			density = mix(d0, d1, smoothstep(8000.0, 10000.0, distFromCam));
-		} else {
-			density = d0;
-		}
-	} else if (distFromCam < 40000.0) {
-		float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-		if (distFromCam > 32000.0) {
-			float d2 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-			density = mix(d1, d2, smoothstep(32000.0, 40000.0, distFromCam));
-		} else {
-			density = d1;
-		}
-	} else {
-		density = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-	}
-
-	return density;
+	vec3 uvw = fract(worldPos / CLOUD_VOLUME_PERIOD);
+	return SAMPLE_3D_LINEAR(push.volumeIndex, uvw).r;
 }
 
 float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
@@ -374,7 +348,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 			float heightFraction = heightFraction(p_cloud, distFromCam);
 			weatherCoverage = pow(weatherCoverage, remapClamp(heightFraction, 0.7, 0.8, 1.0, mix(1.0, 0.5, weatherType)));
 
-			float baseDensity = sampleCloudCascades(p_cloud, distFromCam);
+			float baseDensity = sampleCloudVolume(p_cloud, distFromCam);
 			float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
 			float heightGradient = GetDensityHeightGradientForPoint(heightFraction, weatherType);
 

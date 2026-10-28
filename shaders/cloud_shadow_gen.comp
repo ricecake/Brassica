@@ -10,7 +10,7 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform CloudShadowGenPushConstants {
 	vec4  sunDir;                // xyz = sun direction
-	uvec4 cascadeSampledIdx;     // xyz = sampled bindless indices for volume cascades 0, 1, 2
+	uvec4 volumeIndices;         // x = sampled bindless index for CloudDetailVolume
 	vec4  cameraPos;             // xyz = camera position, w = shadowMapExtent (320000.0)
 	vec4  fogParams;             // x = fog density, y = fog height falloff, z = fog base height
 	uint  weatherBiomeIndex;     // bindless index for weather map
@@ -19,44 +19,23 @@ layout(push_constant) uniform CloudShadowGenPushConstants {
 	uint  shadowMapStorageIdx;   // bindless index for storage image array
 } push;
 
-float sampleCloudCascades(vec3 worldPos, float distFromCam) {
+// Single tileable detail volume (CloudDetailVolume, period CLOUD_VOLUME_PERIOD, all 3 axes) --
+// replaces the former 3-cascade camera-distance blend. Vertical floor/ceiling shaping stays in
+// the caller (sampleCloudExtinction's uv_y gate below), since the volume itself is isotropic.
+float sampleCloudVolume(vec3 worldPos) {
+	vec3 uvw = fract(worldPos / CLOUD_VOLUME_PERIOD);
+	return SAMPLE_3D_LINEAR(push.volumeIndices.x, uvw).r;
+}
+
+float sampleCloudExtinction(vec3 p_cloud) {
+	float distFromCam = length(p_cloud - push.cameraPos.xyz);
 	float distSq = distFromCam * distFromCam;
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-	float adjustedY = worldPos.y + dropOff;
+	float adjustedY = p_cloud.y + dropOff;
 
 	float uv_y = (adjustedY - 5000.0) / 15000.0;
 	if (uv_y < 0.0 || uv_y > 1.0) return 0.0;
 
-	vec3 uvw0 = vec3(fract(worldPos.x / 20000.0),  uv_y, fract(worldPos.z / 20000.0));
-	vec3 uvw1 = vec3(fract(worldPos.x / 80000.0),  uv_y, fract(worldPos.z / 80000.0));
-	vec3 uvw2 = vec3(fract(worldPos.x / 320000.0), uv_y, fract(worldPos.z / 320000.0));
-
-	float density = 0.0;
-	if (distFromCam < 10000.0) {
-		float d0 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.x, uvw0).r;
-		if (distFromCam > 8000.0) {
-			float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-			density = mix(d0, d1, smoothstep(8000.0, 10000.0, distFromCam));
-		} else {
-			density = d0;
-		}
-	} else if (distFromCam < 40000.0) {
-		float d1 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.y, uvw1).r;
-		if (distFromCam > 32000.0) {
-			float d2 = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-			density = mix(d1, d2, smoothstep(32000.0, 40000.0, distFromCam));
-		} else {
-			density = d1;
-		}
-	} else {
-		density = SAMPLE_3D_LINEAR(push.cascadeSampledIdx.z, uvw2).r;
-	}
-
-	return density;
-}
-
-float sampleCloudExtinction(vec3 p_cloud, vec3 camPos) {
-	float distFromCam = length(p_cloud - camPos);
 	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * 3.14159265359;
 	vec2 weatherUV = fract((p_cloud.xz / worldExtent) + 0.5);
 
@@ -69,7 +48,7 @@ float sampleCloudExtinction(vec3 p_cloud, vec3 camPos) {
 	}
 
 	if (weatherCoverage > 0.01) {
-		float baseDensity = sampleCloudCascades(p_cloud, distFromCam) * weatherCoverage;
+		float baseDensity = sampleCloudVolume(p_cloud) * weatherCoverage;
 		float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
 		if (density > 0.0) {
 			// Realistic physical cloud extinction allowing smooth optical depth accumulation across the entire cloud volume
@@ -136,7 +115,7 @@ void main() {
 		vec3 p = p_top + t * (-sunDir);
 		if (p.y < terrainIntersectionY) break;
 
-		float cloudExt = sampleCloudExtinction(p, push.cameraPos.xyz);
+		float cloudExt = sampleCloudExtinction(p);
 		float fogDiff = max(0.0, p.y - push.fogParams.z);
 		float fogExt = push.fogParams.x * exp(-push.fogParams.y * fogDiff);
 		float ext = cloudExt + fogExt;
@@ -179,7 +158,7 @@ void main() {
 		vec3 p = p_cloudStart + t * (-sunDir);
 		if (p.y < terrainIntersectionY) break;
 
-		float cloudExt = sampleCloudExtinction(p, push.cameraPos.xyz);
+		float cloudExt = sampleCloudExtinction(p);
 		float fogDiff = max(0.0, p.y - push.fogParams.z);
 		float fogExt = push.fogParams.x * exp(-push.fogParams.y * fogDiff);
 		float ext = cloudExt + fogExt;

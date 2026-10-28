@@ -28,7 +28,6 @@ namespace brassica {
 	struct alignas(16) CloudRenderPushConstants {
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 0.0f};
 		alignas(16) glm::vec4 sunRadianceAndSkyExp{3.0f, 2.94f, 2.76f, 1.0f};
-		alignas(16) glm::uvec4 cascadeSampledIdx{0};
 		std::uint32_t gPositionIndex{0};
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t hdrColorIndex{0};
@@ -38,12 +37,14 @@ namespace brassica {
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t cloudShadowIndex{0};
 		std::uint32_t clipmapIndex{0};
+		std::uint32_t volumeIndex{0};
 		float         cirrusOpacity{0.0125f};
-		std::uint32_t _pad[3]{0};
+		std::uint32_t _pad[2]{0};
 	};
 
-	// Reads the 3 cloud volume cascade textures and renders them to visible clouds in HdrColor.
-	// Minimally populated graphics fragment pass for cloud volume sampling and composition.
+	// Reads CloudDetailVolume (the single tileable detail-noise volume) and renders it to
+	// visible clouds in HdrColor. Minimally populated graphics fragment pass for cloud volume
+	// sampling and composition.
 	// S4: no kPhase -- After<CirrusNode>() (below) places it in the HdrColor writer chain as a
 	// real edge instead.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
@@ -95,9 +96,7 @@ namespace brassica {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<GBufferPosition>();
 			r.Read<GBufferAlbedo>();
-			r.Read<CloudVolumeCascade0>();
-			r.Read<CloudVolumeCascade1>();
-			r.Read<CloudVolumeCascade2>();
+			r.Read<CloudDetailVolume>();
 			r.Read<TransmittanceLUT>();
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
@@ -108,9 +107,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			push.cascadeSampledIdx.x = ctx.Index<CloudVolumeCascade0>();
-			push.cascadeSampledIdx.y = ctx.Index<CloudVolumeCascade1>();
-			push.cascadeSampledIdx.z = ctx.Index<CloudVolumeCascade2>();
+			push.volumeIndex = ctx.Index<CloudDetailVolume>();
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.hdrColorIndex = ctx.Index<HdrColor>();

@@ -8,13 +8,8 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 layout(push_constant) uniform CloudVolumeGenPushConstants {
-	vec4  cameraPos;            // x, y, z = camera position
-	uvec4 cascadeStorageIdx;    // x, y, z = storage bindless indices for cascades 0, 1, 2
-	vec4  cascadeExtents;       // x = 20000, y = 80000, z = 320000, w = 15000 (vertical span)
-	vec4  cascadeCenterPos[3];  // x, z = center world position for cascade 0, 1, 2
-	ivec4 cascadeGridOffset[3]; // x, y = toroidal grid offset (voxels) for cascade 0, 1, 2
-	uint  forceRegeneration;
-	float cadencePhase;         // Seed/phase derived from update cadence
+	uint outStorageIdx; // Storage bindless index for the single detail volume
+	uint volumeDim;     // 256
 } push;
 
 
@@ -87,143 +82,43 @@ float alligator(vec3 position, float gridsize, vec3 seed, bool tiling) {
 
 void main() {
 	uvec3 vox = gl_GlobalInvocationID;
-	if (vox.x >= 256 || vox.y >= 256 || vox.z >= 256) {
+	uint  dim = push.volumeDim;
+	if (vox.x >= dim || vox.y >= dim || vox.z >= dim) {
 		return;
 	}
 
-	const uint NUM_CHUNKS = 16u;
-	const uint FADE_FRAMES = 8u;
-	const uint STAGGER_FRAMES = 4u;
+	// Pure periodic tiling noise: no camera dependency, no altitude curve, no toroidal
+	// windowing. The weather coverage map supplies the big-picture shape and the analytic
+	// height-gradient (sampled in cloud_render.frag/cloud_shadow_gen.comp) supplies vertical
+	// floor/ceiling shaping, so this volume only needs to be isotropic reusable detail noise
+	// that tiles seamlessly in all 3 axes -- hence the gridsize-based `alligator` noise (exact
+	// periodic wrap) rather than the old cascade's continuous (non-tiling) fbm.
+	vec3 uvw = (vec3(vox) + 0.5) / float(dim);
 
-	// Remove REST_FRAMES. A continuous rolling wave is better for EMA.
-	const uint CYCLE_FRAMES = (NUM_CHUNKS - 1u) * STAGGER_FRAMES + FADE_FRAMES;
+	float density = 0.0;
+	float gridSize = 8.0;
+	float amplitude = 1.0;
+	float maxAmplitude = 0.0;
 
-	// uint mCode = bayer3D(vox);
-	// uint mCode = encodeMorton3D(vox);
-	// uint chunkId = ((mCode >> 20u) & 15u);
+	for (int i = 0; i < 3; i++) {
+		// Nyquist clamp: stop accumulating detail once a noise cell would be smaller than
+		// 2 voxels, faded smoothly so there's no hard cutoff.
+		float voxelsPerCell = float(dim) / gridSize;
+		float fade = clamp((voxelsPerCell - 2.0) / 2.0, 0.0, 1.0);
+		if (fade <= 0.0) break;
 
-	// uint ditherStep = bayer3D(vox) & 7u; // Equivalent to % 8
-	// uint ditherStep = encodeMorton3D(vox) & 7u; // Equivalent to % 8
+		float n = alligator(uvw, gridSize, vec3(float(i) * 17.0), true);
 
-	// 3. Exact target frame for this specific voxel
-	// uint voxelUpdateFrame = ((chunkId * STAGGER_FRAMES) + ditherStep)%CYCLE_FRAMES;
-	// uint voxelUpdateFrame = mCode % CYCLE_FRAMES;
-	// uint voxelUpdateFrame = (owenScrambleBase4(encodeMorton3D(vox), uGlobalSeed) & ~3u) % CYCLE_FRAMES;
-	// uint voxelUpdateFrame = (bayer3D(vox)^encodeMorton3D(vox)) % CYCLE_FRAMES;
-	// uint voxelUpdateFrame = (encodeMorton3D(vox*uvec3(1,3,2))) % CYCLE_FRAMES;
-	// uint voxelUpdateFrame = (bayer3D(vox)) % CYCLE_FRAMES;
+		density += n * amplitude * fade;
+		maxAmplitude += amplitude * amplitude * fade;
 
-
-	uint cycleFrame = (uFrameIndex) % CYCLE_FRAMES;
-
-	float evolutionSpeed = 0.05; // Adjust this to control how fast the clouds morph
-	float continuousTime = float(int((uFrameIndex)/CYCLE_FRAMES) * evolutionSpeed);
-	// float continuousTime = float(uFrameIndex) * (evolutionSpeed / float(CYCLE_FRAMES));
-
-	uvec3 macroPos = vox / 4u;
-	uvec3 microPos = vox % 4u;
-
-	uint h = fastVec3ToUint(macroPos);
-	uint localSeq = encodeMorton3D(microPos);
-	if (localSeq % 2 == 0) localSeq = bitfieldReverse(localSeq);
-
-	uint voxelUpdateFrame = (h + localSeq) % CYCLE_FRAMES;
-
-
-	vec3 rawDelta = uCameraPosition.xyz - uPreviousCameraPosition.xyz;
-
-	for (int c = 0; c < 3; ++c) {
-		uint storageIdx = push.cascadeStorageIdx[c];
-		if (storageIdx == 0xFFFFFFFFu) continue;
-
-		bool needsUpdate = push.forceRegeneration != 0;
-		float hExtent = push.cascadeExtents[c];
-
-		float voxelSize = hExtent / 256.0;
-		vec3 delta = rawDelta / voxelSize;
-
-		vec2 prevSnappedCenter = floor(uPreviousCameraPosition.xz / voxelSize) * voxelSize;
-		vec2 snappedCenter = floor(uCameraPosition.xz / voxelSize) * voxelSize;
-
-		ivec2 gridDelta = ivec2(round((snappedCenter - prevSnappedCenter) / voxelSize));
-
-		if (gridDelta.x > 0 && vox.x >= 256 - gridDelta.x) needsUpdate = true;
-		if (gridDelta.x < 0 && vox.x < -gridDelta.x) needsUpdate = true;
-
-		if (gridDelta.y > 0 && vox.z >= 256 - gridDelta.y) needsUpdate = true;
-		if (gridDelta.y < 0 && vox.z < -gridDelta.y) needsUpdate = true;
-
-		// if ((linearIdx % cadence) == phaseOffset) needsUpdate = true;
-		if (cycleFrame == voxelUpdateFrame) {
-			needsUpdate = true;
-		}
-
-		if (!needsUpdate) continue;
-		// continue;
-
-		float vSpan = push.cascadeExtents.w; // 15000m
-		float baseAlt = 5000.0;             // 1km in the air
-		vec3 voxelNorm = (vec3(vox) / 256.0) - vec3(0.5, 0.0, 0.5);
-
-		ivec2 gridCenter = ivec2(floor(uCameraPosition.xz / voxelSize));
-		ivec2 spatialOffset = ivec2(vox.xz) - ivec2(128);
-		ivec2 absoluteGrid = gridCenter + spatialOffset;
-
-		ivec3 localVox = ivec3(
-			absoluteGrid.x % 256,
-			vox.y,
-			absoluteGrid.y % 256
-		);
-
-		// GLSL modulo can be negative
-		if (localVox.x < 0) localVox.x += 256;
-		if (localVox.z < 0) localVox.z += 256;
-
-		vec3 worldPos = vec3(
-			snappedCenter.x + float(spatialOffset.x) * voxelSize,
-			baseAlt + (float(vox.y) / 256.0) * vSpan,
-			snappedCenter.y + float(spatialOffset.y) * voxelSize
-		);
-
-		// 3. Frequency-Clamped fBm Evaluation
-		float density = 0.0;
-		float frequency = 1.0 / 32000.0; // Base shape frequency (100km)
-		float amplitude = 1.0;
-		float maxAmplitude = 0.0;
-
-		float gridSize = 8.0;
-		vec3 grad = vec3(0.0);
-
-		for (int i = 0; i < 3; i++) {
-			// float wavelength = 1.0 / (gridSize*frequency);
-			float wavelength = 1.0 / frequency;
-
-			// Nyquist clamp: Stop accumulating detail if the noise feature is smaller than 2 voxels.
-			// We fade it out smoothly to guarantee that Cascade 0 and Cascade 1 match perfectly at their boundary.
-			float fade = clamp((wavelength - 2.0 * voxelSize) / (2.0 * voxelSize), 0.0, 1.0);
-			if (fade <= 0.0) break;
-
-			// float n = psrdnoise(worldPos * vec3(frequency, frequency, frequency), vec3(0.0), globalPhase);
-			// float n = alligator(worldPos * vec3(frequency, frequency, frequency), gridSize, vec3(globalPhase), true);
-			float n = dot_noise_fbm((worldPos+grad*wavelength) * vec3(frequency, frequency, frequency), 3, continuousTime, grad);
-
-			density += n * amplitude * fade;
-			maxAmplitude += amplitude*amplitude * fade;
-
-			frequency *= 1.87;
-			gridSize *= 2.0;
-			amplitude *= 0.43; // Or use an exposed roughness parameter
-		}
-
-		density = max(0.0, density / sqrt(maxAmplitude));
-
-		// // Shape the final density using global height bounds
-		// density *= smoothstep(0.1, 0.15, voxelNorm.y) * (1.0 - smoothstep(0.85, 1.0, voxelNorm.y));
-
-        float voxelNormY = float(vox.y) / 256.0;
-        density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
-		density *= smoothstep(0.15, 0.85, density);
-
-        imageStore(uImages3DGenericWrite[nonuniformEXT(storageIdx)], localVox, vec4(density, 0.0, 0.0, 1.0));
+		gridSize *= 2.0;
+		amplitude *= 0.43;
 	}
+
+	density = max(0.0, density / sqrt(max(maxAmplitude, 1e-5)));
+	density *= smoothstep(0.15, 0.85, density);
+
+	ivec3 outVox = ivec3(vox);
+	imageStore(uImages3DGenericWrite[nonuniformEXT(push.outStorageIdx)], outVox, vec4(density, 0.0, 0.0, 1.0));
 }
