@@ -38,9 +38,23 @@ namespace brassica {
 		std::uint32_t cloudShadowIndex{0};
 		std::uint32_t clipmapIndex{0};
 		std::uint32_t volumeIndex{0};
-		float         cirrusOpacity{0.0125f};
-		std::uint32_t _pad[2]{0};
+
+		// CloudLightingManager's settings surface (previously 5 local consts hardcoded inside
+		// marchClouds(), plus a self-shadow multiplier that didn't exist at all). Replaces the
+		// old cirrusOpacity field here, which was declared but never once read in
+		// cloud_render.frag -- CirrusNode has its own, actually-consumed cirrusOpacity.
+		float cloudPhaseG1{0.8f};
+		float cloudPhaseG2{-0.2f};
+		float cloudPhaseAlpha{0.5f};
+		float cloudPhaseIsotropic{0.52f};
+		float cloudPowderScale{300.0f};
+		float cloudBeerPowderMix{0.5f};
+		float cloudShadowOpticalDepthMultiplier{1.0f};
+		float cloudSunLightScale{1.0f};
+		float cloudMoonLightScale{1.0f};
 	};
+
+	static_assert(sizeof(CloudRenderPushConstants) == 112, "CloudRenderPushConstants must be exactly 112 bytes");
 
 	// Reads CloudDetailVolume (the single tileable detail-noise volume) and renders it to
 	// visible clouds in HdrColor. Minimally populated graphics fragment pass for cloud volume
@@ -86,6 +100,15 @@ namespace brassica {
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			push.sunDir = glm::vec4(p.sunDir, 0.0f);
 			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
+			push.cloudPhaseG1 = p.cloudPhaseG1;
+			push.cloudPhaseG2 = p.cloudPhaseG2;
+			push.cloudPhaseAlpha = p.cloudPhaseAlpha;
+			push.cloudPhaseIsotropic = p.cloudPhaseIsotropic;
+			push.cloudPowderScale = p.cloudPowderScale;
+			push.cloudBeerPowderMix = p.cloudBeerPowderMix;
+			push.cloudShadowOpticalDepthMultiplier = p.cloudShadowOpticalDepthMultiplier;
+			push.cloudSunLightScale = p.cloudSunLightScale;
+			push.cloudMoonLightScale = p.cloudMoonLightScale;
 		}
 
 		// No Read<GBufferNormal/Material/Depth>() -- same lesson #2 over-claim as

@@ -11,6 +11,7 @@
 #include "ArgparseManager.hpp"
 #include "AtmosphereManager.hpp"
 #include "audio/AudioManager.hpp"
+#include "CloudLightingManager.hpp"
 #include "ConfigManager.hpp"
 #include "EngineConstants.hpp"
 #include "foliage/FoliageManager.hpp"
@@ -223,6 +224,10 @@ namespace brassica {
 
 		const VolumetricLightingManager& GetVolumetricLightingManager() const { return volumetricLightingManager; }
 
+		CloudLightingManager& GetCloudLightingManager() { return cloudLightingManager; }
+
+		const CloudLightingManager& GetCloudLightingManager() const { return cloudLightingManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -333,6 +338,7 @@ namespace brassica {
 		ParticleManager   particleManager;
 		AtmosphereManager         atmosphereManager;
 		VolumetricLightingManager volumetricLightingManager;
+		CloudLightingManager      cloudLightingManager;
 
 		// Live atmosphere tuning values: per-frame source of truth for the AtmosphereUBO (set 0,
 		// binding 4) and for the 3 LUT nodes' AtmosphereRegenerationState throttle

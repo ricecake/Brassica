@@ -5,6 +5,7 @@
 #include "ArgparseManager.hpp"
 #include "AtmosphereManager.hpp"
 #include "audio/IAudioManager.hpp"
+#include "CloudLightingManager.hpp"
 #include "ConfigManager.hpp"
 #include "IManager.hpp"
 #include "imgui.h"
@@ -57,6 +58,9 @@ namespace brassica::ui {
 			}
 			if (ServiceLocator::Instance().Has<VolumetricLightingManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<VolumetricLightingManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<CloudLightingManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<CloudLightingManager>().get());
 			}
 
 			for (auto* mgr : managers) {

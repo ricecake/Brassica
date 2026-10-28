@@ -538,6 +538,11 @@ namespace brassica {
 			std::shared_ptr<VolumetricLightingManager>(&volumetricLightingManager, [](VolumetricLightingManager*) {})
 		);
 
+		cloudLightingManager.Initialize();
+		serviceLocator.Provide<CloudLightingManager>(
+			std::shared_ptr<CloudLightingManager>(&cloudLightingManager, [](CloudLightingManager*) {})
+		);
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -560,6 +565,7 @@ namespace brassica {
 		particleManager.LoadState(configManager);
 		atmosphereManager.LoadState(configManager);
 		volumetricLightingManager.LoadState(configManager);
+		cloudLightingManager.LoadState(configManager);
 		terrainAS.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
@@ -1324,6 +1330,16 @@ namespace brassica {
 				.fogHeightFalloff = volumetricLightingManager.GetState().fogHeightFalloff,
 				.fogBaseHeight = volumetricLightingManager.GetState().fogBaseHeight,
 				.mieHumidityBoost = volumetricLightingManager.GetState().mieHumidityBoost,
+				.cloudPhaseG1 = cloudLightingManager.GetState().cloudPhaseG1,
+				.cloudPhaseG2 = cloudLightingManager.GetState().cloudPhaseG2,
+				.cloudPhaseAlpha = cloudLightingManager.GetState().cloudPhaseAlpha,
+				.cloudPhaseIsotropic = cloudLightingManager.GetState().cloudPhaseIsotropic,
+				.cloudPowderScale = cloudLightingManager.GetState().cloudPowderScale,
+				.cloudBeerPowderMix = cloudLightingManager.GetState().cloudBeerPowderMix,
+				.cloudShadowOpticalDepthMultiplier = cloudLightingManager.GetState().cloudShadowOpticalDepthMultiplier,
+				.cloudSunLightScale = cloudLightingManager.GetState().cloudSunLightScale,
+				.cloudMoonLightScale = cloudLightingManager.GetState().cloudMoonLightScale,
+				.cirrusOpacity = cloudLightingManager.GetState().cirrusOpacity,
 				.registry = &registry,
 				.atmosphere = atmosphere,
 			};
@@ -1696,6 +1712,16 @@ namespace brassica {
 			.fogHeightFalloff = volumetricLightingManager.GetState().fogHeightFalloff,
 			.fogBaseHeight = volumetricLightingManager.GetState().fogBaseHeight,
 			.mieHumidityBoost = volumetricLightingManager.GetState().mieHumidityBoost,
+			.cloudPhaseG1 = cloudLightingManager.GetState().cloudPhaseG1,
+			.cloudPhaseG2 = cloudLightingManager.GetState().cloudPhaseG2,
+			.cloudPhaseAlpha = cloudLightingManager.GetState().cloudPhaseAlpha,
+			.cloudPhaseIsotropic = cloudLightingManager.GetState().cloudPhaseIsotropic,
+			.cloudPowderScale = cloudLightingManager.GetState().cloudPowderScale,
+			.cloudBeerPowderMix = cloudLightingManager.GetState().cloudBeerPowderMix,
+			.cloudShadowOpticalDepthMultiplier = cloudLightingManager.GetState().cloudShadowOpticalDepthMultiplier,
+			.cloudSunLightScale = cloudLightingManager.GetState().cloudSunLightScale,
+			.cloudMoonLightScale = cloudLightingManager.GetState().cloudMoonLightScale,
+			.cirrusOpacity = cloudLightingManager.GetState().cirrusOpacity,
 			.registry = &registry,
 			.atmosphere = atmosphere,
 		};

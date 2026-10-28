@@ -25,9 +25,20 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	uint  cloudShadowIndex;
 	uint  clipmapIndex;
 	uint  volumeIndex; // sampled bindless index for CloudDetailVolume
-	float cirrusOpacity;
-	uint  _pad0;
-	uint  _pad1;
+
+	// CloudLightingManager's settings surface -- previously local consts hardcoded inside
+	// marchClouds(), plus a self-shadow multiplier that didn't exist at all. Replaces the old
+	// cirrusOpacity field here, which was declared but never once read in this file --
+	// CirrusNode has its own, actually-consumed cirrusOpacity.
+	float cloudPhaseG1;
+	float cloudPhaseG2;
+	float cloudPhaseAlpha;
+	float cloudPhaseIsotropic;
+	float cloudPowderScale;
+	float cloudBeerPowderMix;
+	float cloudShadowOpticalDepthMultiplier;
+	float cloudSunLightScale;
+	float cloudMoonLightScale;
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
@@ -324,11 +335,6 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 	vec3 lightEnergy = vec3(0.0);
 	float prevDensity = 0.0;
 
-	const float cloudPhaseG1 = 0.8;
-	const float cloudPhaseG2 = -0.2;
-	const float cloudPhaseAlpha = 0.5;
-	const float cloudPhaseIsotropic = 0.52;
-	const float cloudBeerPowderMix = 0.5;
 
 	while (t < t_end) {
 		vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
@@ -363,7 +369,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float stepTransmittance = exp(-stepOpticalDepth);
 
 				vec4 cloudShadowData = sampleCloudShadow(p_cloud);
-				float opticalDepthToLight = cloudShadowData.b;
+				float opticalDepthToLight = cloudShadowData.b * push.cloudShadowOpticalDepthMultiplier;
 
 				float r_km = r_world / 1000.0;
                 float mu = dot(surfaceDir, sunDir);
@@ -372,15 +378,15 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float cosTheta = dot(worldRay, sunDir);
 				const int OCTAVES = 3;
 				float currentExtinction = 1.0;
-				float currentKfwd = cloudPhaseG1;
-				float currentKbck = cloudPhaseG2;
+				float currentKfwd = push.cloudPhaseG1;
+				float currentKbck = push.cloudPhaseG2;
 				float currentEnergy = 1.0;
-				float currentScatChaos = (1.0 - cloudPhaseIsotropic);
+				float currentScatChaos = (1.0 - push.cloudPhaseIsotropic);
 
 				vec3 msScattering = vec3(0.0);
 
 				for(int oct = 0; oct < OCTAVES; oct++) {
-					float phase = dualLobeSchlick(cosTheta, currentKfwd, currentKbck, cloudPhaseAlpha);
+					float phase = dualLobeSchlick(cosTheta, currentKfwd, currentKbck, push.cloudPhaseAlpha);
 					phase = mix((1.0 / (4.0 * PI)), phase, currentScatChaos);
 
 					float octaveOpticalDepth = opticalDepthToLight * currentExtinction;
@@ -389,7 +395,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 					float shadowTerm = mix(
 						beerPowder(octaveOpticalDepth, octaveStepDensity),
 						exp(-octaveOpticalDepth),
-						cloudBeerPowderMix
+						push.cloudBeerPowderMix
 					);
 
 					msScattering += vec3(shadowTerm * phase * currentEnergy);
@@ -415,8 +421,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float isotropicPhase = 1.0 / (4.0 * 3.14159265);
 				vec3 diffuseTopBackscatter = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * isotropicPhase * (0.8 + 1.2 * backscatterWeight) * exp(-opticalDepthToLight);
 
-				const float powderScale = 300.0;
-				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * powderScale));
+				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * push.cloudPowderScale));
 
 				// Directional ambient (helpers/ambient.glsl) standing in for a real SH probe
 				// grid -- LightingUBO already reserves uSHCoeffs[81] for one, nothing bakes it
@@ -456,7 +461,11 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 					emissiveGlow = uLightningColor.rgb * propagationGlow;
 				}
 
-				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering;
+				// cloudMoonLightScale (CloudLightingManager) is exposed but not yet wired here --
+				// this march only has a single incoming light (sunDir/sunRadiance, passed by
+				// main()); moon support would need the second light threaded through the same
+				// way, which doesn't exist yet.
+				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering * push.cloudSunLightScale;
 				vec3 stepScattering = directLight + ambientGlow + diffuseTopBackscatter * powder + emissiveGlow;
 
 				// FIX: Removed the `/ max(stepDensity, 0.0001)` that was blowing up the light
