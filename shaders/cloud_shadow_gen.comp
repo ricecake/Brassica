@@ -62,6 +62,22 @@ void main() {
 	ivec2 vox = ivec2(gl_GlobalInvocationID.xy);
 	if (vox.x >= 1024 || vox.y >= 1024) return;
 
+	// Staggered quarter-resolution schedule (2x2 Bayer grid), ported from boidish's
+	// cloud_shadow_bake.comp: only 1/4 of texels get recomputed each frame, cycling through
+	// all 4 phases over 4 frames, amortizing the raymarch below across them. Untouched texels
+	// simply keep whatever they wrote last time they were in-phase -- CloudShadowMapDesc
+	// (ResourceKeys.hpp) is now marked .persistent so that memory reliably survives. The gate
+	// has to sit here, before EVEN the placeholder write below, or every "skipped" texel would
+	// get stomped with placeholder/empty data every frame instead of retaining its real value.
+	// Startup transient: for the first ~4 frames, 3/4 of texels haven't been written yet and
+	// hold whatever the fresh allocation's initial content is -- boidish's reference has the
+	// identical transient, not treated as worth special-casing there either.
+	ivec2 bayerOffsets[4] = ivec2[](ivec2(0, 0), ivec2(1, 1), ivec2(1, 0), ivec2(0, 1));
+	ivec2 currentOffset = bayerOffsets[int(uFrameIndex % 4u)];
+	if ((vox.x % 2) != currentOffset.x || (vox.y % 2) != currentOffset.y) {
+		return;
+	}
+
 	vec2 gridUV = (vec2(vox) + 0.5) / 1024.0;
 	float shadowExtent = push.cameraPos.w > 0.0 ? push.cameraPos.w : 320000.0;
 

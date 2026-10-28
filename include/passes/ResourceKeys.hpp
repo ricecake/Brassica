@@ -73,6 +73,17 @@ namespace brassica {
 				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
 				vk::ImageUsageFlagBits::eTransferDst
 			),
+			// CloudShadowGenNode now only rewrites 1/4 of texels per frame (Bayer-staggered
+			// update, shaders/cloud_shadow_gen.comp) -- the other 3/4 must survive untouched
+			// across frames. Without this, PhysicalRegistry::ProvisionTexture's pooled
+			// allocation never re-Acquires after frame 1 (same id/desc hits the early-return
+			// path), so the aliasing pool's lifetime bookkeeping stays frozen at frame 1's
+			// window and will eventually hand this exact memory to an unrelated resource while
+			// still in use -- a real, confirmed-class bug (see Execution.hpp's .persistent doc
+			// comment and the FoliageBiomeTableTexture precedent it was already fixed for).
+			// This was already latently true before staggering, just invisible, since the old
+			// full-rewrite-every-frame behavior erased any evidence of silent corruption.
+			.persistent = true,
 		};
 	}
 
