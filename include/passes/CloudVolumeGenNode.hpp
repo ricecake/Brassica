@@ -29,8 +29,7 @@ namespace brassica {
 	// weather coverage map (TerrainBiomeNode) carries all the big-picture "where are the clouds"
 	// information, so unlike the former 3-cascade system this has no camera-relative state at
 	// all and needs no incremental/toroidal update: it's baked once and left alone, re-baked
-	// only when forced (hot-reload/debug). The once-only gate lives inside Execute(), not
-	// Setup()'s Active() -- see the comment on Setup() for why.
+	// only when forced (hot-reload/debug), mirroring AtmosphereLUTNode's regen-on-change gate.
 	struct CloudVolumeGenNode: render::NodeRegistrar<CloudVolumeGenNode> {
 		render::PipelineLibrary*    pipelineLibrary = nullptr;
 		ComputeShader               genShader;
@@ -58,25 +57,12 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) { forceRegeneration = p.forceRegeneration; }
 
-		// Stays structurally Active(true) every frame -- NOT gated on hasGenerated/forceRegeneration
-		// -- so this node's edges to CloudShadowGenNode/CloudRenderNode are never stripped from
-		// the HEFT scheduler's placement graph (Graph.hpp: edges with an inactive endpoint are
-		// dropped from both barrier synthesis and ready-time ranking per "§C.4"). Gating via
-		// Active(false) instead (what this used to do) left CloudDetailVolume's correctness fine
-		// (Lifetime::Persistent, ResourceKeys.hpp, already short-circuits the zero-init path
-		// regardless of active status) but silently changed those two downstream nodes' computed
-		// ready time, which shifted HEFT's placement and cost ~10x on both -- confirmed on real
-		// hardware. The actual once-only bake gate now lives entirely in Execute() below instead.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
-			r.Domain(graph::ExecutionDomain::Compute).Active(true);
+			r.Domain(graph::ExecutionDomain::Compute).Active(!hasGenerated || forceRegeneration);
 			r.Create<CloudDetailVolume>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			if (hasGenerated && !forceRegeneration) {
-				return;
-			}
-
 			push.outStorageIdx = ctx.StorageIndex<CloudDetailVolume>();
 
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, genShader, push);
