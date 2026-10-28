@@ -21,13 +21,13 @@ namespace brassica {
 		}
 
 		float mieScatterDisplay = state.mieScattering * 1000.0f;
-		if (ImGui::DragFloat("Mie Scattering (x1e-3)##atmosphere", &mieScatterDisplay, 0.01f, 0.0f, 50.0f)) {
+		if (ImGui::SliderFloat("Mie Scattering (x1e-3)##atmosphere", &mieScatterDisplay, 0.0f, 50.0f)) {
 			state.mieScattering = mieScatterDisplay * 0.001f;
 			modified = true;
 		}
 
 		float mieExtinctionDisplay = state.mieExtinction * 1000.0f;
-		if (ImGui::DragFloat("Mie Extinction (x1e-3)##atmosphere", &mieExtinctionDisplay, 0.01f, 0.0f, 50.0f)) {
+		if (ImGui::SliderFloat("Mie Extinction (x1e-3)##atmosphere", &mieExtinctionDisplay, 0.0f, 50.0f)) {
 			state.mieExtinction = mieExtinctionDisplay * 0.001f;
 			modified = true;
 		}
