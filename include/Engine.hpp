@@ -9,6 +9,7 @@
 #include "vulkan/vulkan.hpp"
 
 #include "ArgparseManager.hpp"
+#include "AtmosphereManager.hpp"
 #include "audio/AudioManager.hpp"
 #include "ConfigManager.hpp"
 #include "EngineConstants.hpp"
@@ -213,6 +214,10 @@ namespace brassica {
 
 		const ParticleManager& GetParticleManager() const { return particleManager; }
 
+		AtmosphereManager& GetAtmosphereManager() { return atmosphereManager; }
+
+		const AtmosphereManager& GetAtmosphereManager() const { return atmosphereManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -315,16 +320,19 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		LightManager     lightManager;
-		LightningManager lightningManager;
-		AudioManager     audioManager;
-		FoliageManager   foliageManager;
-		MaterialManager  materialManager;
-		ParticleManager  particleManager;
+		LightManager      lightManager;
+		LightningManager  lightningManager;
+		AudioManager      audioManager;
+		FoliageManager    foliageManager;
+		MaterialManager   materialManager;
+		ParticleManager   particleManager;
+		AtmosphereManager atmosphereManager;
 
-		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
-		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'
-		// AtmosphereRegenerationState throttle (NodeFrameParams::atmosphere).
+		// Live atmosphere tuning values: per-frame source of truth for the AtmosphereUBO (set 0,
+		// binding 4) and for the 3 LUT nodes' AtmosphereRegenerationState throttle
+		// (NodeFrameParams::atmosphere). atmosphereManager.ApplyTo(atmosphere) (DrawFrame) is
+		// the UI-editable hook into this struct's cloud/sky-optics subset; water-specific
+		// fields here are untouched by that and keep their derived defaults.
 		AtmospherePushConstants atmosphere{};
 
 		TerrainAccelerationStructure terrainAS;

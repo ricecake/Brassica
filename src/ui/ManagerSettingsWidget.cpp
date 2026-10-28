@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "ArgparseManager.hpp"
+#include "AtmosphereManager.hpp"
 #include "audio/IAudioManager.hpp"
 #include "ConfigManager.hpp"
 #include "IManager.hpp"
@@ -49,6 +50,9 @@ namespace brassica::ui {
 			}
 			if (ServiceLocator::Instance().Has<ConfigManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ConfigManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<AtmosphereManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<AtmosphereManager>().get());
 			}
 
 			for (auto* mgr : managers) {

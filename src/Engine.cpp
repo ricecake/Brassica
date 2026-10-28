@@ -528,6 +528,11 @@ namespace brassica {
 			std::shared_ptr<ParticleManager>(&particleManager, [](ParticleManager*) {})
 		);
 
+		atmosphereManager.Initialize();
+		serviceLocator.Provide<AtmosphereManager>(
+			std::shared_ptr<AtmosphereManager>(&atmosphereManager, [](AtmosphereManager*) {})
+		);
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -548,6 +553,7 @@ namespace brassica {
 		lightManager.LoadState(configManager);
 		terrainManager.LoadState(configManager);
 		particleManager.LoadState(configManager);
+		atmosphereManager.LoadState(configManager);
 		terrainAS.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
@@ -1305,7 +1311,7 @@ namespace brassica {
 				.moonRadiance = glm::vec3(0.1f, 0.12f, 0.16f),
 				.time = 0.0f,
 				.worldScale = 1.0f,
-				.multiScatScale = 1.0f,
+				.multiScatScale = atmosphereManager.GetMultiScatScale(),
 				.cloudShadowIntensity = 0.5f,
 				.skyExposure = lightManager.GetSkyExposure(),
 				.registry = &registry,
@@ -1493,6 +1499,12 @@ namespace brassica {
 		lightManager.Update(deltaTime, camera.position);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
+		// Sync UI-tunable settings into the live push-constant struct before anything below
+		// reads it (the AtmosphereUBO upload and this frame's NodeFrameParams.atmosphere, used
+		// by the 3 LUT nodes' regen-on-change throttle). Previously `atmosphere` was just
+		// default-constructed once in Engine.hpp with no runtime surface at all.
+		atmosphereManager.ApplyTo(atmosphere);
+
 		FrameDetails frameDetails{
 			.deltaTime = deltaTime,
 			.totalTime = currentTime,
@@ -1667,7 +1679,7 @@ namespace brassica {
 			.moonRadiance = moonRadiance,
 			.time = ubo.time,
 			.worldScale = 1.0f,
-			.multiScatScale = 1.0f,
+			.multiScatScale = atmosphereManager.GetMultiScatScale(),
 			.cloudShadowIntensity = 0.5f,
 			.skyExposure = lightManager.GetSkyExposure(),
 			.registry = &registry,
