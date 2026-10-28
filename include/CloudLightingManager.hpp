@@ -13,6 +13,9 @@ namespace brassica {
 	// CirrusNode, which already consumes it; CloudRenderPushConstants had an unused duplicate
 	// field of the same name that nothing ever read).
 	//
+	// cloudFlowSpeed/Direction/HeightScale drive actual wind-advected sampling now (see
+	// getCloudAdvectionSpeed, cloud_render.frag) -- clouds didn't drift at all before this.
+	//
 	// Deliberately NOT included here (no attachment point in the current shader, flagging
 	// rather than silently dropping): cloudPowderMultiplier/cloudPowderLocalScale (the powder
 	// formula here doesn't match boidish's beerPowder shape), cloudShadowStepMultiplier (no
@@ -20,8 +23,7 @@ namespace brassica {
 	// map), curlStrength/curlFrequency (needs multi-layer noise sampling Brassica's single
 	// volume doesn't have), colorVarianceScale/Strength and sunAureoleStrength (cosmetic
 	// effects with nothing to hook into yet -- no per-cloud tint pass, no sun-disc/aureole
-	// render). cloudFlowSpeed/Direction/HeightScale (wind-driven advection) is handled
-	// separately -- it needs new sampling logic, not just a constant swap.
+	// render).
 	struct CloudLightingManagerState {
 		float cloudPhaseG1{0.8f};
 		float cloudPhaseG2{-0.2f};
@@ -37,6 +39,10 @@ namespace brassica {
 		float cloudMoonLightScale{1.0f};
 
 		float cirrusOpacity{0.3f};
+
+		float cloudFlowSpeed{0.25f};
+		float cloudFlowDirection{3.14159265f}; // radians; boidish's default is pi (180deg)
+		float cloudFlowHeightScale{0.015f};
 
 		auto GetReflection() const {
 			return std::make_tuple(
@@ -99,6 +105,25 @@ namespace brassica {
 				),
 				MakeField(
 					"cirrusOpacity", "Cirrus Opacity", &CloudLightingManagerState::cirrusOpacity, 0.0f, 1.0f, UIHint::Slider
+				),
+				MakeField(
+					"cloudFlowSpeed", "Cloud Flow Speed", &CloudLightingManagerState::cloudFlowSpeed, 0.0f, 2.0f, UIHint::Slider
+				),
+				MakeField(
+					"cloudFlowDirection",
+					"Cloud Flow Direction (rad)",
+					&CloudLightingManagerState::cloudFlowDirection,
+					0.0f,
+					6.28318f,
+					UIHint::Slider
+				),
+				MakeField(
+					"cloudFlowHeightScale",
+					"Cloud Flow Height Shear",
+					&CloudLightingManagerState::cloudFlowHeightScale,
+					0.0f,
+					0.1f,
+					UIHint::Slider
 				)
 			);
 		}

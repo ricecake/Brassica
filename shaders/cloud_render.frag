@@ -39,7 +39,29 @@ layout(push_constant) uniform CloudRenderPushConstants {
 	float cloudShadowOpticalDepthMultiplier;
 	float cloudSunLightScale;
 	float cloudMoonLightScale;
+
+	// Wind-driven advection of the weather/volume sample position -- clouds didn't drift at
+	// all before this (getCloudAdvectionSpeed below).
+	float cloudFlowSpeed;
+	float cloudFlowDirection;
+	float cloudFlowHeightScale;
 } push;
+
+// Wind-driven advection speed for cloud sampling (m/s, XZ plane). Independent of the global
+// Hadley/Ferrel prevailing-wind model (helpers/wind.glsl) by design -- this is a dedicated
+// artist control for cloud drift, matching boidish's own separate cloudFlowSpeed/Direction
+// knobs rather than tying cloud motion to the same large-scale circulation that drives the CA
+// weather sim. The *10.0 and the shear formula are boidish's own
+// getCloudWindSpeed/getCloud3DNoiseAdvectionSpeed constants verbatim (not re-derived or
+// re-scaled -- "wind speed in m/s" is a physical quantity independent of this engine's planet
+// radius or cloud altitude, so boidish's tuning carries over directly): cloudFlowSpeed=0.25
+// (both engines' default) means ~2.5 m/s, a gentle breeze. `h` is normalized
+// height-in-cloud-band [0,1]; higher clouds shear ahead of/behind lower ones.
+vec3 getCloudAdvectionSpeed(float h) {
+	vec2  flowDir = vec2(cos(push.cloudFlowDirection), sin(push.cloudFlowDirection));
+	float shear = 1.0 - (h * h) * push.cloudFlowHeightScale;
+	return vec3(flowDir.x, 0.0, flowDir.y) * push.cloudFlowSpeed * shear * 10.0;
+}
 
 vec4 sampleCloudShadow(vec3 p) {
 	return sampleCloudShadow(push.cloudShadowIndex, push.clipmapIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
@@ -322,19 +344,66 @@ float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
 	}
 }
 
-// Change signature to return vec4
+// Bifurcated step sizing, ported from boidish's atmosphere_lowres.comp
+// (calculateBifurcatedStepSize): coarse strides through confirmed-empty space, a held-constant
+// fine step while inside a cloud, and a step-back on entry so the boundary itself gets sampled
+// at fine resolution instead of overshooting into the cloud on the first fine step. Replaces
+// the old `stepSize *= 1.02` growth, which ran unconditionally every iteration -- including
+// deep inside a thick cloud, where it should hold steady, not keep growing and under-sampling.
+float calculateBifurcatedStepSize(
+	inout bool inCloud,
+	inout int  zeroCount,
+	float      macroDensity,
+	float      fineStep,
+	float      cheapMult,
+	int        escapeThreshold
+) {
+	float cheapStep = fineStep * cheapMult;
+
+	if (!inCloud) {
+		if (macroDensity > 0.01) {
+			inCloud = true;
+			zeroCount = 0;
+			return -cheapStep;
+		}
+		return cheapStep;
+	} else {
+		if (macroDensity <= 0.0) {
+			zeroCount++;
+			if (zeroCount >= escapeThreshold) {
+				inCloud = false;
+				return cheapStep;
+			}
+		} else {
+			zeroCount = 0;
+		}
+		return fineStep;
+	}
+}
+
+// Reprojection extension point: once a temporal-reprojection pass exists, accumulate
+// weightedDistSum/totalWeight (weight = cloudTransmittance * (1 - stepTransmittance), biased by
+// exp(-accumulatedOpticalDepth * 15.0) so heavily-occluded-by-closer-cloud steps contribute less
+// to the "representative" hit distance) the same way boidish's atmosphere_lowres.comp does, and
+// return weightedDistSum/totalWeight as this march's depth/velocity estimate. Not added yet --
+// nothing consumes it (no depth/velocity output target exists on CloudRenderNode today), and
+// unused accumulation would just be optimized away rather than actually prepare anything.
 vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
-	float stepSize = 50.0;
+	float baseStepSize = 50.0;
 	float t = t_start;
 
 	vec2 fragCoord = gl_FragCoord.xy;
 	float jitter = InterleavedGradientNoise(fragCoord, int(uFrameIndex));
-	t += stepSize * jitter;
+	t += baseStepSize * jitter;
 
 	float cloudTransmittance = 1.0;
 	vec3 lightEnergy = vec3(0.0);
 	float prevDensity = 0.0;
 
+	bool inCloud = false;
+	int zeroCount = 0;
+	const float kCheapStepMult = 3.0; // boidish's own tuned value (atmosphere_lowres.comp:608)
+	const int kEscapeThreshold = 3;
 
 	while (t < t_end) {
 		vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
@@ -351,16 +420,45 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 		float weatherType = weatherSample.g;
 		float weatherMoisture = weatherSample.b;
 
+		float density = 0.0;
+		float cloudHeightFrac = 0.0;
 		if (weatherCoverage > 0.01) {
-			float heightFraction = heightFraction(p_cloud, distFromCam);
-			weatherCoverage = pow(weatherCoverage, remapClamp(heightFraction, 0.7, 0.8, 1.0, mix(1.0, 0.5, weatherType)));
+			cloudHeightFrac = heightFraction(p_cloud, distFromCam);
+			weatherCoverage = pow(weatherCoverage, remapClamp(cloudHeightFrac, 0.7, 0.8, 1.0, mix(1.0, 0.5, weatherType)));
 
-			float baseDensity = sampleCloudVolume(p_cloud, distFromCam);
-			float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
-			float heightGradient = GetDensityHeightGradientForPoint(heightFraction, weatherType);
+			// Wind advection applies to the fine detail volume only, not the weather-coverage
+			// lookup above: the weather map already has its own emergent motion (the CA sim's
+			// upwind-cell advection, helpers/wind.glsl), and drifting it a second time with an
+			// independent speed/direction would fight that rather than add to it. cloudFlowSpeed
+			// is specifically the fine-texture-drift knob, matching boidish's own separation of
+			// "weather" advection from "3D noise" advection (computeCloudWeather vs
+			// calculateCloudDensity in atmosphere_lowres.comp's source).
+			vec3  advectedPos = p_cloud - getCloudAdvectionSpeed(clamp(cloudHeightFrac, 0.0, 1.0)) * uTime;
+			float baseDensity = sampleCloudVolume(advectedPos, distFromCam);
+			density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
+			float heightGradient = GetDensityHeightGradientForPoint(cloudHeightFrac, weatherType);
 
 			density = density * heightGradient * weatherCoverage;
+		}
 
+		float nextStep =
+			calculateBifurcatedStepSize(inCloud, zeroCount, density, baseStepSize, kCheapStepMult, kEscapeThreshold);
+
+		if (nextStep < 0.0) {
+			// Stepped back onto the cloud's entry boundary -- resample there next iteration
+			// instead of doing lighting work from this (pre-entry, still-outside) position.
+			t += nextStep;
+			continue;
+		}
+
+		if (!inCloud) {
+			prevDensity = density;
+			t += nextStep;
+			continue;
+		}
+
+		{
+			float stepSize = nextStep; // held constant while inCloud, not grown
 			if (density > 0.0) {
 				float extinction = max(0.0, density * (0.005 + 0.02 * weatherMoisture));
 				float averageDensity = (prevDensity + density) * 0.5;
@@ -410,13 +508,13 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				// --- Ground Upwelling ---
 				vec3 averageTerrainAlbedo = vec3(0.18, 0.16, 0.12);
 				vec3 upwellingBase = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * averageTerrainAlbedo * (1.0 / 3.14159265);
-				float upwellingOpticalDepth = stepDensity * clamp(heightFraction, 0.0, 1.0) * 15000.0;
+				float upwellingOpticalDepth = stepDensity * clamp(cloudHeightFrac, 0.0, 1.0) * 15000.0;
 				vec3 groundUpwelling = upwellingBase * exp(-upwellingOpticalDepth * 0.1);
 
 				// --- Backscatter & Top Diffuse Illumination ---
 				// When viewed from above (cosTheta < 0, looking down), direct sunlight entering the top of the cloud
 				// undergoes multiple scattering near the top surface and is diffusely backscattered out towards the camera.
-				float topLighting = smoothstep(0.1, 0.9, heightFraction);
+				float topLighting = smoothstep(0.1, 0.9, cloudHeightFrac);
 				float backscatterWeight = max(0.0, -cosTheta) * topLighting;
 				float isotropicPhase = 1.0 / (4.0 * 3.14159265);
 				vec3 diffuseTopBackscatter = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * isotropicPhase * (0.8 + 1.2 * backscatterWeight) * exp(-opticalDepthToLight);
@@ -433,8 +531,8 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				vec3 horizonAmbient = getApproximateHorizonAmbient(sunDir, sunRadiance, skyAmbient, groundAmbient);
 				vec3 ambientTop = mix(skyAmbient, horizonAmbient, 0.4);
 
-				float upwardOD = stepDensity * clamp(heightFraction, 0.0, 1.0) * 15000.0;
-				float downwardOD = stepDensity * clamp(1.0 - heightFraction, 0.0, 1.0) * 15000.0;
+				float upwardOD = stepDensity * clamp(cloudHeightFrac, 0.0, 1.0) * 15000.0;
+				float downwardOD = stepDensity * clamp(1.0 - cloudHeightFrac, 0.0, 1.0) * 15000.0;
 				float skyAttenuation = 1.0 / (1.0 + downwardOD);
 				float groundAttenuation = 1.0 / (1.0 + upwardOD);
 
@@ -451,7 +549,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				if (lightningPulse > 0.001) {
 					float ridge = weatherSample.a;
 					float wavePos = clamp(1.0 - lightningPulse, 0.0, 1.0);
-					float midHeightEnvelope = exp(-pow((heightFraction - 0.5) * 4.0, 2.0));
+					float midHeightEnvelope = exp(-pow((cloudHeightFrac - 0.5) * 4.0, 2.0));
 					float temporalPhase = fract(uTime * 0.7 + ridge * 3.0);
 					float stagger = sin(temporalPhase * 6.28318) * 0.5 + 0.5;
 					float ridgeDist = abs(ridge - wavePos * 0.85);
@@ -479,8 +577,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 			prevDensity = density;
 		}
 
-		t += stepSize;
-		stepSize *= 1.02;
+		t += nextStep;
 	}
 
 	// Return energy and the remaining transmittance

@@ -1340,6 +1340,9 @@ namespace brassica {
 				.cloudSunLightScale = cloudLightingManager.GetState().cloudSunLightScale,
 				.cloudMoonLightScale = cloudLightingManager.GetState().cloudMoonLightScale,
 				.cirrusOpacity = cloudLightingManager.GetState().cirrusOpacity,
+				.cloudFlowSpeed = cloudLightingManager.GetState().cloudFlowSpeed,
+				.cloudFlowDirection = cloudLightingManager.GetState().cloudFlowDirection,
+				.cloudFlowHeightScale = cloudLightingManager.GetState().cloudFlowHeightScale,
 				.registry = &registry,
 				.atmosphere = atmosphere,
 			};
@@ -1722,6 +1725,9 @@ namespace brassica {
 			.cloudSunLightScale = cloudLightingManager.GetState().cloudSunLightScale,
 			.cloudMoonLightScale = cloudLightingManager.GetState().cloudMoonLightScale,
 			.cirrusOpacity = cloudLightingManager.GetState().cirrusOpacity,
+			.cloudFlowSpeed = cloudLightingManager.GetState().cloudFlowSpeed,
+			.cloudFlowDirection = cloudLightingManager.GetState().cloudFlowDirection,
+			.cloudFlowHeightScale = cloudLightingManager.GetState().cloudFlowHeightScale,
 			.registry = &registry,
 			.atmosphere = atmosphere,
 		};

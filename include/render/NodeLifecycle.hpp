@@ -85,6 +85,11 @@ namespace brassica::render {
 		float           cloudSunLightScale{1.0f};
 		float           cloudMoonLightScale{1.0f};
 		float           cirrusOpacity{0.3f};
+		// Wind-driven advection of the cloud weather/volume sample position -- clouds didn't
+		// drift at all before this (getCloudAdvectionSpeed, cloud_render.frag).
+		float           cloudFlowSpeed{0.25f};
+		float           cloudFlowDirection{3.14159265f};
+		float           cloudFlowHeightScale{0.015f};
 		entt::registry* registry = nullptr;
 		// Not for shader delivery -- shaders read the real values from the global AtmosphereUBO
 		// (atmosphere/common.glsl, set 0 binding 4). This is here purely so

@@ -52,9 +52,15 @@ namespace brassica {
 		float cloudShadowOpticalDepthMultiplier{1.0f};
 		float cloudSunLightScale{1.0f};
 		float cloudMoonLightScale{1.0f};
+
+		// Wind-driven advection of the weather/volume sample position -- clouds didn't drift at
+		// all before this (getCloudAdvectionSpeed, cloud_render.frag).
+		float cloudFlowSpeed{0.25f};
+		float cloudFlowDirection{3.14159265f};
+		float cloudFlowHeightScale{0.015f};
 	};
 
-	static_assert(sizeof(CloudRenderPushConstants) == 112, "CloudRenderPushConstants must be exactly 112 bytes");
+	static_assert(sizeof(CloudRenderPushConstants) == 128, "CloudRenderPushConstants must be exactly 128 bytes");
 
 	// Reads CloudDetailVolume (the single tileable detail-noise volume) and renders it to
 	// visible clouds in HdrColor. Minimally populated graphics fragment pass for cloud volume
@@ -109,6 +115,9 @@ namespace brassica {
 			push.cloudShadowOpticalDepthMultiplier = p.cloudShadowOpticalDepthMultiplier;
 			push.cloudSunLightScale = p.cloudSunLightScale;
 			push.cloudMoonLightScale = p.cloudMoonLightScale;
+			push.cloudFlowSpeed = p.cloudFlowSpeed;
+			push.cloudFlowDirection = p.cloudFlowDirection;
+			push.cloudFlowHeightScale = p.cloudFlowHeightScale;
 		}
 
 		// No Read<GBufferNormal/Material/Depth>() -- same lesson #2 over-claim as
