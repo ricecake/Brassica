@@ -6,6 +6,7 @@
 #include "atmosphere/common.glsl"
 #include "helpers/octahedral.glsl"
 #include "helpers/cloud_shadow.glsl"
+#include "helpers/ambient.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 #include "common.glsl"
 
@@ -417,14 +418,46 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				const float powderScale = 300.0;
 				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * powderScale));
 
-				// Sky and ground ambient blend
-				vec3 skyAmbient = sunRadiance * vec3(0.04, 0.06, 0.09) * max(0.1, sunDir.y) * heightFraction;
-				vec3 groundAmbient = groundUpwelling * (1.0 - heightFraction);
-				vec3 ambientGlow = (skyAmbient + groundAmbient) * powder;
+				// Directional ambient (helpers/ambient.glsl) standing in for a real SH probe
+				// grid -- LightingUBO already reserves uSHCoeffs[81] for one, nothing bakes it
+				// yet. groundUpwelling (above) is the sun-reactive part of the ground term and
+				// is kept as-is; the approximation just supplies the ground/sky/horizon floor
+				// a flat, no-sun ambient would otherwise be missing.
+				vec3 skyAmbient = getApproximateSkyAmbient(sunDir, sunRadiance);
+				vec3 groundAmbient = getApproximateGroundAmbient(sunRadiance) + groundUpwelling;
+				vec3 horizonAmbient = getApproximateHorizonAmbient(sunDir, sunRadiance, skyAmbient, groundAmbient);
+				vec3 ambientTop = mix(skyAmbient, horizonAmbient, 0.4);
+
+				float upwardOD = stepDensity * clamp(heightFraction, 0.0, 1.0) * 15000.0;
+				float downwardOD = stepDensity * clamp(1.0 - heightFraction, 0.0, 1.0) * 15000.0;
+				float skyAttenuation = 1.0 / (1.0 + downwardOD);
+				float groundAttenuation = 1.0 / (1.0 + upwardOD);
+
+				vec3 ambientGlow = ((ambientTop * skyAttenuation) + (groundAmbient * groundAttenuation)) * powder;
+
+				// Lightning emissive glow: uLightningColor (shaders/lighting.glsl's
+				// LightingUBO) is now actually populated by LightningManager instead of always
+				// zero (see LightManager::GetLightingUBO). weatherSample.a (lightning
+				// propensity, already sampled above) stands in for boidish's per-point "ridge"
+				// noise, tying the propagating flash's structure to where lightning is
+				// actually likely instead of an arbitrary noise channel.
+				vec3  emissiveGlow = vec3(0.0);
+				float lightningPulse = uLightningColor.w;
+				if (lightningPulse > 0.001) {
+					float ridge = weatherSample.a;
+					float wavePos = clamp(1.0 - lightningPulse, 0.0, 1.0);
+					float midHeightEnvelope = exp(-pow((heightFraction - 0.5) * 4.0, 2.0));
+					float temporalPhase = fract(uTime * 0.7 + ridge * 3.0);
+					float stagger = sin(temporalPhase * 6.28318) * 0.5 + 0.5;
+					float ridgeDist = abs(ridge - wavePos * 0.85);
+					float waveFront = exp(-ridgeDist * ridgeDist * 16.0);
+					float coreGlow = exp(-ridge * 4.0 / max(0.1, lightningPulse));
+					float propagationGlow = (coreGlow * 0.7 + waveFront * 1.3) * lightningPulse * midHeightEnvelope * stagger;
+					emissiveGlow = uLightningColor.rgb * propagationGlow;
+				}
 
 				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering;
-				vec3 stepScattering = directLight + ambientGlow + diffuseTopBackscatter * powder;
-				// vec3 stepScattering = (sunRadiance * msScattering) + ambientGlow;
+				vec3 stepScattering = directLight + ambientGlow + diffuseTopBackscatter * powder + emissiveGlow;
 
 				// FIX: Removed the `/ max(stepDensity, 0.0001)` that was blowing up the light
 				vec3 inscatter = stepScattering * (1.0 - stepTransmittance);

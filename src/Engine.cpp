@@ -1541,6 +1541,13 @@ namespace brassica {
 		}
 
 		LightingUBO lightingUbo = lightManager.GetLightingUBO();
+		// LightManager has no knowledge of LightningManager (a separate Engine-owned system,
+		// updated above), so it always returns a zeroed lightningColor -- overwrite it here
+		// with the real global pulse/color instead of adding a cross-system dependency to
+		// LightManager's own API. Previously always zero: shaders/lighting.glsl's
+		// uLightningColor was wired up on the shader side with nothing upstream ever writing
+		// it, so cloud_render.frag's lightning glow term never fired.
+		lightingUbo.lightningColor = glm::vec4(lightningManager.GetGlobalColor(), lightningManager.GetGlobalPulse());
 		if (lightingUboMapped[activeFrame]) {
 			std::memcpy(lightingUboMapped[activeFrame], &lightingUbo, sizeof(LightingUBO));
 			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));
