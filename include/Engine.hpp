@@ -39,6 +39,7 @@
 #include "types/ubo/FrameUBO.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "vk_mem_alloc.h"
+#include "VolumetricLightingManager.hpp"
 #include "VkBootstrap.h"
 #include <entt/entity/registry.hpp>
 
@@ -218,6 +219,10 @@ namespace brassica {
 
 		const AtmosphereManager& GetAtmosphereManager() const { return atmosphereManager; }
 
+		VolumetricLightingManager& GetVolumetricLightingManager() { return volumetricLightingManager; }
+
+		const VolumetricLightingManager& GetVolumetricLightingManager() const { return volumetricLightingManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -326,7 +331,8 @@ namespace brassica {
 		FoliageManager    foliageManager;
 		MaterialManager   materialManager;
 		ParticleManager   particleManager;
-		AtmosphereManager atmosphereManager;
+		AtmosphereManager         atmosphereManager;
+		VolumetricLightingManager volumetricLightingManager;
 
 		// Live atmosphere tuning values: per-frame source of truth for the AtmosphereUBO (set 0,
 		// binding 4) and for the 3 LUT nodes' AtmosphereRegenerationState throttle

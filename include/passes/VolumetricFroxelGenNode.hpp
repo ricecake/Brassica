@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 
@@ -38,7 +39,12 @@ namespace brassica {
 			16
 		) glm::vec4 fogParams{0.003f, 0.003f, 0.0f, 1024.0f}; // x = density, y = falloff, z = base, w = gridTextureDim
 		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu}; // x = scat0|1, y = scat2|ext0, z = ext1|2, w = noise|skyView
-		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu}; // x = clipmap|minMax, y = cloudShadow, z = 0, w = 0
+		// x = clipmap|minMax, y = cloudShadow|weatherBiome, z = shadowMap|unused, w = bit-cast
+		// float mieHumidityBoost -- repurposing a confirmed-always-0, never-read uint slot
+		// instead of growing this struct past its current 128 bytes (no other push-constant
+		// struct in this codebase exceeds that, and it's the one size the Vulkan spec actually
+		// guarantees everywhere).
+		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu};
 	};
 
 	static_assert(
@@ -91,6 +97,8 @@ namespace brassica {
 			genShader.Destroy(device);
 		}
 
+		float mieHumidityBoost{5.0f};
+
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			cameraPos = p.cameraPosition;
 			time = p.time;
@@ -100,7 +108,11 @@ namespace brassica {
 			genPush.camUp = glm::vec4(p.cameraUp, p.aspectRatio);
 			genPush.sunDir = glm::vec4(p.sunDir, 1.0f);
 			genPush.sunColor = glm::vec4(p.sunRadiance, 0.6f); // w = anisotropy g
-			genPush.fogParams = glm::vec4(0.003f, 0.003f, 0.0f, static_cast<float>(p.terrainGridParams.w));
+			// x/y/z previously hardcoded here directly (VolumetricLightingManager, Engine.hpp,
+			// is the settings surface this used to be missing entirely).
+			genPush.fogParams =
+				glm::vec4(p.fogDensity, p.fogHeightFalloff, p.fogBaseHeight, static_cast<float>(p.terrainGridParams.w));
+			mieHumidityBoost = p.mieHumidityBoost;
 		}
 
 		// TerrainClipmapTexture/TerrainMinMaxTexture are now both catalog-converted (own
@@ -173,7 +185,7 @@ namespace brassica {
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
 			genPush.indices1.z = pack16(shadowMapIndex, 0u);
-			genPush.indices1.w = 0u;
+			genPush.indices1.w = std::bit_cast<std::uint32_t>(mieHumidityBoost);
 
 			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {

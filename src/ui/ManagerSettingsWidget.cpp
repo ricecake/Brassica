@@ -12,6 +12,7 @@
 #include "particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
 #include "terrain/ITerrainManager.hpp"
+#include "VolumetricLightingManager.hpp"
 
 namespace brassica::ui {
 
@@ -53,6 +54,9 @@ namespace brassica::ui {
 			}
 			if (ServiceLocator::Instance().Has<AtmosphereManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<AtmosphereManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<VolumetricLightingManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<VolumetricLightingManager>().get());
 			}
 
 			for (auto* mgr : managers) {

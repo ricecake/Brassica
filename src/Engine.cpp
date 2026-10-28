@@ -533,6 +533,11 @@ namespace brassica {
 			std::shared_ptr<AtmosphereManager>(&atmosphereManager, [](AtmosphereManager*) {})
 		);
 
+		volumetricLightingManager.Initialize();
+		serviceLocator.Provide<VolumetricLightingManager>(
+			std::shared_ptr<VolumetricLightingManager>(&volumetricLightingManager, [](VolumetricLightingManager*) {})
+		);
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -554,6 +559,7 @@ namespace brassica {
 		terrainManager.LoadState(configManager);
 		particleManager.LoadState(configManager);
 		atmosphereManager.LoadState(configManager);
+		volumetricLightingManager.LoadState(configManager);
 		terrainAS.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
@@ -1314,6 +1320,10 @@ namespace brassica {
 				.multiScatScale = atmosphereManager.GetMultiScatScale(),
 				.cloudShadowIntensity = 0.5f,
 				.skyExposure = lightManager.GetSkyExposure(),
+				.fogDensity = volumetricLightingManager.GetState().fogDensity,
+				.fogHeightFalloff = volumetricLightingManager.GetState().fogHeightFalloff,
+				.fogBaseHeight = volumetricLightingManager.GetState().fogBaseHeight,
+				.mieHumidityBoost = volumetricLightingManager.GetState().mieHumidityBoost,
 				.registry = &registry,
 				.atmosphere = atmosphere,
 			};
@@ -1682,6 +1692,10 @@ namespace brassica {
 			.multiScatScale = atmosphereManager.GetMultiScatScale(),
 			.cloudShadowIntensity = 0.5f,
 			.skyExposure = lightManager.GetSkyExposure(),
+			.fogDensity = volumetricLightingManager.GetState().fogDensity,
+			.fogHeightFalloff = volumetricLightingManager.GetState().fogHeightFalloff,
+			.fogBaseHeight = volumetricLightingManager.GetState().fogBaseHeight,
+			.mieHumidityBoost = volumetricLightingManager.GetState().mieHumidityBoost,
 			.registry = &registry,
 			.atmosphere = atmosphere,
 		};
