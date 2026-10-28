@@ -117,6 +117,11 @@ namespace brassica {
 			.width = 256,
 			.height = 256,
 			.depth = 256,
+			// Mips 0..4 (256/128/64/32/16) -- CloudVolumeDownsampleNode fills 1..4 from mip 0.
+			// Matches the clamp cloud_render.frag's sampleCloudVolume() uses when picking a
+			// distance-based LOD (mirroring boidish's own clamp(volumeMip, 0.0, 4.0)); mips
+			// beyond that would never be sampled, so there's no reason to generate them.
+			.mips = 5,
 			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16Sfloat),
 			.usageMask = static_cast<std::uint32_t>(
 				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
@@ -129,7 +134,7 @@ namespace brassica {
 	// constants::Weather::kCloudVolumePeriod) replacing the former 3-cascade camera-snapped
 	// system. Big-picture cloud shape now comes entirely from the weather coverage map; this
 	// volume only supplies reusable shape/erosion detail, so it never needs camera-relative
-	// recentering -- see CloudVolumeGenNode.
+	// recentering -- see CloudVolumeGenNode (mip 0) and CloudVolumeDownsampleNode (mips 1-4).
 	// Lifetime::Persistent -- same reasoning as TransmittanceLUT/MultiScatteringLUT above:
 	// CloudVolumeGenNode only bakes this once (dirty-flag gated), so "this frame's producer is
 	// inactive" is the normal steady state, not "no valid data." Without this, every reader

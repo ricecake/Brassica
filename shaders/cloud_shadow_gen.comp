@@ -21,9 +21,12 @@ layout(push_constant) uniform CloudShadowGenPushConstants {
 // Single tileable detail volume (CloudDetailVolume, period CLOUD_VOLUME_PERIOD, all 3 axes) --
 // replaces the former 3-cascade camera-distance blend. Vertical floor/ceiling shaping stays in
 // the caller (sampleCloudExtinction's uv_y gate below), since the volume itself is isotropic.
-float sampleCloudVolume(vec3 worldPos) {
-	vec3 uvw = fract(worldPos / CLOUD_VOLUME_PERIOD);
-	return SAMPLE_3D_LINEAR(push.volumeIndices.x, uvw).r;
+// Distance-based LOD selection -- see cloud_render.frag's identical sampleCloudVolume for why
+// (this file hit the same alligator()-noise GPU-divergence regression cloud_render.frag did).
+float sampleCloudVolume(vec3 worldPos, float distFromCam) {
+	vec3  uvw = fract(worldPos / CLOUD_VOLUME_PERIOD);
+	float volumeLod = clamp(log2(max(1.0, distFromCam / 2000.0)), 0.0, 4.0);
+	return SAMPLE_3D_LINEAR_LOD(push.volumeIndices.x, uvw, volumeLod).r;
 }
 
 float sampleCloudExtinction(vec3 p_cloud) {
@@ -47,7 +50,7 @@ float sampleCloudExtinction(vec3 p_cloud) {
 	}
 
 	if (weatherCoverage > 0.01) {
-		float baseDensity = sampleCloudVolume(p_cloud) * weatherCoverage;
+		float baseDensity = sampleCloudVolume(p_cloud, distFromCam) * weatherCoverage;
 		float density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
 		if (density > 0.0) {
 			// Realistic physical cloud extinction allowing smooth optical depth accumulation across the entire cloud volume

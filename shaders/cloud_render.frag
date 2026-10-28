@@ -310,7 +310,19 @@ float sampleCloudVolume(vec3 worldPos, float distFromCam) {
 	if (uv_y < 0.0 || uv_y > 1.0) return 0.0;
 
 	vec3 uvw = fract(worldPos / CLOUD_VOLUME_PERIOD);
-	return SAMPLE_3D_LINEAR(push.volumeIndex, uvw).r;
+
+	// Distance-based LOD selection -- the other half of the alligator() noise fix (see
+	// cloud_volume_gen.comp and CloudVolumeDownsampleNode): alligator's sharp Worley-cell edges
+	// caused a ~10x GPU regression from neighboring raymarch threads disagreeing on threshold
+	// branches when every sample read raw, unfiltered noise regardless of distance. Sampling a
+	// pre-blurred mip at range (where per-voxel detail isn't visually distinguishable anyway)
+	// tames that divergence. The distance curve below is a heuristic, not a derived screen-pixel
+	// footprint (boidish's own calculatePixelWorldSizeToTextureLod does the latter, but that
+	// needs a precise world-space-pixel-size term this raymarch doesn't carry) -- expect to
+	// retune the 2000.0 reference distance visually. Clamped to 4 (not further) matching
+	// boidish's own clamp(volumeMip, 0.0, 4.0) and CloudVolumeDesc()'s 5-mip chain.
+	float volumeLod = clamp(log2(max(1.0, distFromCam / 2000.0)), 0.0, 4.0);
+	return SAMPLE_3D_LINEAR_LOD(push.volumeIndex, uvw, volumeLod).r;
 }
 
 float rangeInterpolate(float dist, float res, float f0, float f1, float f2) {
