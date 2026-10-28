@@ -51,9 +51,10 @@ void main() {
 	} else if (inMaterialType == 8u) { // Cactus
 		roughness = 0.4;
 	}
-	OrganicPlateData mCell = getOrganicPlate(inUV*(0.5+0.5*cross_noise_fbm(vec3(inUV,0)*0.00001, 2, sin(uTime+0.5*dot_noise(vec3(inUV,0)*0.05, uTime))*0.001).xz), 50.0, 3.0);
+	// OrganicPlateData mCell = getOrganicPlate(inUV*(0.5+0.5*cross_noise_fbm(vec3(inUV,0)*0.00001, 2, sin(uTime+0.5*dot_noise(vec3(inUV,0)*0.05, uTime))*0.001).xz), 50.0, 3.0);
 
 	outPosition = vec4(relPos, 1.0);
 	outNormal = vec4(normalize(inNormal), roughness);
-	outAlbedo = vec4(inColor.rgb*smoothstep(0, 0.05, mCell.edgeDist), inColor.a);
+	// outAlbedo = vec4(inColor.rgb*smoothstep(0, 0.05, mCell.edgeDist), inColor.a);
+	outAlbedo = vec4(inColor.rgb, inColor.a);
 }

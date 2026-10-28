@@ -18,6 +18,7 @@
 #include "ShaderWatcher.hpp"
 
 namespace brassica {
+	struct CloudVolumeGenNode;
 
 	struct CloudVolumeDownsamplePushConstants {
 		std::uint32_t srcSampledIdx{0};
@@ -74,6 +75,7 @@ namespace brassica {
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute).Active(!hasDownsampled || forceRegeneration);
 			r.Modify<CloudDetailVolume>();
+			r.After<CloudVolumeGenNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
