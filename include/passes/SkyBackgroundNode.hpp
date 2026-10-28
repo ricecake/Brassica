@@ -59,7 +59,7 @@ namespace brassica {
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
-			push.sunDirAndAureole = glm::vec4(p.sunDir, 0.5f);
+			push.sunDirAndAureole = glm::vec4(p.sunDir, 0.0f);
 			push.moonDirAndCirrus = glm::vec4(p.moonDir, 0.3f);
 			push.sunRadianceAndSkyExp = glm::vec4(p.sunRadiance, p.skyExposure);
 			push.worldScale = p.worldScale;
@@ -67,10 +67,13 @@ namespace brassica {
 
 		// SkyViewLUT/TransmittanceLUT are both catalog-converted -- no .Desc() needed. AtmosphereRadiance
 		// isn't, so it keeps the exact desc the old hand-rolled Recipe used.
+		// Read<TerrainWeatherBiomeTexture>(): humidity coupling for the sun aureole
+		// (u_sunAureoleStrength, sky.frag) needs the weather map's moisture channel.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<SkyViewLUT>();
 			r.Read<TransmittanceLUT>();
+			r.Read<TerrainWeatherBiomeTexture>();
 			r.Create<AtmosphereRadiance>().Desc(
 				graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat)
 			);
@@ -79,6 +82,7 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.transmittanceIndex = ctx.Index<TransmittanceLUT>();
+			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

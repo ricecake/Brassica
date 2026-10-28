@@ -34,6 +34,9 @@ namespace brassica {
 		float atmosphereHeight{100.0f};
 		float rayleighScaleHeight{8.0f};
 		float mieScaleHeight{1.2f};
+		// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
+		// literal with no settings surface at all.
+		float sunAureoleStrength{0.5f};
 
 		glm::vec3 rayleighScattering{5.802e-3f, 13.558e-3f, 33.100e-3f};
 		float     mieScattering{3.996e-3f};
@@ -76,6 +79,14 @@ namespace brassica {
 				),
 				MakeField(
 					"mieScaleHeight", "Mie Scale Height", &AtmosphereManagerState::mieScaleHeight, 1.0f, 10.0f, UIHint::Slider
+				),
+				MakeField(
+					"sunAureoleStrength",
+					"Sun Aureole Strength",
+					&AtmosphereManagerState::sunAureoleStrength,
+					0.0f,
+					2.0f,
+					UIHint::Slider
 				)
 			);
 		}
@@ -113,6 +124,7 @@ namespace brassica {
 			push.mieScatteringBase = m_state.mieScattering;
 			push.mieExtinctionBase = m_state.mieExtinction;
 			push.ozoneAbsorptionBase = m_state.ozoneAbsorption;
+			push.sunAureoleStrength = m_state.sunAureoleStrength;
 		}
 
 		[[nodiscard]] float GetMultiScatScale() const { return m_state.multiScatScale; }
