@@ -435,10 +435,25 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 			// calculateCloudDensity in atmosphere_lowres.comp's source).
 			vec3  advectedPos = p_cloud - getCloudAdvectionSpeed(clamp(cloudHeightFrac, 0.0, 1.0)) * uTime;
 			float baseDensity = sampleCloudVolume(advectedPos, distFromCam);
-			density = 10.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
 			float heightGradient = GetDensityHeightGradientForPoint(cloudHeightFrac, weatherType);
 
-			density = density * heightGradient * weatherCoverage;
+			// Anvil spreading (boidish's calculateCloudDensity): strong convective
+			// (cumulus-weighted) clouds flatten out near their top instead of tapering to a
+			// point -- the classic cumulonimbus silhouette. weatherType doubles as boidish's
+			// "type" axis here (0=stratus/1=cumulus, same semantic already sampled above), so
+			// this needs no new baked per-type/height texture.
+			float cumulusWeight = clamp(weatherType * 2.0 - 1.0, 0.0, 1.0); // >0 only in the cumulus half
+			float anvilFactor = mix(1.0, 0.25, cumulusWeight * smoothstep(0.6, 0.9, cloudHeightFrac));
+			float coverageThreshold = pow(1.0 - weatherCoverage, remapClamp(cloudHeightFrac, 0.6, 0.9, 1.0, anvilFactor));
+
+			// Remap-based coverage erosion (boidish's calculateCloudDensity), not the old plain
+			// multiply: treats coverageThreshold as a floor the shaped noise must clear before
+			// any density survives, then ramps 0..1 above it. Gives crisp, billowy edges with
+			// noise-driven boundary detail instead of the old multiply's uniformly-dimmed,
+			// hazier look -- this is the single biggest shape difference from boidish's
+			// reference, and the main thing this whole rework was chasing.
+			float shapedNoise = remapClamp(baseDensity * heightGradient, coverageThreshold, 1.0, 0.0, 1.0);
+			density = 10.0 * shapedNoise * (0.5 + 1.5 * weatherMoisture);
 		}
 
 		float nextStep =
@@ -460,7 +475,19 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 		{
 			float stepSize = nextStep; // held constant while inCloud, not grown
 			if (density > 0.0) {
-				float extinction = max(0.0, density * (0.005 + 0.02 * weatherMoisture));
+				// Type + height-profile extinction shaping (boidish's moistureExtinctionMult,
+				// adapted to Brassica's available data -- no separate humidity channel, so
+				// this layers on top of the existing moisture-coupled base rather than
+				// replacing it): stratus (uniform, fog-like) clouds are optically denser per
+				// unit shape than cumulus (chunky, sparser-but-denser-cored) at the same
+				// density value; moisture pools near the cloud base, so extinction per unit
+				// density falls off toward the top. Constants are boidish's own.
+				float typeFactor = mix(1.2, 0.7, clamp(weatherType, 0.0, 1.0));
+				float bottomMoistureProfile = clamp(1.0 - smoothstep(0.0, 0.85, cloudHeightFrac), 0.1, 1.0);
+				bottomMoistureProfile *= bottomMoistureProfile;
+				float extinction = max(
+					0.0, density * (0.005 + 0.02 * weatherMoisture) * typeFactor * (0.6 + 0.8 * bottomMoistureProfile)
+				);
 				float averageDensity = (prevDensity + density) * 0.5;
 				float stepDensity = averageDensity * extinction;
 				float stepOpticalDepth = stepDensity * stepSize;
