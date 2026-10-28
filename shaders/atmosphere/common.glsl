@@ -59,6 +59,16 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	float cloudFlowSpeed;
 	float cloudFlowDirection;
 	float cloudFlowHeightScale;
+	// Final flat tint on the cloud march's accumulated light -- applied as the very last step
+	// before marchClouds() returns (cloud_render.frag).
+	vec3  cloudColor;
+	// Per-channel extinction: rgbExtinction = cloudExtinctionColor * cloudExtinctionScale,
+	// multiplied into the density->optical-depth->transmittance chain throughout
+	// marchClouds() (stepDensity/stepOpticalDepth/cloudTransmittance, all vec3 for this).
+	float cloudExtinctionScale;
+	vec3  cloudExtinctionColor;
+	// Scales the cloud's reflected light (direct + ambient, NOT the lightning emissive glow).
+	vec3  cloudAlbedo;
 	// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
 	// literal with no settings surface.
 	float sunAureoleStrength;
@@ -124,6 +134,10 @@ u_atmosphere;
 #define u_cloudFlowSpeed u_atmosphere.cloudFlowSpeed
 #define u_cloudFlowDirection u_atmosphere.cloudFlowDirection
 #define u_cloudFlowHeightScale u_atmosphere.cloudFlowHeightScale
+#define u_cloudColor u_atmosphere.cloudColor
+#define u_cloudExtinctionScale u_atmosphere.cloudExtinctionScale
+#define u_cloudExtinctionColor u_atmosphere.cloudExtinctionColor
+#define u_cloudAlbedo u_atmosphere.cloudAlbedo
 #define u_sunAureoleStrength u_atmosphere.sunAureoleStrength
 #define u_colorVarianceScale u_atmosphere.colorVarianceScale
 #define u_colorVarianceStrength u_atmosphere.colorVarianceStrength

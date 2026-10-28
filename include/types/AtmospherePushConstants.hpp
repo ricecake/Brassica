@@ -40,9 +40,11 @@ namespace brassica {
 		// Cloud lighting settings (CloudLightingManager) -- previously threaded per-frame
 		// through NodeFrameParams into CloudRenderPushConstants/CirrusPushConstants, which kept
 		// pushing those structs toward the 128-byte guaranteed-safe push-constant ceiling for
-		// data that only changes when a UI slider moves, not per-draw. All plain floats, so
-		// (per std140) they pack tightly after skyConvergenceStrength with no alignment padding
-		// needed between them -- no vec3/vec4 fields in this section.
+		// data that only changes when a UI slider moves, not per-draw. Mostly plain floats, which
+		// (per std140) pack tightly after skyConvergenceStrength with no alignment padding
+		// needed between them; the 3 vec3 color fields below are each alignas(16) so the
+		// compiler inserts whatever padding std140 needs before them automatically, same as
+		// rayleighScatteringBase/ozoneAbsorptionBase/hazeColor above.
 		alignas(4) float cloudPhaseG1{0.8f};
 		alignas(4) float cloudPhaseG2{-0.2f};
 		alignas(4) float cloudPhaseAlpha{0.5f};
@@ -64,6 +66,26 @@ namespace brassica {
 		alignas(4) float cloudFlowSpeed{0.25f};
 		alignas(4) float cloudFlowDirection{3.14159265f};
 		alignas(4) float cloudFlowHeightScale{0.015f};
+		// Final flat tint on the cloud march's accumulated light (marchClouds()'s return value,
+		// cloud_render.frag) -- boidish's cloudColorUniform applied the same way, as the very
+		// last step before returning. Defaults to a no-op (1,1,1), not boidish's own tuned
+		// {0.95,0.95,1.0} -- Brassica's extinction formula is its own adaptation, not boidish's
+		// verbatim, so the port shouldn't silently change today's look; dial it in via the UI.
+		alignas(16) glm::vec3 cloudColor{1.0f, 1.0f, 1.0f};
+		// Per-channel extinction: rgbExtinction = cloudExtinctionColor * cloudExtinctionScale,
+		// multiplied into the density->optical-depth->transmittance chain throughout
+		// marchClouds() (stepDensity/stepOpticalDepth/cloudTransmittance, all vec3 for this).
+		// cloudExtinctionScale defaults to 1.0 (no-op), not boidish's own 0.372, for the same
+		// reason as cloudColor above.
+		alignas(4) float cloudExtinctionScale{1.0f};
+		alignas(16) glm::vec3 cloudExtinctionColor{1.0f, 1.0f, 1.0f};
+		// Scales the cloud's reflected light (direct + ambient, NOT the lightning emissive
+		// glow -- that's self-luminous, not reflective) before adding emissive back in. boidish
+		// also multiplies by a per-sample albedo from calculateCloudDensity(), which Brassica's
+		// live density function has no equivalent of, so this is the flat-uniform-only half of
+		// that term. Defaults to a no-op (1,1,1), not boidish's own 0.85, for the same reason as
+		// cloudColor above.
+		alignas(16) glm::vec3 cloudAlbedo{1.0f, 1.0f, 1.0f};
 		// Sun aureole (shared by SkyBackgroundNode's sky.frag) -- previously hardcoded
 		// push.sunDirAndAureole.w = 0.5f in SkyBackgroundNode::SetFrameParams, no UI at all.
 		alignas(4) float sunAureoleStrength{0.5f};

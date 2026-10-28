@@ -380,7 +380,16 @@ float calculateBifurcatedStepSize(
 // return weightedDistSum/totalWeight as this march's depth/velocity estimate. Not added yet --
 // nothing consumes it (no depth/velocity output target exists on CloudRenderNode today), and
 // unused accumulation would just be optimized away rather than actually prepare anything.
-vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
+// lightEnergy/transmittance are returned separately, not packed into a vec4's rgb/a, since
+// transmittance is now vec3 (per-channel extinction, CloudLightingManager's cloudExtinctionColor)
+// -- main()'s two-segment compositing already does its own manual blend (not a GPU fixed-
+// function alpha blend), so there's no vec4-alpha constraint forcing transmittance to stay scalar.
+struct CloudMarchResult {
+	vec3 lightEnergy;
+	vec3 transmittance;
+};
+
+CloudMarchResult marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
 	float baseStepSize = 50.0;
 	float t = t_start;
 
@@ -388,7 +397,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 	float jitter = InterleavedGradientNoise(fragCoord, int(uFrameIndex));
 	t += baseStepSize * jitter;
 
-	float cloudTransmittance = 1.0;
+	vec3 cloudTransmittance = vec3(1.0);
 	vec3 lightEnergy = vec3(0.0);
 	float prevDensity = 0.0;
 
@@ -480,13 +489,18 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float extinction = max(
 					0.0, density * (0.005 + 0.02 * weatherMoisture) * typeFactor * (0.6 + 0.8 * bottomMoistureProfile)
 				);
+				// Per-channel extinction (CloudLightingManager's cloudExtinctionScale/Color) --
+				// boidish's rgbExtinction, multiplied through the whole optical-depth chain
+				// below (stepDensity/stepOpticalDepth/transmittance/the self-shadow term/the
+				// OCTAVES multi-scatter loop), not just a final tint.
+				vec3 rgbExtinction = extinction * u_cloudExtinctionColor * u_cloudExtinctionScale;
 				float averageDensity = (prevDensity + density) * 0.5;
-				float stepDensity = averageDensity * extinction;
-				float stepOpticalDepth = stepDensity * stepSize;
-				float stepTransmittance = exp(-stepOpticalDepth);
+				vec3  stepDensity = averageDensity * rgbExtinction;
+				vec3  stepOpticalDepth = stepDensity * stepSize;
+				vec3  stepTransmittance = exp(-stepOpticalDepth);
 
 				vec4 cloudShadowData = sampleCloudShadow(p_cloud);
-				float opticalDepthToLight = cloudShadowData.b * u_cloudShadowOpticalDepthMultiplier;
+				vec3 opticalDepthToLight = cloudShadowData.b * u_cloudShadowOpticalDepthMultiplier * rgbExtinction;
 
 				float r_km = r_world / 1000.0;
                 float mu = dot(surfaceDir, sunDir);
@@ -506,10 +520,10 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 					float phase = dualLobeSchlick(cosTheta, currentKfwd, currentKbck, u_cloudPhaseAlpha);
 					phase = mix((1.0 / (4.0 * PI)), phase, currentScatChaos);
 
-					float octaveOpticalDepth = opticalDepthToLight * currentExtinction;
-					float octaveStepDensity = stepDensity * currentExtinction;
+					vec3 octaveOpticalDepth = opticalDepthToLight * currentExtinction;
+					vec3 octaveStepDensity = stepDensity * currentExtinction;
 
-					float shadowTerm = mix(
+					vec3 shadowTerm = mix(
 						beerPowder(
 							octaveOpticalDepth, octaveStepDensity, u_directBeerPowderScale, u_cloudPowderMultiplier, u_cloudPowderLocalScale
 						),
@@ -517,7 +531,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 						u_cloudBeerPowderMix
 					);
 
-					msScattering += vec3(shadowTerm * phase * currentEnergy);
+					msScattering += shadowTerm * phase * currentEnergy;
 
 					currentExtinction *= 0.5;
 					currentKfwd *= 0.5;
@@ -529,7 +543,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				// --- Ground Upwelling ---
 				vec3 averageTerrainAlbedo = vec3(0.18, 0.16, 0.12);
 				vec3 upwellingBase = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * averageTerrainAlbedo * (1.0 / 3.14159265);
-				float upwellingOpticalDepth = stepDensity * clamp(cloudHeightFrac, 0.0, 1.0) * 15000.0;
+				vec3 upwellingOpticalDepth = stepDensity * clamp(cloudHeightFrac, 0.0, 1.0) * 15000.0;
 				vec3 groundUpwelling = upwellingBase * exp(-upwellingOpticalDepth * 0.1);
 
 				// --- Backscatter & Top Diffuse Illumination ---
@@ -540,7 +554,7 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				float isotropicPhase = 1.0 / (4.0 * 3.14159265);
 				vec3 diffuseTopBackscatter = sunRadiance * atmosphereTransmittance * max(0.0, sunDir.y) * isotropicPhase * (0.8 + 1.2 * backscatterWeight) * exp(-opticalDepthToLight);
 
-				float powder = 1.0 - 1.0 / (1.0 + (25.0 * stepDensity * u_ambientBeerPowderScale));
+				vec3 powder = vec3(1.0) - vec3(1.0) / (vec3(1.0) + (25.0 * stepDensity * u_ambientBeerPowderScale));
 
 				// Directional ambient (helpers/ambient.glsl) standing in for a real SH probe
 				// grid -- LightingUBO already reserves uSHCoeffs[81] for one, nothing bakes it
@@ -552,10 +566,10 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				vec3 horizonAmbient = getApproximateHorizonAmbient(sunDir, sunRadiance, skyAmbient, groundAmbient);
 				vec3 ambientTop = mix(skyAmbient, horizonAmbient, 0.4);
 
-				float upwardOD = stepDensity * clamp(cloudHeightFrac, 0.0, 1.0) * 15000.0;
-				float downwardOD = stepDensity * clamp(1.0 - cloudHeightFrac, 0.0, 1.0) * 15000.0;
-				float skyAttenuation = 1.0 / (1.0 + downwardOD);
-				float groundAttenuation = 1.0 / (1.0 + upwardOD);
+				vec3 upwardOD = stepDensity * clamp(cloudHeightFrac, 0.0, 1.0) * 15000.0;
+				vec3 downwardOD = stepDensity * clamp(1.0 - cloudHeightFrac, 0.0, 1.0) * 15000.0;
+				vec3 skyAttenuation = vec3(1.0) / (vec3(1.0) + downwardOD);
+				vec3 groundAttenuation = vec3(1.0) / (vec3(1.0) + upwardOD);
 
 				vec3 ambientGlow = ((ambientTop * skyAttenuation) + (groundAmbient * groundAttenuation)) * powder;
 
@@ -585,7 +599,12 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				// main()); moon support would need the second light threaded through the same
 				// way, which doesn't exist yet.
 				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering * u_cloudSunLightScale;
-				vec3 stepScattering = directLight + ambientGlow + diffuseTopBackscatter * powder + emissiveGlow;
+				// cloudAlbedo (CloudLightingManager) scales reflected light only -- emissiveGlow
+				// is self-luminous (lightning), not reflective, so it's added back in afterward
+				// rather than scaled by albedo too (boidish's own structure: S = (stepScattering
+				// + ambient) * albedo + emissiveGlow, not (... + emissiveGlow) * albedo).
+				vec3 reflectedLight = (directLight + ambientGlow + diffuseTopBackscatter * powder) * u_cloudAlbedo;
+				vec3 stepScattering = reflectedLight + emissiveGlow;
 
 				// FIX: Removed the `/ max(stepDensity, 0.0001)` that was blowing up the light
 				vec3 inscatter = stepScattering * (1.0 - stepTransmittance);
@@ -593,7 +612,10 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 				lightEnergy += inscatter * cloudTransmittance;
 				cloudTransmittance *= stepTransmittance;
 
-				if (cloudTransmittance < 0.05) break;
+				// all(), not any(): a channel with lower extinction can still be meaningfully
+				// transmissive even once another channel has already dropped below threshold,
+				// and cutting the march short there would visibly discolor the result.
+				if (all(lessThan(cloudTransmittance, vec3(0.05)))) break;
 			}
 			prevDensity = density;
 		}
@@ -601,8 +623,10 @@ vec4 marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 su
 		t += nextStep;
 	}
 
-	// Return energy and the remaining transmittance
-	return vec4(lightEnergy, cloudTransmittance);
+	// cloudColor (CloudLightingManager): final flat tint on the accumulated light, applied once
+	// here rather than per-segment at the call site (boidish applies it the same way, as the
+	// very last step before returning).
+	return CloudMarchResult(lightEnergy * u_cloudColor, cloudTransmittance);
 }
 
 void main() {
@@ -634,23 +658,27 @@ void main() {
 	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
-		vec4 result = vec4(0.0, 0.0, 0.0, 1.0);
+		// Manual (not GPU fixed-function alpha) blend -- transmittance is vec3 (per-channel
+		// extinction, CloudLightingManager's cloudExtinctionColor), so it's tracked separately
+		// rather than packed into a vec4's alpha the way a single-channel transmittance was.
+		vec3 resultRgb = vec3(0.0);
+		vec3 resultTransmittance = vec3(1.0);
 
 		// Segment 1 (Near side of the cloud shell)
 		if (t_s1 < t_e1 && t_s1 < surfaceDistKM) {
-			vec4 near = marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
-			result.rgb += near.rgb;
-			result.a *= near.a;
+			CloudMarchResult near = marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
+			resultRgb += near.lightEnergy;
+			resultTransmittance *= near.transmittance;
 		}
 
 		// Segment 2 (Far side of the cloud shell, if ray pierces entirely through space)
 		if (t_s2 < t_e2 && t_s2 < surfaceDistKM) {
-			vec4 far = marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
-			result.rgb += far.rgb * result.a;
-			result.a *= far.a;
+			CloudMarchResult far = marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
+			resultRgb += far.lightEnergy * resultTransmittance;
+			resultTransmittance *= far.transmittance;
 		}
 
-		currentRadiance = currentRadiance * result.a + result.rgb;
+		currentRadiance = currentRadiance * resultTransmittance + resultRgb;
 	}
 	outColor = vec4(currentRadiance, 1.0);
 }

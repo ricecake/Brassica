@@ -237,6 +237,16 @@ float beerPowder(float d, float local_d, float directScale, float multiplier, fl
 	);
 }
 
+// vec3 overload -- for a per-channel-extinction-tinted d/local_d (cloudExtinctionColor,
+// CloudLightingManager), so the multi-scatter approximation stays consistently tinted with the
+// rest of the optical-depth chain it's part of.
+vec3 beerPowder(vec3 d, vec3 local_d, float directScale, float multiplier, float localScale) {
+	return max(
+		exp(-d),
+		exp(-d * directScale) * multiplier * (vec3(1.0) - exp(-local_d * localScale))
+	);
+}
+
 float schlickPhase(float cosTheta, float k) {
     float kCos = k * cosTheta;
     float denom = 1.0 - kCos;

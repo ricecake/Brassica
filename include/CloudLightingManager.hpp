@@ -2,6 +2,8 @@
 
 #include <tuple>
 
+#include <glm/glm.hpp>
+
 #include "IManager.hpp"
 #include "ManagerReflection.hpp"
 #include "types/AtmospherePushConstants.hpp"
@@ -10,9 +12,10 @@ namespace brassica {
 
 	// Mirrors the subset of boidish's AtmosphereEffect cloud-lighting Set/Get surface that has
 	// a direct attachment point in cloud_render.frag today -- phase function, powder/multi-
-	// scatter blend, self-shadow strength, per-light scale, and cirrus opacity (shared with
+	// scatter blend, self-shadow strength, per-light scale, cirrus opacity (shared with
 	// CirrusNode, which already consumes it; CloudRenderPushConstants had an unused duplicate
-	// field of the same name that nothing ever read).
+	// field of the same name that nothing ever read), final color tint, per-channel extinction,
+	// and albedo.
 	//
 	// ambientBeerPowderScale is Brassica's own separate ambient-glow term (cloud_render.frag's
 	// `1.0 - 1.0/(1.0+25*stepDensity*scale)`) -- NOT the same quantity as boidish's own
@@ -53,6 +56,24 @@ namespace brassica {
 		float cloudFlowSpeed{0.25f};
 		float cloudFlowDirection{3.14159265f}; // radians; boidish's default is pi (180deg)
 		float cloudFlowHeightScale{0.015f};
+
+		// Final flat tint on the cloud march's accumulated light (boidish's cloudColorUniform).
+		// Defaults to a no-op (1,1,1), not boidish's own tuned {0.95,0.95,1.0} -- Brassica's
+		// extinction formula is its own adaptation, not boidish's verbatim, so boidish's tuned
+		// defaults have no particular reason to look right here; this way the port doesn't
+		// silently change today's look, and the slider is there once someone wants to dial it in.
+		glm::vec3 cloudColor{1.0f, 1.0f, 1.0f};
+		// Per-channel extinction: rgbExtinction = cloudExtinctionColor * cloudExtinctionScale,
+		// multiplied into marchClouds()'s density->optical-depth->transmittance chain. Same
+		// no-op-default reasoning as cloudColor -- boidish's own default (0.372) would silently
+		// cut extinction to ~37% of today's look the moment this landed.
+		float     cloudExtinctionScale{1.0f};
+		glm::vec3 cloudExtinctionColor{1.0f, 1.0f, 1.0f};
+		// Scales the cloud's reflected light (direct + ambient), not the lightning emissive
+		// glow. boidish also multiplies by a per-sample albedo from calculateCloudDensity(),
+		// which Brassica's live density function has no equivalent of -- flat-uniform-only.
+		// Same no-op-default reasoning as cloudColor/cloudExtinctionScale.
+		glm::vec3 cloudAlbedo{1.0f, 1.0f, 1.0f};
 
 		auto GetReflection() const {
 			return std::make_tuple(
@@ -163,7 +184,20 @@ namespace brassica {
 					0.0f,
 					0.1f,
 					UIHint::Slider
-				)
+				),
+				MakeColorField("cloudColor", "Cloud Color", &CloudLightingManagerState::cloudColor),
+				MakeField(
+					"cloudExtinctionScale",
+					"Extinction Scale",
+					&CloudLightingManagerState::cloudExtinctionScale,
+					0.001f,
+					1.0f,
+					UIHint::Slider
+				),
+				MakeColorField(
+					"cloudExtinctionColor", "Extinction Balance", &CloudLightingManagerState::cloudExtinctionColor
+				),
+				MakeColorField("cloudAlbedo", "Cloud Albedo", &CloudLightingManagerState::cloudAlbedo)
 			);
 		}
 	};
@@ -199,6 +233,10 @@ namespace brassica {
 			push.cloudFlowSpeed = m_state.cloudFlowSpeed;
 			push.cloudFlowDirection = m_state.cloudFlowDirection;
 			push.cloudFlowHeightScale = m_state.cloudFlowHeightScale;
+			push.cloudColor = m_state.cloudColor;
+			push.cloudExtinctionScale = m_state.cloudExtinctionScale;
+			push.cloudExtinctionColor = m_state.cloudExtinctionColor;
+			push.cloudAlbedo = m_state.cloudAlbedo;
 		}
 
 	private:
