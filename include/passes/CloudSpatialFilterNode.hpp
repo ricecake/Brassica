@@ -21,10 +21,13 @@ namespace brassica {
 		std::uint32_t colorIndex{0};
 		std::uint32_t transmittanceIndex{0};
 		std::uint32_t momentsIndex{0};
-		std::uint32_t depthIndex{0};
+		std::uint32_t depthIndex{0}; // CloudAccumulatedDepth -- r=dist, a=pathDensity
+		std::uint32_t errorMapBufferIdx{0};
 		std::uint32_t outColorStorageIdx{0};
 		std::uint32_t outTransmittanceStorageIdx{0};
 		std::uint32_t stepSize{1};
+		std::uint32_t passIndex{0};
+		std::uint32_t tileCols{0};
 		std::uint32_t outputWidth{0};
 		std::uint32_t outputHeight{0};
 	};
@@ -70,7 +73,8 @@ namespace brassica {
 			r.Read<CloudAccumulatedColor>();
 			r.Read<CloudAccumulatedTransmittance>();
 			r.Read<CloudMoments>();
-			r.Read<CloudDepth>();
+			r.Read<CloudAccumulatedDepth>();
+			r.Read<CloudTileErrorMap>();
 			r.Create<CloudFilterScratchColor>();
 			r.Create<CloudFilterScratchTransmittance>();
 			r.Create<CloudFilteredColor>();
@@ -79,7 +83,8 @@ namespace brassica {
 
 		void Execute(graph::NodeContext& ctx) {
 			std::uint32_t momentsIndex = ctx.Index<CloudMoments>();
-			std::uint32_t depthIndex = ctx.Index<CloudDepth>();
+			std::uint32_t depthIndex = ctx.Index<CloudAccumulatedDepth>();
+			std::uint32_t errorMapBufferIdx = ctx.BufferIndex<CloudTileErrorMap>();
 			std::uint32_t groupsX = (width + 7) / 8;
 			std::uint32_t groupsY = (height + 7) / 8;
 
@@ -90,9 +95,12 @@ namespace brassica {
 			push.transmittanceIndex = ctx.Index<CloudAccumulatedTransmittance>();
 			push.momentsIndex = momentsIndex;
 			push.depthIndex = depthIndex;
+			push.errorMapBufferIdx = errorMapBufferIdx;
 			push.outColorStorageIdx = ctx.StorageIndex<CloudFilterScratchColor>();
 			push.outTransmittanceStorageIdx = ctx.StorageIndex<CloudFilterScratchTransmittance>();
 			push.stepSize = 1;
+			push.passIndex = 0;
+			push.tileCols = (width + 7) / 8;
 			push.outputWidth = width;
 			push.outputHeight = height;
 
@@ -116,6 +124,7 @@ namespace brassica {
 			push.outColorStorageIdx = ctx.StorageIndex<CloudFilteredColor>();
 			push.outTransmittanceStorageIdx = ctx.StorageIndex<CloudFilteredTransmittance>();
 			push.stepSize = 2;
+			push.passIndex = 1;
 
 			resolved = render::BindCompute(ctx, *pipelineLibrary, filterShader, push);
 			if (resolved.pipeline) {

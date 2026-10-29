@@ -3,29 +3,43 @@
 
 #include "bindless.glsl"
 
-// Stage C: a real a-trous edge-stopping wavelet filter (SVGF's spatial half), not a fixed-
-// kernel blur -- edge-stopping weights come from luma/depth deltas, scaled by a variance
-// estimate (CloudMoments, Stage B), with the real SVGF "low-confidence variance" fallback: a
-// 3x3 spatial luma variance when historyLength is still short, since the temporal moments
-// haven't accumulated enough samples to be trustworthy yet. Dispatched twice (CloudSpatialFilterNode,
-// step sizes 1 then 2 -- simplified from boidish's 2-4 pass progression) by the same shader,
-// just a different step size and source/dest pair each time.
+// F4: real rewrite matching boidish's cloud_spatial_filter.comp -- a genuine a-trous
+// edge-stopping wavelet filter (SVGF's spatial half) with 4 edge-stopping terms (luma, path
+// density, depth, time) instead of the earlier 2-term (luma, depth) version, a per-tile
+// errorBoost that widens every phi when CloudTileErrorMap flags a tile as noisy, and a
+// timeWeight that kills blending across a fresh/stale tile boundary -- exactly the artifact
+// Stage D's tile-skipping would otherwise risk at tile seams. Dispatched twice
+// (CloudSpatialFilterNode, step sizes 1 then 2 -- simplified from boidish's 2-4 pass
+// progression, unchanged from the earlier version of this stage) by the same shader.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(push_constant) uniform CloudSpatialFilterPushConstants {
 	uint colorIndex;
 	uint transmittanceIndex;
 	uint momentsIndex;
-	uint depthIndex;
+	uint depthIndex; // CloudAccumulatedDepth -- r=dist, a=pathDensity
+	uint errorMapBufferIdx;
 	uint outColorStorageIdx;
 	uint outTransmittanceStorageIdx;
 	uint stepSize;
+	uint passIndex; // 0 or 1 -- only pass 0 applies the low-confidence spatial-variance fallback
+	uint tileCols;
 	uint outputWidth;
 	uint outputHeight;
 } push;
 
+layout(std430, set = 1, binding = 6) readonly buffer CloudTileErrorMapBuffer {
+	vec4 tiles[]; // x = error, y = flow, z = step multiplier, w = last-raymarched frame index
+}
+uErrorMaps[];
+
 float luminance(vec3 c) {
 	return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+uint tileIdxOf(ivec2 pixel) {
+	uvec2 tc = uvec2(pixel) / 8u;
+	return tc.y * push.tileCols + tc.x;
 }
 
 void main() {
@@ -39,15 +53,23 @@ void main() {
 	vec3  centerColor = SAMPLE_NEAREST(push.colorIndex, centerUV).rgb;
 	vec3  centerTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, centerUV).rgb;
 	vec4  centerMoments = SAMPLE_NEAREST(push.momentsIndex, centerUV);
-	float centerDepth = SAMPLE_NEAREST(push.depthIndex, centerUV).r;
+	vec4  centerDepthProps = SAMPLE_NEAREST(push.depthIndex, centerUV);
+	float centerDepth = centerDepthProps.r;
+	float centerDensity = centerDepthProps.a;
 	float centerLuma = luminance(centerColor);
+	float centerHistory = centerMoments.w; // CloudMoments: x=lumaMean, y=lumaSqMean, z=density^2Mean, w=historyLength
 
-	float variance = max(0.0, centerMoments.y - centerMoments.x * centerMoments.x);
+	float tileError = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdxOf(pixel)].x;
+	float centerTimestamp = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdxOf(pixel)].w;
+
+	float varLuma = max(0.0, centerMoments.y - centerMoments.x * centerMoments.x);
 
 	// Low-confidence fallback: short history -> estimate variance from a 3x3 spatial
-	// neighborhood of luma instead of trusting barely-accumulated temporal moments.
-	const float kHistoryConfidenceThreshold = 4.0;
-	if (centerMoments.z < kHistoryConfidenceThreshold) {
+	// neighborhood of luma instead of trusting barely-accumulated temporal moments. Only on
+	// pass 0, matching boidish exactly (pass 1's larger step size works from pass 0's already-
+	// filtered result, which no longer needs this correction).
+	const float kSvgfHistoryThreshold = 10.0; // boidish's cloud_svgf_history_threshold_ default
+	if (push.passIndex == 0u && centerHistory < kSvgfHistoryThreshold) {
 		float sum = 0.0;
 		float sumSq = 0.0;
 		for (int dy = -1; dy <= 1; dy++) {
@@ -60,11 +82,22 @@ void main() {
 			}
 		}
 		float mean = sum / 9.0;
-		variance = max(0.0, (sumSq / 9.0) - mean * mean);
+		float spatialVar = max(0.0, (sumSq / 9.0) - mean * mean);
+		varLuma = mix(spatialVar, varLuma, smoothstep(0.0, kSvgfHistoryThreshold, centerHistory));
 	}
 
-	float phiLuma = max(0.0001, sqrt(variance) * 4.0);
-	float phiDepth = max(0.0001, centerDepth * 0.05);
+	float stdLuma = sqrt(varLuma);
+	// boidish's cloud_svgf_history_boost_ default -- widens the filter early on (low
+	// historyLength), narrowing back to 1x once enough real temporal samples have accumulated.
+	const float kSvgfHistoryBoost = 4.0;
+	float historyScale = mix(kSvgfHistoryBoost, 1.0, smoothstep(1.0, kSvgfHistoryThreshold, centerHistory));
+	float errorBoost = 1.0 + tileError * 3.0;
+
+	// boidish's AtmosphereEffect.h defaults (cloud_phi_luma_/cloud_phi_density_/cloud_phi_depth_).
+	float phiLuma = (20.0 * stdLuma + 0.02) * historyScale * errorBoost;
+	float phiDensity = (0.05 * centerDensity + 0.1) * historyScale * errorBoost;
+	float phiDepth = (1.5 * centerDepth + 0.05) * historyScale * errorBoost;
+	const float phiTime = 1.0;
 
 	const float kWeights1D[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
 
@@ -80,13 +113,18 @@ void main() {
 
 			vec3  sampleColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
 			vec3  sampleTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, sampleUV).rgb;
-			float sampleDepth = SAMPLE_NEAREST(push.depthIndex, sampleUV).r;
+			vec4  sampleDepthProps = SAMPLE_NEAREST(push.depthIndex, sampleUV);
 			float sampleLuma = luminance(sampleColor);
+			float sampleTimestamp = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdxOf(samplePixel)].w;
+			float timeDelta = abs(centerTimestamp - sampleTimestamp);
 
 			float kernelWeight = kWeights1D[dx + 2] * kWeights1D[dy + 2];
 			float lumaWeight = exp(-abs(sampleLuma - centerLuma) / phiLuma);
-			float depthWeight = exp(-abs(sampleDepth - centerDepth) / phiDepth);
-			float w = kernelWeight * lumaWeight * depthWeight;
+			float densityWeight = exp(-abs(sampleDepthProps.a - centerDensity) / phiDensity);
+			float depthWeight = exp(-abs(sampleDepthProps.r - centerDepth) / phiDepth);
+			float timeWeight = exp(-timeDelta / phiTime);
+
+			float w = kernelWeight * lumaWeight * densityWeight * depthWeight * timeWeight;
 
 			colorSum += sampleColor * w;
 			transmittanceSum += sampleTransmittance * w;
