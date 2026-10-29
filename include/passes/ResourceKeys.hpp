@@ -248,6 +248,37 @@ namespace brassica {
 		}
 	};
 
+	// Stage B (temporal reprojection + variance-clipped accumulation, CloudTemporalNode,
+	// shaders/cloud_temporal.comp) -- these are both this frame's write target AND (via
+	// ReadPrevious<K>()/graph::History<K>) last frame's read target, the same self-referential
+	// ping-pong FoliageNode's ReadPrevious<HiZTexture>() precedent proves out (just against a
+	// different node's output there, vs. this node's own prior output here -- confirmed safe via
+	// PhysicalRegistry::ProvisionTemporalPairs's frameIndex-parity swap, which doesn't care which
+	// node wrote either half of the pair). CloudCompositeNode reads these now, not CloudColor/
+	// CloudTransmittance directly.
+	struct CloudAccumulatedColor {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	struct CloudAccumulatedTransmittance {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	// SVGF-style running moments: x = luma, y = luma^2 (Stage C's variance estimate is y - x*x),
+	// z = historyLength (decayed on disocclusion/rejection, not just incremented), w = this
+	// pixel's accumulated depth (carried forward for next frame's disocclusion comparison --
+	// CloudDepth itself is always fresh every frame in Stages A-C, so there's no separate
+	// "history depth" resource needed beyond this channel).
+	struct CloudMoments {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
 	struct AtmosphereRadiance {};
 
 	struct GBufferPosition {

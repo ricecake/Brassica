@@ -29,12 +29,13 @@ namespace brassica {
 		std::uint32_t cloudTransmittanceIndex{0};
 	};
 
-	// Blends CloudRenderNode's (now compute) output into HdrColor. Takes over CloudRenderNode's
-	// old position in the HdrColor writer chain -- it's the one Modifying HdrColor now, so every
-	// Before<CloudRenderNode>()/After<CloudRenderNode>() ordering that existed because of shared
-	// HdrColor access (CirrusNode, VolumetricRenderNode, ParticleSystemNode, LightningRenderNode)
-	// now points at this node instead. After<CloudRenderNode>() itself isn't declared explicitly
-	// below -- Read<CloudColor/CloudTransmittance>() already orders this after CloudRenderNode's
+	// Blends CloudTemporalNode's (Stage B) accumulated output into HdrColor -- not
+	// CloudRenderNode's raw per-frame raymarch directly, now that Stage B exists. Takes over
+	// CloudRenderNode's old position in the HdrColor writer chain -- it's the one Modifying
+	// HdrColor now, so every Before<>/After<> ordering that existed because of shared HdrColor
+	// access (CirrusNode, VolumetricRenderNode, ParticleSystemNode, LightningRenderNode) points
+	// at this node instead. After<CloudTemporalNode>() isn't declared explicitly below --
+	// Read<CloudAccumulatedColor/Transmittance>() already orders this after CloudTemporalNode's
 	// sole Create<> of both via the usual Create-before-accessor edge.
 	struct CloudCompositeNode: render::NodeRegistrar<CloudCompositeNode> {
 		static constexpr render::GraphicsPipelineState kPipelineState{
@@ -74,16 +75,16 @@ namespace brassica {
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Read<CloudColor>();
-			r.Read<CloudTransmittance>();
+			r.Read<CloudAccumulatedColor>();
+			r.Read<CloudAccumulatedTransmittance>();
 			r.Modify<HdrColor>();
 			r.After<CirrusNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push.hdrColorIndex = ctx.Index<HdrColor>();
-			push.cloudColorIndex = ctx.Index<CloudColor>();
-			push.cloudTransmittanceIndex = ctx.Index<CloudTransmittance>();
+			push.cloudColorIndex = ctx.Index<CloudAccumulatedColor>();
+			push.cloudTransmittanceIndex = ctx.Index<CloudAccumulatedTransmittance>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

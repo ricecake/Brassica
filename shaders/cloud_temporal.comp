@@ -1,0 +1,122 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+// Stage B of the tile-based temporal pipeline: reprojects last frame's accumulated cloud result
+// (History<CloudAccumulatedColor/Transmittance/Moments>, see ResourceKeys.hpp's comment on the
+// self-referential ping-pong) using camera motion (uPreviousViewProjMatrix, its first real
+// consumer) plus this pixel's own non-camera wind velocity (CloudVelocity, from
+// cloud_raymarch.comp), and blends with this frame's fresh raymarch (CloudColor/Transmittance/
+// Depth) using disocclusion-aware rejection and a 3x3-neighborhood AABB color clip (a Karis-
+// style TAA variance clip, not a naive lerp -- the simplified RGB-space variant of boidish's
+// YCoCg clipAABB, not byte-for-byte identical to it).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform CloudTemporalPushConstants {
+	uint colorIndex;
+	uint transmittanceIndex;
+	uint depthIndex;
+	uint velocityIndex;
+	uint historyColorIndex;
+	uint historyTransmittanceIndex;
+	uint historyMomentsIndex;
+	uint outColorStorageIdx;
+	uint outTransmittanceStorageIdx;
+	uint outMomentsStorageIdx;
+	uint outputWidth;
+	uint outputHeight;
+} push;
+
+float luminance(vec3 c) {
+	return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (pixel.x >= int(push.outputWidth) || pixel.y >= int(push.outputHeight)) {
+		return;
+	}
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+	vec3  curColor = SAMPLE_NEAREST(push.colorIndex, uv).rgb;
+	vec3  curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, uv).rgb;
+	float curDepth = SAMPLE_NEAREST(push.depthIndex, uv).r;
+	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, uv).rg;
+
+	bool hasCloud = curDepth < 1e8;
+	vec2 historyUV = uv;
+	bool inBounds = false;
+
+	if (hasCloud) {
+		// Reconstruct world position from this frame's depth, reproject via the PREVIOUS
+		// frame's view-projection (camera motion only), then subtract the wind-only velocity
+		// cloud_raymarch.comp already isolated -- the same camera/non-camera split boidish uses.
+		vec2 clipCoord = uv * 2.0 - 1.0;
+		vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
+		vec3 viewDir = viewRay4.xyz / viewRay4.w;
+		vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
+		vec3 worldPos = uCameraPosition.xyz + worldRay * curDepth;
+
+		vec4 prevClip = uPreviousViewProjMatrix * vec4(worldPos, 1.0);
+		vec2 camReprojUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+
+		historyUV = camReprojUV - curVelocity;
+		inBounds = all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0)));
+	}
+
+	vec3 histColor = vec3(0.0);
+	vec3 histTransmittance = vec3(1.0);
+	vec4 histMoments = vec4(0.0); // x = luma, y = luma^2, z = historyLength, w = depth
+	bool validHistory = hasCloud && inBounds;
+
+	if (validHistory) {
+		histColor = SAMPLE_LINEAR(push.historyColorIndex, historyUV).rgb;
+		histTransmittance = SAMPLE_LINEAR(push.historyTransmittanceIndex, historyUV).rgb;
+		histMoments = SAMPLE_LINEAR(push.historyMomentsIndex, historyUV);
+
+		// Multi-signal rejection (simplified from boidish's depth/luma/density-derivative set to
+		// depth + luma): each signal independently decays historyLength rather than a single
+		// hard accept/reject, so a partial mismatch fades history faster instead of snapping.
+		float depthDiff = abs(histMoments.w - curDepth) / max(curDepth, 1.0);
+		float depthReject = smoothstep(0.02, 0.1, depthDiff);
+
+		float curLuma = luminance(curColor);
+		float histLuma = histMoments.x;
+		float lumaDiff = abs(curLuma - histLuma) / max(max(curLuma, histLuma), 0.01);
+		float lumaReject = smoothstep(0.3, 1.0, lumaDiff);
+
+		histMoments.z *= (1.0 - max(depthReject, lumaReject));
+	}
+
+	float historyLength = min(32.0, histMoments.z + 1.0);
+	float alpha = 1.0 / historyLength;
+
+	// 3x3-neighborhood AABB color clip: keeps the blended history inside this frame's local
+	// color range, so a stale/ghosted history sample self-corrects over 1-2 frames instead of
+	// visibly smearing. RGB-space, not YCoCg -- simpler, same core technique.
+	vec3 nMin = curColor;
+	vec3 nMax = curColor;
+	for (int dy = -1; dy <= 1; dy++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			if (dx == 0 && dy == 0) continue;
+			ivec2 samplePixel =
+				clamp(pixel + ivec2(dx, dy), ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+			vec2 sampleUV = (vec2(samplePixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+			vec3 neighborColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
+			nMin = min(nMin, neighborColor);
+			nMax = max(nMax, neighborColor);
+		}
+	}
+	vec3 clippedHistColor = clamp(histColor, nMin, nMax);
+
+	vec3 blendedColor = mix(clippedHistColor, curColor, alpha);
+	vec3 blendedTransmittance = mix(histTransmittance, curTransmittance, alpha);
+
+	float blendedLuma = luminance(blendedColor);
+	vec4  outMoments = vec4(blendedLuma, blendedLuma * blendedLuma, historyLength, curDepth);
+
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outColorStorageIdx)], pixel, vec4(blendedColor, 0.0));
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outTransmittanceStorageIdx)], pixel, vec4(blendedTransmittance, 0.0));
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outMomentsStorageIdx)], pixel, outMoments);
+}
