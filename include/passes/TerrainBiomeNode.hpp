@@ -119,6 +119,9 @@ namespace brassica {
 			r.Modify<TerrainBiomeMapBTexture>();
 			// shaders/climate_ca.comp reads uLights[0].direction via clustered_lighting.glsl.
 			r.Read<LightsBuffer>();
+			// climate_ca.comp's lightning trigger claims a ring-buffer slot and writes a fresh
+			// strike directly (see shaders/lighting.glsl's LightningStrikePool).
+			r.Modify<LightningStrikePool>();
 		}
 
 		// Shared square-workgroup dispatch math for all three CA passes below -- bind/push itself

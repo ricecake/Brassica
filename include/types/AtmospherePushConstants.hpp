@@ -86,6 +86,11 @@ namespace brassica {
 		// that term. Defaults to a no-op (1,1,1), not boidish's own 0.85, for the same reason as
 		// cloudColor above.
 		alignas(16) glm::vec3 cloudAlbedo{1.0f, 1.0f, 1.0f};
+		// GPU-driven lightning (shaders/climate_ca.comp's trigger, shaders/lightning_age.comp's
+		// reserved-light-slot write) -- lightningFrequencyScale multiplies the per-cell trigger
+		// probability; lightningFlashIntensity scales the reserved uLights[] range's intensity.
+		alignas(4) float lightningFrequencyScale{1.0f};
+		alignas(4) float lightningFlashIntensity{1.0f};
 		// Sun aureole (shared by SkyBackgroundNode's sky.frag) -- previously hardcoded
 		// push.sunDirAndAureole.w = 0.5f in SkyBackgroundNode::SetFrameParams, no UI at all.
 		alignas(4) float sunAureoleStrength{0.5f};
