@@ -34,14 +34,16 @@ uint getClusterIndex(vec3 frag_pos) {
  * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR BRDF.
  */
 LightingResult evaluateClusteredLightContributionPBR(
-	vec3 frag_pos,
-	vec3 normal,
+	vec3  frag_pos,
+	vec3  normal,
 	Material material,
-	uint skyViewIndex,
-	uint weatherBiomeIndex,
-	uint gtaoIndex,
-	vec2 uv,
-	float aoDirectInfluence
+	uint  skyViewIndex,
+	uint  weatherBiomeIndex,
+	uint  gtaoIndex,
+	vec2  uv,
+	float aoDirectInfluence,
+	uint  minMaxIndex,
+	uvec4 gridParams // x = numLODs, w = textureDim -- same layout as every terrain-aware pass's own push constants
 ) {
 	vec3 N = normalize(normal);
 	vec3 V = normalize(uCameraPosition.xyz - frag_pos);
@@ -134,7 +136,15 @@ LightingResult evaluateClusteredLightContributionPBR(
 		evaluate_brdf(N, V, L, material, radiance, 1.0, result);
 	}
 
-	float terrainOcc = calculateTerrainOcclusion(frag_pos, N);
+	// terrainClipmapLevelFor can return numLevels itself as an "out of clipmap coverage" sentinel
+	// (its own comment in terrain.glsl), not a valid array-layer index -- every other caller
+	// (traceTerrainOcclusion, calculateTerrainSoftShadow) clamps to numLevels-1 before using it;
+	// this one didn't, so most distant terrain (anything past LOD 0's own half-extent) fed an
+	// out-of-bounds layer index into sampleTerrainMinMaxMip, reading undefined data and collapsing
+	// terrainOcc toward 0 almost everywhere.
+	uint  numLevels = max(gridParams.x, 1u);
+	uint  terrainOccLevel = min(terrainClipmapLevelFor(frag_pos.xz, gridParams.w, gridParams.x), numLevels - 1u);
+	float terrainOcc = calculateTerrainOcclusion(frag_pos, minMaxIndex, terrainOccLevel, gridParams.w);
 
 	// 1. Minimum physically grounded airglow floor (upper atmosphere chemiluminescence)
 	const vec3 airglow = vec3(0.0008, 0.0015, 0.0022);
@@ -195,7 +205,7 @@ LightingResult evaluateClusteredLightContributionPBR(
 }
 
 LightingResult evaluateClusteredLightContributionPBR(vec3 frag_pos, vec3 normal, Material material) {
-	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u, 0u, vec2(0.5), 0.0);
+	return evaluateClusteredLightContributionPBR(frag_pos, normal, material, 0u, 0u, 0u, vec2(0.5), 0.0, 0u, uvec4(0));
 }
 
 #endif // BRASSICA_CLUSTERED_LIGHTING_GLSL

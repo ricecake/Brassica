@@ -7,6 +7,7 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "terrain_payload.glsl"
 #include "helpers/culling.glsl"
 
 // Self-occlusion cull: skip emitting a sub-tile fully hidden behind a nearer, higher ridge.
@@ -24,15 +25,6 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  weatherBiomeIndex;
 }
 params;
-
-struct TaskPayload {
-    vec2 relMeshletMinXZ[512];
-    uint renderLOD[512];
-    uint morphLOD[512];
-    uint childXY[512];         // NEW: (cy << 16) | cx
-};
-
-taskPayloadSharedEXT TaskPayload payload;
 
 shared uint meshletCount;
 
@@ -151,7 +143,14 @@ void main() {
 
 		if (visible) {
 			// 1. Sample Variance
-			vec2 centerXZ = uCameraPosition.xz + relMinB.xz + (meshletSize * 0.5);
+			// Built from cameraSnap + a camera-position-independent grid offset, not
+			// uCameraPosition.xz + relMinB.xz: the latter is camPos + (cameraSnap - camPos), which
+			// only cancels back to cameraSnap exactly in real-number math. In float32 the rounding
+			// residue tracks camPos's own continuously-changing bit pattern even though the
+			// intended value is a pure step function of camPos (same reasoning as terrain.mesh's
+			// identical fix for the reported terrain "swimming" -- this sample only feeds an LOD
+			// heuristic rather than vertex height, but there's no reason to leave it jittery too).
+			vec2 centerXZ = cameraSnap + (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5) * meshletSize + vec2(meshletSize * 0.5);
 			float variance = sampleTerrainClipmap(params.clipmapIndex, centerXZ, lodLevel, params.gridParams.w).g;
 
 			// 2. Calculate Screen-Space Error (SSE)
@@ -189,6 +188,7 @@ void main() {
 					payload.renderLOD[writeIdx] = targetLOD;
 					payload.morphLOD[writeIdx] = lodLevel;
 					payload.childXY[writeIdx] = (ly << 16) | lx; // Track local grid position
+					payload.macroColRow[writeIdx] = (row << 16) | col;
 				}
 			}
 		}

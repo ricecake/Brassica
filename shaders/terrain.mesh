@@ -3,6 +3,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "terrain_payload.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
@@ -18,14 +19,6 @@ layout(push_constant) uniform TerrainPushConstants {
 }
 params;
 
-struct TaskPayload {
-    vec2 relMeshletMinXZ[512];
-    uint renderLOD[512];
-    uint morphLOD[512];
-    uint childXY[512];         // NEW: (cy << 16) | cx
-};
-
-taskPayloadSharedEXT TaskPayload payload;
 shared vec3 sharedPos[121];
 layout(location = 0) out vec3 outPosition[];
 layout(location = 1) out vec3 outNormal[];
@@ -77,9 +70,36 @@ void main() {
 	uint meshletsPerRow = params.gridParams.y;
 	uint totalPerLOD = meshletsPerRow * meshletsPerRow;
 
+	uint cx = payload.childXY[taskIndex] & 0xFFFFu;
+	uint cy = payload.childXY[taskIndex] >> 16u;
+	uint macroColRow = payload.macroColRow[taskIndex];
+	uint macroCol = macroColRow & 0xFFFFu;
+	uint macroRow = macroColRow >> 16u;
+
 	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
-	vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
-	vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
+
+	// Clipmap sample anchor, built without ever adding uCameraPosition.xz back onto a value that
+	// already had it subtracted out (what this used to do, via a dead cameraSnap/relCameraSnap
+	// pair -- computed at the wrong level, lodLevel instead of morphLOD, and never actually read).
+	// camPos + (cameraSnapAtMorphLOD - camPos) is exactly cameraSnapAtMorphLOD in real arithmetic,
+	// but not in float32: the result's rounding error tracks camPos's own continuously-changing bit
+	// pattern, even though the intended value is a pure step function of camPos (it should only
+	// change when the camera crosses a whole texel at morphLOD). Every vertex "should" see a fixed
+	// height/normal while the camera drifts within one texel; instead it saw a jittery fraction of
+	// a texel's worth of bilinear-interpolation noise every frame -- worst near the camera, where
+	// texelSize is smallest -- which is the reported terrain "swimming."
+	//
+	// cameraSnapForMorph + pureGridOffset avoids the round-trip entirely: both are individually
+	// exactly reproducible frame to frame while the camera stays inside one morphLOD texel (the
+	// first via a single floor(), the second from macroColRow/childXY -- grid indices with no
+	// camera dependence at all), so their sum is too. relMeshletMinXZ (camera-relative, used below
+	// for the actual vertex position/culling) is unaffected -- it's well-conditioned already; this
+	// only fixes the clipmap-texture sample coordinate.
+	float parentTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(morphLOD));
+	vec2  cameraSnapForMorph = floor(uCameraPosition.xz / parentTexelSize) * parentTexelSize;
+	vec2  pureGridOffset =
+		(vec2(float(macroCol), float(macroRow)) - float(meshletsPerRow) * 0.5) * parentMeshletSize +
+		vec2(float(cx), float(cy)) * meshletSize;
 
 	float outerDist = (float(params.gridParams.y) * 0.5) * parentMeshletSize;
 
@@ -89,13 +109,14 @@ void main() {
 	vec2 offsetDist = abs(relBaseXZ);
 	float distToCam = max(offsetDist.x, offsetDist.y);
 
+	// alpha blends this vertex's height/normal/biome sample between morphLOD and morphLOD+1 near
+	// the outer edge of morphLOD's ring, so the surface doesn't pop when a meshlet's LOD changes.
+	// XZ-position morphing (snapping relBaseXZ itself toward the coarser grid) is disabled --
+	// relMorphedXZ stays equal to relBaseXZ -- so only height/normal/biome blend, not vertex
+	// position. (If XZ-morphing is ever re-enabled, morphedWorldXZ below needs to track
+	// relMorphedXZ again instead of being anchor-plus-localPos directly.)
 	float alpha = 0.0;
-	vec2 relMorphedXZ = relBaseXZ;
-	float targetGrid = (32.0 * getLODScale(float(morphLOD + 1))) / 10.0;
-	vec2 worldBaseXZ = uCameraPosition.xz + relBaseXZ;
-	vec2 worldTargetXZ = floor(worldBaseXZ / targetGrid + 0.5) * targetGrid;
-	vec2 relTargetXZ = worldTargetXZ - uCameraPosition.xz;
-
+	vec2  relMorphedXZ = relBaseXZ;
 
 	if (morphLOD < params.gridParams.x - 1 && outerDist > 0.0) {
 		float morphWidth = 2 * texelSize;
@@ -103,13 +124,10 @@ void main() {
 
 		if (distToCam > morphStart) {
 			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
-			// alpha = 0.5*round(2.0*alpha * alpha * (3.0 - 2.0 * alpha));
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
-
-			// relMorphedXZ = mix(relBaseXZ, relTargetXZ, alpha);
 		}
 	}
-	vec2 morphedWorldXZ = uCameraPosition.xz + relMorphedXZ;
+	vec2 morphedWorldXZ = cameraSnapForMorph + pureGridOffset + localPos;
 
 	vec4 texSample = sampleTerrainClipmap(
 		params.clipmapIndex,
@@ -134,8 +152,6 @@ void main() {
 
 	uint lodDiff = morphLOD - lodLevel;
 	uint gridDim = 1u << lodDiff;
-	uint cx = payload.childXY[taskIndex] & 0xFFFFu;
-	uint cy = payload.childXY[taskIndex] >> 16u;
 
 	bool isTopMacroEdge = (ly == 0) && (cy == 0);
 	bool isBottomMacroEdge = (ly == 10) && (cy == gridDim - 1);

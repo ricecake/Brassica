@@ -142,7 +142,14 @@ void main() {
 	// Water has zero Lambertian diffuse term of its own (visible color comes from volume absorption/scattering).
 	// Low roughness keeps specular highlights sharp, while glint > 0 generates sparkling micro-facet highlights.
 	Material waterMaterial = Material(vec3(0.0), 0.035, 0.0, 1.0, 0.0, 2.5);
-	vec3 shineColor = isAboveWater ? evaluateClusteredLightContributionPBR(absWaterPos, waveNormal, waterMaterial).color : vec3(0.0);
+	// Only the ambient-occlusion params (minMaxIndex/gridParams, which this pass already has) are
+	// threaded through here; skyViewIndex/weatherBiomeIndex/gtaoIndex/aoDirectInfluence stay at
+	// their existing defaults, unrelated to this fix.
+	vec3 shineColor = isAboveWater
+		? evaluateClusteredLightContributionPBR(
+			absWaterPos, waveNormal, waterMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams
+		  ).color
+		: vec3(0.0);
 
 	// Physical Fresnel-Schlick for water (IOR = 1.333 -> F0 = 0.02037)
 	float NdotV = max(dot(viewDir, waveNormal), 0.0);
@@ -189,7 +196,9 @@ void main() {
 
 	vec3 foamBaseColor = vec3(0.92, 0.96, 1.0);
 	Material foamMaterial = Material(foamBaseColor, 0.85, 0.0, 1.0, 0.0, 0.0);
-	vec3 litFoam = evaluateClusteredLightContributionPBR(absWaterPos, waveNormal, foamMaterial).color;
+	vec3 litFoam = evaluateClusteredLightContributionPBR(
+		absWaterPos, waveNormal, foamMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams
+	).color;
 	vec3 foamColor = max(litFoam, uAmbientLight.rgb * foamBaseColor);
 
 	vec3 finalColor = mix(specularReflective, foamColor, totalFoam);

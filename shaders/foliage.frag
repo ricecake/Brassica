@@ -53,7 +53,12 @@ void main() {
 	}
 	// OrganicPlateData mCell = getOrganicPlate(inUV*(0.5+0.5*cross_noise_fbm(vec3(inUV,0)*0.00001, 2, sin(uTime+0.5*dot_noise(vec3(inUV,0)*0.05, uTime))*0.001).xz), 50.0, 3.0);
 
-	outPosition = vec4(relPos, 1.0);
+	// .a is emissivity (deferred.frag reads gPosition.a as material.emissivity) -- foliage isn't
+	// emissive, matching terrain.frag's own outPosition.a = 0.0. This was 1.0, making every
+	// foliage pixel add its full albedo on top of the lit result unconditionally, bypassing
+	// shadow and ambient entirely regardless of height -- the reported "foliage always fully lit
+	// even at ground level."
+	outPosition = vec4(relPos, 0.0);
 	outNormal = vec4(normalize(inNormal), roughness);
 	// outAlbedo = vec4(inColor.rgb*smoothstep(0, 0.05, mCell.edgeDist), inColor.a);
 	outAlbedo = vec4(inColor.rgb, inColor.a);
