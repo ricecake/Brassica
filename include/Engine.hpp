@@ -36,6 +36,7 @@
 #include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/FrameDetails.hpp"
+#include "types/LightningStrike.hpp"
 #include "types/TransformComponent.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "types/ubo/LightingUBO.hpp"
@@ -387,6 +388,14 @@ namespace brassica {
 		vk::Buffer    cdlGradingBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation cdlGradingAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*         cdlGradingMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
+		// LightningStrikePool (frame set binding 7): a single persistent allocation, NOT one per
+		// FRAME_OVERLAP slot like every buffer above -- it's 100% GPU-owned state that must
+		// survive across frames unmodified by anything on the CPU side, same reasoning as
+		// TerrainReadbackStaging's single handle. Every frameDescriptorSets[i] below points its
+		// binding 7 at this same buffer.
+		vk::Buffer    lightningStrikePoolBuffer{nullptr};
+		VmaAllocation lightningStrikePoolAllocation{nullptr};
 
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 

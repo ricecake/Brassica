@@ -69,6 +69,11 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	vec3  cloudExtinctionColor;
 	// Scales the cloud's reflected light (direct + ambient, NOT the lightning emissive glow).
 	vec3  cloudAlbedo;
+	// GPU-driven lightning (climate_ca.comp's trigger, lightning_age.comp's reserved-light-
+	// slot write) -- lightningFrequencyScale multiplies the per-cell trigger probability;
+	// lightningFlashIntensity scales the reserved uLights[] range's intensity.
+	float lightningFrequencyScale;
+	float lightningFlashIntensity;
 	// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
 	// literal with no settings surface.
 	float sunAureoleStrength;
@@ -138,6 +143,8 @@ u_atmosphere;
 #define u_cloudExtinctionScale u_atmosphere.cloudExtinctionScale
 #define u_cloudExtinctionColor u_atmosphere.cloudExtinctionColor
 #define u_cloudAlbedo u_atmosphere.cloudAlbedo
+#define u_lightningFrequencyScale u_atmosphere.lightningFrequencyScale
+#define u_lightningFlashIntensity u_atmosphere.lightningFlashIntensity
 #define u_sunAureoleStrength u_atmosphere.sunAureoleStrength
 #define u_colorVarianceScale u_atmosphere.colorVarianceScale
 #define u_colorVarianceStrength u_atmosphere.colorVarianceStrength

@@ -24,6 +24,8 @@
 #include "passes/GTAONode.hpp"
 #include "passes/HiZDownsampleNode.hpp"
 #include "passes/ImGuiNode.hpp"
+#include "passes/LightningAgeNode.hpp"
+#include "passes/LightningRenderNode.hpp"
 #include "passes/ParticleSystemNode.hpp"
 #include "passes/SkyBackgroundNode.hpp"
 #include "passes/TerrainBiomeNode.hpp"

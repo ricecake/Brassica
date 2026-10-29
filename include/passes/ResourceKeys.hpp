@@ -263,6 +263,15 @@ namespace brassica {
 	// Provision skips an imported key's realization regardless of desc.
 	struct LightsBuffer {};
 
+	// Frame set binding 7 (shaders/lighting.glsl's LightningStrikePool) -- a persistent,
+	// 100%-GPU-owned strike pool. climate_ca.comp claims a ring-buffer slot and writes a fresh
+	// strike's origin/seed/lifetime when weather conditions trigger one; lightning_age.comp ages
+	// every slot and writes its reserved light-slot entry; lightning.task reads it to plot/cull.
+	// Imported once at Engine init (include/types/LightningStrike.hpp's LightningStrikePoolLayout
+	// sizes the allocation) -- its handle never changes, same as TerrainReadbackStaging below, not
+	// AutoExposureBuffer/LightsBuffer's "different real handle per FRAME_OVERLAP slot" case.
+	struct LightningStrikePool {};
+
 	// TonemapComputeNode's bloom/local-tonemap mip chain: mip N is ctx.width/2 (then height)
 	// halved N more times, floored to 1 -- same formula at every one of the 16 keys below, just
 	// a different (and, for the Ltm pair, duplicated) mip index. kMip is a type-level constant,

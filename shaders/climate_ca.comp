@@ -1,6 +1,10 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : require
 
+// This cell's lightning-trigger check (see lightningPropensity below) claims a strike slot and
+// writes it directly -- see shaders/lighting.glsl's LightningStrikePool.
+#define LIGHTNING_STRIKE_POOL_WRITABLE
+
 #include "bindless.glsl"
 #include "common.glsl"
 #include "helpers/whittaker.glsl"
@@ -261,6 +265,40 @@ void main() {
 	float weatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0);
 	float moistureContent = clamp(next1.groundwater, 0.0, 1.0);
 	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC), 0.0, 1.0);
+
+	// Lightning trigger (shaders/lighting.glsl's LightningStrikePool). Cloud-to-cloud strikes
+	// only for v1: both endpoints stay within the cloud shell (5000-20000m, matching
+	// cloud_render.frag's intersectCloudShell call) rather than needing a ground endpoint --
+	// this CA's own `elevation` is an abstract [0,1] climate-simulation quantity with no
+	// verified conversion to the terrain mesh's actual world-space height, so a ground strike
+	// would need a real height source this cell doesn't have.
+	{
+		uint strikeSeed =
+			hashUint(uint(pos.x) * 73856093u ^ uint(pos.y) * 19349663u ^ uFrameIndex * 83492791u);
+		float strikeRoll = pcg_hash(strikeSeed);
+		// No per-frame deltaTime is threaded into this shader -- the partial-row-band dispatch
+		// (full map every 4 frames) already paces this naturally, so this is a flat per-cell-
+		// per-dispatch chance rather than a deltaTime-scaled rate.
+		float strikeChance = lightningPropensity * u_lightningFrequencyScale * 0.0005;
+		if (strikeRoll < strikeChance) {
+			uint slot = atomicAdd(uStrikeRingCounter, 1u) % LIGHTNING_MAX_STRIKES;
+
+			vec2 worldExtentXZ = vec2(2.0 * FAKE_PLANET_RADIUS * PI);
+			vec2 cellUV = (vec2(pos) + 0.5) / float(dim);
+			vec2 worldXZ = (cellUV - 0.5) * worldExtentXZ;
+
+			float originSeed = pcg_hash(strikeSeed ^ 0x9E3779B9u);
+			vec2  endOffset =
+				(vec2(pcg_hash(strikeSeed ^ 0x1u), pcg_hash(strikeSeed ^ 0x2u)) * 2.0 - 1.0) * 400.0;
+			float lifetimeRoll = pcg_hash(strikeSeed ^ 0x3u);
+			float strikeMaxLifetime = mix(0.2, 0.5, lifetimeRoll);
+
+			uStrikes[slot].originAndSeed = vec4(worldXZ.x, 8000.0, worldXZ.y, originSeed);
+			uStrikes[slot].endPos = vec4(worldXZ.x + endOffset.x, 11000.0, worldXZ.y + endOffset.y, 0.0);
+			uStrikes[slot].lifetime = strikeMaxLifetime;
+			uStrikes[slot].maxLifetime = strikeMaxLifetime;
+		}
+	}
 
 	imageStore(
 		uImageStorageRGBA32F[nonuniformEXT(push.weatherOutStorageIdx)],

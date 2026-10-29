@@ -389,7 +389,11 @@ struct CloudMarchResult {
 	vec3 transmittance;
 };
 
-CloudMarchResult marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance) {
+// lightningPulseColor: rgb = brightest active strike's color, w = its normalized flicker
+// envelope -- computed once per pixel in main() (see there for why), not per raymarch step.
+CloudMarchResult marchClouds(
+	vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance, vec4 lightningPulseColor
+) {
 	float baseStepSize = 50.0;
 	float t = t_start;
 
@@ -573,14 +577,15 @@ CloudMarchResult marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sun
 
 				vec3 ambientGlow = ((ambientTop * skyAttenuation) + (groundAmbient * groundAttenuation)) * powder;
 
-				// Lightning emissive glow: uLightningColor (shaders/lighting.glsl's
-				// LightingUBO) is now actually populated by LightningManager instead of always
-				// zero (see LightManager::GetLightingUBO). weatherSample.a (lightning
-				// propensity, already sampled above) stands in for boidish's per-point "ridge"
-				// noise, tying the propagating flash's structure to where lightning is
-				// actually likely instead of an arbitrary noise channel.
+				// Lightning emissive glow: previously read uLightningColor (shaders/lighting.glsl's
+				// LightingUBO), fed by the CPU LightningManager -- which has zero production
+				// callers, so that was always zero in practice. Now reads lightningPulseColor
+				// (the GPU-driven strike pool's brightest active slot, see main()) instead.
+				// weatherSample.a (lightning propensity, already sampled above) stands in for
+				// boidish's per-point "ridge" noise, tying the propagating flash's structure to
+				// where lightning is actually likely instead of an arbitrary noise channel.
 				vec3  emissiveGlow = vec3(0.0);
-				float lightningPulse = uLightningColor.w;
+				float lightningPulse = lightningPulseColor.w;
 				if (lightningPulse > 0.001) {
 					float ridge = weatherSample.a;
 					float wavePos = clamp(1.0 - lightningPulse, 0.0, 1.0);
@@ -591,7 +596,7 @@ CloudMarchResult marchClouds(vec3 worldRay, float t_start, float t_end, vec3 sun
 					float waveFront = exp(-ridgeDist * ridgeDist * 16.0);
 					float coreGlow = exp(-ridge * 4.0 / max(0.1, lightningPulse));
 					float propagationGlow = (coreGlow * 0.7 + waveFront * 1.3) * lightningPulse * midHeightEnvelope * stagger;
-					emissiveGlow = uLightningColor.rgb * propagationGlow;
+					emissiveGlow = lightningPulseColor.rgb * propagationGlow;
 				}
 
 				// cloudMoonLightScale (CloudLightingManager) is exposed but not yet wired here --
@@ -658,6 +663,21 @@ void main() {
 	if (intersection) {
 		vec3 sunDir = normalize(push.sunDir.xyz);
 		vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
+
+		// Brightest active GPU-driven strike (shaders/lighting.glsl's reserved uLights[] range,
+		// written by lightning_age.comp) -- computed once per pixel, not per raymarch step
+		// inside marchClouds(), since it's the same value for the whole screen. Un-scales
+		// intensity back to the normalized-ish [0,1] flicker envelope marchClouds()'s glow
+		// formula expects (intensity itself is scaled by u_lightningFlashIntensity * 50.0).
+		vec4  lightningPulseColor = vec4(0.0);
+		float lightningScaleInv = 1.0 / max(0.0001, u_lightningFlashIntensity * 50.0);
+		for (uint li = 0u; li < LIGHTNING_MAX_STRIKES; li++) {
+			float strikePulse = uLights[LIGHTNING_LIGHT_SLOT_BASE + li].intensity * lightningScaleInv;
+			if (strikePulse > lightningPulseColor.w) {
+				lightningPulseColor = vec4(uLights[LIGHTNING_LIGHT_SLOT_BASE + li].color, strikePulse);
+			}
+		}
+
 		// Manual (not GPU fixed-function alpha) blend -- transmittance is vec3 (per-channel
 		// extinction, CloudLightingManager's cloudExtinctionColor), so it's tracked separately
 		// rather than packed into a vec4's alpha the way a single-channel transmittance was.
@@ -666,14 +686,16 @@ void main() {
 
 		// Segment 1 (Near side of the cloud shell)
 		if (t_s1 < t_e1 && t_s1 < surfaceDistKM) {
-			CloudMarchResult near = marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance);
+			CloudMarchResult near =
+				marchClouds(worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor);
 			resultRgb += near.lightEnergy;
 			resultTransmittance *= near.transmittance;
 		}
 
 		// Segment 2 (Far side of the cloud shell, if ray pierces entirely through space)
 		if (t_s2 < t_e2 && t_s2 < surfaceDistKM) {
-			CloudMarchResult far = marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance);
+			CloudMarchResult far =
+				marchClouds(worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor);
 			resultRgb += far.lightEnergy * resultTransmittance;
 			resultTransmittance *= far.transmittance;
 		}

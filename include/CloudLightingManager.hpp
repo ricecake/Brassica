@@ -75,6 +75,12 @@ namespace brassica {
 		// Same no-op-default reasoning as cloudColor/cloudExtinctionScale.
 		glm::vec3 cloudAlbedo{1.0f, 1.0f, 1.0f};
 
+		// GPU-driven lightning (climate_ca.comp's trigger, lightning_age.comp's reserved-light-
+		// slot write) -- see those files for the mechanism. No TriggerStrike()/LightningManager
+		// involvement; that CPU path has zero production callers and stays untouched.
+		float lightningFrequencyScale{1.0f};
+		float lightningFlashIntensity{1.0f};
+
 		auto GetReflection() const {
 			return std::make_tuple(
 				MakeField(
@@ -197,7 +203,23 @@ namespace brassica {
 				MakeColorField(
 					"cloudExtinctionColor", "Extinction Balance", &CloudLightingManagerState::cloudExtinctionColor
 				),
-				MakeColorField("cloudAlbedo", "Cloud Albedo", &CloudLightingManagerState::cloudAlbedo)
+				MakeColorField("cloudAlbedo", "Cloud Albedo", &CloudLightingManagerState::cloudAlbedo),
+				MakeField(
+					"lightningFrequencyScale",
+					"Lightning Frequency",
+					&CloudLightingManagerState::lightningFrequencyScale,
+					0.0f,
+					5.0f,
+					UIHint::Slider
+				),
+				MakeField(
+					"lightningFlashIntensity",
+					"Lightning Flash Intensity",
+					&CloudLightingManagerState::lightningFlashIntensity,
+					0.0f,
+					5.0f,
+					UIHint::Slider
+				)
 			);
 		}
 	};
@@ -237,6 +259,8 @@ namespace brassica {
 			push.cloudExtinctionScale = m_state.cloudExtinctionScale;
 			push.cloudExtinctionColor = m_state.cloudExtinctionColor;
 			push.cloudAlbedo = m_state.cloudAlbedo;
+			push.lightningFrequencyScale = m_state.lightningFrequencyScale;
+			push.lightningFlashIntensity = m_state.lightningFlashIntensity;
 		}
 
 	private:
