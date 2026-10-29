@@ -22,7 +22,7 @@ namespace brassica {
 		std::uint32_t tileQueueBufferIdx{0};
 		std::uint32_t dispatchArgsBufferIdx{0};
 		std::uint32_t errorMapBufferIdx{0};
-		std::uint32_t momentsIndex{0}; // sampled: History<CloudMoments> (last frame's, see Setup's comment)
+		std::uint32_t boundingMapIndex{0}; // sampled: CloudBoundingMap, this frame's (not History<>)
 		std::uint32_t tileCols{0};
 		std::uint32_t tileRows{0};
 		std::uint32_t maxTilesPerFrame{0};
@@ -30,23 +30,26 @@ namespace brassica {
 		std::uint32_t phase{0};
 	};
 
-	// Stage D: builds the per-frame tile queue CloudRenderNode's raymarch indirect-dispatches
-	// over (see shaders/cloud_tile_scheduler.comp for the real 2-pass priority scheduler this
-	// drives -- Owen-scrambled-Morton periodic refresh + variance/luma-delta/age priority
-	// scoring against a temporally-dithered budget threshold, full fidelity per the user's
-	// explicit instruction to port boidish's actual algorithm rather than a simplified
-	// substitute). CloudTileErrorMap is read here (for priority scoring) with 3 in-node hand-
-	// rolled-barrier dispatches (reset -> spatial -> priority, same multi-dispatch-one-node
-	// pattern as CloudSpatialFilterNode's 2-pass a-trous), and persists across frames without
-	// History<> pairing -- no Create<> call for it, same as ParticleBuffer's own cross-frame
-	// Modify<>-only convention (see ParticleLivenessNode.hpp's comment on why that's sufficient).
+	// F3: real rewrite matching boidish's cloud_tile_scheduler.comp exactly -- builds the
+	// per-frame tile queue CloudRenderNode's raymarch indirect-dispatches over. See
+	// shaders/cloud_tile_scheduler.comp for the real 2-pass priority scheduler: Owen-scrambled-
+	// Morton periodic refresh (phase 1, no error-map touch) + real bounding-map-driven
+	// densityDeltaScore/newlyAppeared + error/flow/age priority scoring (phase 2) against a
+	// temporally-dithered budget threshold, plus an adaptive per-tile step multiplier
+	// CloudRenderNode's raymarch reads back. 3 in-node hand-rolled-barrier dispatches (reset ->
+	// spatial -> priority, same multi-dispatch-one-node pattern as CloudSpatialFilterNode's
+	// 2-pass a-trous). CloudTileErrorMap persists across frames without History<> pairing -- no
+	// Create<> call for it, same as ParticleBuffer's own cross-frame Modify<>-only convention
+	// (see ParticleLivenessNode.hpp's comment on why that's sufficient).
 	struct CloudTileSchedulerNode: render::NodeRegistrar<CloudTileSchedulerNode> {
 		render::PipelineLibrary*        pipelineLibrary = nullptr;
 		ComputeShader                   schedulerShader; // shaders/cloud_tile_scheduler.comp
 		CloudTileSchedulerPushConstants push{};
 		std::uint32_t                   tileCols{0};
 		std::uint32_t                   tileRows{0};
-		float                           maxTileBudgetFraction{0.35f};
+		// boidish's own cloud_max_refresh_rate_ default (AtmosphereEffect.h) -- the fraction of
+		// tiles the frame budget allows per frame.
+		float maxTileBudgetFraction{0.25f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -72,12 +75,10 @@ namespace brassica {
 			tileRows = CloudTileRows(ctx);
 
 			r.Domain(graph::ExecutionDomain::Compute);
-			// Last frame's accumulated moments, NOT this frame's (CloudTemporalNode hasn't run
-			// yet when this node does -- it writes CloudMoments from this same frame's raymarch,
-			// which hasn't happened either). ReadPrevious<> alone is enough; CloudTemporalNode is
-			// CloudMoments' sole Create<>/History owner, same FoliageNode-style cross-node
-			// History read this engine already relies on elsewhere.
-			r.ReadPrevious<CloudMoments>();
+			// This frame's bounding map, not last frame's -- CloudBoundingNode runs earlier in
+			// this same frame (ordered via this same Read<>() accessor edge against its sole
+			// Modify<>()), so a plain Read<>() is correct here, not ReadPrevious<>().
+			r.Read<CloudBoundingMap>();
 			r.Create<CloudTileQueue>();
 			r.Create<CloudTileDispatchArgs>();
 			r.Modify<CloudTileErrorMap>();
@@ -88,10 +89,12 @@ namespace brassica {
 			push.tileQueueBufferIdx = ctx.BufferIndex<CloudTileQueue>();
 			push.dispatchArgsBufferIdx = ctx.BufferIndex<CloudTileDispatchArgs>();
 			push.errorMapBufferIdx = ctx.BufferIndex<CloudTileErrorMap>();
-			push.momentsIndex = ctx.Index<graph::History<CloudMoments>>();
+			push.boundingMapIndex = ctx.Index<CloudBoundingMap>();
 			push.tileCols = tileCols;
 			push.tileRows = tileRows;
-			push.maxTilesPerFrame = static_cast<std::uint32_t>(static_cast<float>(totalTiles) * maxTileBudgetFraction);
+			push.maxTilesPerFrame = (std::max)(
+				1u, static_cast<std::uint32_t>(static_cast<float>(totalTiles) * maxTileBudgetFraction)
+			);
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			std::uint32_t      groupsX = (tileCols + 7) / 8;

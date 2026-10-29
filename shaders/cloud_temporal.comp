@@ -320,7 +320,7 @@ void main() {
 			blendedTransmittance = mix(historyTransmittance, currentTransmittance, alpha);
 			blendedDepth = mix(historyDepthProps, currDepthProps, alpha);
 		} else {
-			float gamma = 1.25; // boidish's own uCloudTemporalGamma default -- no exposed Brassica setting yet
+			float gamma = 1.1; // boidish's own cloud_temporal_gamma_ default (AtmosphereEffect.h) -- no exposed Brassica setting yet
 
 			NeighborhoodStats colorStats = computeNeighborhoodStats(push.colorIndex, uv, texelSize, true);
 			vec3 colorExtents = calculateDynamicColorExtents(colorStats.stddev, historyMoments, gamma);
