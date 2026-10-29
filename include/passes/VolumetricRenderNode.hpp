@@ -22,8 +22,8 @@
 
 namespace brassica {
 
-	// Forward-declared only: After<CloudRenderNode>() below needs just the type's name.
-	struct CloudRenderNode;
+	// Forward-declared only: After<CloudCompositeNode>() below needs just the type's name.
+	struct CloudCompositeNode;
 
 	struct alignas(16) VolumetricRenderPushConstants {
 		alignas(16) glm::vec4 camForward{0.0f, 0.0f, -1.0f, 0.0f};
@@ -111,7 +111,7 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<TransmittanceLUT>();
 			r.Modify<HdrColor>();
-			r.After<CloudRenderNode>();
+			r.After<CloudCompositeNode>(); // CloudRenderNode is a compute pass now, not in this chain
 		}
 
 		void Execute(graph::NodeContext& ctx) {

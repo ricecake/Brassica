@@ -211,6 +211,43 @@ namespace brassica {
 		}
 	};
 
+	// Cloud raymarch outputs (CloudRenderNode, now a compute pass -- shaders/cloud_raymarch.comp)
+	// -- CloudCompositeNode blends CloudColor/CloudTransmittance into HdrColor; CloudDepth/
+	// CloudVelocity exist for the temporal reprojection pass (tile-based TAA plan, Stage B) to
+	// consume. ComputeStorageImageDesc, not ColorAttachmentDesc: these are imageStore targets,
+	// never attachment-bound, and the desc's eTransferDst is what makes them safe to pair with
+	// graph::Lifetime::History later (ComputeStorageImageDesc's own comment has the war story).
+	struct CloudColor {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	struct CloudTransmittance {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	// Representative world-space hit distance (marchClouds()'s weightedDistSum/totalWeight,
+	// boidish's own reprojection-depth formula) -- single channel, but ComputeStorageImageDesc's
+	// default rgba16f format is fine for a formatless-write target (see bindless.glsl's
+	// uImagesGenericWrite comment); only .x is ever read.
+	struct CloudDepth {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	// Non-camera (wind-advection) screen-space velocity only -- camera motion is reprojected
+	// separately in Stage B via uPreviousViewProjMatrix, matching boidish's own split between
+	// cam_only_vel and a stored non-camera velocity texture.
+	struct CloudVelocity {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
 	struct AtmosphereRadiance {};
 
 	struct GBufferPosition {

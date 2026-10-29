@@ -22,9 +22,9 @@
 
 namespace brassica {
 
-	// Forward-declared only: Before<CloudRenderNode>() below needs just the type's name -- see
+	// Forward-declared only: Before<CloudCompositeNode>() below needs just the type's name -- see
 	// ClusterLightAssignmentNode.hpp's identical reasoning.
-	struct CloudRenderNode;
+	struct CloudCompositeNode;
 
 	// No fields needed: camera/time (FrameUBO) and the strike pool (LightningStrikePool) are
 	// both already globally bound (set 0), so there's nothing per-dispatch to push -- but
@@ -35,11 +35,12 @@ namespace brassica {
 
 	// Draws every active LightningStrikePool slot as camera-facing quad geometry (lightning.task
 	// plots the polyline and culls dead slots; lightning.mesh builds the quads; lightning.frag
-	// is a flat flicker-tinted unlit output). Before<CloudRenderNode>(): strikes are cloud-to-
-	// cloud only (v1 scope, see climate_ca.comp's trigger comment), so drawing before clouds
-	// lets CloudRenderNode's own transmittance attenuate the bolt by whatever cloud density sits
-	// between it and the camera -- the physically-motivated side of "embedded in the cloud
-	// layer," rather than always rendering fully bright on top.
+	// is a flat flicker-tinted unlit output). Before<CloudCompositeNode>(): strikes are cloud-to-
+	// cloud only (v1 scope, see climate_ca.comp's trigger comment), so drawing before the cloud
+	// composite lets its transmittance attenuate the bolt by whatever cloud density sits between
+	// it and the camera -- the physically-motivated side of "embedded in the cloud layer,"
+	// rather than always rendering fully bright on top. (CloudRenderNode itself is a compute
+	// pass now and never touches HdrColor -- CloudCompositeNode does the attenuating blend.)
 	struct LightningRenderNode: render::NodeRegistrar<LightningRenderNode> {
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -87,7 +88,7 @@ namespace brassica {
 			r.Read<GBufferDepth>();
 			r.Modify<HdrColor>();
 			r.After<LightningAgeNode>();
-			r.Before<CloudRenderNode>();
+			r.Before<CloudCompositeNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
