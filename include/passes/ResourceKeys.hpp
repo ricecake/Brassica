@@ -279,6 +279,38 @@ namespace brassica {
 		}
 	};
 
+	// Stage C (SVGF spatial filter, CloudSpatialFilterNode, shaders/cloud_spatial_filter.comp):
+	// a 2-pass (step sizes 1, 2 -- simplified from boidish's 2-4 pass progression) a-trous
+	// edge-stopping wavelet filter over CloudAccumulatedColor/Transmittance, guided by
+	// CloudMoments' variance. Deliberately NOT fed back into CloudAccumulatedColor/
+	// Transmittance -- SVGF only ever filters right before display, never feeds the filtered
+	// (blurred) result back into the temporal accumulation loop, or blur would compound
+	// generation over generation. Scratch is pass 1's output / pass 2's input; Filtered is the
+	// final result CloudCompositeNode reads.
+	struct CloudFilterScratchColor {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	struct CloudFilterScratchTransmittance {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	struct CloudFilteredColor {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	struct CloudFilteredTransmittance {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
 	struct AtmosphereRadiance {};
 
 	struct GBufferPosition {

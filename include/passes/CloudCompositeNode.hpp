@@ -29,14 +29,15 @@ namespace brassica {
 		std::uint32_t cloudTransmittanceIndex{0};
 	};
 
-	// Blends CloudTemporalNode's (Stage B) accumulated output into HdrColor -- not
-	// CloudRenderNode's raw per-frame raymarch directly, now that Stage B exists. Takes over
-	// CloudRenderNode's old position in the HdrColor writer chain -- it's the one Modifying
-	// HdrColor now, so every Before<>/After<> ordering that existed because of shared HdrColor
-	// access (CirrusNode, VolumetricRenderNode, ParticleSystemNode, LightningRenderNode) points
-	// at this node instead. After<CloudTemporalNode>() isn't declared explicitly below --
-	// Read<CloudAccumulatedColor/Transmittance>() already orders this after CloudTemporalNode's
-	// sole Create<> of both via the usual Create-before-accessor edge.
+	// Blends CloudSpatialFilterNode's (Stage C) filtered output into HdrColor -- not
+	// CloudTemporalNode's accumulated-but-unfiltered output, and not CloudRenderNode's raw
+	// per-frame raymarch, now that Stage C exists. Takes over CloudRenderNode's old position in
+	// the HdrColor writer chain -- it's the one Modifying HdrColor now, so every Before<>/
+	// After<> ordering that existed because of shared HdrColor access (CirrusNode,
+	// VolumetricRenderNode, ParticleSystemNode, LightningRenderNode) points at this node
+	// instead. After<CloudSpatialFilterNode>() isn't declared explicitly below --
+	// Read<CloudFilteredColor/Transmittance>() already orders this after that node's sole
+	// Create<> of both via the usual Create-before-accessor edge.
 	struct CloudCompositeNode: render::NodeRegistrar<CloudCompositeNode> {
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -75,16 +76,16 @@ namespace brassica {
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Read<CloudAccumulatedColor>();
-			r.Read<CloudAccumulatedTransmittance>();
+			r.Read<CloudFilteredColor>();
+			r.Read<CloudFilteredTransmittance>();
 			r.Modify<HdrColor>();
 			r.After<CirrusNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push.hdrColorIndex = ctx.Index<HdrColor>();
-			push.cloudColorIndex = ctx.Index<CloudAccumulatedColor>();
-			push.cloudTransmittanceIndex = ctx.Index<CloudAccumulatedTransmittance>();
+			push.cloudColorIndex = ctx.Index<CloudFilteredColor>();
+			push.cloudTransmittanceIndex = ctx.Index<CloudFilteredTransmittance>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

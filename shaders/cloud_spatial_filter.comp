@@ -1,0 +1,104 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+// Stage C: a real a-trous edge-stopping wavelet filter (SVGF's spatial half), not a fixed-
+// kernel blur -- edge-stopping weights come from luma/depth deltas, scaled by a variance
+// estimate (CloudMoments, Stage B), with the real SVGF "low-confidence variance" fallback: a
+// 3x3 spatial luma variance when historyLength is still short, since the temporal moments
+// haven't accumulated enough samples to be trustworthy yet. Dispatched twice (CloudSpatialFilterNode,
+// step sizes 1 then 2 -- simplified from boidish's 2-4 pass progression) by the same shader,
+// just a different step size and source/dest pair each time.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform CloudSpatialFilterPushConstants {
+	uint colorIndex;
+	uint transmittanceIndex;
+	uint momentsIndex;
+	uint depthIndex;
+	uint outColorStorageIdx;
+	uint outTransmittanceStorageIdx;
+	uint stepSize;
+	uint outputWidth;
+	uint outputHeight;
+} push;
+
+float luminance(vec3 c) {
+	return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (pixel.x >= int(push.outputWidth) || pixel.y >= int(push.outputHeight)) {
+		return;
+	}
+	vec2 pixelSize = vec2(1.0) / vec2(push.outputWidth, push.outputHeight);
+	vec2 centerUV = (vec2(pixel) + 0.5) * pixelSize;
+
+	vec3  centerColor = SAMPLE_NEAREST(push.colorIndex, centerUV).rgb;
+	vec3  centerTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, centerUV).rgb;
+	vec4  centerMoments = SAMPLE_NEAREST(push.momentsIndex, centerUV);
+	float centerDepth = SAMPLE_NEAREST(push.depthIndex, centerUV).r;
+	float centerLuma = luminance(centerColor);
+
+	float variance = max(0.0, centerMoments.y - centerMoments.x * centerMoments.x);
+
+	// Low-confidence fallback: short history -> estimate variance from a 3x3 spatial
+	// neighborhood of luma instead of trusting barely-accumulated temporal moments.
+	const float kHistoryConfidenceThreshold = 4.0;
+	if (centerMoments.z < kHistoryConfidenceThreshold) {
+		float sum = 0.0;
+		float sumSq = 0.0;
+		for (int dy = -1; dy <= 1; dy++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				ivec2 samplePixel = clamp(pixel + ivec2(dx, dy), ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+				vec2  sampleUV = (vec2(samplePixel) + 0.5) * pixelSize;
+				float l = luminance(SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb);
+				sum += l;
+				sumSq += l * l;
+			}
+		}
+		float mean = sum / 9.0;
+		variance = max(0.0, (sumSq / 9.0) - mean * mean);
+	}
+
+	float phiLuma = max(0.0001, sqrt(variance) * 4.0);
+	float phiDepth = max(0.0001, centerDepth * 0.05);
+
+	const float kWeights1D[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
+
+	vec3  colorSum = vec3(0.0);
+	vec3  transmittanceSum = vec3(0.0);
+	float weightSum = 0.0;
+
+	for (int dy = -2; dy <= 2; dy++) {
+		for (int dx = -2; dx <= 2; dx++) {
+			ivec2 offset = ivec2(dx, dy) * int(push.stepSize);
+			ivec2 samplePixel = clamp(pixel + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+			vec2  sampleUV = (vec2(samplePixel) + 0.5) * pixelSize;
+
+			vec3  sampleColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
+			vec3  sampleTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, sampleUV).rgb;
+			float sampleDepth = SAMPLE_NEAREST(push.depthIndex, sampleUV).r;
+			float sampleLuma = luminance(sampleColor);
+
+			float kernelWeight = kWeights1D[dx + 2] * kWeights1D[dy + 2];
+			float lumaWeight = exp(-abs(sampleLuma - centerLuma) / phiLuma);
+			float depthWeight = exp(-abs(sampleDepth - centerDepth) / phiDepth);
+			float w = kernelWeight * lumaWeight * depthWeight;
+
+			colorSum += sampleColor * w;
+			transmittanceSum += sampleTransmittance * w;
+			weightSum += w;
+		}
+	}
+
+	vec3 filteredColor = weightSum > 0.0001 ? (colorSum / weightSum) : centerColor;
+	vec3 filteredTransmittance = weightSum > 0.0001 ? (transmittanceSum / weightSum) : centerTransmittance;
+
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outColorStorageIdx)], pixel, vec4(filteredColor, 0.0));
+	imageStore(
+		uImagesGenericWrite[nonuniformEXT(push.outTransmittanceStorageIdx)], pixel, vec4(filteredTransmittance, 0.0)
+	);
+}
