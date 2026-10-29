@@ -23,5 +23,5 @@
 // 27 -> 28: Added TerrainShadowNode.
 // 28 -> 27: Unified AtmosphereCompositeNode into VolumetricRenderNode.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 27);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 30);
 }

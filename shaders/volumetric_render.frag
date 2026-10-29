@@ -125,16 +125,8 @@ void main() {
 		fogTransmittance = mix(t1, t2, blend);
 	}
 
-	// Underwater extinction when camera is submerged
 	float camAltKM = uCameraPosition.y / 1000.0;
 	float waterLevelKM = u_waterLevel / 1000.0;
-	if (camAltKM < waterLevelKM) {
-		vec3 waterExtCoeff = vec3(0.45, 0.08, 0.03); // Red attenuated fastest
-		float distKM = rayDist / 1000.0;
-		vec3 waterTrans = exp(-waterExtCoeff * distKM);
-		fogTransmittance *= waterTrans;
-		fogScattering *= waterTrans;
-	}
 
 	if (!hasSurface && push.skyViewIndex > 0u && push.skyViewIndex != 0xFFFFFFFFu && camAltKM >= waterLevelKM) {
 		vec3 skyColor = sampleSkyView(push.skyViewIndex, worldRayDir);
