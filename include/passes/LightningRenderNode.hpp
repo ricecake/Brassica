@@ -89,6 +89,8 @@ namespace brassica {
 			r.Modify<HdrColor>();
 			r.After<LightningAgeNode>();
 			r.Before<CloudCompositeNode>();
+			r.Before<CirrusNode>();
+			r.Before<WaterNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

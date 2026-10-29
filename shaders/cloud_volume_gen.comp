@@ -107,11 +107,11 @@ void main() {
 	vec3 uvw = (vec3(vox) + 0.5) / float(dim);
 
 	float density = 0.0;
-	float gridSize = 8.0;
+	float gridSize = 2.0;
 	float amplitude = 1.0;
 	float maxAmplitude = 0.0;
 
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 8; i++) {
 		// Nyquist clamp: stop accumulating detail once a noise cell would be smaller than
 		// 2 voxels, faded smoothly so there's no hard cutoff.
 		float voxelsPerCell = float(dim) / gridSize;
@@ -128,7 +128,9 @@ void main() {
 	}
 
 	density = max(0.0, density / sqrt(max(maxAmplitude, 1e-5)));
-	density *= smoothstep(0.15, 0.85, density);
+	float voxelNormY = float(vox.y) / 256.0;
+	density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
+	// density *= smoothstep(0.15, 0.85, density);
 
 	ivec3 outVox = ivec3(vox);
 	imageStore(uImages3DGenericWrite[nonuniformEXT(push.outStorageIdx)], outVox, vec4(density, 0.0, 0.0, 1.0));
