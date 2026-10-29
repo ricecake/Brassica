@@ -14,7 +14,7 @@
 #include "types/AtmospherePushConstants.hpp"
 
 TEST_CASE("AtmospherePushConstants Struct Layout and Size") {
-	CHECK(sizeof(brassica::AtmospherePushConstants) == 128);
+	CHECK(sizeof(brassica::AtmospherePushConstants) == 272);
 
 	brassica::AtmospherePushConstants push{};
 	CHECK(offsetof(brassica::AtmospherePushConstants, rayleighScatteringBase) == 0);

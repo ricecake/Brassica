@@ -22,9 +22,8 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 
 	CHECK(builder.Active() == true);
 	CHECK(builder.Domain() == graph::ExecutionDomain::Compute);
-	// 7 ReadWrite texture realizations plus one Read<LightsBuffer>() (shaders/climate_ca.comp
-	// reads uLights[0].direction via clustered_lighting.glsl).
-	CHECK(builder.Realizations().size() == 8);
+	// 7 ReadWrite texture realizations plus Read<LightsBuffer>() and Modify<LightningStrikePool>().
+	CHECK(builder.Realizations().size() == 9);
 
 	bool foundWeatherBiome = false;
 	bool foundPingPong = false;
