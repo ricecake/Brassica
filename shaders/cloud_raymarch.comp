@@ -55,21 +55,8 @@ layout(std430, set = 1, binding = 6) buffer CloudTileErrorMapBuffer {
 }
 uErrorMaps[];
 
-// Wind-driven advection speed for cloud sampling (m/s, XZ plane). Independent of the global
-// Hadley/Ferrel prevailing-wind model (helpers/wind.glsl) by design -- this is a dedicated
-// artist control for cloud drift, matching boidish's own separate cloudFlowSpeed/Direction
-// knobs rather than tying cloud motion to the same large-scale circulation that drives the CA
-// weather sim. The *10.0 and the shear formula are boidish's own
-// getCloudWindSpeed/getCloud3DNoiseAdvectionSpeed constants verbatim (not re-derived or
-// re-scaled -- "wind speed in m/s" is a physical quantity independent of this engine's planet
-// radius or cloud altitude, so boidish's tuning carries over directly): cloudFlowSpeed=0.25
-// (both engines' default) means ~2.5 m/s, a gentle breeze. `h` is normalized
-// height-in-cloud-band [0,1]; higher clouds shear ahead of/behind lower ones.
-vec3 getCloudAdvectionSpeed(float h) {
-	vec2  flowDir = vec2(cos(u_cloudFlowDirection), sin(u_cloudFlowDirection));
-	float shear = 1.0 - (h * h) * u_cloudFlowHeightScale;
-	return vec3(flowDir.x, 0.0, flowDir.y) * u_cloudFlowSpeed * shear * 10.0;
-}
+// getCloudAdvectionSpeed moved to atmosphere/common.glsl -- cloud_bounding.comp (Stage E) needs
+// the same wind advection, 2 real call sites now.
 
 vec4 sampleCloudShadow(vec3 p) {
 	return sampleCloudShadow(push.cloudShadowIndex, push.clipmapIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);

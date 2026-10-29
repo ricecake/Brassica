@@ -1,0 +1,48 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+// Stage E0: one mip level of CloudWeatherMinMaxMap's chain -- 2x2 min/max downsample from
+// srcMip to srcMip+1, matching boidish's cloud_weather_mip.comp exactly. Dispatched in a loop
+// by CloudWeatherMinMaxDownsampleNode with hand-rolled barriers between levels, same shape as
+// CloudVolumeDownsampleNode's mip chain.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform CloudWeatherMinMaxDownsamplePushConstants {
+	uint srcSampledIdx; // sampled: CloudWeatherMinMaxMap
+	uint dstStorageIdx;
+	uint srcMip;
+	uint dstDim;
+} push;
+
+// Exact-texel fetch (not bilinear texture()) -- min/max has no GPU filtering-mode equivalent to
+// box-filtered average sampling, so each of the 4 source texels must be read precisely.
+vec2 fetchMinMax(ivec2 coord, ivec2 maxCoord, int lod) {
+	return texelFetch(
+		sampler2D(uTextures2D[nonuniformEXT(push.srcSampledIdx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		clamp(coord, ivec2(0), maxCoord),
+		lod
+	).rg;
+}
+
+void main() {
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (pixel.x >= int(push.dstDim) || pixel.y >= int(push.dstDim)) {
+		return;
+	}
+
+	ivec2 srcCoord = pixel * 2;
+	ivec2 srcMaxCoord = ivec2(push.dstDim * 2u) - ivec2(1);
+	int   lod = int(push.srcMip);
+
+	vec2 c00 = fetchMinMax(srcCoord + ivec2(0, 0), srcMaxCoord, lod);
+	vec2 c10 = fetchMinMax(srcCoord + ivec2(1, 0), srcMaxCoord, lod);
+	vec2 c01 = fetchMinMax(srcCoord + ivec2(0, 1), srcMaxCoord, lod);
+	vec2 c11 = fetchMinMax(srcCoord + ivec2(1, 1), srcMaxCoord, lod);
+
+	float minVal = min(min(c00.r, c10.r), min(c01.r, c11.r));
+	float maxVal = max(max(c00.g, c10.g), max(c01.g, c11.g));
+
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.dstStorageIdx)], pixel, vec4(minVal, maxVal, 0.0, 0.0));
+}

@@ -113,6 +113,11 @@ layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
 #define SAMPLE_LINEAR(idx, uv)                                                                                         \
 	texture(sampler2D(uTextures2D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv)
 
+// Explicit-LOD variant of SAMPLE_LINEAR -- for callers picking a mip by hand (e.g. a hierarchical
+// mip-skip march reading a min/max coverage map), same reasoning as SAMPLE_3D_LINEAR_LOD.
+#define SAMPLE_LINEAR_LOD(idx, uv, lod)                                                                               \
+	textureLod(sampler2D(uTextures2D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, lod)
+
 #define SAMPLE_ARRAY_WRAP(idx, uvw)                                                                                    \
 	texture(sampler2DArray(uTextureArrays[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
 

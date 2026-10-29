@@ -1,0 +1,26 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+// Stage E0: mip 0 of CloudWeatherMinMaxMap -- min=max=raw coverage, matching boidish's
+// cloud_weather_minmax_init.comp. CloudWeatherMinMaxDownsampleNode's mip-chain pass builds the
+// rest from this.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform CloudWeatherMinMaxInitPushConstants {
+	uint weatherIndex; // sampled: TerrainWeatherBiomeTexture
+	uint dstStorageIdx;
+	uint dim;
+} push;
+
+void main() {
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (pixel.x >= int(push.dim) || pixel.y >= int(push.dim)) {
+		return;
+	}
+	vec2  uv = (vec2(pixel) + 0.5) / vec2(push.dim);
+	float coverage = SAMPLE_NEAREST(push.weatherIndex, uv).r;
+
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.dstStorageIdx)], pixel, vec4(coverage, coverage, 0.0, 0.0));
+}

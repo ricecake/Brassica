@@ -248,6 +248,21 @@ namespace brassica {
 		}
 	};
 
+	// Stage E1 (CloudBoundingNode, shaders/cloud_bounding.comp): a cheap full-resolution coarse
+	// bounding march against CloudWeatherMinMaxMap, interleaved across frames by
+	// FrameContext::renderScalePercent (ctx.renderScalePercent == 100, the default, means
+	// scaleFactor == 1 and every pixel updates every frame -- the interleaving only kicks in if
+	// something later drives render scale below 100%). vec4(firstHitDist, lastHitDist,
+	// totalDensity, previousTotalDensity) -- NOT graph::Lifetime::History paired: .a is a
+	// self-referential read-before-write of this SAME physical buffer's own prior .b (one frame
+	// or, when interleaved, several frames ago for this exact pixel), same continuous-
+	// accumulation convention as CloudTileErrorMap/LightningStrikePool, no Create<> call anywhere.
+	struct CloudBoundingMap {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat);
+		}
+	};
+
 	// Stage B (temporal reprojection + variance-clipped accumulation, CloudTemporalNode,
 	// shaders/cloud_temporal.comp) -- these are both this frame's write target AND (via
 	// ReadPrevious<K>()/graph::History<K>) last frame's read target, the same self-referential
@@ -630,6 +645,29 @@ namespace brassica {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
 			return WeatherBiomeImageDesc(constants::Weather::kCoverageTextureDim);
 		}
+	};
+
+	// Stage E0: min/max mip chain of TerrainWeatherBiomeTexture.r (coverage), rebuilt from
+	// scratch every active frame (the weather sim is continuously simulated, not baked once --
+	// unlike CloudDetailVolume's mip chain, there's no "only regenerate when forced" gate here).
+	// Mips 0..10 (2048 -> 2px), matching boidish's cloud_bounding.comp own L clamp of [0,10] --
+	// CloudBoundingNode's hierarchical mip-skip march never reads past mip 10.
+	inline graph::ResourceDesc CloudWeatherMinMaxDesc() {
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Image2D,
+			.width = constants::Weather::kCoverageTextureDim,
+			.height = constants::Weather::kCoverageTextureDim,
+			.mips = 11,
+			.formatCode = static_cast<std::uint32_t>(vk::Format::eR16G16Sfloat),
+			.usageMask = static_cast<std::uint32_t>(
+				vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+				vk::ImageUsageFlagBits::eTransferDst
+			),
+		};
+	}
+
+	struct CloudWeatherMinMaxMap {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return CloudWeatherMinMaxDesc(); }
 	};
 
 	struct TerrainWeatherPingPongTexture {

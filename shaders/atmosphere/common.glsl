@@ -153,6 +153,23 @@ u_atmosphere;
 #define u_fogBaseHeight u_atmosphere.fogBaseHeight
 #define u_mieHumidityBoost u_atmosphere.mieHumidityBoost
 
+// Wind-driven advection speed for cloud sampling (m/s, XZ plane). Independent of the global
+// Hadley/Ferrel prevailing-wind model (helpers/wind.glsl) by design -- this is a dedicated
+// artist control for cloud drift, matching boidish's own separate cloudFlowSpeed/Direction
+// knobs rather than tying cloud motion to the same large-scale circulation that drives the CA
+// weather sim. The *10.0 and the shear formula are boidish's own
+// getCloudWindSpeed/getCloud3DNoiseAdvectionSpeed constants verbatim (not re-derived or
+// re-scaled -- "wind speed in m/s" is a physical quantity independent of this engine's planet
+// radius or cloud altitude, so boidish's tuning carries over directly): cloudFlowSpeed=0.25
+// (both engines' default) means ~2.5 m/s, a gentle breeze. `h` is normalized
+// height-in-cloud-band [0,1]; higher clouds shear ahead of/behind lower ones. Shared here (not
+// local to cloud_raymarch.comp) since cloud_bounding.comp (Stage E) needs the same advection.
+vec3 getCloudAdvectionSpeed(float h) {
+	vec2  flowDir = vec2(cos(u_cloudFlowDirection), sin(u_cloudFlowDirection));
+	float shear = 1.0 - (h * h) * u_cloudFlowHeightScale;
+	return vec3(flowDir.x, 0.0, flowDir.y) * u_cloudFlowSpeed * shear * 10.0;
+}
+
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {
 	float b = dot(ro, rd);
 	float rLen = length(ro);

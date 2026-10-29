@@ -1,0 +1,198 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "atmosphere/common.glsl"
+
+// Stage E1: a cheap, interleaved, full-resolution coarse bounding march against
+// CloudWeatherMinMaxMap's hierarchical mip chain -- ported from boidish's cloud_bounding.comp.
+// Feeds CloudTileSchedulerNode's real densityDeltaScore (current vs. previous-frame coarse
+// density at this pixel, self-referentially carried in .a) and CloudTemporalNode's shell-hit/
+// has-density gating. Not a replacement for the real per-step density-shaped raymarch
+// (cloud_raymarch.comp) -- this only ever reads the weather coverage's MAX bound per cell, never
+// the real multi-octave shaped density.
+//
+// worldScale (boidish's "scale world geometry by a factor") is dropped entirely -- Brassica has
+// no such notion by design. uRenderScale ("render fraction" / internal resolution) is the
+// unrelated, real concept this maps to: FrameContext::renderScalePercent, default 100 (->
+// scaleFactor == 1, every pixel updates every frame, interleaving degenerates away).
+//
+// applyDynamicCoverage (boidish's UI-slider bias on top of a *baked* weather texture) has no
+// Brassica equivalent either: TerrainWeatherBiomeTexture is continuously simulated by
+// climate_ca.comp, not baked once, so there's no separate "global override" knob to apply here
+// -- this reads CloudWeatherMinMaxMap's max bound directly. Same reasoning, boidish's
+// cloudCoverage>=1.0 fast path (short-circuits using that same missing global knob) is dropped.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform CloudBoundingPushConstants {
+	uint  gPositionIndex;
+	uint  gAlbedoIndex;
+	uint  weatherMinMaxIndex; // sampled: CloudWeatherMinMaxMap
+	uint  dstStorageIdx;      // CloudBoundingMap
+	uint  outputWidth;
+	uint  outputHeight;
+	uint  scaleFactor; // derived from renderScalePercent -- 1 at the default 100%
+	uint  frameIndex;
+} push;
+
+// Bit-interleaves `step` (0..scaleFactor^2-1) into a sub-cell (x,y) offset in [0,scaleFactor) --
+// boidish's own technique, ported verbatim (not Brassica's bindless-agnostic concern, this is
+// pure integer bit-twiddling).
+ivec2 interleavedOffset(int step, int scaleFactor) {
+	ivec2 offset = ivec2(0);
+	int   x = 0;
+	int   y = 0;
+	int   tempFactor = scaleFactor;
+	int   bits = 0;
+	while (tempFactor > 1) {
+		bits++;
+		tempFactor >>= 1;
+	}
+	for (int i = 0; i < bits; i++) {
+		int shift = bits - 1 - i;
+		int bitPair = (step >> (2 * shift)) & 3;
+		int bx = (bitPair == 1 || bitPair == 2) ? 1 : 0;
+		int by = (bitPair == 1 || bitPair == 3) ? 1 : 0;
+		x = (x << 1) | bx;
+		y = (y << 1) | by;
+	}
+	offset = ivec2(x, y);
+	return offset;
+}
+
+void main() {
+	int scaleFactor = int(push.scaleFactor);
+	ivec2 subCellOffset = ivec2(0);
+	if (scaleFactor > 1) {
+		int numCells = scaleFactor * scaleFactor;
+		int step = int(push.frameIndex) % numCells;
+		subCellOffset = interleavedOffset(step, scaleFactor);
+	}
+
+	ivec2 fullResWorkGroupID = ivec2(gl_WorkGroupID.xy) * scaleFactor + subCellOffset;
+	ivec2 pixel = fullResWorkGroupID * ivec2(gl_WorkGroupSize.xy) + ivec2(gl_LocalInvocationID.xy);
+	if (pixel.x >= int(push.outputWidth) || pixel.y >= int(push.outputHeight)) {
+		return;
+	}
+
+	vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+	// Scene surface distance, same GBufferPosition/albedo convention as cloud_raymarch.comp's
+	// own surfaceDistKM -- there's no hardware depth buffer to read here, Brassica's deferred
+	// pass already gives us this directly.
+	vec4  albedo = SAMPLE_NEAREST(push.gAlbedoIndex, uv);
+	vec3  relPos = SAMPLE_NEAREST(push.gPositionIndex, uv).rgb;
+	bool  hasSurface = albedo.a >= 0.01;
+	float dist = hasSurface ? length(relPos) : 1.0e9;
+
+	vec2 clipCoord = uv * 2.0 - 1.0;
+	vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
+	vec3 viewDir = viewRay4.xyz / viewRay4.w;
+	vec3 rayDir = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
+
+	float cloudAlt = 5000.0;
+	float t_s1, t_e1, t_s2, t_e2;
+	bool  hitShell =
+		intersectCloudShell(uCameraPosition.xyz, rayDir, FAKE_PLANET_RADIUS, cloudAlt, 15000.0, t_s1, t_e1, t_s2, t_e2);
+
+	int   numSegments = 0;
+	float segStart[2];
+	float segEnd[2];
+
+	if (hitShell) {
+		if (t_s1 < t_e1 && t_s1 < dist) {
+			segStart[numSegments] = t_s1;
+			segEnd[numSegments] = min(t_e1, dist);
+			numSegments++;
+		}
+		if (t_s2 < t_e2 && t_s2 < dist) {
+			segStart[numSegments] = t_s2;
+			segEnd[numSegments] = min(t_e2, dist);
+			numSegments++;
+		}
+	}
+
+	if (numSegments == 0) {
+		imageStore(uImagesRGBA32F[nonuniformEXT(push.dstStorageIdx)], pixel, vec4(-1.0, -1.0, 0.0, 0.0));
+		return;
+	}
+
+	// CloudBoundingMap is RGBA32F, matching uImagesRGBA32F's declared format exactly -- no
+	// formatless/coherent alias needed, this is a same-invocation read-then-write of one texel.
+	vec4 previousBounds = imageLoad(uImagesRGBA32F[nonuniformEXT(push.dstStorageIdx)], pixel);
+
+	float firstHit = -1.0;
+	float lastHit = -1.0;
+	float totalDensity = 0.0;
+
+	// Cheap, height-independent wind offset -- boidish's own cloud_bounding.comp uses a
+	// height-independent getCloudWindOffset too (unlike the real raymarch's height-sheared
+	// advection), so a fixed mid-band height fraction here matches that same cheapness.
+	vec3 advect = getCloudAdvectionSpeed(0.5) * uTime;
+
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * 3.14159265359;
+	// 2048: CloudWeatherMinMaxMap's mip-0 dimension (constants::Weather::kCoverageTextureDim,
+	// ResourceKeys.hpp) -- a shader-side literal, not plumbed through push constants, since it's
+	// a fixed compile-time constant on the C++ side already.
+	float texelSizeAtLevel0 = worldExtent / 2048.0;
+
+	for (int s = 0; s < numSegments; s++) {
+		float t = segStart[s];
+		float segE = segEnd[s];
+		int   L = 3;
+		float baseStepSize = 25.0;
+
+		for (int i = 0; i < 2048; ++i) {
+			if (t >= segE) break;
+
+			vec3 p = uCameraPosition.xyz + rayDir * t;
+			vec3 pAdvected = p - advect;
+			vec2 weatherUV = fract((pAdvected.xz / worldExtent) + 0.5);
+
+			float lod = clamp(float(L), 0.0, 10.0);
+			vec2  minMax = SAMPLE_LINEAR_LOD(push.weatherMinMaxIndex, weatherUV, lod).rg;
+			float maxDensity = minMax.y;
+
+			if (maxDensity <= 0.001) {
+				float texelSize = float(1 << L) * texelSizeAtLevel0;
+
+				vec2  dir2D = rayDir.xz;
+				float len2D = max(length(dir2D), 1e-6);
+				vec2  dirNorm = dir2D / len2D;
+
+				vec2 pXZ = pAdvected.xz;
+				vec2 cellIdx = floor(pXZ / texelSize);
+
+				vec2 nextBound;
+				nextBound.x = (dirNorm.x > 0.0) ? (cellIdx.x + 1.0) * texelSize : cellIdx.x * texelSize;
+				nextBound.y = (dirNorm.y > 0.0) ? (cellIdx.y + 1.0) * texelSize : cellIdx.y * texelSize;
+
+				vec2 distToBound;
+				distToBound.x = (abs(dirNorm.x) > 1e-6) ? (nextBound.x - pXZ.x) / dirNorm.x : 1e10;
+				distToBound.y = (abs(dirNorm.y) > 1e-6) ? (nextBound.y - pXZ.y) / dirNorm.y : 1e10;
+
+				float dt2D = min(distToBound.x, distToBound.y);
+				float dt = (dt2D / len2D) + 0.001;
+
+				dt = clamp(dt, baseStepSize, 2000.0);
+				t += dt;
+				L = clamp(L + 1, 0, 10);
+			} else {
+				if (L > 0) {
+					L--;
+				} else {
+					if (maxDensity > 0.01) {
+						if (firstHit < 0.0) {
+							firstHit = t;
+						}
+						lastHit = t;
+						totalDensity += maxDensity * (baseStepSize / 1000.0);
+					}
+					t += baseStepSize;
+				}
+			}
+		}
+	}
+
+	imageStore(uImagesRGBA32F[nonuniformEXT(push.dstStorageIdx)], pixel, vec4(firstHit, lastHit, totalDensity, previousBounds.b));
+}
