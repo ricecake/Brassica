@@ -3,14 +3,24 @@
 
 #include "bindless.glsl"
 
-// Stage B of the tile-based temporal pipeline: reprojects last frame's accumulated cloud result
-// (History<CloudAccumulatedColor/Transmittance/Moments>, see ResourceKeys.hpp's comment on the
-// self-referential ping-pong) using camera motion (uPreviousViewProjMatrix, its first real
-// consumer) plus this pixel's own non-camera wind velocity (CloudVelocity, from
-// cloud_raymarch.comp), and blends with this frame's fresh raymarch (CloudColor/Transmittance/
-// Depth) using disocclusion-aware rejection and a 3x3-neighborhood AABB color clip (a Karis-
-// style TAA variance clip, not a naive lerp -- the simplified RGB-space variant of boidish's
-// YCoCg clipAABB, not byte-for-byte identical to it).
+// F2: real rewrite, matching boidish's cloud_temporal_reprojection.comp structurally (not the
+// earlier RGB-box-clip/2-signal-rejection simplification this stage started with). Reprojects
+// last frame's accumulated cloud result (History<CloudAccumulatedColor/Transmittance/Depth/
+// Moments>, see ResourceKeys.hpp's comment on the self-referential ping-pong) using camera
+// motion (uPreviousViewProjMatrix) plus this pixel's own non-camera wind velocity
+// (CloudVelocity, wind-only by Brassica's own convention -- boidish's storedVelocity is full
+// cam+wind; cam_only_vel + wind-only is the same final_velocity when a tile is fresh, and
+// dropping the wind term entirely when stale matches boidish's own non-fresh branch exactly),
+// gated by CloudBoundingMap's real shell-hit/has-density signal (Stage E) rather than a depth
+// sentinel, with real multi-signal rejection (luma Weber contrast, path-density delta,
+// disocclusion) and a YCoCg weighted-mean/stddev neighborhood-stats + dynamic-extents +
+// Karis-style clipAABB (not a plain box min/max). Transmittance (vec3, Brassica's own split from
+// boidish's packed scalar alpha) gets the same clipAABB treatment directly in RGB space --
+// there's no YCoCg-equivalent chrominance structure for it, and no separate "transmittance
+// moments" to drive a temporal-variance term the way color's dynamic extents use, so its extents
+// are spatial-stddev-only (documented adaptation, not a technique boidish itself has to deviate
+// from). Also the sole writer of CloudTileErrorMap's error/flow channels now -- a per-8x8-tile
+// shared-memory reduction, every tile every frame, matching boidish exactly.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(push_constant) uniform CloudTemporalPushConstants {
@@ -18,165 +28,350 @@ layout(push_constant) uniform CloudTemporalPushConstants {
 	uint transmittanceIndex;
 	uint depthIndex;
 	uint velocityIndex;
+	uint boundingMapIndex;
 	uint historyColorIndex;
 	uint historyTransmittanceIndex;
+	uint historyDepthIndex;
 	uint historyMomentsIndex;
 	uint outColorStorageIdx;
 	uint outTransmittanceStorageIdx;
+	uint outDepthStorageIdx;
 	uint outMomentsStorageIdx;
-	uint errorMapBufferIdx; // Stage D: tile-freshness check
+	uint errorMapBufferIdx;
 	uint tileCols;
 	uint outputWidth;
 	uint outputHeight;
 } push;
 
-// Stage D's tile scheduler/dispatch idiom -- same aliased-buffer-at-binding-6 declaration as
-// cloud_tile_scheduler.comp/cloud_raymarch.comp, read-only here (this node never writes it).
-layout(std430, set = 1, binding = 6) readonly buffer CloudTileErrorMapBuffer {
-	vec2 tiles[]; // x = luma as of this tile's last real raymarch, y = frames since last raymarch
+layout(std430, set = 1, binding = 6) buffer CloudTileErrorMapBuffer {
+	vec4 tiles[]; // x = error, y = flow, z = step multiplier, w = last-raymarched frame index
 }
 uErrorMaps[];
+
+shared float sharedError[64];
+shared float sharedFlow[64];
 
 float luminance(vec3 c) {
 	return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
+vec3 RGBToYCoCg(vec3 rgb) {
+	float y = dot(rgb, vec3(0.25, 0.5, 0.25));
+	float co = dot(rgb, vec3(0.5, 0.0, -0.5));
+	float cg = dot(rgb, vec3(-0.25, 0.5, -0.25));
+	return vec3(y, co, cg);
+}
+
+vec3 YCoCgToRGB(vec3 ycocg) {
+	float y = ycocg.x;
+	float co = ycocg.y;
+	float cg = ycocg.z;
+	return vec3(y + co - cg, y + cg, y - co - cg);
+}
+
+struct NeighborhoodStats {
+	vec3 spatialMean;
+	vec3 stddev;
+};
+
+// useYCoCg: color needs the perceptual YCoCg transform (matching boidish exactly); transmittance
+// is clipped directly in RGB -- there's no "chrominance" structure to it.
+NeighborhoodStats computeNeighborhoodStats(uint texIdx, vec2 uv, vec2 texelSize, bool useYCoCg) {
+	vec3  m1 = vec3(0.0);
+	vec3  m2 = vec3(0.0);
+	float weightSum = 0.0;
+	float weights[3] = float[](0.25, 0.5, 0.25);
+
+	for (int y = -1; y <= 1; y++) {
+		for (int x = -1; x <= 1; x++) {
+			vec2 sampleUV = uv + vec2(x, y) * texelSize;
+			vec3 smp = SAMPLE_NEAREST(texIdx, sampleUV).rgb;
+			vec3 v = useYCoCg ? RGBToYCoCg(smp) : smp;
+
+			float w = weights[abs(x)] * weights[abs(y)];
+			m1 += v * w;
+			m2 += v * v * w;
+			weightSum += w;
+		}
+	}
+
+	NeighborhoodStats stats;
+	stats.spatialMean = m1 / weightSum;
+	stats.stddev = sqrt(max(vec3(0.0), (m2 / weightSum) - (stats.spatialMean * stats.spatialMean)));
+	return stats;
+}
+
+// Color's real formula, matching boidish's calculateDynamicExtents exactly: the wider of
+// spatial stddev and temporal luma variance (from the running moments), each scaled by gamma.
+vec3 calculateDynamicColorExtents(vec3 spatialStdDev, vec4 historyMoments, float baseGamma) {
+	float histLumaMean = historyMoments.x;
+	float histLumaSqMean = historyMoments.y;
+	float temporalVar = max(0.0, histLumaSqMean - (histLumaMean * histLumaMean));
+	float temporalStdDev = sqrt(temporalVar);
+
+	vec3 extents = max(spatialStdDev * baseGamma, vec3(temporalStdDev * (baseGamma * 0.75)));
+	return max(extents, vec3(0.02));
+}
+
+// Karis-style ray-to-mean clip -- walks from historyYCoCg toward spatialMean until it re-enters
+// [minColor, maxColor], rather than a hard per-channel clamp (which would distort hue/chroma).
+// Boidish's own clipAABB, ported verbatim; works for any vec3 clip space, not just YCoCg, so the
+// same function serves transmittance's RGB clip below too.
+vec3 clipAABB(vec3 history, vec3 spatialMean, vec3 minColor, vec3 maxColor) {
+	vec3 clipDir = spatialMean - history;
+	vec3 clipFactors = vec3(1.0);
+
+	for (int i = 0; i < 3; i++) {
+		if (abs(clipDir[i]) > 0.0001) {
+			if (history[i] < minColor[i])
+				clipFactors[i] = (minColor[i] - history[i]) / clipDir[i];
+			else if (history[i] > maxColor[i])
+				clipFactors[i] = (maxColor[i] - history[i]) / clipDir[i];
+			else
+				clipFactors[i] = 0.0;
+		}
+	}
+	float clipT = clamp(max(clipFactors.x, max(clipFactors.y, clipFactors.z)), 0.0, 1.0);
+	return mix(history, spatialMean, clipT);
+}
+
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (pixel.x >= int(push.outputWidth) || pixel.y >= int(push.outputHeight)) {
-		return;
-	}
-	vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+	ivec2 size = ivec2(push.outputWidth, push.outputHeight);
+	uint  localIdx = gl_LocalInvocationIndex;
+	bool  inBounds = (pixel.x < size.x && pixel.y < size.y);
 
-	// Stage D: CloudColor/Transmittance/Depth/Velocity at this pixel are only "this frame's"
-	// if the scheduler actually queued this tile and CloudRenderNode raymarched it -- otherwise
-	// they're a stale raw result from whenever this tile was last queued, unusable as "current".
-	uvec2 tileCoord = uvec2(pixel) / 8u;
+	ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+	vec2  uv = (vec2(clampedPixel) + 0.5) / vec2(size);
+	vec2  texelSize = 1.0 / vec2(size);
+
+	uvec2 tileCoord = uvec2(clampedPixel) / 8u;
 	uint  tileIdx = tileCoord.y * push.tileCols + tileCoord.x;
-	bool  tileFresh = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx].y <= 0.0;
+	vec4  tileErrorData = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx];
+	bool  tileWasRenderedThisFrame = (uint(round(tileErrorData.w)) == uFrameIndex);
 
-	vec3  curColor = vec3(0.0);
-	vec3  curTransmittance = vec3(1.0);
-	float curDepth = 1e9;
-	vec2  curVelocity = vec2(0.0);
+	// Raw, unconditional fetches -- matching atmosphere_lowres.comp exactly (currDepthProps/
+	// currentRGBA are always the fresh-buffer's raw contents regardless of tile freshness; only
+	// the reprojection distance below is freshness-gated). The branch structure further down
+	// guarantees these are only ever actually blended with when the tile IS fresh.
+	vec4 currDepthProps = SAMPLE_NEAREST(push.depthIndex, uv);
+	vec3 currentColor = SAMPLE_NEAREST(push.colorIndex, uv).rgb;
+	vec3 currentTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, uv).rgb;
 
-	if (tileFresh) {
-		curColor = SAMPLE_NEAREST(push.colorIndex, uv).rgb;
-		curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, uv).rgb;
-		curDepth = SAMPLE_NEAREST(push.depthIndex, uv).r;
-		curVelocity = SAMPLE_NEAREST(push.velocityIndex, uv).rg;
+	float currentDist = 1.0e7;
+	if (tileWasRenderedThisFrame) {
+		currentDist = currDepthProps.r;
 	} else {
-		// No fresh raymarch this frame -- approximate using last frame's OWN accumulated depth
-		// at this same UV (not yet reprojected) purely to drive the camera-motion reprojection
-		// below. There's no fresh wind-velocity sample on a skipped tile, so non-camera drift
-		// simply isn't corrected for until this tile is raymarched again.
-		float approxDepth = SAMPLE_NEAREST(push.historyMomentsIndex, uv).w;
-		curDepth = approxDepth > 0.0 ? approxDepth : 1e9;
+		vec4 hd = SAMPLE_LINEAR(push.historyDepthIndex, uv);
+		currentDist = hd.r;
+	}
+	float currentPathDensity = currDepthProps.a;
+	if (currentPathDensity < 0.01) {
+		currentDist = 1.0e7;
 	}
 
-	bool hasCloud = curDepth < 1e8;
-	vec2 historyUV = uv;
-	bool inBounds = false;
+	// Real shell-hit/has-density gating (Stage E's CloudBoundingMap), replacing a depth-sentinel
+	// check -- bData.r>=0 means the ray actually intersected the cloud shell at all; bData.b is
+	// the coarse march's totalDensity.
+	vec4 bData = SAMPLE_LINEAR(push.boundingMapIndex, uv);
+	bool hitCloudShell = bData.r >= 0.0;
+	bool hasCloudDensity = hitCloudShell && (bData.b > 0.001);
 
-	if (hasCloud) {
-		// Reconstruct world position from this frame's depth, reproject via the PREVIOUS
-		// frame's view-projection (camera motion only), then subtract the wind-only velocity
-		// cloud_raymarch.comp already isolated -- the same camera/non-camera split boidish uses.
-		vec2 clipCoord = uv * 2.0 - 1.0;
-		vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
-		vec3 viewDir = viewRay4.xyz / viewRay4.w;
-		vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
-		vec3 worldPos = uCameraPosition.xyz + worldRay * curDepth;
+	vec2 clipCoord = uv * 2.0 - 1.0;
+	vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
+	vec3 viewDir = viewRay4.xyz / viewRay4.w;
+	vec3 currentRayDir = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
 
-		vec4 prevClip = uPreviousViewProjMatrix * vec4(worldPos, 1.0);
-		vec2 camReprojUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+	vec3 cloudWorldPos = uCameraPosition.xyz + currentRayDir * currentDist;
+	vec4 prevClip = uPreviousViewProjMatrix * vec4(cloudWorldPos, 1.0);
+	vec2 prevScreenUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+	vec2 camOnlyVel = prevScreenUV - uv;
 
-		historyUV = camReprojUV - curVelocity;
-		inBounds = all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0)));
+	// Brassica's CloudVelocity is wind-only (not boidish's full cam+wind storedVelocity) --
+	// cam_only_vel (recomputed fresh here) plus the wind-only sample IS the same final_velocity
+	// boidish's storedVelocity already represents when the tile is fresh; dropping the wind term
+	// entirely when stale matches boidish's own non-fresh branch (it never reads storedVelocity
+	// then either).
+	vec2 finalVelocity = camOnlyVel;
+	if (tileWasRenderedThisFrame && currentPathDensity >= 0.01) {
+		vec2 windVel = SAMPLE_NEAREST(push.velocityIndex, uv).rg;
+		finalVelocity += windVel;
 	}
 
-	vec3 histColor = vec3(0.0);
-	vec3 histTransmittance = vec3(1.0);
-	vec4 histMoments = vec4(0.0); // x = luma, y = luma^2, z = historyLength, w = depth
-	bool validHistory = hasCloud && inBounds;
+	vec2 prevUV = uv + finalVelocity;
+	bool validHistory =
+		hitCloudShell && all(greaterThanEqual(prevUV, vec2(0.0))) && all(lessThanEqual(prevUV, vec2(1.0)));
+
+	vec3  historyColor = vec3(0.0);
+	vec3  historyTransmittance = vec3(1.0);
+	vec4  historyDepthProps = vec4(0.0);
+	vec4  historyMoments = vec4(0.0);
+	float historyLength = 0.0;
 
 	if (validHistory) {
-		histColor = SAMPLE_LINEAR(push.historyColorIndex, historyUV).rgb;
-		histTransmittance = SAMPLE_LINEAR(push.historyTransmittanceIndex, historyUV).rgb;
-		histMoments = SAMPLE_LINEAR(push.historyMomentsIndex, historyUV);
+		historyColor = SAMPLE_LINEAR(push.historyColorIndex, prevUV).rgb;
+		historyTransmittance = SAMPLE_LINEAR(push.historyTransmittanceIndex, prevUV).rgb;
+		historyDepthProps = SAMPLE_LINEAR(push.historyDepthIndex, prevUV);
+		historyMoments = SAMPLE_LINEAR(push.historyMomentsIndex, prevUV);
+		historyLength = historyMoments.w;
 
-		if (tileFresh) {
-			// Multi-signal rejection (simplified from boidish's depth/luma/density-derivative set
-			// to depth + luma): each signal independently decays historyLength rather than a
-			// single hard accept/reject, so a partial mismatch fades history faster instead of
-			// snapping. Skipped on a non-fresh tile -- there's no independently-sampled
-			// curColor/curDepth to score against, only the depth approximation above, so the
-			// reprojected history is accepted as-is and left for the next real raymarch to correct.
-			float depthDiff = abs(histMoments.w - curDepth) / max(curDepth, 1.0);
-			float depthReject = smoothstep(0.02, 0.1, depthDiff);
-
-			float curLuma = luminance(curColor);
-			float histLuma = histMoments.x;
-			float lumaDiff = abs(curLuma - histLuma) / max(max(curLuma, histLuma), 0.01);
-			float lumaReject = smoothstep(0.3, 1.0, lumaDiff);
-
-			histMoments.z *= (1.0 - max(depthReject, lumaReject));
+		if (tileWasRenderedThisFrame) {
+			float depthDiff = abs(currDepthProps.r - historyDepthProps.r);
+			float boundSpan = max(bData.g - bData.r, 0.0);
+			float allowedDiff = max(currDepthProps.b * 16.0, boundSpan * 0.5);
+			allowedDiff = max(allowedDiff, 1000.0);
+			if (depthDiff > allowedDiff) {
+				validHistory = false;
+			}
 		}
+	}
+
+	historyLength = validHistory ? min(32.0, historyLength + 1.0) : 1.0;
+	if (!validHistory) {
+		historyColor = currentColor;
+		historyTransmittance = currentTransmittance;
+		historyDepthProps = currDepthProps;
+		historyMoments = vec4(0.0);
+	}
+
+	float historyPathDensity = historyDepthProps.a;
+
+	float lumaCurrent = luminance(currentColor);
+	float lumaHistory = luminance(historyColor);
+	// Weber contrast: Delta L / L -- denominator is historyLuma alone, matching boidish exactly
+	// (not max(cur,hist)).
+	float relativeLumaDiff = abs(lumaCurrent - lumaHistory) / max(lumaHistory, 0.01);
+	float lumaRejection = smoothstep(0.05, 0.25, relativeLumaDiff);
+
+	float densityDelta = abs(currentPathDensity - historyPathDensity);
+	float densityError = smoothstep(0.05, 0.5, densityDelta);
+
+	float disocclusionError = validHistory ? 0.0 : 1.0;
+
+	// Density-gradient/flow signal for the error map -- deliberately reads CloudDepth (the raw,
+	// possibly-stale buffer) at neighboring pixels unconditionally, matching
+	// atmosphere_lowres.comp's own choice exactly (it's a prioritization hint consumed by the
+	// scheduler, which self-corrects once a tile is actually re-raymarched -- not something that
+	// needs to be perfectly accurate every frame).
+	float centerDensity = currentPathDensity;
+	float rightDensity = SAMPLE_NEAREST(push.depthIndex, uv + vec2(texelSize.x, 0.0)).a;
+	float topDensity = SAMPLE_NEAREST(push.depthIndex, uv + vec2(0.0, texelSize.y)).a;
+	vec2  densityGradient = vec2(rightDensity - centerDensity, topDensity - centerDensity);
+	float flowDensityChange = length(densityGradient) * length(finalVelocity * vec2(size));
+	float flowPredictor = clamp(flowDensityChange * 3.0, 0.0, 1.0);
+
+	float perPixelFlow = (inBounds && hasCloudDensity) ? flowPredictor : 0.0;
+	float perPixelError = 0.0;
+	if (inBounds && hasCloudDensity) {
+		perPixelError =
+			tileWasRenderedThisFrame ? max(max(lumaRejection, densityError), disocclusionError) : disocclusionError;
+	}
+
+	sharedError[localIdx] = perPixelError;
+	sharedFlow[localIdx] = perPixelFlow;
+	barrier();
+
+	if (localIdx == 0u) {
+		float maxTileError = 0.0;
+		float maxTileFlow = 0.0;
+		for (uint i = 0u; i < 64u; i++) {
+			maxTileError = max(maxTileError, sharedError[i]);
+			maxTileFlow = max(maxTileFlow, sharedFlow[i]);
+		}
+		vec4 e = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx];
+		e.x = max(e.x, maxTileError);
+		e.y = max(e.y, maxTileFlow);
+		uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx] = e;
+	}
+
+	if (!inBounds) {
+		return;
 	}
 
 	vec3  blendedColor;
 	vec3  blendedTransmittance;
-	float historyLength;
-	float outDepth;
+	vec4  blendedDepth;
+	float blendedHistoryLength;
 
-	if (tileFresh) {
-		historyLength = min(32.0, histMoments.z + 1.0);
-		float alpha = 1.0 / historyLength;
-
-		// 3x3-neighborhood AABB color clip: keeps the blended history inside this frame's local
-		// color range, so a stale/ghosted history sample self-corrects over 1-2 frames instead of
-		// visibly smearing. RGB-space, not YCoCg -- simpler, same core technique.
-		vec3 nMin = curColor;
-		vec3 nMax = curColor;
-		for (int dy = -1; dy <= 1; dy++) {
-			for (int dx = -1; dx <= 1; dx++) {
-				if (dx == 0 && dy == 0) continue;
-				ivec2 samplePixel =
-					clamp(pixel + ivec2(dx, dy), ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
-				vec2 sampleUV = (vec2(samplePixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
-				vec3 neighborColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
-				nMin = min(nMin, neighborColor);
-				nMax = max(nMax, neighborColor);
-			}
-		}
-		vec3 clippedHistColor = clamp(histColor, nMin, nMax);
-
-		blendedColor = mix(clippedHistColor, curColor, alpha);
-		blendedTransmittance = mix(histTransmittance, curTransmittance, alpha);
-		outDepth = curDepth;
-	} else if (validHistory) {
-		// Stage D passthrough: no fresh sample was added this frame, so there's nothing to
-		// blend and no AABB neighborhood worth clipping against (CloudColor at neighboring
-		// pixels may be just as stale). Carry the reprojected history forward unchanged --
-		// historyLength doesn't advance either, since no new real sample backs it.
-		blendedColor = histColor;
-		blendedTransmittance = histTransmittance;
-		historyLength = histMoments.z;
-		outDepth = histMoments.w;
-	} else {
-		// Disoccluded (or never had cloud) AND not raymarched this frame -- nothing usable to
-		// carry forward. Reset so the next real raymarch of this tile starts a fresh history
-		// instead of blending against stale, since-moved-camera data.
+	if (!hasCloudDensity) {
 		blendedColor = vec3(0.0);
 		blendedTransmittance = vec3(1.0);
-		historyLength = 0.0;
-		outDepth = 1e9;
+		blendedDepth = vec4(20000.0, 20000.0, 50.0, 0.0);
+		blendedHistoryLength = 0.0;
+		historyMoments = vec4(0.0);
+	} else if (!tileWasRenderedThisFrame) {
+		// Stage D passthrough: no fresh sample this frame -- carry the reprojected history
+		// forward unchanged rather than blending against CloudColor/CloudDepth's stale raw
+		// contents, matching atmosphere_lowres.comp's own inactive-tile bypass exactly.
+		blendedColor = historyColor;
+		blendedTransmittance = historyTransmittance;
+		blendedDepth = historyDepthProps;
+		blendedHistoryLength = historyLength;
+	} else {
+		bool isSky = (currentPathDensity < 0.01) && (historyPathDensity < 0.01);
+
+		if (isSky) {
+			float alpha = 1.0;
+			blendedHistoryLength = mix(historyLength, 1.0, lumaRejection);
+			alpha = 1.0 / max(blendedHistoryLength, 1.0);
+			alpha = max(alpha, lumaRejection * 0.85);
+
+			blendedColor = mix(historyColor, currentColor, alpha);
+			blendedTransmittance = mix(historyTransmittance, currentTransmittance, alpha);
+			blendedDepth = mix(historyDepthProps, currDepthProps, alpha);
+		} else {
+			float gamma = 1.25; // boidish's own uCloudTemporalGamma default -- no exposed Brassica setting yet
+
+			NeighborhoodStats colorStats = computeNeighborhoodStats(push.colorIndex, uv, texelSize, true);
+			vec3 colorExtents = calculateDynamicColorExtents(colorStats.stddev, historyMoments, gamma);
+			vec3 colorMin = colorStats.spatialMean - colorExtents;
+			vec3 colorMax = colorStats.spatialMean + colorExtents;
+
+			NeighborhoodStats transStats = computeNeighborhoodStats(push.transmittanceIndex, uv, texelSize, false);
+			vec3 transExtents = max(transStats.stddev * gamma, vec3(0.02));
+			vec3 transMin = transStats.spatialMean - transExtents;
+			vec3 transMax = transStats.spatialMean + transExtents;
+
+			vec3 historyYCoCg = RGBToYCoCg(historyColor);
+
+			float lumaConfidence = smoothstep(0.20, 0.02, relativeLumaDiff);
+			float motionConfidenceFactor = smoothstep(2.0, 0.2, length(finalVelocity * vec2(size)));
+			float confidence = lumaConfidence * motionConfidenceFactor;
+
+			vec3 clippedHistoryYCoCg = clipAABB(historyYCoCg, colorStats.spatialMean, colorMin, colorMax);
+			vec3 clippedHistoryTrans = clipAABB(historyTransmittance, transStats.spatialMean, transMin, transMax);
+
+			historyYCoCg = mix(clippedHistoryYCoCg, historyYCoCg, confidence * 0.9);
+			vec3 blendedHistoryTrans = mix(clippedHistoryTrans, historyTransmittance, confidence * 0.9);
+			vec3 blendedHistoryColor = YCoCgToRGB(historyYCoCg);
+
+			float densityDiff = currentPathDensity - historyPathDensity;
+			float relativeDiff = densityDiff / max(max(currentPathDensity, historyPathDensity), 0.001);
+			float trailingEdgeRejection = 1.0 - smoothstep(-0.5, -0.3, relativeDiff);
+			float leadingEdgeRejection = smoothstep(0.4, 0.8, relativeDiff);
+			float spatialRejection =
+				max(trailingEdgeRejection, leadingEdgeRejection) * smoothstep(0.1, 1.0, length(finalVelocity * vec2(size)));
+
+			float totalRejection = max(spatialRejection, lumaRejection);
+
+			blendedHistoryLength = mix(historyLength, 1.0, totalRejection);
+			float alpha = 1.0 / max(blendedHistoryLength, 1.0);
+			alpha = max(alpha, lumaRejection * 0.85);
+
+			blendedColor = mix(blendedHistoryColor, currentColor, alpha);
+			blendedTransmittance = mix(blendedHistoryTrans, currentTransmittance, alpha);
+			blendedDepth = mix(historyDepthProps, currDepthProps, alpha);
+		}
 	}
 
 	float blendedLuma = luminance(blendedColor);
-	vec4  outMoments = vec4(blendedLuma, blendedLuma * blendedLuma, historyLength, outDepth);
+	float blendedPathDensitySq = blendedDepth.a * blendedDepth.a;
+	vec4  outMoments = vec4(blendedLuma, blendedLuma * blendedLuma, blendedPathDensitySq, blendedHistoryLength);
 
-	imageStore(uImagesGenericWrite[nonuniformEXT(push.outColorStorageIdx)], pixel, vec4(blendedColor, 0.0));
-	imageStore(uImagesGenericWrite[nonuniformEXT(push.outTransmittanceStorageIdx)], pixel, vec4(blendedTransmittance, 0.0));
-	imageStore(uImagesGenericWrite[nonuniformEXT(push.outMomentsStorageIdx)], pixel, outMoments);
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outColorStorageIdx)], clampedPixel, vec4(blendedColor, 0.0));
+	imageStore(
+		uImagesGenericWrite[nonuniformEXT(push.outTransmittanceStorageIdx)], clampedPixel, vec4(blendedTransmittance, 0.0)
+	);
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outDepthStorageIdx)], clampedPixel, blendedDepth);
+	imageStore(uImagesGenericWrite[nonuniformEXT(push.outMomentsStorageIdx)], clampedPixel, outMoments);
 }

@@ -51,7 +51,9 @@ layout(std430, set = 1, binding = 6) readonly buffer CloudTileQueueBuffer {
 uTileQueues[];
 
 layout(std430, set = 1, binding = 6) buffer CloudTileErrorMapBuffer {
-	vec2 tiles[]; // x = tracked luma (as of this tile's last real raymarch), y = frames since last raymarch
+	vec4 tiles[]; // x = error, y = flow/densityGrad (both written by cloud_temporal.comp), z =
+	              // adaptive step multiplier (written by cloud_tile_scheduler.comp), w = frame
+	              // index this tile was last actually raymarched (written here)
 }
 uErrorMaps[];
 
@@ -152,23 +154,42 @@ float calculateBifurcatedStepSize(
 
 // weightedDistSum/totalWeight: weight = cloudTransmittance * (1 - stepTransmittance), biased by
 // exp(-accumulatedOpticalDepth * 15.0) so heavily-occluded-by-closer-cloud steps contribute less
-// to the "representative" hit distance -- boidish's atmosphere_lowres.comp's own formula,
-// previously specified in a dead comment here with nothing consuming it; now feeds CloudDepth
-// (Stage B's reprojection). lightEnergy/transmittance stay separate fields, not packed into a
-// vec4's rgb/a, since transmittance is vec3 (per-channel extinction).
+// to the "representative" hit distance -- boidish's atmosphere_lowres.comp's own formula. Used
+// ONLY to weight the wind-advection velocity sample (matching atmosphere_lowres.comp's own
+// stableHitDist, which it also uses solely for that, not for the depth channel) -- the real
+// per-pixel depth/disocclusion signal is firstHitDist/lastHitDist/pathDensity below, matching
+// atmosphere_lowres.comp's actual finalDepth = vec4(firstHitDist, lastHitDist, firstStepSize,
+// pathDensity) packing exactly (a literal first-density-encountered distance is a far more
+// stable geometric quantity for depth-reprojection than a density-weighted average, which drifts
+// frame-to-frame as the density profile along the ray shifts even when the near edge hasn't
+// moved). lightEnergy/transmittance stay separate fields, not packed into a vec4's rgb/a, since
+// transmittance is vec3 (per-channel extinction).
 struct CloudMarchResult {
 	vec3  lightEnergy;
 	vec3  transmittance;
 	float weightedDistSum;
 	float totalWeight;
+	float firstHitDist;  // -1.0 if density never exceeded the firstHit threshold
+	float lastHitDist;   // -1.0 if density never exceeded the firstHit threshold
+	float firstStepSize; // step size at firstHitDist -- CloudTileErrorMap's adaptive multiplier,
+	                      // already baked into baseStepSize by the time this is recorded
+	float pathDensity;   // max raw density encountered -- the real "is there actually a cloud
+	                      // here" gate downstream (cloud_temporal.comp), not a depth sentinel
 };
 
 // lightningPulseColor: rgb = brightest active strike's color, w = its normalized flicker
 // envelope -- computed once per pixel in main() (see there for why), not per raymarch step.
 CloudMarchResult marchClouds(
-	vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance, vec4 lightningPulseColor, vec2 pixel
+	vec3  worldRay,
+	float t_start,
+	float t_end,
+	vec3  sunDir,
+	vec3  sunRadiance,
+	vec4  lightningPulseColor,
+	vec2  pixel,
+	float stepSizeMultiplier
 ) {
-	float baseStepSize = 50.0;
+	float baseStepSize = 50.0 * stepSizeMultiplier;
 	float t = t_start;
 
 	float jitter = InterleavedGradientNoise(pixel, int(uFrameIndex));
@@ -180,6 +201,10 @@ CloudMarchResult marchClouds(
 	float weightedDistSum = 0.0;
 	float totalWeight = 0.0;
 	float accumulatedOpticalDepth = 0.0;
+	float firstHitDist = -1.0;
+	float lastHitDist = -1.0;
+	float firstStepSize = baseStepSize;
+	float pathDensity = 0.0;
 
 	bool inCloud = false;
 	int zeroCount = 0;
@@ -236,6 +261,15 @@ CloudMarchResult marchClouds(
 		{
 			float stepSize = nextStep;
 			if (density > 0.0) {
+				pathDensity = max(pathDensity, density);
+				if (density > 0.01) {
+					if (firstHitDist < 0.0) {
+						firstHitDist = t;
+						firstStepSize = stepSize;
+					}
+					lastHitDist = t;
+				}
+
 				float typeFactor = mix(1.2, 0.7, clamp(weatherType, 0.0, 1.0));
 				float bottomMoistureProfile = clamp(1.0 - smoothstep(0.0, 0.85, cloudHeightFrac), 0.1, 1.0);
 				bottomMoistureProfile *= bottomMoistureProfile;
@@ -355,7 +389,16 @@ CloudMarchResult marchClouds(
 		t += nextStep;
 	}
 
-	return CloudMarchResult(lightEnergy * u_cloudColor, cloudTransmittance, weightedDistSum, totalWeight);
+	return CloudMarchResult(
+		lightEnergy * u_cloudColor,
+		cloudTransmittance,
+		weightedDistSum,
+		totalWeight,
+		firstHitDist,
+		lastHitDist,
+		firstStepSize,
+		pathDensity
+	);
 }
 
 void main() {
@@ -370,9 +413,29 @@ void main() {
 	}
 	vec2 inUV = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
+	// Adaptive step multiplier -- CloudTileSchedulerNode's priority pass (F3) writes .z based on
+	// how urgently this tile scored; re-read directly per-thread rather than broadcast through
+	// shared memory, matching atmosphere_lowres.comp's own per-thread re-read exactly.
+	vec4  tileErrorData = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx];
+	float stepSizeMultiplier = (tileErrorData.z > 0.01) ? tileErrorData.z : 1.0;
+
+	// Tile-local (0,0) only: zero error/flow (cloud_temporal.comp's upcoming max-accumulation
+	// into them starts from zero for a freshly-queued tile) and stamp this frame's index into
+	// .w, BEFORE the march -- freshness downstream is `errorMap.w == uFrameIndex`, not an age
+	// counter. Matches atmosphere_lowres.comp's own write order exactly.
+	if (gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u) {
+		tileErrorData.x = 0.0;
+		tileErrorData.y = 0.0;
+		tileErrorData.w = float(uFrameIndex);
+		uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx] = tileErrorData;
+	}
+
 	vec3  cloudRgb = vec3(0.0);
 	vec3  cloudTransmittance = vec3(1.0);
-	float cloudDepth = 1e9; // sentinel: no cloud hit
+	float resultFirstHitDist = -1.0;
+	float resultLastHitDist = -1.0;
+	float resultFirstStepSize = 50.0 * stepSizeMultiplier;
+	float resultPathDensity = 0.0;
 	vec2  cloudVelocity = vec2(0.0);
 
 	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, inUV);
@@ -417,17 +480,40 @@ void main() {
 
 			if (t_s1 < t_e1 && t_s1 < surfaceDistKM) {
 				CloudMarchResult near = marchClouds(
-					worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor, vec2(pixel)
+					worldRay,
+					t_s1,
+					min(t_e1, surfaceDistKM),
+					sunDir,
+					sunRadiance,
+					lightningPulseColor,
+					vec2(pixel),
+					stepSizeMultiplier
 				);
 				resultRgb += near.lightEnergy;
 				resultTransmittance *= near.transmittance;
 				resultWeightedDistSum += near.weightedDistSum;
 				resultTotalWeight += near.totalWeight;
+				// Near segment is strictly closer along the ray -- its firstHitDist wins outright
+				// if it has one; its lastHitDist is a provisional answer the far segment below
+				// overwrites if IT also hits (far is strictly farther along the same ray).
+				if (near.firstHitDist >= 0.0) {
+					resultFirstHitDist = near.firstHitDist;
+					resultFirstStepSize = near.firstStepSize;
+					resultLastHitDist = near.lastHitDist;
+				}
+				resultPathDensity = max(resultPathDensity, near.pathDensity);
 			}
 
 			if (t_s2 < t_e2 && t_s2 < surfaceDistKM) {
 				CloudMarchResult far = marchClouds(
-					worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor, vec2(pixel)
+					worldRay,
+					t_s2,
+					min(t_e2, surfaceDistKM),
+					sunDir,
+					sunRadiance,
+					lightningPulseColor,
+					vec2(pixel),
+					stepSizeMultiplier
 				);
 				float resultTransmittanceScalar =
 					(resultTransmittance.r + resultTransmittance.g + resultTransmittance.b) / 3.0;
@@ -435,20 +521,30 @@ void main() {
 				resultWeightedDistSum += far.weightedDistSum * resultTransmittanceScalar;
 				resultTotalWeight += far.totalWeight * resultTransmittanceScalar;
 				resultTransmittance *= far.transmittance;
+
+				if (far.firstHitDist >= 0.0) {
+					if (resultFirstHitDist < 0.0) {
+						resultFirstHitDist = far.firstHitDist;
+						resultFirstStepSize = far.firstStepSize;
+					}
+					resultLastHitDist = far.lastHitDist;
+				}
+				resultPathDensity = max(resultPathDensity, far.pathDensity);
 			}
 
 			cloudRgb = resultRgb;
 			cloudTransmittance = resultTransmittance;
 
 			if (resultTotalWeight > 1e-5) {
-				cloudDepth = resultWeightedDistSum / resultTotalWeight;
-
 				// Non-camera (wind-only) screen-space velocity: project the representative hit
 				// position and that same position minus one frame's wind drift through the SAME
 				// (current) view-proj matrix, so only the wind-driven shift shows up here --
 				// camera motion is reprojected separately in Stage B via uPreviousViewProjMatrix.
-				vec3  worldPos = uCameraPosition.xyz + worldRay * cloudDepth;
-				float hFrac = clamp(heightFraction(worldPos, cloudDepth), 0.0, 1.0);
+				// The density-weighted stableHitDist (not firstHitDist) is the right distance for
+				// this specifically -- matching atmosphere_lowres.comp's own split use of the two.
+				float stableHitDist = resultWeightedDistSum / resultTotalWeight;
+				vec3  worldPos = uCameraPosition.xyz + worldRay * stableHitDist;
+				float hFrac = clamp(heightFraction(worldPos, stableHitDist), 0.0, 1.0);
 				vec3  advectVel = getCloudAdvectionSpeed(hFrac) * push.deltaTime;
 				vec3  prevWorldPos = worldPos - advectVel;
 
@@ -463,15 +559,10 @@ void main() {
 
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.colorStorageIdx)], pixel, vec4(cloudRgb, 0.0));
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.transmittanceStorageIdx)], pixel, vec4(cloudTransmittance, 0.0));
-	imageStore(uImagesGenericWrite[nonuniformEXT(push.depthStorageIdx)], pixel, vec4(cloudDepth, 0.0, 0.0, 0.0));
+	imageStore(
+		uImagesGenericWrite[nonuniformEXT(push.depthStorageIdx)],
+		pixel,
+		vec4(resultFirstHitDist, resultLastHitDist, resultFirstStepSize, resultPathDensity)
+	);
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.velocityStorageIdx)], pixel, vec4(cloudVelocity, 0.0, 0.0));
-
-	// One representative thread per workgroup (the tile's center pixel, matching the
-	// scheduler's own tileCenterUV convention) records this tile's freshly-raymarched luma --
-	// CloudTileSchedulerNode's priority pass diffs this against CloudMoments' accumulated luma
-	// next time around to score how much this tile's content has actually changed since the
-	// last real raymarch.
-	if (gl_LocalInvocationID.x == 4u && gl_LocalInvocationID.y == 4u) {
-		uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx].x = luminance(cloudRgb);
-	}
 }

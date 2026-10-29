@@ -229,10 +229,14 @@ namespace brassica {
 		}
 	};
 
-	// Representative world-space hit distance (marchClouds()'s weightedDistSum/totalWeight,
-	// boidish's own reprojection-depth formula) -- single channel, but ComputeStorageImageDesc's
-	// default rgba16f format is fine for a formatless-write target (see bindless.glsl's
-	// uImagesGenericWrite comment); only .x is ever read.
+	// F1: packed exactly like boidish's atmosphere_lowres.comp's own finalDepth -- r = distance
+	// to the first density sample above the firstHit threshold (a stable geometric quantity for
+	// depth-reprojection, unlike a density-weighted average which drifts frame-to-frame), g =
+	// distance to the last such sample, b = step size used at the first hit (CloudTileErrorMap's
+	// adaptive multiplier already baked in), a = max raw density encountered along the ray --
+	// the real "is there actually a cloud here" signal cloud_temporal.comp (F2) gates on, not a
+	// depth sentinel. r/g are meaningless (whatever -1.0 default survived) whenever a < 0.01,
+	// matching boidish's own currentAlpha<0.01 convention exactly.
 	struct CloudDepth {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
 			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
@@ -283,11 +287,24 @@ namespace brassica {
 		}
 	};
 
-	// SVGF-style running moments: x = luma, y = luma^2 (Stage C's variance estimate is y - x*x),
-	// z = historyLength (decayed on disocclusion/rejection, not just incremented), w = this
-	// pixel's accumulated depth (carried forward for next frame's disocclusion comparison --
-	// CloudDepth itself is always fresh every frame in Stages A-C, so there's no separate
-	// "history depth" resource needed beyond this channel).
+	// F2: the temporally-blended counterpart of CloudDepth -- same 4-channel packing (r =
+	// firstHitDist, g = lastHitDist, b = stepSizeAtFirstHit, a = pathDensity), but THIS is what
+	// cloud_temporal.comp actually blends frame-to-frame and what CloudSpatialFilterNode (F4)
+	// reads, exactly matching atmosphere_lowres.comp's own separate outDepth/uHistoryCloudDepth
+	// resource (not folded into CloudMoments, which Brassica's earlier Stage B mistakenly used
+	// for this -- boidish keeps accumulated depth and the luma/density moments as two genuinely
+	// separate textures).
+	struct CloudAccumulatedDepth {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
+
+	// SVGF-style running moments, matching atmosphere_lowres.comp/cloud_temporal_reprojection.comp
+	// exactly: x = luma mean, y = luma^2 mean (Stage C's variance estimate is y - x*x), z =
+	// path-density^2 mean (tracked for symmetry with boidish's own real layout; no current
+	// consumer, same as upstream), w = historyLength (decayed on rejection, not just
+	// incremented). Depth lives in CloudAccumulatedDepth now, not packed in here.
 	struct CloudMoments {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
 			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);

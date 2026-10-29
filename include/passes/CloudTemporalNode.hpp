@@ -23,11 +23,14 @@ namespace brassica {
 		std::uint32_t transmittanceIndex{0};
 		std::uint32_t depthIndex{0};
 		std::uint32_t velocityIndex{0};
+		std::uint32_t boundingMapIndex{0}; // F2: CloudBoundingMap, real shell-hit/has-density gating
 		std::uint32_t historyColorIndex{0};
 		std::uint32_t historyTransmittanceIndex{0};
+		std::uint32_t historyDepthIndex{0}; // F2: History<CloudAccumulatedDepth>
 		std::uint32_t historyMomentsIndex{0};
 		std::uint32_t outColorStorageIdx{0};
 		std::uint32_t outTransmittanceStorageIdx{0};
+		std::uint32_t outDepthStorageIdx{0};
 		std::uint32_t outMomentsStorageIdx{0};
 		std::uint32_t errorMapBufferIdx{0}; // Stage D: tile-freshness check, see cloud_temporal.comp
 		std::uint32_t tileCols{0};
@@ -35,13 +38,18 @@ namespace brassica {
 		std::uint32_t outputHeight{0};
 	};
 
-	// Stage B: reprojects+accumulates CloudRenderNode's fresh per-frame raymarch
-	// (CloudColor/CloudTransmittance/CloudDepth/CloudVelocity) against its own prior output
-	// (ReadPrevious<CloudAccumulatedColor/Transmittance/Moments>, the self-referential ping-pong
-	// ResourceKeys.hpp's comment describes) into this frame's CloudAccumulatedColor/
-	// Transmittance/Moments -- see shaders/cloud_temporal.comp for the actual reprojection/
-	// disocclusion/variance-clip math. CloudCompositeNode reads this node's output now, not
-	// CloudRenderNode's raw output directly.
+	// F2: real rewrite matching boidish's cloud_temporal_reprojection.comp structurally --
+	// reprojects+accumulates CloudRenderNode's fresh per-frame raymarch (CloudColor/
+	// CloudTransmittance/CloudDepth/CloudVelocity) against its own prior output
+	// (ReadPrevious<CloudAccumulatedColor/Transmittance/Depth/Moments>, the self-referential
+	// ping-pong ResourceKeys.hpp's comment describes) into this frame's accumulated buffers --
+	// see shaders/cloud_temporal.comp for the real multi-signal rejection/YCoCg-clip math. Also
+	// now the sole writer of CloudTileErrorMap's error/flow channels (a per-8x8-tile shared-
+	// memory reduction, every tile every frame, matching boidish exactly) -- Modify<>, not
+	// Read<>, since CloudTileSchedulerNode/CloudRenderNode also touch this same buffer (ordering
+	// already established via the other resources' accessor edges, same reasoning as elsewhere
+	// in this pipeline). CloudCompositeNode reads this node's output now, not CloudRenderNode's
+	// raw output directly.
 	struct CloudTemporalNode: render::NodeRegistrar<CloudTemporalNode> {
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
 		ComputeShader                temporalShader; // shaders/cloud_temporal.comp
@@ -62,6 +70,7 @@ namespace brassica {
 				auto& catalog = services.physicalRegistry->Catalog();
 				catalog.Get<CloudAccumulatedColor>();
 				catalog.Get<CloudAccumulatedTransmittance>();
+				catalog.Get<CloudAccumulatedDepth>();
 				catalog.Get<CloudMoments>();
 			}
 		}
@@ -77,13 +86,16 @@ namespace brassica {
 			r.Read<CloudTransmittance>();
 			r.Read<CloudDepth>();
 			r.Read<CloudVelocity>();
+			r.Read<CloudBoundingMap>();
 			r.Create<CloudAccumulatedColor>();
 			r.ReadPrevious<CloudAccumulatedColor>();
 			r.Create<CloudAccumulatedTransmittance>();
 			r.ReadPrevious<CloudAccumulatedTransmittance>();
+			r.Create<CloudAccumulatedDepth>();
+			r.ReadPrevious<CloudAccumulatedDepth>();
 			r.Create<CloudMoments>();
 			r.ReadPrevious<CloudMoments>();
-			r.Read<CloudTileErrorMap>();
+			r.Modify<CloudTileErrorMap>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -91,11 +103,14 @@ namespace brassica {
 			push.transmittanceIndex = ctx.Index<CloudTransmittance>();
 			push.depthIndex = ctx.Index<CloudDepth>();
 			push.velocityIndex = ctx.Index<CloudVelocity>();
+			push.boundingMapIndex = ctx.Index<CloudBoundingMap>();
 			push.historyColorIndex = ctx.Index<graph::History<CloudAccumulatedColor>>();
 			push.historyTransmittanceIndex = ctx.Index<graph::History<CloudAccumulatedTransmittance>>();
+			push.historyDepthIndex = ctx.Index<graph::History<CloudAccumulatedDepth>>();
 			push.historyMomentsIndex = ctx.Index<graph::History<CloudMoments>>();
 			push.outColorStorageIdx = ctx.StorageIndex<CloudAccumulatedColor>();
 			push.outTransmittanceStorageIdx = ctx.StorageIndex<CloudAccumulatedTransmittance>();
+			push.outDepthStorageIdx = ctx.StorageIndex<CloudAccumulatedDepth>();
 			push.outMomentsStorageIdx = ctx.StorageIndex<CloudMoments>();
 			push.errorMapBufferIdx = ctx.BufferIndex<CloudTileErrorMap>();
 			push.tileCols = (width + 7) / 8;
