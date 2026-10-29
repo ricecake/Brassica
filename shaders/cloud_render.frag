@@ -308,8 +308,9 @@ float sampleCloudVolume(vec3 worldPos, float distFromCam) {
 
 	// Fixes the vertical streaks (Screenshot 3) by preventing Y-axis wrapping
 	if (uv_y < 0.0 || uv_y > 1.0) return 0.0;
-
+	// worldPos += vec3(1,1.2,1)*500*cross_noise_fbm(vec3(0.005, 0.004, 0.005)*worldPos, 3, 0.3*uTime);
 	vec3 uvw = fract(worldPos / CLOUD_VOLUME_PERIOD);
+	uvw.y = fract(uv_y);
 
 	// Distance-based LOD selection -- the other half of the alligator() noise fix (see
 	// cloud_volume_gen.comp and CloudVolumeDownsampleNode): alligator's sharp Worley-cell edges
@@ -440,6 +441,21 @@ CloudMarchResult marchClouds(
 			// calculateCloudDensity in atmosphere_lowres.comp's source).
 			vec3  advectedPos = p_cloud - getCloudAdvectionSpeed(clamp(cloudHeightFrac, 0.0, 1.0)) * uTime;
 			float baseDensity = sampleCloudVolume(advectedPos, distFromCam);
+
+// all(lessThan(cloudTransmittance, vec3(0.05)))
+			float progress = smoothstep(0.015, 1.0, max(max(cloudTransmittance.r, cloudTransmittance.g), cloudTransmittance.b));
+			mat3 grad;
+			vec3 crNoise = cross_noise_fbm(advectedPos/75, 4, uTime*0.5, grad);
+			vec3 cross_curl = get_curl(grad);
+			// float baseDensity = weatherCoverage * sampleCloudCascades(p_cloud+100*progress*crNoise, distFromCam);
+			// float density = 1.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
+
+			// float dtNoise = dot_noise_fbm((p_cloud+25*progress*cross_curl)/750, 4, 0.05*uTime);
+			// density = remapClamp(baseDensity, abs(dtNoise/4.0), 1, 0.0, 1);
+			// density = 2*smoothstep(0.15, 0.85, density);
+
+
+			// baseDensity = remapClamp(baseDensity, abs(dot_noise_fbm(advectedPos*0.000125, 3, 0.01*uTime)), 1, 0, 1);
 			float heightGradient = GetDensityHeightGradientForPoint(cloudHeightFrac, weatherType);
 
 			// Anvil spreading (boidish's calculateCloudDensity): strong convective
@@ -457,8 +473,16 @@ CloudMarchResult marchClouds(
 			// noise-driven boundary detail instead of the old multiply's uniformly-dimmed,
 			// hazier look -- this is the single biggest shape difference from boidish's
 			// reference, and the main thing this whole rework was chasing.
-			float shapedNoise = remapClamp(baseDensity * heightGradient, coverageThreshold, 1.0, 0.0, 1.0);
-			density = 10.0 * shapedNoise * (0.5 + 1.5 * weatherMoisture);
+			float shapedNoise = remapClamp(baseDensity * heightGradient, coverageThreshold, 1, 0.0, 1.0);
+			density = shapedNoise * (0.5 + 1.5 * weatherMoisture);
+
+			// if(progress > 0) {
+				// float dtNoise = progress*dot_noise_fbm((advectedPos+25*progress*cross_curl)/750, 4, 0.05*uTime);
+				float dtNoise = dot_noise_fbm((advectedPos+25*cross_curl)/1500, 5, 0.05*uTime);
+				density = remapClamp(baseDensity, abs(dtNoise/4.0), 1, 0.0, 1);
+			// }
+			density = 250*smoothstep(0.15, 0.85, density);
+
 		}
 
 		float nextStep =
