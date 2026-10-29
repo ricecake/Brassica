@@ -29,6 +29,8 @@ namespace brassica {
 		std::uint32_t outColorStorageIdx{0};
 		std::uint32_t outTransmittanceStorageIdx{0};
 		std::uint32_t outMomentsStorageIdx{0};
+		std::uint32_t errorMapBufferIdx{0}; // Stage D: tile-freshness check, see cloud_temporal.comp
+		std::uint32_t tileCols{0};
 		std::uint32_t outputWidth{0};
 		std::uint32_t outputHeight{0};
 	};
@@ -81,6 +83,7 @@ namespace brassica {
 			r.ReadPrevious<CloudAccumulatedTransmittance>();
 			r.Create<CloudMoments>();
 			r.ReadPrevious<CloudMoments>();
+			r.Read<CloudTileErrorMap>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -94,6 +97,8 @@ namespace brassica {
 			push.outColorStorageIdx = ctx.StorageIndex<CloudAccumulatedColor>();
 			push.outTransmittanceStorageIdx = ctx.StorageIndex<CloudAccumulatedTransmittance>();
 			push.outMomentsStorageIdx = ctx.StorageIndex<CloudMoments>();
+			push.errorMapBufferIdx = ctx.BufferIndex<CloudTileErrorMap>();
+			push.tileCols = (width + 7) / 8;
 			push.outputWidth = width;
 			push.outputHeight = height;
 

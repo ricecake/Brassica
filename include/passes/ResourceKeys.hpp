@@ -311,6 +311,54 @@ namespace brassica {
 		}
 	};
 
+	// Stage D (tile scheduler + indirect dispatch, CloudTileSchedulerNode,
+	// shaders/cloud_tile_scheduler.comp): 8x8 tiles, matching cloud_raymarch.comp's own
+	// local_size. Real graph::ResourceDesc::Kind::Buffer resources, not a custom per-node
+	// descriptor set -- PhysicalRegistry::BufferIndexOf/AssignAndWriteBindlessBufferIndex (set 1
+	// binding 6, PhysicalRegistry.hpp) is a real, properly feature-gated (shaderStorageBuffer-
+	// ArrayNonUniformIndexing + descriptorBindingStorageBufferUpdateAfterBind, Engine.cpp) bindless
+	// buffer mechanism with zero existing GLSL consumers before this -- each consumer declares
+	// its own aliased struct at that binding, same idiom as uImagesRGBA32F's image aliasing.
+	inline std::uint32_t CloudTileCols(const graph::FrameContext& ctx) { return (ctx.width + 7u) / 8u; }
+
+	inline std::uint32_t CloudTileRows(const graph::FrameContext& ctx) { return (ctx.height + 7u) / 8u; }
+
+	// One uint per tile -- the index (row-major) of a tile queued for raymarching this frame.
+	struct CloudTileQueue {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			std::uint64_t totalTiles = static_cast<std::uint64_t>(CloudTileCols(ctx)) * CloudTileRows(ctx);
+			return graph::StorageBufferDesc(totalTiles * sizeof(std::uint32_t));
+		}
+	};
+
+	// VkDispatchIndirectCommand-shaped (x = queued tile count from the scheduler's atomic
+	// append, y = z = 1) -- CloudRenderNode's raymarch dispatch reads this via
+	// vkCmdDispatchIndirect instead of a fixed groupCount.
+	struct CloudTileDispatchArgs {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return graph::ResourceDesc{
+				.kind = graph::ResourceDesc::Kind::Buffer,
+				.usageMask = static_cast<std::uint32_t>(
+					vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndirectBuffer
+				),
+				.byteSize = 3 * sizeof(std::uint32_t),
+			};
+		}
+	};
+
+	// Per-tile persistent state (vec2: x = luma as of this tile's last real raymarch, y = frames
+	// since last raymarch) -- read-modify-written in place every frame by CloudTileSchedulerNode
+	// and CloudRenderNode (the latter overwrites .x with the freshly-raymarched luma when it
+	// actually re-renders a tile), NOT graph::Lifetime::History paired: there's no ping-pong
+	// here, just continuous accumulation on one physical buffer, same shape as
+	// LightningStrikePool's ring buffer.
+	struct CloudTileErrorMap {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			std::uint64_t totalTiles = static_cast<std::uint64_t>(CloudTileCols(ctx)) * CloudTileRows(ctx);
+			return graph::StorageBufferDesc(totalTiles * sizeof(float) * 2);
+		}
+	};
+
 	struct AtmosphereRadiance {};
 
 	struct GBufferPosition {

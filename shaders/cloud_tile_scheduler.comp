@@ -1,0 +1,175 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl" // pulls in helpers/distribution.glsl's mortonOwenScramble
+
+// Stage D's tile scheduler -- a real 2-pass priority scheduler, not a fixed Bayer round-robin
+// (that simpler scheme is what the already-ported CloudShadowGenNode's quarter-res stagger
+// uses). Dispatched 3 times by CloudTileSchedulerNode with different push.phase values (reset,
+// pass 0, pass 1), one thread per tile (8x8 tiles, matching cloud_raymarch.comp's local_size).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#define PHASE_RESET 0u
+#define PHASE_SPATIAL 1u
+#define PHASE_PRIORITY 2u
+
+layout(push_constant) uniform CloudTileSchedulerPushConstants {
+	uint tileQueueBufferIdx;
+	uint dispatchArgsBufferIdx;
+	uint errorMapBufferIdx;
+	uint momentsIndex; // sampled: CloudMoments, for the priority pass's variance signal
+	uint tileCols;
+	uint tileRows;
+	uint maxTilesPerFrame;
+	uint spatialUpdateFrames; // every tile gets a guaranteed refresh at least this often
+	uint phase;
+} push;
+
+layout(std430, set = 1, binding = 6) buffer CloudTileQueueBuffer {
+	uint tiles[];
+}
+uTileQueues[];
+
+layout(std430, set = 1, binding = 6) buffer CloudTileDispatchArgsBuffer {
+	uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+}
+uDispatchArgs[];
+
+layout(std430, set = 1, binding = 6) buffer CloudTileErrorMapBuffer {
+	vec2 tiles[]; // x = luma as of this tile's last real raymarch, y = frames since last raymarch
+}
+uErrorMaps[];
+
+// Standard 8x8 Bayer dither matrix (values 0..63) -- boidish's own temporally-dithered priority
+// threshold uses this exact table shape.
+const uint kBayer8x8[64] = uint[64](
+	0, 32, 8, 40, 2, 34, 10, 42,
+	48, 16, 56, 24, 50, 18, 58, 26,
+	12, 44, 4, 36, 14, 46, 6, 38,
+	60, 28, 52, 20, 62, 30, 54, 22,
+	3, 35, 11, 43, 1, 33, 9, 41,
+	51, 19, 59, 27, 49, 17, 57, 25,
+	15, 47, 7, 39, 13, 45, 5, 37,
+	63, 31, 55, 23, 61, 29, 53, 21
+);
+
+vec2 tileCenterUVOf(uvec2 coord) {
+	return (vec2(coord) * 8.0 + 4.0) / vec2(push.tileCols * 8u, push.tileRows * 8u);
+}
+
+// errorState.x is the raw luma cloud_raymarch.comp recorded the last time it actually
+// raymarched this tile; diffing it against CloudMoments' current accumulated luma is the
+// closest available proxy for boidish's densityDeltaScore -- "how much has this tile's content
+// actually changed since we last looked" (as opposed to variance's "how noisy/detailed is it
+// right now").
+float tileLumaDelta(uvec2 coord) {
+	uint tIdx = coord.y * push.tileCols + coord.x;
+	vec2 state = uErrorMaps[push.errorMapBufferIdx].tiles[tIdx];
+	vec4 m = SAMPLE_NEAREST(push.momentsIndex, tileCenterUVOf(coord));
+	return abs(m.x - state.x);
+}
+
+void main() {
+	if (push.phase == PHASE_RESET) {
+		if (gl_GlobalInvocationID.x == 0u && gl_GlobalInvocationID.y == 0u) {
+			uDispatchArgs[push.dispatchArgsBufferIdx].groupCountX = 0u;
+			uDispatchArgs[push.dispatchArgsBufferIdx].groupCountY = 1u;
+			uDispatchArgs[push.dispatchArgsBufferIdx].groupCountZ = 1u;
+		}
+		return;
+	}
+
+	uvec2 tileCoord = gl_GlobalInvocationID.xy;
+	if (tileCoord.x >= push.tileCols || tileCoord.y >= push.tileRows) {
+		return;
+	}
+	uint tileIdx = tileCoord.y * push.tileCols + tileCoord.x;
+
+	if (push.phase == PHASE_SPATIAL) {
+		// Guaranteed periodic refresh, permuted by an Owen-scrambled Morton code (not plain
+		// Bayer round-robin) so no tile ever starves and the refresh order isn't a visible
+		// scanning pattern. helpers/distribution.glsl's mortonOwenScramble is already in this
+		// codebase (used nowhere live yet) -- boidish's own exact call shape.
+		uint scrambled = mortonOwenScramble(tileCoord, 0u);
+		bool scheduledBySpatial = (scrambled % push.spatialUpdateFrames) == (uFrameIndex % push.spatialUpdateFrames);
+
+		if (scheduledBySpatial) {
+			uint slot = atomicAdd(uDispatchArgs[push.dispatchArgsBufferIdx].groupCountX, 1u);
+			if (slot < push.tileCols * push.tileRows) {
+				uTileQueues[push.tileQueueBufferIdx].tiles[slot] = tileIdx;
+			}
+			// Marks this tile "freshly queued this frame" for pass 1 to skip (age == 0 this
+			// frame means "already handled", whatever pass 1's own scoring would have said) --
+			// also what cloud_temporal.comp checks to know whether this tile's CloudColor/etc.
+			// are fresh this frame, before CloudRenderNode's raymarch resets it again to 0 for
+			// real once it actually renders the tile.
+			uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx].y = 0.0;
+		} else {
+			uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx].y += 1.0;
+		}
+		return;
+	}
+
+	// PHASE_PRIORITY
+	vec2 errorState = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx];
+	if (errorState.y <= 0.0) {
+		// Already queued by the spatial pass this frame -- nothing more to decide.
+		return;
+	}
+
+	// Variance signal (CloudMoments, Stage B) stands in for boidish's separately-tracked
+	// densityGrad -- this pipeline has no standalone density buffer to derive that from
+	// directly, so this is the closest available proxy, not a byte-for-byte port of that
+	// specific term.
+	vec4  moments = SAMPLE_NEAREST(push.momentsIndex, tileCenterUVOf(tileCoord));
+	float variance = max(0.0, moments.y - moments.x * moments.x);
+	float selfLumaDelta = abs(moments.x - errorState.x);
+
+	const float kVarianceWeight = 8.0;
+	const float kLumaDeltaWeight = 4.0;
+	const float kAgeWeight = 0.02;
+	const float kNeighborWeight = 0.5;
+
+	float selfScore = variance * kVarianceWeight + selfLumaDelta * kLumaDeltaWeight + errorState.y * kAgeWeight;
+
+	// 4-orthogonal-neighbor max luma-delta (boidish's neighborScore) -- a tile next to one
+	// whose content just changed a lot is worth reconsidering too, catching detail that's
+	// about to spread.
+	float neighborLumaDelta = 0.0;
+	if (tileCoord.x > 0u) {
+		neighborLumaDelta = max(neighborLumaDelta, tileLumaDelta(tileCoord - uvec2(1u, 0u)));
+	}
+	if (tileCoord.x + 1u < push.tileCols) {
+		neighborLumaDelta = max(neighborLumaDelta, tileLumaDelta(tileCoord + uvec2(1u, 0u)));
+	}
+	if (tileCoord.y > 0u) {
+		neighborLumaDelta = max(neighborLumaDelta, tileLumaDelta(tileCoord - uvec2(0u, 1u)));
+	}
+	if (tileCoord.y + 1u < push.tileRows) {
+		neighborLumaDelta = max(neighborLumaDelta, tileLumaDelta(tileCoord + uvec2(0u, 1u)));
+	}
+
+	float finalScore = selfScore + neighborLumaDelta * kNeighborWeight;
+
+	// Temporally-dithered, budget-aware threshold -- boidish's own formula: a Bayer value offset
+	// by the frame index (so the dither pattern itself cycles, not a static per-tile bias),
+	// divided by the fraction of tiles the frame budget actually allows.
+	uint  bayerVal = kBayer8x8[(tileCoord.y % 8u) * 8u + (tileCoord.x % 8u)];
+	uint  temporalBayer = (bayerVal + uFrameIndex * 17u) % 64u;
+	float ditherMask = float(temporalBayer) / 64.0;
+	float totalTiles = float(push.tileCols * push.tileRows);
+	float budgetRatio = float(push.maxTilesPerFrame) / max(1.0, totalTiles);
+	const float kPriorityThreshold = 1.0;
+	float dynamicThreshold = (kPriorityThreshold + ditherMask) / max(0.01, budgetRatio);
+
+	if (finalScore > dynamicThreshold) {
+		uint slot = atomicAdd(uDispatchArgs[push.dispatchArgsBufferIdx].groupCountX, 1u);
+		if (slot < push.tileCols * push.tileRows) {
+			uTileQueues[push.tileQueueBufferIdx].tiles[slot] = tileIdx;
+		}
+		uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx].y = 0.0;
+	}
+}

@@ -33,10 +33,27 @@ layout(push_constant) uniform CloudRaymarchPushConstants {
 	uint  transmittanceStorageIdx;
 	uint  depthStorageIdx;
 	uint  velocityStorageIdx;
+	uint  tileQueueBufferIdx; // Stage D: CloudTileSchedulerNode's queue, set 1 binding 6
+	uint  errorMapBufferIdx;
+	uint  tileCols;
 	uint  outputWidth;
 	uint  outputHeight;
 	float deltaTime;
 } push;
+
+// Stage D: indirect-dispatched one workgroup per QUEUED tile (not one per screen tile) --
+// gl_WorkGroupID.x indexes the queue CloudTileSchedulerNode built this frame, not a tile
+// coordinate directly. Same aliased-buffer-at-binding-6 idiom as cloud_tile_scheduler.comp;
+// only the two buffers this shader actually touches are declared here.
+layout(std430, set = 1, binding = 6) readonly buffer CloudTileQueueBuffer {
+	uint tiles[];
+}
+uTileQueues[];
+
+layout(std430, set = 1, binding = 6) buffer CloudTileErrorMapBuffer {
+	vec2 tiles[]; // x = tracked luma (as of this tile's last real raymarch), y = frames since last raymarch
+}
+uErrorMaps[];
 
 // Wind-driven advection speed for cloud sampling (m/s, XZ plane). Independent of the global
 // Hadley/Ferrel prevailing-wind model (helpers/wind.glsl) by design -- this is a dedicated
@@ -355,7 +372,12 @@ CloudMarchResult marchClouds(
 }
 
 void main() {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	// Stage D: this workgroup's tile comes from the scheduler's queue (indirect dispatch count
+	// == queued tile count), not from gl_WorkGroupID directly mapping to screen position.
+	uint  queueSlot = gl_WorkGroupID.x;
+	uint  tileIdx = uTileQueues[push.tileQueueBufferIdx].tiles[queueSlot];
+	uvec2 tileCoord = uvec2(tileIdx % push.tileCols, tileIdx / push.tileCols);
+	ivec2 pixel = ivec2(tileCoord * 8u + gl_LocalInvocationID.xy);
 	if (pixel.x >= int(push.outputWidth) || pixel.y >= int(push.outputHeight)) {
 		return;
 	}
@@ -456,4 +478,13 @@ void main() {
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.transmittanceStorageIdx)], pixel, vec4(cloudTransmittance, 0.0));
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.depthStorageIdx)], pixel, vec4(cloudDepth, 0.0, 0.0, 0.0));
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.velocityStorageIdx)], pixel, vec4(cloudVelocity, 0.0, 0.0));
+
+	// One representative thread per workgroup (the tile's center pixel, matching the
+	// scheduler's own tileCenterUV convention) records this tile's freshly-raymarched luma --
+	// CloudTileSchedulerNode's priority pass diffs this against CloudMoments' accumulated luma
+	// next time around to score how much this tile's content has actually changed since the
+	// last real raymarch.
+	if (gl_LocalInvocationID.x == 4u && gl_LocalInvocationID.y == 4u) {
+		uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx].x = luminance(cloudRgb);
+	}
 }

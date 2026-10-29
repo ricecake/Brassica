@@ -24,9 +24,18 @@ layout(push_constant) uniform CloudTemporalPushConstants {
 	uint outColorStorageIdx;
 	uint outTransmittanceStorageIdx;
 	uint outMomentsStorageIdx;
+	uint errorMapBufferIdx; // Stage D: tile-freshness check
+	uint tileCols;
 	uint outputWidth;
 	uint outputHeight;
 } push;
+
+// Stage D's tile scheduler/dispatch idiom -- same aliased-buffer-at-binding-6 declaration as
+// cloud_tile_scheduler.comp/cloud_raymarch.comp, read-only here (this node never writes it).
+layout(std430, set = 1, binding = 6) readonly buffer CloudTileErrorMapBuffer {
+	vec2 tiles[]; // x = luma as of this tile's last real raymarch, y = frames since last raymarch
+}
+uErrorMaps[];
 
 float luminance(vec3 c) {
 	return dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -39,10 +48,31 @@ void main() {
 	}
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
-	vec3  curColor = SAMPLE_NEAREST(push.colorIndex, uv).rgb;
-	vec3  curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, uv).rgb;
-	float curDepth = SAMPLE_NEAREST(push.depthIndex, uv).r;
-	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, uv).rg;
+	// Stage D: CloudColor/Transmittance/Depth/Velocity at this pixel are only "this frame's"
+	// if the scheduler actually queued this tile and CloudRenderNode raymarched it -- otherwise
+	// they're a stale raw result from whenever this tile was last queued, unusable as "current".
+	uvec2 tileCoord = uvec2(pixel) / 8u;
+	uint  tileIdx = tileCoord.y * push.tileCols + tileCoord.x;
+	bool  tileFresh = uErrorMaps[push.errorMapBufferIdx].tiles[tileIdx].y <= 0.0;
+
+	vec3  curColor = vec3(0.0);
+	vec3  curTransmittance = vec3(1.0);
+	float curDepth = 1e9;
+	vec2  curVelocity = vec2(0.0);
+
+	if (tileFresh) {
+		curColor = SAMPLE_NEAREST(push.colorIndex, uv).rgb;
+		curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, uv).rgb;
+		curDepth = SAMPLE_NEAREST(push.depthIndex, uv).r;
+		curVelocity = SAMPLE_NEAREST(push.velocityIndex, uv).rg;
+	} else {
+		// No fresh raymarch this frame -- approximate using last frame's OWN accumulated depth
+		// at this same UV (not yet reprojected) purely to drive the camera-motion reprojection
+		// below. There's no fresh wind-velocity sample on a skipped tile, so non-camera drift
+		// simply isn't corrected for until this tile is raymarched again.
+		float approxDepth = SAMPLE_NEAREST(push.historyMomentsIndex, uv).w;
+		curDepth = approxDepth > 0.0 ? approxDepth : 1e9;
+	}
 
 	bool hasCloud = curDepth < 1e8;
 	vec2 historyUV = uv;
@@ -75,46 +105,76 @@ void main() {
 		histTransmittance = SAMPLE_LINEAR(push.historyTransmittanceIndex, historyUV).rgb;
 		histMoments = SAMPLE_LINEAR(push.historyMomentsIndex, historyUV);
 
-		// Multi-signal rejection (simplified from boidish's depth/luma/density-derivative set to
-		// depth + luma): each signal independently decays historyLength rather than a single
-		// hard accept/reject, so a partial mismatch fades history faster instead of snapping.
-		float depthDiff = abs(histMoments.w - curDepth) / max(curDepth, 1.0);
-		float depthReject = smoothstep(0.02, 0.1, depthDiff);
+		if (tileFresh) {
+			// Multi-signal rejection (simplified from boidish's depth/luma/density-derivative set
+			// to depth + luma): each signal independently decays historyLength rather than a
+			// single hard accept/reject, so a partial mismatch fades history faster instead of
+			// snapping. Skipped on a non-fresh tile -- there's no independently-sampled
+			// curColor/curDepth to score against, only the depth approximation above, so the
+			// reprojected history is accepted as-is and left for the next real raymarch to correct.
+			float depthDiff = abs(histMoments.w - curDepth) / max(curDepth, 1.0);
+			float depthReject = smoothstep(0.02, 0.1, depthDiff);
 
-		float curLuma = luminance(curColor);
-		float histLuma = histMoments.x;
-		float lumaDiff = abs(curLuma - histLuma) / max(max(curLuma, histLuma), 0.01);
-		float lumaReject = smoothstep(0.3, 1.0, lumaDiff);
+			float curLuma = luminance(curColor);
+			float histLuma = histMoments.x;
+			float lumaDiff = abs(curLuma - histLuma) / max(max(curLuma, histLuma), 0.01);
+			float lumaReject = smoothstep(0.3, 1.0, lumaDiff);
 
-		histMoments.z *= (1.0 - max(depthReject, lumaReject));
-	}
-
-	float historyLength = min(32.0, histMoments.z + 1.0);
-	float alpha = 1.0 / historyLength;
-
-	// 3x3-neighborhood AABB color clip: keeps the blended history inside this frame's local
-	// color range, so a stale/ghosted history sample self-corrects over 1-2 frames instead of
-	// visibly smearing. RGB-space, not YCoCg -- simpler, same core technique.
-	vec3 nMin = curColor;
-	vec3 nMax = curColor;
-	for (int dy = -1; dy <= 1; dy++) {
-		for (int dx = -1; dx <= 1; dx++) {
-			if (dx == 0 && dy == 0) continue;
-			ivec2 samplePixel =
-				clamp(pixel + ivec2(dx, dy), ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
-			vec2 sampleUV = (vec2(samplePixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
-			vec3 neighborColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
-			nMin = min(nMin, neighborColor);
-			nMax = max(nMax, neighborColor);
+			histMoments.z *= (1.0 - max(depthReject, lumaReject));
 		}
 	}
-	vec3 clippedHistColor = clamp(histColor, nMin, nMax);
 
-	vec3 blendedColor = mix(clippedHistColor, curColor, alpha);
-	vec3 blendedTransmittance = mix(histTransmittance, curTransmittance, alpha);
+	vec3  blendedColor;
+	vec3  blendedTransmittance;
+	float historyLength;
+	float outDepth;
+
+	if (tileFresh) {
+		historyLength = min(32.0, histMoments.z + 1.0);
+		float alpha = 1.0 / historyLength;
+
+		// 3x3-neighborhood AABB color clip: keeps the blended history inside this frame's local
+		// color range, so a stale/ghosted history sample self-corrects over 1-2 frames instead of
+		// visibly smearing. RGB-space, not YCoCg -- simpler, same core technique.
+		vec3 nMin = curColor;
+		vec3 nMax = curColor;
+		for (int dy = -1; dy <= 1; dy++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				if (dx == 0 && dy == 0) continue;
+				ivec2 samplePixel =
+					clamp(pixel + ivec2(dx, dy), ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+				vec2 sampleUV = (vec2(samplePixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+				vec3 neighborColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
+				nMin = min(nMin, neighborColor);
+				nMax = max(nMax, neighborColor);
+			}
+		}
+		vec3 clippedHistColor = clamp(histColor, nMin, nMax);
+
+		blendedColor = mix(clippedHistColor, curColor, alpha);
+		blendedTransmittance = mix(histTransmittance, curTransmittance, alpha);
+		outDepth = curDepth;
+	} else if (validHistory) {
+		// Stage D passthrough: no fresh sample was added this frame, so there's nothing to
+		// blend and no AABB neighborhood worth clipping against (CloudColor at neighboring
+		// pixels may be just as stale). Carry the reprojected history forward unchanged --
+		// historyLength doesn't advance either, since no new real sample backs it.
+		blendedColor = histColor;
+		blendedTransmittance = histTransmittance;
+		historyLength = histMoments.z;
+		outDepth = histMoments.w;
+	} else {
+		// Disoccluded (or never had cloud) AND not raymarched this frame -- nothing usable to
+		// carry forward. Reset so the next real raymarch of this tile starts a fresh history
+		// instead of blending against stale, since-moved-camera data.
+		blendedColor = vec3(0.0);
+		blendedTransmittance = vec3(1.0);
+		historyLength = 0.0;
+		outDepth = 1e9;
+	}
 
 	float blendedLuma = luminance(blendedColor);
-	vec4  outMoments = vec4(blendedLuma, blendedLuma * blendedLuma, historyLength, curDepth);
+	vec4  outMoments = vec4(blendedLuma, blendedLuma * blendedLuma, historyLength, outDepth);
 
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.outColorStorageIdx)], pixel, vec4(blendedColor, 0.0));
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.outTransmittanceStorageIdx)], pixel, vec4(blendedTransmittance, 0.0));

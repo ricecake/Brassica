@@ -34,6 +34,9 @@ namespace brassica {
 		std::uint32_t transmittanceStorageIdx{0};
 		std::uint32_t depthStorageIdx{0};
 		std::uint32_t velocityStorageIdx{0};
+		std::uint32_t tileQueueBufferIdx{0};
+		std::uint32_t errorMapBufferIdx{0};
+		std::uint32_t tileCols{0};
 		std::uint32_t outputWidth{0};
 		std::uint32_t outputHeight{0};
 		float         deltaTime{0.016f};
@@ -46,15 +49,26 @@ namespace brassica {
 	// CloudCompositeNode does that blend instead, and has taken over this node's old position in
 	// the HdrColor writer chain (After<CirrusNode>() etc.) since it's the one actually Modifying
 	// that resource now.
+	//
+	// Stage D: the dispatch itself is indirect now, driven by CloudTileSchedulerNode's queue --
+	// only tiles the scheduler actually queued this frame get raymarched; the rest keep
+	// whatever CloudColor/Transmittance/Depth/Velocity they were last written with, and
+	// CloudTemporalNode's tile-freshness check (CloudTileErrorMap) decides whether that's usable
+	// as "this frame's fresh result" or just a passthrough of the accumulated history. No
+	// explicit After<CloudTileSchedulerNode>() needed -- Read<CloudTileQueue>()/
+	// Read<CloudTileDispatchArgs>() below already order this after that node's sole Create<> of
+	// both, same Create-before-accessor edge as everywhere else in this engine.
 	struct CloudRenderNode: render::NodeRegistrar<CloudRenderNode> {
-		render::PipelineLibrary*     pipelineLibrary = nullptr;
-		ComputeShader                raymarchShader; // shaders/cloud_raymarch.comp
-		CloudRaymarchPushConstants   push{};
-		std::uint32_t                width{0};
-		std::uint32_t                height{0};
+		render::PipelineLibrary*        pipelineLibrary = nullptr;
+		graph::PhysicalResourceRegistry* physicalRegistry = nullptr; // for GetBuffer<CloudTileDispatchArgs>()'s raw vk::Buffer -- vkCmdDispatchIndirect needs a handle, not a bindless index
+		ComputeShader                   raymarchShader; // shaders/cloud_raymarch.comp
+		CloudRaymarchPushConstants      push{};
+		std::uint32_t                   width{0};
+		std::uint32_t                   height{0};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
+			physicalRegistry = services.physicalRegistry;
 			if (!raymarchShader.CompileComputeFromFile(services.device, "shaders/cloud_raymarch.comp")) {
 				spdlog::critical("CloudRenderNode shader compilation failed.");
 				throw std::runtime_error("CloudRenderNode shader compilation failed.");
@@ -98,6 +112,9 @@ namespace brassica {
 			r.Create<CloudTransmittance>();
 			r.Create<CloudDepth>();
 			r.Create<CloudVelocity>();
+			r.Read<CloudTileQueue>();
+			r.Read<CloudTileDispatchArgs>();
+			r.Modify<CloudTileErrorMap>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -113,6 +130,9 @@ namespace brassica {
 			push.transmittanceStorageIdx = ctx.StorageIndex<CloudTransmittance>();
 			push.depthStorageIdx = ctx.StorageIndex<CloudDepth>();
 			push.velocityStorageIdx = ctx.StorageIndex<CloudVelocity>();
+			push.tileQueueBufferIdx = ctx.BufferIndex<CloudTileQueue>();
+			push.errorMapBufferIdx = ctx.BufferIndex<CloudTileErrorMap>();
+			push.tileCols = (width + 7) / 8;
 			push.outputWidth = width;
 			push.outputHeight = height;
 
@@ -121,8 +141,13 @@ namespace brassica {
 				return;
 			}
 
+			auto dispatchArgsBuf = physicalRegistry ? physicalRegistry->GetBuffer<CloudTileDispatchArgs>() : nullptr;
+			if (!dispatchArgsBuf) {
+				return;
+			}
+
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			vkCmd.dispatch((width + 7) / 8, (height + 7) / 8, 1);
+			vkCmd.dispatchIndirect(dispatchArgsBuf->GetBuffer(), 0);
 		}
 	};
 

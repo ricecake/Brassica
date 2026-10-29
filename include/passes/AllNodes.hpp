@@ -17,6 +17,7 @@
 #include "passes/CloudShadowGenNode.hpp"
 #include "passes/CloudSpatialFilterNode.hpp"
 #include "passes/CloudTemporalNode.hpp"
+#include "passes/CloudTileSchedulerNode.hpp"
 #include "passes/CloudVolumeDownsampleNode.hpp"
 #include "passes/CloudVolumeGenNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
