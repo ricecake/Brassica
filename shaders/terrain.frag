@@ -30,7 +30,7 @@ void main() {
 	float camDist = length(inPosition);
 
 	// OrganicMacroCell mCell = generateOrganicMacroCell(worldXZ, 0.5, 3);
-	OrganicPlateData mCell = getOrganicPlate(worldXZ*(0.5+0.5*cross_noise_fbm(worldPos*0.00005, 2, sin(uTime*0.001+0.5*dot_noise(worldPos*0.0005, 0.01*uTime))*0.1).xz), 0.00025, 3.0);
+	// OrganicPlateData mCell = getOrganicPlate(worldXZ*(0.5+0.5*cross_noise_fbm(worldPos*0.00005, 2, sin(uTime*0.001+0.5*dot_noise(worldPos*0.0005, 0.01*uTime))*0.1).xz), 0.00025, 3.0);
 
 
 	// Progressive multi-tier distance fading for normal perturbations (tapers off faster to avoid specular shimmer/aliasing):
@@ -138,47 +138,28 @@ void main() {
 			float mediumCanopyFade = 1.0 - smoothstep(80.0, 300.0, camDist);   // Branch clusters (~2.0m - 3.5m)
 			float macroCanopyFade  = 1.0 - smoothstep(200.0, 1200.0, camDist); // Individual tree crowns (~6.0m - 10.0m)
 
-			vec2 forestGrad = vec2(0.0);
-			float fNoise1 = 0.0;
-			float fNoise2 = 0.0;
-
-			vec2 squatWarpedXZ = worldXZ + vec2(sin(worldXZ.y * 0.25), cos(worldXZ.x * 0.25)) * 1.2;
 			mat3 microWarpGrad;
-			vec3 microNoiseWarp = cross_noise_fbm(worldPos, 3, mCell.regionID*mCell.edgeDist, microWarpGrad);
-			vec3 warp = (microWarpGrad*microNoiseWarp);
+			vec2 forestGrad = vec2(0.0);
+			vec3 g1 = vec3(0.0);
+			vec3 g2 = vec3(0.0);
+			vec3 g3 = vec3(0.0);
+			float fNoise1 = 1.0;
+			float fNoise2 = 1.0;
+			float fn3 = 1.0;//dot_noise(vec3(squatWarpedXZ * 2.000, 0.0), 0.0, g3);
 
 
 			if (treeType == 0u) { // Pine / Evergreen: Conical peaked crowns with vertical branch texture
-				vec3 g1, g2, g3;
-				fNoise1 = dot_noise(warp+vec3(squatWarpedXZ * 0.166, 0.0), 0.0, g1);
-				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.500, 0.0), 0.0, g2);
-				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 2.000, 0.0), 0.0, g3);
-
 				forestGrad = g1.xz * (1.3 * 0.50 * macroCanopyFade) +
 				             g2.xz * (0.35 * mediumCanopyFade) +
 				             g3.xz * (0.15 * microCanopyFade);
 			} else if (treeType == 2u) { // Tropical / Palm: Broad umbrella domes
-				vec3 g1, g2, g3;
-				fNoise1 = dot_noise(warp+vec3(squatWarpedXZ * 0.100, 0.0), 0.0, g1);
-				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.333, 0.0), 0.0, g2);
-				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 1.250, 0.0), 0.0, g3);
-
 				forestGrad = g1.xz * (0.50 * macroCanopyFade) +
 				             g2.xz * (0.35 * mediumCanopyFade) +
 				             g3.xz * (0.20 * microCanopyFade);
 			} else if (treeType == 3u) { // Cactus / Arid Scrub: Scattered columnar bumps
-				vec3 g2, g3;
-				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.333, 0.0), 0.0, g2);
-				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 1.000, 0.0), 0.0, g3);
-
 				forestGrad = g2.xz * (0.60 * mediumCanopyFade) +
 				             g3.xz * (0.40 * microCanopyFade);
 			} else { // Deciduous: Rounded canopy clusters
-				vec3 g1, g2, g3;
-				fNoise1 = dot_noise(warp+vec3(squatWarpedXZ * 0.125, 0.0), 0.0, g1);
-				fNoise2 = dot_noise(warp+vec3(squatWarpedXZ * 0.400, 0.0), 0.0, g2);
-				float fn3 = dot_noise(warp+vec3(squatWarpedXZ * 1.666, 0.0), 0.0, g3);
-
 				forestGrad = g1.xz * (0.45 * macroCanopyFade) +
 				             g2.xz * (0.35 * mediumCanopyFade) +
 				             g3.xz * (0.20 * microCanopyFade);
@@ -189,9 +170,7 @@ void main() {
 			// Gap crevice shadowing between adjacent tree crowns
 			// float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
 			float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
-			crownCrevice *= pow(smoothstep(0.0, fNoise1, mCell.edgeDist), 0.3);
 			vec3 canopyColor = mix(leafColor * 0.55, leafColor * 1.15, crownCrevice);
-			canopyColor *= mix(1.0, 10.0*mCell.regionID, pow(mCell.edgeDist, 2.0));
 
 			// Blend canopy color and increase surface roughness in dense forest areas
 			finalAlbedo = mix(finalAlbedo, canopyColor, proxyAmount * 0.70);
@@ -204,7 +183,7 @@ void main() {
 	// -------------------------------------------------------------------------
 	if (macroColorFade > 0.001 || macroNormalFade > 0.001) {
 		vec3 macroGrad3D;
-		float macroNoise = dot_noise(vec3(worldXZ * 0.35, 0.0), 0.0, macroGrad3D);
+		float macroNoise = 1.0;//dot_noise(vec3(worldXZ * 0.35, 0.0), 0.0, macroGrad3D);
 		vec2 macroGrad = macroGrad3D.xz;
 
 		float macroColorWeight  = macroColorFade * 0.35;
@@ -225,10 +204,10 @@ void main() {
 	if (mediumColorFade > 0.001 || mediumNormalFade > 0.001) {
 		vec3 mediumGrad3D;
 		mat3 microWarpGrad;
-		vec3 microNoiseWarp = cross_noise(worldPos, 0.0, microWarpGrad);
-		vec3 warp = 2*(microWarpGrad*microNoiseWarp);
+		// vec3 microNoiseWarp = cross_noise(worldPos, 0.0, microWarpGrad);
+		vec3 warp = vec3(1.0);//2*(microWarpGrad*microNoiseWarp);
 
-		float mediumNoise = dot_noise(warp+vec3(worldXZ * 3.2, 0.0), 0.0, mediumGrad3D);
+		float mediumNoise = 1.0;//dot_noise(vec3(worldXZ * 3.2, 0.0), 0.0, mediumGrad3D);
 		vec2 mediumGrad = mediumGrad3D.xz;
 
 		float mediumColorWeight  = mediumColorFade * 0.55;
@@ -257,8 +236,8 @@ void main() {
 	if (microColorFade > 0.001 || microNormalFade > 0.001) {
 		vec3 microGrad3D;
 		mat3 microWarpGrad;
-		vec3 microNoiseWarp = cross_noise(worldPos, 0.0, microWarpGrad);
-		float microNoise = dot_noise(0.5*(microWarpGrad*microNoiseWarp)+vec3(worldXZ * 12.0, 0.0), 0.0, microGrad3D);
+		vec3 microNoiseWarp = vec3(0.0);//cross_noise(worldPos, 0.0, microWarpGrad);
+		float microNoise = 1.0;//dot_noise(0.5*(microWarpGrad*microNoiseWarp)+vec3(worldXZ * 12.0, 0.0), 0.0, microGrad3D);
 		vec2 microGrad = microGrad3D.xz;
 
 		float microColorWeight  = microColorFade;

@@ -78,23 +78,6 @@ void main() {
 
 	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
 
-	// Clipmap sample anchor, built without ever adding uCameraPosition.xz back onto a value that
-	// already had it subtracted out (what this used to do, via a dead cameraSnap/relCameraSnap
-	// pair -- computed at the wrong level, lodLevel instead of morphLOD, and never actually read).
-	// camPos + (cameraSnapAtMorphLOD - camPos) is exactly cameraSnapAtMorphLOD in real arithmetic,
-	// but not in float32: the result's rounding error tracks camPos's own continuously-changing bit
-	// pattern, even though the intended value is a pure step function of camPos (it should only
-	// change when the camera crosses a whole texel at morphLOD). Every vertex "should" see a fixed
-	// height/normal while the camera drifts within one texel; instead it saw a jittery fraction of
-	// a texel's worth of bilinear-interpolation noise every frame -- worst near the camera, where
-	// texelSize is smallest -- which is the reported terrain "swimming."
-	//
-	// cameraSnapForMorph + pureGridOffset avoids the round-trip entirely: both are individually
-	// exactly reproducible frame to frame while the camera stays inside one morphLOD texel (the
-	// first via a single floor(), the second from macroColRow/childXY -- grid indices with no
-	// camera dependence at all), so their sum is too. relMeshletMinXZ (camera-relative, used below
-	// for the actual vertex position/culling) is unaffected -- it's well-conditioned already; this
-	// only fixes the clipmap-texture sample coordinate.
 	float parentTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(morphLOD));
 	vec2  cameraSnapForMorph = floor(uCameraPosition.xz / parentTexelSize) * parentTexelSize;
 	vec2  pureGridOffset =
@@ -109,12 +92,6 @@ void main() {
 	vec2 offsetDist = abs(relBaseXZ);
 	float distToCam = max(offsetDist.x, offsetDist.y);
 
-	// alpha blends this vertex's height/normal/biome sample between morphLOD and morphLOD+1 near
-	// the outer edge of morphLOD's ring, so the surface doesn't pop when a meshlet's LOD changes.
-	// XZ-position morphing (snapping relBaseXZ itself toward the coarser grid) is disabled --
-	// relMorphedXZ stays equal to relBaseXZ -- so only height/normal/biome blend, not vertex
-	// position. (If XZ-morphing is ever re-enabled, morphedWorldXZ below needs to track
-	// relMorphedXZ again instead of being anchor-plus-localPos directly.)
 	float alpha = 0.0;
 	vec2  relMorphedXZ = relBaseXZ;
 
@@ -158,25 +135,6 @@ void main() {
 	bool isLeftMacroEdge = (lx == 0) && (cx == 0);
 	bool isRightMacroEdge = (lx == 10) && (cx == gridDim - 1);
 
-	// bool isOddBoundaryInternal = ((lx % 2 != 0) && (isTopMacroEdge || isBottomMacroEdge)) ||
-	//                      ((ly % 2 != 0) && (isLeftMacroEdge || isRightMacroEdge));
-
-	// if (isOddBoundaryInternal) {
-	// 	vec2 localA = vec2(float(lx - (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly - (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
-	// 	vec2 localB = vec2(float(lx + (lx % 2 != 0 ? 1 : 0)) / 10.0, float(ly + (ly % 2 != 0 ? 1 : 0)) / 10.0) * meshletSize;
-
-	// 	vec2 relBaseA = relMeshletMinXZ + localA;
-	// 	vec2 relBaseB = relMeshletMinXZ + localB;
-
-	// 	vec2 worldA = uCameraPosition.xz + relBaseA;
-	// 	vec2 worldB = uCameraPosition.xz + relBaseB;
-
-	// 	float hA = sampleTerrainClipmap(params.clipmapIndex, worldA, morphLOD, params.gridParams.w).r;
-	// 	float hB = sampleTerrainClipmap(params.clipmapIndex, worldB, morphLOD, params.gridParams.w).r;
-
-	// 	height = (hA + hB) * 0.5;
-	// }
-
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	vec3 relWorldPos = vec3(relMorphedXZ.x, height - dropOff - uCameraPosition.y, relMorphedXZ.y);
@@ -192,16 +150,9 @@ void main() {
 		uint neighborB = (ly == 0 || ly == 10) ? vertexIndex + 1 : vertexIndex + 11;
 		relWorldPos = (sharedPos[neighborA] + sharedPos[neighborB]) * 0.5;
 	}
-	// OrganicPlateData mCell = getOrganicPlate(uCameraPosition.xz+relWorldPos.xz, 0.125, 3.0);
-	// vec3 warp = cross_noise_fbm(relWorldPos, 3, uTime*0.0001);
-	// vec3 pOffset = 2*mCell.edgeDist*warp*((dot_noise_dir(relWorldPos*0.125, uTime*0.5, warp)*6.5));
 
 	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
-	// gl_MeshVerticesEXT[vertexIndex].gl_Position = (uProjMatrix * vec4(viewPos+pOffset, 1.0));
-	// OrganicMacroCell mCell = generateOrganicMacroCell(morphedWorldXZ, 200.0, 3);
-	// OrganicPlateData mCell = getOrganicPlate(uCameraPosition.xz+relWorldPos.xz, 0.125, 3.0);
-	// relWorldPos.y += 35.0*mCell.edgeDist;
 
 	outPosition[vertexIndex] = relWorldPos;
 	outNormal[vertexIndex] = normal;
@@ -314,14 +265,6 @@ void main() {
 		if (length(outDir) > 0.0) {
 			outDir = normalize(outDir);
 		}
-
-		// float overlapWidth = (1.0 / 3.0) * meshletSize;
-
-		// vec3 out3D = vec3(outDir.x, 0.0, outDir.y);
-		// vec3 proj = out3D - dot(out3D, normal) * normal;
-		// float lenP = length(proj);
-		// vec3 tangentOut = (lenP > 0.001) ? (proj / lenP) : out3D;
-		// vec3 relSkirtPos = relWorldPos + tangentOut * overlapWidth - normal * (0.05 * overlapWidth);
 
 		float overlapWidth = (1.0 / 3.0) * meshletSize;
 		vec3 relSkirtPos = relWorldPos - vec3(0.0, overlapWidth, 0.0);

@@ -440,13 +440,15 @@ CloudMarchResult marchClouds(
 			// "weather" advection from "3D noise" advection (computeCloudWeather vs
 			// calculateCloudDensity in atmosphere_lowres.comp's source).
 			vec3  advectedPos = p_cloud - getCloudAdvectionSpeed(clamp(cloudHeightFrac, 0.0, 1.0)) * uTime;
-			float baseDensity = sampleCloudVolume(advectedPos, distFromCam);
 
-// all(lessThan(cloudTransmittance, vec3(0.05)))
+			// all(lessThan(cloudTransmittance, vec3(0.05)))
 			float progress = smoothstep(0.015, 1.0, max(max(cloudTransmittance.r, cloudTransmittance.g), cloudTransmittance.b));
 			mat3 grad;
-			vec3 crNoise = cross_noise_fbm(advectedPos/75, 4, uTime*0.5, grad);
+			vec3 crNoise = cross_noise_fbm(advectedPos/(prevDensity+750), 3, uTime*0.05, grad);
 			vec3 cross_curl = get_curl(grad);
+
+
+			float baseDensity = sampleCloudVolume(advectedPos+50*grad*cross_curl, distFromCam);
 			// float baseDensity = weatherCoverage * sampleCloudCascades(p_cloud+100*progress*crNoise, distFromCam);
 			// float density = 1.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
 
@@ -478,10 +480,10 @@ CloudMarchResult marchClouds(
 
 			// if(progress > 0) {
 				// float dtNoise = progress*dot_noise_fbm((advectedPos+25*progress*cross_curl)/750, 4, 0.05*uTime);
-				float dtNoise = dot_noise_fbm((advectedPos+25*cross_curl)/1500, 5, 0.05*uTime);
-				density = remapClamp(baseDensity, abs(dtNoise/4.0), 1, 0.0, 1);
+				// float dtNoise = dot_noise_fbm((advectedPos/1500)+(cross_curl)/150, 5, 0.05*uTime);
+				// density = remapClamp(baseDensity, abs(dtNoise/4.0), 1, 0.0, 1);
 			// }
-			density = 250*smoothstep(0.15, 0.85, density);
+			density = 2*smoothstep(0.15, 0.5, density);
 
 		}
 
