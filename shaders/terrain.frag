@@ -73,27 +73,57 @@ void main() {
 		hasWeather = true;
 	}
 
+	WhittakerBiome wb;
+	vec3 palA, palB, palC, palD;
 	if (hasWeather) {
 		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
-		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+		wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+		palA = wb.palA;
+		palB = wb.palB;
+		palC = wb.palC;
+		palD = wb.palD;
+	} else {
+		uint bIdx = params.biomeIndex;
+		wb.biomeIndex = float(bIdx);
+		wb.roughness = 0.75;
+		wb.snowCover = 0.0;
+		getWhittakerBiomePalette(bIdx, palA, palB, palC, palD);
+		wb.palA = palA;
+		wb.palB = palB;
+		wb.palC = palC;
+		wb.palD = palD;
+		wb.color = evalCosinePalette(palA, palB, palC, palD, 0.65);
+	}
 
-		// 1. Climate biome color blending: enhance greenness in moist regions
-		if (grassW > 0.01) {
-			vec3 lushGreen = mix(wb.color, vec3(0.12, 0.48, 0.10), smoothstep(0.35, 0.75, moisture));
-			finalAlbedo = mix(finalAlbedo, lushGreen, grassW * 0.65);
-			roughness = mix(roughness, wb.roughness, grassW * 0.5);
-		}
+	// Procedural biome variation using dot_noise_fbm and its analytical gradient variant:
+	// A broad low-frequency FBM with gradient provides broad geographic shifting across hills and valleys
+	vec3 biomeGrad3D;
+	float biomeFbm = dot_noise_fbm(vec3(worldXZ * 0.015, worldPos.y * 0.008), 3, 0.0, biomeGrad3D);
+	float patchFbm = dot_noise_fbm(vec3(worldXZ * 0.08, worldPos.y * 0.04), 2.0, 0.0);
 
-		// 2. Patches of green moss / damp vegetation on wet cliff ledges and crevices
-		if (rockW > 0.01 && moisture > 0.20) {
-			float ledgeFactor = smoothstep(0.25, 0.75, N.y);
-			vec3 dummyGrad;
-			float mossNoise = dot_noise(vec3(worldXZ * 1.5, 0.0), 0.0, dummyGrad);
-			float mossAmount = rockW * ledgeFactor * smoothstep(0.25, 0.65, moisture) * smoothstep(-0.3, 0.4, mossNoise);
-			vec3 mossColor = mix(vec3(0.18, 0.40, 0.14), vec3(0.10, 0.52, 0.12), moisture);
-			finalAlbedo = mix(finalAlbedo, mossColor, mossAmount * 0.75);
-			roughness = mix(roughness, 0.85, mossAmount * 0.5);
-		}
+	// Evaluate the cosine palette with parameter t modulated by moisture, slope, and procedural FBM noise
+	float palT = clamp(0.60 + 0.25 * biomeFbm + 0.15 * patchFbm + 0.15 * (moisture - 0.5) + 0.10 * (N.y - 0.7), 0.0, 1.0);
+	vec3 paletteColor = evalCosinePalette(palA, palB, palC, palD, palT);
+
+	// 1. Climate biome color blending: enhance greenness in moist regions
+	if (grassW > 0.01) {
+		vec3 lushGreen = mix(paletteColor, vec3(0.12, 0.48, 0.10), smoothstep(0.35, 0.75, moisture) * 0.5);
+		finalAlbedo = mix(finalAlbedo, lushGreen, grassW * 0.70);
+		roughness = mix(roughness, clamp(wb.roughness + 0.10 * patchFbm, 0.35, 0.95), grassW * 0.5);
+		perturbedGradSum += biomeGrad3D.xz * (0.15 * grassW * macroNormalFade);
+	}
+
+	// 2. Patches of green moss / damp vegetation on wet cliff ledges and crevices
+	if (rockW > 0.01 && moisture > 0.20) {
+		float ledgeFactor = smoothstep(0.25, 0.75, N.y);
+		vec3 mossGrad;
+		float mossNoise = dot_noise_fbm(vec3(worldXZ * 0.5, worldPos.y * 0.25), 2, 0.0, mossGrad);
+		float mossAmount = rockW * ledgeFactor * smoothstep(0.25, 0.65, moisture) * smoothstep(-0.3, 0.4, mossNoise);
+		vec3 mossBase = evalCosinePalette(palA, palB, palC, palD, 0.35 + 0.20 * patchFbm);
+		vec3 mossColor = mix(mossBase, vec3(0.10, 0.52, 0.12), moisture * 0.7);
+		finalAlbedo = mix(finalAlbedo, mossColor, mossAmount * 0.75);
+		roughness = mix(roughness, 0.85, mossAmount * 0.5);
+		perturbedGradSum += mossGrad.xz * (0.15 * mossAmount * mediumNormalFade);
 	}
 
 	// -------------------------------------------------------------------------
@@ -102,8 +132,6 @@ void main() {
 	// Serves as a 3D canopy standin at distance where explicit foliage meshes
 	// fade out, providing normal mapping, crevice shadowing, and roughness tweaks.
 	if (hasWeather && grassW > 0.02 && N.y > 0.50 && worldPos.y > params.waterLevel - 0.5) {
-		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
-		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
 		uint biomeIdx = uint(clamp(wb.biomeIndex, 0.0, 9.0));
 
 		// Determine forest density and appropriate tree species canopy profile using unified tree selection:
@@ -138,15 +166,13 @@ void main() {
 			float mediumCanopyFade = 1.0 - smoothstep(80.0, 300.0, camDist);   // Branch clusters (~2.0m - 3.5m)
 			float macroCanopyFade  = 1.0 - smoothstep(200.0, 1200.0, camDist); // Individual tree crowns (~6.0m - 10.0m)
 
-			mat3 microWarpGrad;
 			vec2 forestGrad = vec2(0.0);
 			vec3 g1 = vec3(0.0);
 			vec3 g2 = vec3(0.0);
 			vec3 g3 = vec3(0.0);
-			float fNoise1 = 1.0;
-			float fNoise2 = 1.0;
-			float fn3 = 1.0;//dot_noise(vec3(squatWarpedXZ * 2.000, 0.0), 0.0, g3);
-
+			float fNoise1 = dot_noise_fbm(vec3(worldXZ * 0.12, worldPos.y * 0.06), 3, 0.0, g1);
+			float fNoise2 = dot_noise_fbm(vec3(worldXZ * 0.35, worldPos.y * 0.18), 2, 0.0, g2);
+			float fn3 = dot_noise(vec3(worldXZ * 1.5, worldPos.y * 0.8), 0.0, g3);
 
 			if (treeType == 0u) { // Pine / Evergreen: Conical peaked crowns with vertical branch texture
 				forestGrad = g1.xz * (1.3 * 0.50 * macroCanopyFade) +
@@ -167,8 +193,11 @@ void main() {
 
 			perturbedGradSum += forestGrad * proxyAmount;
 
+			// Blend leafColor with the cosine palette canopy highlight
+			vec3 canopyHighlight = evalCosinePalette(palA, palB, palC, palD, 0.80 + 0.20 * fNoise2);
+			leafColor = mix(leafColor, canopyHighlight, 0.40);
+
 			// Gap crevice shadowing between adjacent tree crowns
-			// float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
 			float crownCrevice = smoothstep(-0.4, 0.4, fNoise1 * 0.65 + fNoise2 * 0.35);
 			vec3 canopyColor = mix(leafColor * 0.55, leafColor * 1.15, crownCrevice);
 
@@ -183,7 +212,7 @@ void main() {
 	// -------------------------------------------------------------------------
 	if (macroColorFade > 0.001 || macroNormalFade > 0.001) {
 		vec3 macroGrad3D;
-		float macroNoise = 1.0;//dot_noise(vec3(worldXZ * 0.35, 0.0), 0.0, macroGrad3D);
+		float macroNoise = dot_noise_fbm(vec3(worldXZ * 0.04, worldPos.y * 0.02), 3, 0.0, macroGrad3D);
 		vec2 macroGrad = macroGrad3D.xz;
 
 		float macroColorWeight  = macroColorFade * 0.35;
@@ -203,11 +232,7 @@ void main() {
 	// -------------------------------------------------------------------------
 	if (mediumColorFade > 0.001 || mediumNormalFade > 0.001) {
 		vec3 mediumGrad3D;
-		mat3 microWarpGrad;
-		// vec3 microNoiseWarp = cross_noise(worldPos, 0.0, microWarpGrad);
-		vec3 warp = vec3(1.0);//2*(microWarpGrad*microNoiseWarp);
-
-		float mediumNoise = 1.0;//dot_noise(vec3(worldXZ * 3.2, 0.0), 0.0, mediumGrad3D);
+		float mediumNoise = dot_noise_fbm(vec3(worldXZ * 0.25, worldPos.y * 0.12), 3, 0.0, mediumGrad3D);
 		vec2 mediumGrad = mediumGrad3D.xz;
 
 		float mediumColorWeight  = mediumColorFade * 0.55;
@@ -235,9 +260,7 @@ void main() {
 	// -------------------------------------------------------------------------
 	if (microColorFade > 0.001 || microNormalFade > 0.001) {
 		vec3 microGrad3D;
-		mat3 microWarpGrad;
-		vec3 microNoiseWarp = vec3(0.0);//cross_noise(worldPos, 0.0, microWarpGrad);
-		float microNoise = 1.0;//dot_noise(0.5*(microWarpGrad*microNoiseWarp)+vec3(worldXZ * 12.0, 0.0), 0.0, microGrad3D);
+		float microNoise = dot_noise_fbm(vec3(worldXZ * 1.5, worldPos.y * 0.6), 2, 0.0, microGrad3D);
 		vec2 microGrad = microGrad3D.xz;
 
 		float microColorWeight  = microColorFade;
