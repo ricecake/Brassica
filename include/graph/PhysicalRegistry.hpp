@@ -335,6 +335,20 @@ namespace brassica::graph {
 			vk::ImageLayout     targetLayout
 		);
 
+		// Not ResourceId-keyed, unlike UploadTextureImmediate above -- for a caller with a
+		// runtime-counted set of textures with no compile-time key per texture (e.g. GltfModel's
+		// textures, one per loaded glTF image), where there is no single "the" resource id to
+		// store this under. The caller owns the returned PhysicalTexture (keeps it alive via the
+		// shared_ptr) and reads its bindless index back via GetSampledBindlessIndex(). A
+        // deliberately independent implementation from UploadTextureImmediate rather than a
+        // shared refactor -- see Util.hpp's definition for why.
+		std::shared_ptr<PhysicalTexture> CreateAndUploadTexture2D(
+			const void*         pixelData,
+			std::size_t         sizeBytes,
+			const ResourceDesc& desc,
+			vk::ImageLayout     targetLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+		);
+
 		// ResourceServices: NodeContext::Write<K>/WriteSpan<K> call through to these. Defined in
 		// Util.hpp, same as the three above -- the real bodies need vk::Buffer(Image)Copy/VMA,
 		// which would bloat this class if inlined here.

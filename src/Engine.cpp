@@ -520,6 +520,15 @@ namespace brassica {
 			std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {})
 		);
 
+		// Stage 1 of the GLTF/GLB pipeline: load a single hardcoded test asset at startup -- no
+		// asset-selection UI or multi-model support yet, see GltfModelManager's own comment.
+		// Provided unconditionally regardless of load success/failure: a failed load just leaves
+		// GetMeshletCount() at 0, which already keeps GltfRenderNode inactive on its own.
+		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager);
+		serviceLocator.Provide<GltfModelManager>(
+			std::shared_ptr<GltfModelManager>(&gltfModelManager, [](GltfModelManager*) {})
+		);
+
 		particleManager.Initialize();
 		serviceLocator.Provide<IParticleManager>(
 			std::shared_ptr<IParticleManager>(&particleManager, [](IParticleManager*) {})
@@ -1339,6 +1348,8 @@ namespace brassica {
 			frameGraph.Register<graph::Import<LightsBuffer>>();
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
+			gltfModelManager.UpdatePose(0.0f); // no real frame time in this path -- see its own comment
+			gltfModelManager.RegisterBufferNodes(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
 			vk::Extent2D        extent = GetSwapchainExtent();
 			graph::FrameContext ctx{
@@ -1720,6 +1731,8 @@ namespace brassica {
 		frameGraph.Register<graph::Import<LightsBuffer>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
+		gltfModelManager.UpdatePose(ubo.time);
+		gltfModelManager.RegisterBufferNodes(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};

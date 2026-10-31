@@ -22,6 +22,15 @@
 // 26 -> 27: Added TerrainReadbackNode (design plan's bug 6 fix -- the terrain ground-height
 // 27 -> 28: Added TerrainShadowNode.
 // 28 -> 27: Unified AtmosphereCompositeNode into VolumetricRenderNode.
+// 27 -> 32: Drift found empirically while adding GltfRenderNode below -- the tracked count here
+// had already fallen behind several nodes' worth of uncommitted foliage/HiZ/multi-queue work
+// this session before this change, with no corresponding history entries. Not reconstructing
+// which specific additions those were; resynced to the real current count instead.
+// 32 -> 33: Added GltfRenderNode (Stage 1 of the GLTF/GLB pipeline).
+// 33 -> 34: Added FoliageIndirectResetNode (splitting FoliageIndirectArgsBuffer's zero-clear out
+// of FoliageNode::Execute() into its own Compute-domain node -- see FoliageNode.hpp's comment;
+// the Graphics-domain original was issuing an illegal barrier+fillBuffer inside its own
+// already-open dynamic-rendering scope, confirmed via real GPU-assisted validation).
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 27);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 34);
 }

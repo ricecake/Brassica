@@ -91,6 +91,15 @@ namespace brassica::testing {
 			// core already requires synchronization2; it does not require timelineSemaphore (a
 			// 1.2 feature synchronization2 happens to build on but doesn't itself enable).
 			features12.timelineSemaphore = VK_TRUE;
+			// Needed by any test exercising a buffer_reference-consuming node (Foliage/Particle/
+			// GLTF buffers across this codebase all request eShaderDeviceAddress usage) -- without
+			// this feature, VMA/the driver rejects creating such a buffer outright ("Failed to
+			// allocate buffer via VMA!"), found via test_foliage_node.cpp's own
+			// FoliageIndirectResetNode case. Confirmed supported the same way as this file's other
+			// features (see this struct's own comment): Engine.cpp already requests and relies on
+			// it (features12.bufferDeviceAddress, InitVulkan) across every real run this session,
+			// on the same MoltenVK backend this header targets.
+			features12.bufferDeviceAddress = VK_TRUE;
 
 			VkPhysicalDeviceFeatures features1{};
 			features1.shaderInt64 = VK_TRUE;
@@ -137,6 +146,12 @@ namespace brassica::testing {
 			allocatorInfo.device = m_device;
 			allocatorInfo.instance = m_instance;
 			allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+			// VMA refuses to allocate a buffer with VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+			// without this flag, regardless of whether the device feature above is enabled --
+			// found the hard way (features12.bufferDeviceAddress alone wasn't enough; this was
+			// the second, easy-to-miss half). Mirrors Engine.cpp's own allocator creation exactly
+			// (InitVulkan).
+			allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
 			if (vmaCreateAllocator(&allocatorInfo, &m_allocator) != VK_SUCCESS) {
 				spdlog::error("MinimalDevice: failed to create VMA allocator.");

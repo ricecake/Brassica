@@ -611,4 +611,128 @@ namespace brassica {
 
 	struct MaterialBuffer {};
 
+	// Matches shaders/foliage_archetype.glsl / foliage_instance.glsl exactly.
+	inline constexpr std::uint32_t kFoliageArchetypeMaxVerts = 128;
+	inline constexpr std::uint32_t kFoliageArchetypeMaxTris = 128;
+	inline constexpr std::uint32_t kFoliageTreeArchetypeCount = 8;
+	inline constexpr std::uint32_t kFoliageArchetypeCount = 16;
+	inline constexpr std::uint32_t kFoliageInstanceCapacity = 8192;
+
+	// Catalog-converted (Desc() lives on the key, like TerrainClipmapTexture/TerrainMinMaxTexture
+	// above) rather than each Create<>/Read<>() call site repeating its own .Desc(): with no
+	// per-site desc to disagree about, every toucher can carry a real Read<>/Modify<>() instead
+	// of the buffer_reference-consumer workaround of an explicit After<>() plus a hand-rolled
+	// barrier (EntityNode.hpp's EntityInstanceBuffer pattern -- itself flagged there as
+	// pre-catalog-conversion, not the thing to copy for a new resource). Per-vertex byte size
+	// verified via spirv-dis against the real std430 layout (vec3+vec3+vec2+vec4+uint -> 80
+	// bytes/vertex, not the naively-expected 56) rather than hand-computed -- see
+	// feedback_push_constant_struct_editing.
+	inline graph::ResourceDesc FoliageArchetypeVertexBufferDesc() {
+		graph::ResourceDesc desc = graph::StorageBufferDesc(
+			static_cast<std::uint64_t>(kFoliageArchetypeCount) * kFoliageArchetypeMaxVerts * 80
+		);
+		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+		desc.persistent = true;
+		return desc;
+	}
+
+	inline graph::ResourceDesc FoliageArchetypeIndexBufferDesc() {
+		graph::ResourceDesc desc = graph::StorageBufferDesc(
+			static_cast<std::uint64_t>(kFoliageArchetypeCount) * kFoliageArchetypeMaxTris * 16
+		);
+		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+		desc.persistent = true;
+		return desc;
+	}
+
+	inline graph::ResourceDesc FoliageArchetypeMetaBufferDesc() {
+		graph::ResourceDesc desc =
+			graph::StorageBufferDesc(static_cast<std::uint64_t>(kFoliageArchetypeCount) * 8);
+		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+		desc.persistent = true;
+		return desc;
+	}
+
+	// Persistent, GPU-baked (not host-written) tree/bush archetype shapes -- see
+	// shaders/foliage_archetype.glsl for the layout and FoliageBakeNode.hpp for how/when these
+	// get populated. Still read via buffer_reference (device address in a push constant, not a
+	// bindless SSBO index -- no generic bindless-buffer GLSL array exists in this codebase yet,
+	// see shaders/bindless.glsl); only the graph-side declaration changed, not the GPU-side access.
+	struct FoliageArchetypeVertexBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return FoliageArchetypeVertexBufferDesc();
+		}
+	};
+	struct FoliageArchetypeIndexBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return FoliageArchetypeIndexBufferDesc();
+		}
+	};
+	struct FoliageArchetypeMetaBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return FoliageArchetypeMetaBufferDesc();
+		}
+	};
+
+	// Scratch color target: FoliageBakeNode's mesh-shader pipeline needs a real Write-access
+	// Image2D realization to be valid (DynamicRenderingWrapper::Begin requires at least one), but
+	// the bake's real output is the buffers above, not anything rasterized here. Sized to the
+	// real frame (FoliageBakeNode::Setup), not a tiny throwaway extent -- BindGraphics sets the
+	// viewport/scissor from the frame's own width/height, not from this attachment's extent.
+	struct FoliageBakeDummyTarget {};
+
+	// Per-frame tree/bush instance list collected by foliage.mesh, and the indirect-draw args
+	// buffer whose groupCountX doubles as the live append counter -- see
+	// shaders/foliage_instance.glsl for the layout. Rebuilt every frame (unlike the archetype
+	// buffers above), zeroed each frame before collection via ClearBufferToZero. Catalog-converted
+	// for the same reason as the archetype buffers above.
+	struct FoliageInstanceBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc =
+				graph::StorageBufferDesc(static_cast<std::uint64_t>(kFoliageInstanceCapacity) * 32);
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+	struct FoliageIndirectArgsBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(16); // real struct is 12 bytes; 16 for safety margin
+			desc.usageMask |= static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eIndirectBuffer |
+				// eTransferSrc: lets a debug/test readback (vkCmdCopyBuffer out of this buffer)
+				// actually work -- added while writing test_foliage_node.cpp's own
+				// FoliageIndirectResetNode regression test, which needs to verify this exact
+				// buffer's real post-reset contents. Harmless to leave on a 16-byte buffer, and
+				// this is specifically the kind of silent, hard-to-observe buffer that benefits
+				// from being readable.
+				vk::BufferUsageFlagBits::eTransferSrc
+			);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Stage 1 of the GLTF/GLB pipeline (GltfModel/GltfModelManager): one asset's vertex/meshlet
+	// data, host-uploaded once at load time via graph::PredefinedBufferNode -- same mechanism as
+	// MaterialBuffer above, not catalog-converted. Unlike the foliage archetype buffers above,
+	// byte size depends on which asset was loaded, so there's no FrameContext-only Desc() a bare
+	// tag struct could compute; GltfModelManager's PredefinedBufferNode members are each key's
+	// sole Create<>(), with the real (data-size-derived, eShaderDeviceAddress-flagged) desc passed
+	// explicitly to SetData() there. Every reader's Read<>() of these stays bare (no .Desc()) --
+	// same reasoning as ParticleGridBuildNode's bare Read<ParticleTypeBuffer>() above, since
+	// there's exactly one real producer per key here, not ParticleBuffer's dual-Modify case where
+	// two touchers must agree on an identical explicit .Desc().
+	struct GltfVertexBuffer {};
+	struct GltfMeshletVertexBuffer {};
+	struct GltfMeshletTriangleBuffer {};
+	struct GltfMeshletBuffer {};
+
+	// Stage 4 (GPU skinning): one mat4 per joint, in skin-joint order (GltfModel::EvaluatePose's
+	// own output order), recomputed and re-uploaded every frame as the current animation plays --
+	// unlike the other four GLTF buffers above, this one's *contents* change every frame even
+	// though its size doesn't, same PredefinedBufferNode mechanism either way. Same non-catalog
+	// reasoning as the others: joint count depends on which asset's skin was loaded.
+	struct GltfJointMatrixBuffer {};
+
 } // namespace brassica

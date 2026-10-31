@@ -98,21 +98,28 @@ namespace brassica {
 		// instead of being an accident of EntityPrepareNode's Prepare phase sorting earlier than
 		// this node's old GBuffer phase.
 		//
-		// AnyOrder() on Position/Normal/Albedo/Depth (not Material, which FoliageNode doesn't
-		// touch at all): both this node and FoliageNode Modify the same four keys with nothing
-		// else ordering them, which the relational compiler (S3) treats as a hard ambiguity
-		// error unless both sides opt in. Safe specifically because both are depth-tested opaque
-		// writes to disjoint screen regions -- the visual result doesn't depend on draw order --
-		// but AnyOrder() still gets a real, deterministically-directed edge (and the barrier that
-		// comes with it): two same-stage Graphics nodes with *no* edge at all between them,
-		// writing the same attachment-backed images, would be a genuine WAW hazard regardless of
-		// how commutative the actual pixels are.
+		// AnyOrder() on all five GBuffer keys, Material included: this node and GltfRenderNode
+		// (as of the GLTF pipeline's Stage 2) both Modify it now. Confirmed via
+		// test_rendergraph.cpp's force-all-active check (with a temporary diagnostic) that
+		// leaving Material bare here was NOT actually ambiguous -- this node and GltfRenderNode
+		// were already transitively ordered via the other four keys' own AnyOrder tie-break
+		// (RelationalCompiler.hpp's addResourceEdge updates global reachability, not a per-key
+		// one, so one key's tie-break edge orders the pair for every other key they jointly
+		// touch too). Added here anyway, explicitly, so that ordering isn't a silent accident of
+		// which other keys happen to pair these two nodes -- a future writer that only touches
+        // Material (no Position/Normal/Albedo/Depth) would have no such accidental edge to lean
+        // on. Safe specifically because every writer here is a depth-tested opaque write to
+        // disjoint screen regions -- the visual result doesn't depend on draw order -- but
+        // AnyOrder() still gets a real, deterministically-directed edge (and the barrier that
+        // comes with it): two same-stage Graphics nodes with *no* edge at all between them,
+        // writing the same attachment-backed images, would be a genuine WAW hazard regardless of
+        // how commutative the actual pixels are.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Modify<GBufferPosition>().AnyOrder();
 			r.Modify<GBufferNormal>().AnyOrder();
 			r.Modify<GBufferAlbedo>().AnyOrder();
-			r.Modify<GBufferMaterial>();
+			r.Modify<GBufferMaterial>().AnyOrder();
 			r.Modify<GBufferDepth>().AnyOrder();
 			r.After<EntityPrepareNode>();
 		}

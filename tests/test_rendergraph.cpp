@@ -70,6 +70,20 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	// so this test has no FoliageManager to register it the real way. Same category as the
 	// other Import<>s above: a key whose producer lives outside the auto-registered set.
 	frameGraph.Register<graph::Import<FoliageBiomeTableTexture>>();
+	// Same category again: GltfVertexBuffer/GltfMeshletVertexBuffer/GltfMeshletTriangleBuffer/
+	// GltfMeshletBuffer/GltfJointMatrixBuffer's real producers are GltfModelManager's
+	// PredefinedBufferNode members (GltfModelManager::RegisterBufferNodes), and MaterialBuffer's
+	// is MaterialManager's (MaterialManager::RegisterBufferNode) -- both called alongside
+	// RegisterAllInto in Engine.cpp's real graph builds, neither part of EngineNodeRegistry's
+	// auto-registered set. GltfRenderNode (auto-registered) is the one real consumer of all six
+	// once ForceAllActive() below stops letting its own Setup()-decided inactivity (no
+	// GltfModelManager service in this test) hide the gap.
+	frameGraph.Register<graph::Import<GltfVertexBuffer>>();
+	frameGraph.Register<graph::Import<GltfMeshletVertexBuffer>>();
+	frameGraph.Register<graph::Import<GltfMeshletTriangleBuffer>>();
+	frameGraph.Register<graph::Import<GltfMeshletBuffer>>();
+	frameGraph.Register<graph::Import<GltfJointMatrixBuffer>>();
+	frameGraph.Register<graph::Import<MaterialBuffer>>();
 
 	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
 

@@ -22,6 +22,7 @@
 #include "InputHandler.hpp"
 #include "lighting/LightManager.hpp"
 #include "lighting/LightningManager.hpp"
+#include "model/GltfModelManager.hpp"
 #include "particle/ParticleManager.hpp"
 #include "passes/AllNodes.hpp"
 #include "render/MaterialManager.hpp"
@@ -337,6 +338,7 @@ namespace brassica {
 		FoliageManager    foliageManager;
 		MaterialManager   materialManager;
 		ParticleManager   particleManager;
+		GltfModelManager  gltfModelManager;
 		AtmosphereManager         atmosphereManager;
 		VolumetricLightingManager volumetricLightingManager;
 		CloudLightingManager      cloudLightingManager;

@@ -7,7 +7,7 @@
 #include "render/MaterialManager.hpp"
 
 TEST_CASE("MaterialData - std430 Layout and Sentinel Values") {
-	CHECK(sizeof(brassica::MaterialData) == 128);
+	CHECK(sizeof(brassica::MaterialData) == 160);
 	CHECK(brassica::UNBOUND_TEXTURE_ID == 0xFFFFFFFFu);
 
 	brassica::MaterialData mat;
@@ -24,6 +24,9 @@ TEST_CASE("MaterialData - std430 Layout and Sentinel Values") {
 	CHECK(mat.palette[1] == glm::vec4(0.5f, 0.5f, 0.5f, 0.0f));
 	CHECK(mat.palette[2] == glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));
 	CHECK(mat.palette[3] == glm::vec4(0.0f, 0.33f, 0.67f, 0.0f));
+
+	CHECK(mat.baseColorFactor == glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	CHECK(mat.emissiveFactor == glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
 }
 
 TEST_CASE("MaterialManager - Material Registration, Retrieval, and Updates") {
