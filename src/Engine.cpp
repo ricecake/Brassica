@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <thread>
 
 #include "spdlog/spdlog.h"
 
@@ -1230,6 +1231,36 @@ namespace brassica {
 			.familyIndex = transferQueueFamily
 		};
 
+		// S0 data-gathering only (design plan's restructure, "zippy-seeking-hanrahan"): the real
+		// numbers S7a's set-0-storage spike needs (ring-slice alignment) and S8's queue
+		// introspection needs (how many queues of each type the device can actually give us),
+		// logged once at startup so they're on hand without re-querying by hand on whatever
+		// machine ends up running those stages. Not read by anything yet.
+		{
+			const auto queueFamilyProps = chosenGPU.getQueueFamilyProperties();
+			for (std::size_t i = 0; i < queueFamilyProps.size(); ++i) {
+				const auto& props = queueFamilyProps[i];
+				spdlog::info(
+					"Queue family {}: count={} flags={} timestampValidBits={}",
+					i,
+					props.queueCount,
+					vk::to_string(props.queueFlags),
+					props.timestampValidBits
+				);
+			}
+
+			const vk::PhysicalDeviceLimits& limits = chosenGPU.getProperties().limits;
+			spdlog::info(
+				"Device limits: minUniformBufferOffsetAlignment={} minStorageBufferOffsetAlignment={} "
+				"nonCoherentAtomSize={}",
+				limits.minUniformBufferOffsetAlignment,
+				limits.minStorageBufferOffsetAlignment,
+				limits.nonCoherentAtomSize
+			);
+
+			spdlog::info("std::thread::hardware_concurrency() = {}", std::thread::hardware_concurrency());
+		}
+
 		// Initialize VMA
 		VmaAllocatorCreateInfo allocatorInfo{};
 		allocatorInfo.physicalDevice = chosenGPU;
@@ -1346,6 +1377,7 @@ namespace brassica {
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 			frameGraph.Register<graph::Import<LightsBuffer>>();
+			frameGraph.Register<graph::Import<ClusteredLighting>>();
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
 			gltfModelManager.UpdatePose(0.0f); // no real frame time in this path -- see its own comment
@@ -1639,6 +1671,19 @@ namespace brassica {
 			true
 		);
 
+		// ClusteredLighting (frame set binding 3, shaders/lighting.glsl's uClusters) -- S0 fix,
+		// design plan's restructure: this used to be a Create()'d transient graph buffer with
+		// its own Desc() while the real data lived here, in clusterGridBuffers[], imported
+		// separately into set 0 -- the graph's buffer barriers named the wrong VkBuffer
+		// entirely, a phantom resource. Same pattern as AutoExposureBuffer/LightsBuffer above:
+		// imported right after InitFrameSet's binding setup covers it, and
+		// ClusterLightAssignmentNode's Setup() now does a real Modify<>() against it.
+		physicalRegistry.RegisterImportedBuffer<ClusteredLighting>(
+			clusterGridBuffers[activeFrame],
+			graph::StorageBufferDesc(TOTAL_CLUSTERS * sizeof(ClusterGPU)),
+			true
+		);
+
 		// bindlessBindings.set/layout (set 1) never change frame to frame -- only frameSet
 		// actually varies here, since it's the only piece that's genuinely double-buffered. This
 		// still runs every frame rather than once at init because activeFrame does.
@@ -1729,6 +1774,7 @@ namespace brassica {
 		// --print-render-graph path below) and produced exactly ValidateRuntime's "no node or
 		// import produces these resource keys" error on real hardware.
 		frameGraph.Register<graph::Import<LightsBuffer>>();
+		frameGraph.Register<graph::Import<ClusteredLighting>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
 		gltfModelManager.UpdatePose(ubo.time);

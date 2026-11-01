@@ -243,11 +243,17 @@ namespace brassica {
 		}
 	};
 
-	struct ClusteredLighting {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
-			return graph::StorageBufferDesc(TOTAL_CLUSTERS * sizeof(ClusterGPU));
-		}
-	};
+	// Frame set binding 3 (shaders/lighting.glsl's uClusters) -- this used to be a Create()'d
+	// transient graph buffer with its own Desc() while the real data lived in Engine's separate
+	// clusterGridBuffers[], imported into set 0 by Engine::InitFrameSet: the graph's buffer
+	// barriers (BarrierTranslator) name the specific VkBuffer a realization resolves to, so they
+	// were covering the wrong buffer entirely -- a phantom resource, structurally unable to
+	// produce a real RAW memory dependency between ClusterLightAssignmentNode's write and
+	// DeferredNode's read (S0 fix, design plan's restructure). Imported now, same reasoning and
+	// the same tag-only shape as AutoExposureBuffer/LightsBuffer just below -- Provision skips an
+	// imported key's realization regardless of desc, so there's nothing for a Desc() to
+	// usefully describe.
+	struct ClusteredLighting {};
 
 	// AutoExposureBuffer is imported (Engine::DrawFrame's RegisterImportedBuffer) -- Provision
 	// skips an imported key's realization entirely regardless of its desc, so this stays a

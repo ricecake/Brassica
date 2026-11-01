@@ -1,4 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <map>
+#include <string>
+#include <vector>
+
 #include "doctest/doctest.h"
 
 #include "Engine.hpp"
@@ -12,6 +16,135 @@
 #include "passes/TerrainNode.hpp"
 
 using namespace brassica;
+
+namespace {
+
+	// S0 golden fixture (design plan's restructure, "zippy-seeking-hanrahan"): a layout-only move
+	// (S1) or a pure resource-type conversion (S2-S4, S6) must reproduce this byte-identical --
+	// any diff means something that was supposed to be a no-op logic change actually moved a node
+	// between stages or changed which node wins a multi-writer key. S5 (managers own nodes) is
+	// expected to change the MULTI-WRITER KEYS section's import list once ClusteredLighting/etc.
+	// become real imports and the two drifted Engine.cpp graph-build sites unify -- see the plan's
+	// S0/S5 sections for what's expected to change there.
+	//
+	// Stage membership is sorted alphabetically within a stage (node order within a stage is
+	// unconstrained -- two nodes share a stage specifically because neither depends on the
+	// other -- so an unsorted dump would make this fixture flaky against nothing more than
+	// std::vector's own incidental ordering). Multi-writer keys are listed in node-registration
+	// order, which is what PhysicalRegistry::Provision's schedule-last-wins collapse (lessons
+	// 7/10/11/12a, project-brassica-graph-phase-lessons) actually iterates.
+	std::string DumpScheduleFixture(const graph::Graph& g) {
+		std::string      out;
+		const auto       nodes = g.Nodes();
+		const auto&      schedule = g.GetSchedule();
+
+		for (std::size_t s = 0; s < schedule.stages.size(); ++s) {
+			std::vector<std::string> names;
+			for (std::size_t idx : schedule.stages[s].nodes) {
+				names.emplace_back(nodes[idx].Descriptor().name);
+			}
+			std::sort(names.begin(), names.end());
+			out += "STAGE " + std::to_string(s) + ":\n";
+			for (const auto& n : names) {
+				out += "  " + n + "\n";
+			}
+		}
+
+		std::map<std::string, std::vector<std::string>> writersByKeyName;
+		for (const auto& node : nodes) {
+			const auto desc = node.Descriptor();
+			for (const graph::ResourceId key : desc.produces) {
+				writersByKeyName[std::string(key->name)].emplace_back(desc.name);
+			}
+		}
+		out += "MULTI-WRITER KEYS:\n";
+		for (const auto& [keyName, writerNames] : writersByKeyName) {
+			if (writerNames.size() < 2) {
+				continue;
+			}
+			out += "  " + keyName + ": ";
+			for (std::size_t i = 0; i < writerNames.size(); ++i) {
+				if (i) {
+					out += ", ";
+				}
+				out += writerNames[i];
+			}
+			out += "\n";
+		}
+		return out;
+	}
+
+	// Captured from a real run of the test below (DumpScheduleFixture's output); see its comment
+	// for what this is allowed and not allowed to change across. Re-capture via
+	// `ctest -R test_rendergraph --output-on-failure` (or run the binary directly with
+	// `--test-case="Force-all-active*" --success`) and copy the printed "actual dump" back in
+	// here if a stage intentionally changes.
+	const std::string kGoldenScheduleFixture =
+		R"FIXTURE(STAGE 0:
+  brassica::graph::Import<brassica::AutoExposureBuffer>
+  brassica::graph::Import<brassica::ClusteredLighting>
+  brassica::graph::Import<brassica::FoliageBiomeTableTexture>
+  brassica::graph::Import<brassica::LightsBuffer>
+  brassica::graph::Import<brassica::Swapchain>
+  brassica::graph::Import<brassica::TerrainTLAS>
+  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture>>
+STAGE 1:
+  brassica::CloudVolumeGenNode
+  brassica::ClusterLightAssignmentNode
+  brassica::EntityPrepareNode
+  brassica::TerrainBiomeNode
+  brassica::TerrainGenNode
+  brassica::TransmittanceLUTNode
+STAGE 2:
+  brassica::CloudShadowGenNode
+  brassica::MultiScatteringLUTNode
+  brassica::TerrainMinMaxDownsampleNode
+  brassica::TerrainReadbackNode
+STAGE 3:
+  brassica::SkyViewLUTNode
+  brassica::TerrainNode
+STAGE 4:
+  brassica::EntityNode
+  brassica::SkyBackgroundNode
+  brassica::VolumetricFroxelGenNode
+STAGE 5:
+  brassica::FoliageNode
+STAGE 6:
+  brassica::GTAONode
+  brassica::HiZDownsampleNode
+STAGE 7:
+  brassica::DeferredNode
+STAGE 8:
+  brassica::AtmosphereCompositeNode
+STAGE 9:
+  brassica::VolumetricRenderNode
+STAGE 10:
+  brassica::WaterNode
+STAGE 11:
+  brassica::CirrusNode
+STAGE 12:
+  brassica::CloudRenderNode
+STAGE 13:
+  brassica::TonemapComputeNode
+STAGE 14:
+  brassica::TonemapNode
+STAGE 15:
+  brassica::ImGuiNode
+MULTI-WRITER KEYS:
+  brassica::AutoExposureBuffer: brassica::graph::Import<brassica::AutoExposureBuffer>, brassica::TonemapComputeNode
+  brassica::ClusteredLighting: brassica::graph::Import<brassica::ClusteredLighting>, brassica::ClusterLightAssignmentNode
+  brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
+  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
+  brassica::GBufferMaterial: brassica::EntityNode, brassica::TerrainNode
+  brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
+  brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
+  brassica::HdrColor: brassica::AtmosphereCompositeNode, brassica::CirrusNode, brassica::CloudRenderNode, brassica::DeferredNode, brassica::VolumetricRenderNode, brassica::WaterNode
+  brassica::Swapchain: brassica::graph::Import<brassica::Swapchain>, brassica::ImGuiNode, brassica::TonemapNode
+  brassica::TerrainMinMaxTexture: brassica::TerrainGenNode, brassica::TerrainMinMaxDownsampleNode
+  brassica::TerrainTLAS: brassica::graph::Import<brassica::TerrainTLAS>, brassica::TerrainGenNode
+)FIXTURE";
+
+} // namespace
 
 TEST_CASE("Real TerrainGenNode/SkyBackgroundNode/TerrainNode/DeferredNode compose into a renderable, correctly-staged graph") {
 	brassica::Engine        engine;
@@ -63,6 +196,7 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	frameGraph.Register<graph::Import<Swapchain>>();
 	frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 	frameGraph.Register<graph::Import<LightsBuffer>>();
+	frameGraph.Register<graph::Import<ClusteredLighting>>();
 	frameGraph.Register<graph::Import<graph::History<HiZTexture>>>();
 	// FoliageBiomeTableTexture's real producer is a PredefinedTextureNode instance owned by
 	// FoliageManager (FoliageManager::RegisterTableNode, called alongside RegisterAllInto in
@@ -99,6 +233,14 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 
 	const auto& schedule = frameGraph.GetSchedule();
 	CHECK(!schedule.stages.empty());
+
+	// Golden schedule fixture -- see DumpScheduleFixture's comment above. MESSAGE prints the
+	// actual dump on failure so a deliberate (explained) change can be re-captured by hand.
+	const std::string actualFixture = DumpScheduleFixture(frameGraph);
+	if (actualFixture != kGoldenScheduleFixture) {
+		MESSAGE("Golden schedule fixture mismatch -- actual dump:\n" << actualFixture);
+	}
+	CHECK(actualFixture == kGoldenScheduleFixture);
 
 	ServiceLocator::SetInstance(nullptr);
 }

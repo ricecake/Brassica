@@ -32,9 +32,6 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-			if (services.physicalRegistry) {
-				services.physicalRegistry->Catalog().Get<ClusteredLighting>();
-			}
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) { watcher.RegisterShader(&compShader); }
@@ -43,7 +40,10 @@ namespace brassica {
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
-			r.Create<ClusteredLighting>();
+			// ClusteredLighting is now imported (Engine::DrawFrame's RegisterImportedBuffer) --
+			// same reasoning as LightsBuffer's own Modify<>() just below: a real producer-node
+			// write against an already-imported key is Modify, not Create.
+			r.Modify<ClusteredLighting>();
 			// uLights/uLightCount (shaders/lighting.glsl, set 0 binding 2) is now a real graph
 			// key (LightsBuffer, ResourceKeys.hpp) -- this Read<>() is a genuine RAW edge against
 			// ParticleBehaviorNode's Modify<LightsBuffer>() (its firefly particles write real
