@@ -199,10 +199,6 @@ namespace brassica {
 		};
 	}
 
-	struct VolumetricNoiseTexture {
-		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const { return VolumetricNoiseDesc(); }
-	};
-
 	struct Swapchain {};
 
 	struct HdrColor {

@@ -80,7 +80,6 @@ namespace brassica {
 				catalog.Get<VolumetricCascade1Extinction>();
 				catalog.Get<VolumetricCascade2Scattering>();
 				catalog.Get<VolumetricCascade2Extinction>();
-				catalog.Get<VolumetricNoiseTexture>();
 			}
 		}
 
@@ -124,7 +123,6 @@ namespace brassica {
 			r.Create<VolumetricCascade1Extinction>();
 			r.Create<VolumetricCascade2Scattering>();
 			r.Create<VolumetricCascade2Extinction>();
-			r.Create<VolumetricNoiseTexture>();
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
@@ -139,17 +137,6 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
-			// 1. Generate 2D noise map
-			noisePush.noiseStorageIdx = ctx.StorageIndex<VolumetricNoiseTexture>();
-			noisePush.time = time;
-
-			render::ResolvedPipeline noiseResolved = render::BindCompute(ctx, *pipelineLibrary, noiseShader, noisePush);
-			if (noiseResolved.pipeline) {
-				// 512 / 16 = 32
-				vkCmd.dispatch(32, 32, 1);
-			}
-
-			// 2. Generate froxel cascade volumes
 			auto pack16 = [](std::uint32_t low, std::uint32_t high) -> std::uint32_t {
 				return (low & 0xFFFFu) | ((high & 0xFFFFu) << 16u);
 			};
@@ -162,7 +149,6 @@ namespace brassica {
 			std::uint32_t ext1 = ctx.StorageIndex<VolumetricCascade1Extinction>();
 			std::uint32_t ext2 = ctx.StorageIndex<VolumetricCascade2Extinction>();
 
-			std::uint32_t noiseTextureIdx = ctx.Index<VolumetricNoiseTexture>();
 			std::uint32_t skyViewIndex = ctx.Index<SkyViewLUT>();
 			std::uint32_t clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			std::uint32_t minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
@@ -173,7 +159,7 @@ namespace brassica {
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
 			genPush.indices0.z = pack16(ext1, ext2);
-			genPush.indices0.w = pack16(noiseTextureIdx, skyViewIndex);
+			genPush.indices0.w = pack16(0xFFFF, skyViewIndex);
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
