@@ -32,7 +32,7 @@ namespace brassica {
 	struct WaterNode;
 	struct VolumetricRenderNode;
 	struct CirrusNode;
-	struct CloudRenderNode;
+	struct CloudCompositeNode;
 
 	struct ParticleResetPushConstants {
 		std::uint32_t gridSize{1024};
@@ -940,10 +940,11 @@ namespace brassica {
 			// Not required by any currently-registered graph -- see
 			// UnderwaterParticleRenderNode's identical comment on After<AtmosphereCompositeNode>()/
 			// After<VolumetricRenderNode>() for why this is the other half of the same
-			// future-safety fix (CirrusNode/CloudRenderNode are WaterNode's successors in the
-			// HdrColor chain, same as Atmosphere/Volumetric are its predecessors).
+			// future-safety fix (CirrusNode/CloudCompositeNode are WaterNode's successors in the
+			// HdrColor chain, same as Atmosphere/Volumetric are its predecessors). CloudCompositeNode,
+			// not CloudRenderNode -- that's a compute pass now, no longer in this chain at all.
 			r.Before<CirrusNode>();
-			r.Before<CloudRenderNode>();
+			r.Before<CloudCompositeNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

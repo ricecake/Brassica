@@ -23,9 +23,9 @@ namespace brassica {
 
 	class ShaderWatcher;
 
-	// Forward-declared only: Before<CloudRenderNode>()/After<WaterNode>() below need just the
+	// Forward-declared only: Before<CloudCompositeNode>()/After<WaterNode>() below need just the
 	// type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
-	struct CloudRenderNode;
+	struct CloudCompositeNode;
 	struct WaterNode;
 
 	struct CirrusPushConstants {
@@ -44,9 +44,11 @@ namespace brassica {
 	// Renders a thin, lower atmospheric cirrus cloud layer at ~10km altitude.
 	// Serves as a weather indicator and daytime skybox layer, blending over HdrColor
 	// with dual-sided visibility and camera proximity transparency fading.
-	// S4: no kPhase -- After<WaterNode>()/Before<CloudRenderNode>() (below) place it in the
+	// S4: no kPhase -- After<WaterNode>()/Before<CloudCompositeNode>() (below) place it in the
 	// HdrColor writer chain as real edges instead, immediately after WaterNode so water surfaces
-	// do not cover the cirrus cloud layer.
+	// do not cover the cirrus cloud layer. Before<CloudCompositeNode>() (not CloudRenderNode --
+	// that's a compute pass now, no longer in this chain at all) since CloudCompositeNode is the
+	// one actually Modifying HdrColor.
 	struct CirrusNode: render::NodeRegistrar<CirrusNode> {
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
@@ -92,7 +94,7 @@ namespace brassica {
 		// No Read<GBufferNormal/Material/Depth>() -- same lesson #2 over-claim as
 		// AtmosphereCompositeNode.hpp's identical fix. Read<TerrainWeatherBiomeTexture>()
 		// restored (S4): catalog-converted since batch 5, so the lesson #10 hazard that
-		// justified omitting it is gone. Before<CloudRenderNode>() reproduces the schedule
+		// justified omitting it is gone. Before<CloudCompositeNode>() reproduces the schedule
 		// order S0 recorded (Cirrus before Cloud) for these two same-phase HdrColor writers.
 		// After<WaterNode>() (S4) is the other half of WaterNode's new Before<CirrusNode>() --
 		// see VolumetricRenderNode.hpp's identical comment on why this chain needs real edges.
@@ -104,7 +106,7 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<TerrainWeatherBiomeTexture>();
 			r.Modify<HdrColor>();
-			r.Before<CloudRenderNode>();
+			r.Before<CloudCompositeNode>();
 			r.After<WaterNode>();
 		}
 
