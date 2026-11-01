@@ -37,16 +37,42 @@ void main() {
 	if (pixel.x >= int(push.outputWidth) || pixel.y >= int(push.outputHeight)) {
 		return;
 	}
+
+const ivec2 bayer_offsets[16] = ivec2[](
+    ivec2(0,0), ivec2(2,0), ivec2(0,2), ivec2(2,2), // Indices 0-3
+    ivec2(1,1), ivec2(3,1), ivec2(1,3), ivec2(3,3), // Indices 4-7
+    ivec2(2,1), ivec2(0,1), ivec2(2,3), ivec2(0,3), // Indices 8-11
+    ivec2(3,0), ivec2(1,0), ivec2(3,2), ivec2(1,2)  // Indices 12-15
+);
+	ivec2 offset = bayer_offsets[uFrameIndex % 16];
+	bool freshPixel = (pixel % 4) == offset;
+
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
-	vec3  curColor = SAMPLE_NEAREST(push.colorIndex, uv).rgb;
-	vec3  curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, uv).rgb;
-	float curDepth = SAMPLE_NEAREST(push.depthIndex, uv).r;
-	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, uv).rg;
+	// 1. Move the freshUV calculation UP here
+	ivec2 blockOrigin = pixel & ~3; // Top-left of the 4x4 block
+	ivec2 freshPixelCoord = blockOrigin + offset;
+	vec2 freshUV = (vec2(freshPixelCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
+	// 2. Fetch all current data using freshUV, never uv!
+	vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
+	vec3  curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, freshUV).rgb;
+	float curDepth = SAMPLE_NEAREST(push.depthIndex, freshUV).r;
+	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, freshUV).rg;
+
+	// 3. hasCloud can now just use curDepth safely
 	bool hasCloud = curDepth < 1e8;
+
 	vec2 historyUV = uv;
 	bool inBounds = false;
+
+	// if (freshPixel) {
+	// 	float currLuma = luminance(curColor);
+	// 	imageStore(uImagesGenericWrite[nonuniformEXT(push.outColorStorageIdx)], pixel, vec4(curColor, 0.0));
+	// 	imageStore(uImagesGenericWrite[nonuniformEXT(push.outTransmittanceStorageIdx)], pixel, vec4(curTransmittance, 0.0));
+	// 	imageStore(uImagesGenericWrite[nonuniformEXT(push.outMomentsStorageIdx)], pixel, vec4(currLuma, currLuma*currLuma, 1.0, curDepth));
+	// 	return;
+	// }
 
 	if (hasCloud) {
 		// Reconstruct world position from this frame's depth, reproject via the PREVIOUS
@@ -89,25 +115,27 @@ void main() {
 		histMoments.z *= (1.0 - max(depthReject, lumaReject));
 	}
 
-	float historyLength = min(32.0, histMoments.z + 1.0);
+	float historyLength = min(4.0, histMoments.z + 1.0);
 	float alpha = 1.0 / historyLength;
 
 	// 3x3-neighborhood AABB color clip: keeps the blended history inside this frame's local
 	// color range, so a stale/ghosted history sample self-corrects over 1-2 frames instead of
 	// visibly smearing. RGB-space, not YCoCg -- simpler, same core technique.
-	vec3 nMin = curColor;
-	vec3 nMax = curColor;
-	for (int dy = -1; dy <= 1; dy++) {
-		for (int dx = -1; dx <= 1; dx++) {
-			if (dx == 0 && dy == 0) continue;
-			ivec2 samplePixel =
-				clamp(pixel + ivec2(dx, dy), ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
-			vec2 sampleUV = (vec2(samplePixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
-			vec3 neighborColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
-			nMin = min(nMin, neighborColor);
-			nMax = max(nMax, neighborColor);
-		}
-	}
+vec3 nMin = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb; // Start with this block's fresh color
+vec3 nMax = nMin;
+
+for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+        if (dx == 0 && dy == 0) continue;
+        ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
+        ivec2 neighborFreshCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+        vec2 sampleUV = (vec2(neighborFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+        vec3 neighborColor = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
+        nMin = min(nMin, neighborColor);
+        nMax = max(nMax, neighborColor);
+    }
+}
 	vec3 clippedHistColor = clamp(histColor, nMin, nMax);
 
 	vec3 blendedColor = mix(clippedHistColor, curColor, alpha);

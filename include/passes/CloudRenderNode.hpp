@@ -122,7 +122,7 @@ namespace brassica {
 			}
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			vkCmd.dispatch((width + 7) / 8, (height + 7) / 8, 1);
+			vkCmd.dispatch((width + 7) / (4*8), (height + 7) / (4*8), 1);
 		}
 	};
 
