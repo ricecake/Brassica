@@ -15,6 +15,7 @@
 #include "passes/CloudCompositeNode.hpp"
 #include "passes/CloudRenderNode.hpp"
 #include "passes/CloudShadowGenNode.hpp"
+#include "passes/CloudTemporalNode.hpp"
 #include "passes/CloudVolumeDownsampleNode.hpp"
 #include "passes/CloudVolumeGenNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
