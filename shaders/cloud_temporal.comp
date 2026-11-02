@@ -61,7 +61,7 @@ const ivec2 bayer_offsets[16] = ivec2[](
 	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, freshUV).rg;
 
 	// 3. hasCloud can now just use curDepth safely
-	bool hasCloud = curDepth < 1e8;
+	bool hasCloud = any(lessThan(curTransmittance, vec3(1.0)));
 
 	vec2 historyUV = uv;
 	bool inBounds = false;
@@ -75,22 +75,25 @@ const ivec2 bayer_offsets[16] = ivec2[](
 	// }
 
 	if (hasCloud) {
-		// Reconstruct world position from this frame's depth, reproject via the PREVIOUS
-		// frame's view-projection (camera motion only), then subtract the wind-only velocity
-		// cloud_raymarch.comp already isolated -- the same camera/non-camera split boidish uses.
-		vec2 clipCoord = uv * 2.0 - 1.0;
-		vec4 viewRay4 = uInvProjMatrix * vec4(clipCoord, 1.0, 1.0);
-		vec3 viewDir = viewRay4.xyz / viewRay4.w;
-		vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
-		vec3 worldPos = uCameraPosition.xyz + worldRay * curDepth;
+// 1. Reconstruct the exact world position of the pixel that was raymarched
+		vec2 freshClipCoord = freshUV * 2.0 - 1.0;
+		vec4 freshViewRay4 = uInvProjMatrix * vec4(freshClipCoord, 1.0, 1.0);
+		vec3 freshViewDir = freshViewRay4.xyz / freshViewRay4.w;
+		vec3 freshWorldRay = normalize((uInvViewMatrix * vec4(freshViewDir, 0.0)).xyz);
+		vec3 freshWorldPos = uCameraPosition.xyz + freshWorldRay * curDepth;
 
-		vec4 prevClip = uPreviousViewProjMatrix * vec4(worldPos, 1.0);
-		vec2 camReprojUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+		// 2. Project it into the previous frame to find where it was
+		vec4 prevClip = uPreviousViewProjMatrix * vec4(freshWorldPos, 1.0);
+		vec2 prevFreshUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
 
-		historyUV = camReprojUV - curVelocity;
+		// 3. Extract the camera motion vector in screen space
+		vec2 cameraMotion = prevFreshUV - freshUV;
+
+		// 4. Apply the shared motion vector to THIS thread's UV, and add wind
+		historyUV = uv + cameraMotion - curVelocity;
 		inBounds = all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0)));
 	}
-
+/*
 	vec3 histColor = vec3(0.0);
 	vec3 histTransmittance = vec3(1.0);
 	vec4 histMoments = vec4(0.0); // x = luma, y = luma^2, z = historyLength, w = depth
@@ -115,7 +118,7 @@ const ivec2 bayer_offsets[16] = ivec2[](
 		histMoments.z *= (1.0 - max(depthReject, lumaReject));
 	}
 
-	float historyLength = min(4.0, histMoments.z + 1.0);
+	float historyLength = min(32.0, histMoments.z + 1.0);
 	float alpha = 1.0 / historyLength;
 
 	// 3x3-neighborhood AABB color clip: keeps the blended history inside this frame's local
@@ -143,6 +146,89 @@ for (int dy = -1; dy <= 1; dy++) {
 
 	float blendedLuma = luminance(blendedColor);
 	vec4  outMoments = vec4(blendedLuma, blendedLuma * blendedLuma, historyLength, curDepth);
+*/
+
+vec3 histColor = vec3(0.0);
+	vec3 histTransmittance = vec3(1.0);
+	vec4 histMoments = vec4(0.0);
+	bool validHistory = hasCloud && inBounds;
+
+	if (validHistory) {
+		histColor = SAMPLE_LINEAR(push.historyColorIndex, historyUV).rgb;
+		histTransmittance = SAMPLE_LINEAR(push.historyTransmittanceIndex, historyUV).rgb;
+		histMoments = SAMPLE_LINEAR(push.historyMomentsIndex, historyUV);
+
+		bool historyWasSky = all(greaterThan(histTransmittance, vec3(0.99)));
+		if (historyWasSky) {
+			histMoments.z = 0.0;
+		}
+	}
+
+	// Capped to 8.0 (128 frames) for faster smoothing. The variance clip will handle fast action.
+	float historyLength = min(8.0, histMoments.z + 1.0);
+	float alpha = 1.0 / historyLength;
+
+	// Variance-based 3x3 Neighborhood Clip (Soft Clip)
+	// Solves ghosting and slow-updates without causing stochastic boiling.
+	vec3 m1 = vec3(0.0);
+	vec3 m2 = vec3(0.0);
+	vec3 t_m1 = vec3(0.0);
+	vec3 t_m2 = vec3(0.0);
+
+	for (int dy = -1; dy <= 1; dy++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
+			ivec2 neighborFreshCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+			vec2 sampleUV = (vec2(neighborFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+			vec3 c = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
+			vec3 t = SAMPLE_NEAREST(push.transmittanceIndex, sampleUV).rgb;
+
+			m1 += c;
+			m2 += c * c;
+			t_m1 += t;
+			t_m2 += t * t;
+		}
+	}
+	m1 /= 9.0;
+	m2 /= 9.0;
+	t_m1 /= 9.0;
+	t_m2 /= 9.0;
+
+	vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
+	vec3 t_sigma = sqrt(max(vec3(0.0), t_m2 - t_m1 * t_m1));
+
+	// Gamma 1.5 allows stochastic noise smoothing, but brutally cuts off stale ghosting
+	vec3 nMin = m1 - 1.5 * sigma;
+	vec3 nMax = m1 + 1.5 * sigma;
+	vec3 t_nMin = t_m1 - 1.5 * t_sigma;
+	vec3 t_nMax = t_m1 + 1.5 * t_sigma;
+
+	vec3 clippedHistColor = clamp(histColor, nMin, nMax);
+	vec3 clippedHistTrans = clamp(histTransmittance, t_nMin, t_nMax);
+
+	vec3 blendedColor;
+	vec3 blendedTransmittance;
+
+	if (validHistory) {
+		if (freshPixel) {
+			blendedColor = mix(clippedHistColor, curColor, alpha);
+			blendedTransmittance = mix(clippedHistTrans, curTransmittance, alpha);
+		} else {
+			// Non-fresh pixels STILL get clipped to reality. This instantly fixes ghosting
+			// and growing clouds without snapping to jagged 4x4 nearest-neighbor blocks.
+			blendedColor = clippedHistColor;
+			blendedTransmittance = clippedHistTrans;
+		}
+	} else {
+		// Disocclusion fallback: use the neighborhood spatial mean instead of the raw 4x4 block chunk
+		blendedColor = m1;
+		blendedTransmittance = t_m1;
+		historyLength = 1.0;
+	}
+
+	float blendedLuma = luminance(blendedColor);
+	vec4 outMoments = vec4(blendedLuma, blendedLuma * blendedLuma, historyLength, curDepth);
 
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.outColorStorageIdx)], pixel, vec4(blendedColor, 0.0));
 	imageStore(uImagesGenericWrite[nonuniformEXT(push.outTransmittanceStorageIdx)], pixel, vec4(blendedTransmittance, 0.0));

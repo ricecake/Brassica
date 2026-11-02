@@ -254,13 +254,17 @@ namespace brassica {
 	// CloudTransmittance directly.
 	struct CloudAccumulatedColor {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
-			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+			auto desc = graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+			desc.persistent = true;
+			return desc;
 		}
 	};
 
 	struct CloudAccumulatedTransmittance {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
-			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+			auto desc = graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+			desc.persistent = true;
+			return desc;
 		}
 	};
 
@@ -271,7 +275,9 @@ namespace brassica {
 	// "history depth" resource needed beyond this channel).
 	struct CloudMoments {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
-			return graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+			auto desc = graph::ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+			desc.persistent = true;
+			return desc;
 		}
 	};
 
