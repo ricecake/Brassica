@@ -25,6 +25,9 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	uint  uGlobalSeed;
 	uint  uFrameRandom;
 	mat4  uPreviousViewProjMatrix;
+	// Milliseconds since engine startup -- see FrameUBO.hpp's own comment on why model-instance
+	// clip/startTime comparisons use this instead of uTime.
+	uint  uTimeMs;
 };
 
 // Bindless resource catalog in Set 1 (bindings 0..4). One descriptor set instance -- never

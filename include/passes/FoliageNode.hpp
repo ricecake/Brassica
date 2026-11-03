@@ -60,15 +60,16 @@ namespace brassica {
 		std::uint32_t terrainNumLevels{8};
 		std::uint32_t foliageFlags{0}; // bit 0: terrain occlusion culling
 		std::uint32_t hizIndex{0};     // bindless index for History<HiZTexture>
-		// Appended, not interleaved -- see feedback_push_constant_struct_editing. Device
-		// addresses for FoliageInstanceBuffer/FoliageIndirectArgsBuffer (shaders/
-		// foliage_instance.glsl); foliage.task's own copy of this struct doesn't need these and
-		// isn't updated to match, since it never touches either buffer.
-		alignas(8) std::uint64_t instanceBufAddress{0};
-		alignas(8) std::uint64_t indirectArgsBufAddress{0};
+		// Appended, not interleaved -- see feedback_push_constant_struct_editing. Bindless
+		// storage-buffer indices (ctx.BufferIndex<K>(), binding 6 -- see shaders/
+		// model_instance.glsl's own comment) for FoliageInstanceBuffer/FoliageIndirectArgsBuffer;
+		// foliage.task's own copy of this struct doesn't need these and isn't updated to match,
+		// since it never touches either buffer.
+		std::uint32_t instanceBufIdx{0};
+		std::uint32_t indirectArgsBufIdx{0};
 	};
 
-	static_assert(sizeof(FoliagePushConstants) == 136, "FoliagePushConstants size must be 136 bytes");
+	static_assert(sizeof(FoliagePushConstants) == 124, "FoliagePushConstants size must be 124 bytes");
 
 	// Compute-domain, sole Create<>() of FoliageIndirectArgsBuffer -- FoliageNode below now
 	// Modify<>()s it instead of creating it, same split as ParticleResetNode/ParticleLivenessNode
@@ -120,65 +121,27 @@ namespace brassica {
 			if (auto* physReg = dynamic_cast<graph::PhysicalResourceRegistry*>(ctx.resources)) {
 				if (auto buf = physReg->GetBuffer<FoliageIndirectArgsBuffer>()) {
 					vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-					graph::ClearBufferToZero(vkCmd, *buf, graph::AccessKind::ReadWrite, ctx.domain);
 
 					// Root cause of archetype-rendered trees/bushes never appearing: this buffer
-					// is a VkDrawMeshTasksIndirectCommandEXT{groupCountX,Y,Z}, and
-					// ClearBufferToZero above zeroes all of it -- but foliage.mesh's own
-					// collection only ever atomicAdd's groupCountX (shaders/foliage.mesh);
-					// nothing anywhere writes groupCountY/Z. A Vulkan indirect dispatch's real
-					// total is groupCountX*Y*Z, so Y=Z=0 means FoliageArchetypeRenderNode's
-					// drawMeshTasksIndirectEXT always dispatches zero workgroups, regardless of
+					// is a VkDrawMeshTasksIndirectCommandEXT{groupCountX,Y,Z}. groupCountX is
+					// foliage.mesh's live per-frame counter (atomicAdd, shaders/foliage.mesh);
+					// nothing anywhere writes groupCountY/Z, and the indirect draw's real total
+					// is groupCountX*Y*Z, so Y=Z=0 means FoliageArchetypeRenderNode's
+					// drawMeshTasksIndirectEXT always dispatches zero workgroups regardless of
 					// how many instances foliage.mesh actually collected. This predates this
-					// session's own work (the buffer layout/zeroing was always this shape) but
-					// was masked for as long as foliage.mesh's now-removed emitTreeItem/
-					// emitBushItem calls drew trees/bushes live, independent of this buffer --
-					// once that fallback was cut over to archetype-only rendering, the
-					// always-broken indirect path became the only path, and trees/bushes
-					// stopped appearing at all. Patched here with a small vkCmdUpdateBuffer
-					// instead of changing ClearBufferToZero itself, which is a shared utility
-					// other callers rely on zeroing *everything*.
-					const auto& desc = buf->GetDesc();
-					if (desc.usageMask & static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferDst)) {
-						vk::BufferMemoryBarrier2 toTransferDst{
-							buf->GetLastStage(),
-							buf->GetLastAccess(),
-							vk::PipelineStageFlagBits2::eAllTransfer,
-							vk::AccessFlagBits2::eTransferWrite,
-							VK_QUEUE_FAMILY_IGNORED,
-							VK_QUEUE_FAMILY_IGNORED,
-							buf->GetBuffer(),
-							4,
-							8,
-						};
-						vk::DependencyInfo preDep{};
-						preDep.setBufferMemoryBarriers(toTransferDst);
-						vkCmd.pipelineBarrier2(preDep);
-
-						const std::array<std::uint32_t, 2> groupCountYZ{1u, 1u};
-						vkCmd.updateBuffer<std::uint32_t>(buf->GetBuffer(), 4, groupCountYZ);
-
-						graph::ResourceState postUpdate = graph::DeriveBufferState(
-							graph::AccessKind::ReadWrite,
-							ctx.domain,
-							desc.usageMask ? vk::BufferUsageFlags(desc.usageMask) : vk::BufferUsageFlags{}
-						);
-						vk::BufferMemoryBarrier2 toFinal{
-							vk::PipelineStageFlagBits2::eAllTransfer,
-							vk::AccessFlagBits2::eTransferWrite,
-							postUpdate.stage,
-							postUpdate.access,
-							VK_QUEUE_FAMILY_IGNORED,
-							VK_QUEUE_FAMILY_IGNORED,
-							buf->GetBuffer(),
-							4,
-							8,
-						};
-						vk::DependencyInfo postDep{};
-						postDep.setBufferMemoryBarriers(toFinal);
-						vkCmd.pipelineBarrier2(postDep);
-						buf->SetLastStageAccess(postUpdate.stage, postUpdate.access);
-					}
+					// session's own work but was masked as long as foliage.mesh's now-removed
+					// emitTreeItem/emitBushItem calls drew trees/bushes live, independent of this
+					// buffer -- once that fallback was cut over to archetype-only rendering, the
+					// always-broken indirect path became the only path, and trees/bushes stopped
+					// appearing at all. The dispatch is always 1-dimensional along X, so Y/Z are
+					// a fixed {1,1}, not live data -- FillBufferRegions writes the correct
+					// steady state directly in one pass (X=0, Y=Z=1) rather than zeroing
+					// everything and patching the non-zero fields back in afterward.
+					const std::array<graph::BufferFillRegion, 2> regions{
+						graph::BufferFillRegion{0, 4, 0u}, // groupCountX: live counter, reset to 0
+						graph::BufferFillRegion{4, 8, 1u}, // groupCountY, groupCountZ: fixed at 1
+					};
+					graph::FillBufferRegions(vkCmd, *buf, graph::AccessKind::ReadWrite, ctx.domain, regions);
 				}
 			}
 		}
@@ -337,16 +300,8 @@ namespace brassica {
 			// before this node runs (Create-before-accessor on FoliageIndirectArgsBuffer) -- see
 			// its own comment for why that can't happen here anymore (this node is Graphics-domain
 			// and already has its own dynamic-rendering scope open by the time Execute() runs).
-			if (auto* physReg = dynamic_cast<graph::PhysicalResourceRegistry*>(ctx.resources)) {
-				if (auto buf = physReg->GetBuffer<FoliageInstanceBuffer>()) {
-					vk::BufferDeviceAddressInfo info(buf->GetBuffer());
-					push.instanceBufAddress = physReg->GetDevice().getBufferAddress(info);
-				}
-				if (auto buf = physReg->GetBuffer<FoliageIndirectArgsBuffer>()) {
-					vk::BufferDeviceAddressInfo info(buf->GetBuffer());
-					push.indirectArgsBufAddress = physReg->GetDevice().getBufferAddress(info);
-				}
-			}
+			push.instanceBufIdx = ctx.BufferIndex<FoliageInstanceBuffer>();
+			push.indirectArgsBufIdx = ctx.BufferIndex<FoliageIndirectArgsBuffer>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

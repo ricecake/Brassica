@@ -11,6 +11,9 @@
 #include "graph/Dot.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
+#include "model/ModelAsset.hpp"
+#include "model/ManifoldTreeAsset.hpp"
+#include "model/ProceduralTreeAsset.hpp"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
 #include "types/CdlGradingData.hpp"
@@ -520,13 +523,21 @@ namespace brassica {
 			std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {})
 		);
 
-		// Stage 1 of the GLTF/GLB pipeline: load a single hardcoded test asset at startup -- no
-		// asset-selection UI or multi-model support yet, see GltfModelManager's own comment.
-		// Provided unconditionally regardless of load success/failure: a failed load just leaves
-		// GetMeshletCount() at 0, which already keeps GltfRenderNode inactive on its own.
-		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager);
-		serviceLocator.Provide<GltfModelManager>(
-			std::shared_ptr<GltfModelManager>(&gltfModelManager, [](GltfModelManager*) {})
+		// Stage 2: ModelRegistry is producer-agnostic -- GltfModelManager (a real glTF/GLB file)
+		// is one producer, BuildProceduralTreeAsset() (a hand-built asset, no file/textures at
+		// all) is another, proving the registry doesn't secretly assume glTF. Registered
+		// unconditionally regardless of the glTF load's success: a failed load just leaves
+		// cowAsset empty (0 meshlets), which registers as a harmless no-op model. Failed load
+		// result intentionally unchecked here, same as the old single-model call -- a model
+		// with GetTotalMeshletCount() == 0 already keeps ModelRenderNode inactive on its own.
+		ModelAsset cowAsset;
+		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager, cowAsset);
+		modelRegistry.RegisterAsset(cowAsset);
+		modelRegistry.RegisterAsset(BuildProceduralTreeAsset());
+		modelRegistry.RegisterAsset(BuildManifoldTestTree());
+		serviceLocator.Provide<ModelRegistry>(std::shared_ptr<ModelRegistry>(&modelRegistry, [](ModelRegistry*) {}));
+		serviceLocator.Provide<ModelInstanceManager>(
+			std::shared_ptr<ModelInstanceManager>(&modelInstanceManager, [](ModelInstanceManager*) {})
 		);
 
 		particleManager.Initialize();
@@ -1348,8 +1359,8 @@ namespace brassica {
 			frameGraph.Register<graph::Import<LightsBuffer>>();
 			materialManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
-			gltfModelManager.UpdatePose(0.0f); // no real frame time in this path -- see its own comment
-			gltfModelManager.RegisterBufferNodes(frameGraph);
+			modelRegistry.RegisterBufferNodes(frameGraph);
+			modelInstanceManager.RegisterBufferNodes(frameGraph);
 			nodeRegistry.RegisterAllInto(frameGraph);
 			vk::Extent2D        extent = GetSwapchainExtent();
 			graph::FrameContext ctx{
@@ -1566,6 +1577,8 @@ namespace brassica {
 		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
 		ubo.previousViewProjMatrix = previousViewProjMatrix;
 		ubo.time = static_cast<float>(currentTime);
+		// From the double, not from the already-narrowed ubo.time -- see FrameUBO.hpp's comment.
+		ubo.timeMs = static_cast<std::uint32_t>(currentTime * 1000.0);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
 		ubo.nearPlane = camera.nearPlane;
@@ -1705,6 +1718,7 @@ namespace brassica {
 			.moonDir = moonDir,
 			.moonRadiance = moonRadiance,
 			.time = ubo.time,
+			.timeMs = ubo.timeMs,
 			.worldScale = 1.0f,
 			.multiScatScale = atmosphereManager.GetMultiScatScale(),
 			.cloudShadowIntensity = 0.5f,
@@ -1731,8 +1745,9 @@ namespace brassica {
 		frameGraph.Register<graph::Import<LightsBuffer>>();
 		materialManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
-		gltfModelManager.UpdatePose(ubo.time);
-		gltfModelManager.RegisterBufferNodes(frameGraph);
+		modelRegistry.RegisterBufferNodes(frameGraph);
+		modelInstanceManager.SetCurrentTimeMs(ubo.timeMs);
+		modelInstanceManager.RegisterBufferNodes(frameGraph);
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
@@ -2350,11 +2365,22 @@ namespace brassica {
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 6: bindless storage buffers (no single canonical GLSL declaration -- each
 		// consumer aliases its own struct at this binding, same idiom as uImagesRGBA32F's
-		// image2D/image2DArray/image3D aliases at binding 3)
+		// image2D/image2DArray/image3D aliases at binding 3). AssignAndWriteBindlessBufferIndex
+		// (PhysicalRegistry.hpp) auto-registers *every* eStorageBuffer-usage buffer here the
+		// moment it's provisioned, regardless of whether anything actually reads its index --
+		// confirmed on real hardware that ~15 distinct keys are already live today (entity,
+		// material, clustered lighting, 5x foliage, 6x gltf/model-instance geometry+clip
+		// buffers), and BindlessArena's own index 0 is never handed out (see its own comment),
+		// so 16 slots only ever gave 15 usable ones -- already fully consumed before the model-
+		// instance system's own buffer could get one on first spawn. Real "vkUpdateDescriptorSets
+		// ... oversteps the bounds of this binding" validation error, not hypothetical. 64 gives
+		// real headroom for Stage 2+'s planned ModelDescBuffer/ModelSkeletonBuffer/
+		// ModelLivePaletteBuffer and any future re-enabled particle buffers, not just enough to
+		// cover today's count.
 		bindings[6]
 			.setBinding(6)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-			.setDescriptorCount(16)
+			.setDescriptorCount(64)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		std::array<vk::DescriptorBindingFlags, 7> bindingFlags{
@@ -2383,7 +2409,7 @@ namespace brassica {
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 64}, // matches binding 6's descriptorCount above
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);

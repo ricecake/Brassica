@@ -71,18 +71,30 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	// other Import<>s above: a key whose producer lives outside the auto-registered set.
 	frameGraph.Register<graph::Import<FoliageBiomeTableTexture>>();
 	// Same category again: GltfVertexBuffer/GltfMeshletVertexBuffer/GltfMeshletTriangleBuffer/
-	// GltfMeshletBuffer/GltfJointMatrixBuffer's real producers are GltfModelManager's
-	// PredefinedBufferNode members (GltfModelManager::RegisterBufferNodes), and MaterialBuffer's
-	// is MaterialManager's (MaterialManager::RegisterBufferNode) -- both called alongside
-	// RegisterAllInto in Engine.cpp's real graph builds, neither part of EngineNodeRegistry's
-	// auto-registered set. GltfRenderNode (auto-registered) is the one real consumer of all six
-	// once ForceAllActive() below stops letting its own Setup()-decided inactivity (no
-	// GltfModelManager service in this test) hide the gap.
+	// GltfMeshletBuffer/ModelClipPaletteBuffer/ModelClipTableBuffer/ModelDescBuffer/
+	// ModelSkeletonBuffer's real producers are ModelRegistry's PredefinedBufferNode members
+	// (ModelRegistry::RegisterBufferNodes -- Stage 2 moved these off GltfModelManager, which is
+	// now just one of ModelRegistry's producers; ModelSkeletonBuffer is Stage 4's), and
+	// ModelInstanceWriteBuffer's is ModelInstanceManager's, and MaterialBuffer's is
+	// MaterialManager's (MaterialManager::RegisterBufferNode) -- all called alongside
+	// RegisterAllInto in Engine.cpp's real graph builds, none part of EngineNodeRegistry's
+	// auto-registered set. ModelRenderNode/ModelInstanceScatterNode/ModelCullNode/
+	// ModelLiveEvalNode (all auto-registered) are the real consumers once ForceAllActive() below
+	// stops letting their own Setup()-decided inactivity (no ModelRegistry/ModelInstanceManager
+	// service in this test) hide the gap. ModelInstanceBuffer and Stage 3/4's own
+	// ModelVisibleListBuffer/ModelIndirectArgsBuffer/ModelLiveListBuffer/
+	// ModelLiveIndirectArgsBuffer/ModelLivePaletteBuffer are all catalog-converted (no Import<>
+	// needed -- their real producers, ModelInstanceScatterNode/ModelCullResetNode/ModelCullNode/
+	// ModelLiveEvalNode, are themselves auto-registered, so the catalog already resolves them).
 	frameGraph.Register<graph::Import<GltfVertexBuffer>>();
 	frameGraph.Register<graph::Import<GltfMeshletVertexBuffer>>();
 	frameGraph.Register<graph::Import<GltfMeshletTriangleBuffer>>();
 	frameGraph.Register<graph::Import<GltfMeshletBuffer>>();
-	frameGraph.Register<graph::Import<GltfJointMatrixBuffer>>();
+	frameGraph.Register<graph::Import<ModelClipPaletteBuffer>>();
+	frameGraph.Register<graph::Import<ModelClipTableBuffer>>();
+	frameGraph.Register<graph::Import<ModelDescBuffer>>();
+	frameGraph.Register<graph::Import<ModelSkeletonBuffer>>();
+	frameGraph.Register<graph::Import<ModelInstanceWriteBuffer>>();
 	frameGraph.Register<graph::Import<MaterialBuffer>>();
 
 	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);

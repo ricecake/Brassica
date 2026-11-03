@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -404,6 +405,87 @@ namespace brassica::graph {
 		cmd.pipelineBarrier2(postClearDep);
 
 		buf.SetLastStageAccess(postClear.stage, postClear.access);
+		buf.SetHasDefinedContents(true);
+	}
+
+	// One (offset, size, 32-bit word) region for FillBufferRegions below.
+	struct BufferFillRegion {
+		vk::DeviceSize offset;
+		vk::DeviceSize size;
+		std::uint32_t  value;
+	};
+
+	// Generalizes ClearBufferToZero to N regions, each filled with its own repeated 32-bit word,
+	// under a single barrier pair spanning the whole buffer -- for a buffer whose correct reset
+	// state isn't simply "everything zero" (e.g. a VkDrawMeshTasksIndirectCommandEXT-shaped
+	// buffer, where groupCountX is a live per-frame counter that resets to 0 but groupCountY/Z
+	// are a fixed non-zero dispatch shape -- resetting the whole buffer to zero and then
+	// separately patching the non-zero fields back in is strictly worse than just writing the
+	// correct steady state directly in one pass). Regions must not overlap; each offset/size must
+	// be a multiple of 4, per vkCmdFillBuffer's own requirement.
+	inline void FillBufferRegions(
+		vk::CommandBuffer                  cmd,
+		PhysicalBuffer&                    buf,
+		AccessKind                         access,
+		ExecutionDomain                    domain,
+		std::span<const BufferFillRegion> regions
+	) {
+		const auto& desc = buf.GetDesc();
+
+		// Defensive: vkCmdFillBuffer requires eTransferDst -- see ClearImageToZero's identical
+		// guard and comment for why this degrades to a skip instead of an invalid call.
+		if (!(desc.usageMask & static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferDst))) {
+			static bool warned = false;
+			if (!warned) {
+				spdlog::warn(
+					"FillBufferRegions: skipping fill for a buffer whose desc lacks eTransferDst "
+					"usage -- add it to this key's Desc()."
+				);
+				warned = true;
+			}
+			return;
+		}
+
+		const vk::DeviceSize size = desc.byteSize ? desc.byteSize : VK_WHOLE_SIZE;
+
+		vk::BufferMemoryBarrier2 toTransferDst{
+			buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
+			buf.GetLastAccess(),
+			vk::PipelineStageFlagBits2::eAllTransfer,
+			vk::AccessFlagBits2::eTransferWrite,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			buf.GetBuffer(),
+			0,
+			size,
+		};
+		vk::DependencyInfo preFillDep{};
+		preFillDep.setBufferMemoryBarriers(toTransferDst);
+		cmd.pipelineBarrier2(preFillDep);
+
+		for (const BufferFillRegion& region : regions) {
+			cmd.fillBuffer(buf.GetBuffer(), region.offset, region.size, region.value);
+		}
+
+		const ResourceState postFill =
+			DeriveBufferState(access, domain, desc.usageMask ? vk::BufferUsageFlags(desc.usageMask) : vk::BufferUsageFlags{});
+
+		vk::BufferMemoryBarrier2 toFinal{
+			vk::PipelineStageFlagBits2::eAllTransfer,
+			vk::AccessFlagBits2::eTransferWrite,
+			postFill.stage,
+			postFill.access,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			buf.GetBuffer(),
+			0,
+			size,
+		};
+		vk::DependencyInfo postFillDep{};
+		postFillDep.setBufferMemoryBarriers(toFinal);
+		cmd.pipelineBarrier2(postFillDep);
+
+		buf.SetLastStageAccess(postFill.stage, postFill.access);
 		buf.SetHasDefinedContents(true);
 	}
 

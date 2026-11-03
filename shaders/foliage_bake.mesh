@@ -10,9 +10,9 @@ layout(triangles, max_vertices = 128, max_primitives = 128) out;
 #include "foliage_archetype.glsl"
 
 layout(push_constant) uniform FoliageBakePushConstants {
-	FoliageArchetypeVertexRef vertexBuf;
-	FoliageArchetypeIndexRef  indexBuf;
-	FoliageArchetypeMetaRef   metaBuf;
+	uint vertexBufIdx;
+	uint indexBufIdx;
+	uint metaBufIdx;
 }
 push;
 
@@ -110,10 +110,12 @@ void main() {
 		v.uv = outUV[i];
 		v.color = outColor[i];
 		v.materialType = outMaterialType[i];
-		push.vertexBuf.vertices[vertBase + i] = v;
+		uFoliageArchetypeVertexBuffers[nonuniformEXT(push.vertexBufIdx)].vertices[vertBase + i] = v;
 	}
 	for (uint i = 0u; i < pCount; ++i) {
-		push.indexBuf.triangles[triBase + i] = gl_PrimitiveTriangleIndicesEXT[i];
+		uFoliageArchetypeIndexBuffers[nonuniformEXT(push.indexBufIdx)].triangles[triBase + i] =
+			gl_PrimitiveTriangleIndicesEXT[i];
 	}
-	push.metaBuf.slots[archetypeIndex] = FoliageArchetypeMeta(vCount, pCount);
+	uFoliageArchetypeMetaBuffers[nonuniformEXT(push.metaBufIdx)].slots[archetypeIndex] =
+		FoliageArchetypeMeta(vCount, pCount);
 }

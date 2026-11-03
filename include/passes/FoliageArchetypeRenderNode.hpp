@@ -31,18 +31,20 @@ namespace brassica {
 
 	static_assert(sizeof(FoliageIndirectArgsLayout) == 12, "FoliageIndirectArgsLayout size must be 12 bytes");
 
+	// Bindless storage-buffer indices (ctx.BufferIndex<K>(), binding 6 -- see
+	// shaders/model_instance.glsl's own comment), not device addresses.
 	struct FoliageArchetypeRenderPushConstants {
-		std::uint64_t instanceBufAddress{0};
-		std::uint64_t vertexBufAddress{0};
-		std::uint64_t indexBufAddress{0};
-		std::uint64_t metaBufAddress{0};
+		std::uint32_t instanceBufIdx{0};
+		std::uint32_t vertexBufIdx{0};
+		std::uint32_t indexBufIdx{0};
+		std::uint32_t metaBufIdx{0};
 		float         lengthMultiplier{1.0f};
 		float         widthMultiplier{1.0f};
 	};
 
 	static_assert(
-		sizeof(FoliageArchetypeRenderPushConstants) == 40,
-		"FoliageArchetypeRenderPushConstants size must be 40 bytes"
+		sizeof(FoliageArchetypeRenderPushConstants) == 24,
+		"FoliageArchetypeRenderPushConstants size must be 24 bytes"
 	);
 
 	// Draws this frame's collected tree/bush instances (FoliageNode's foliage.mesh collects them,
@@ -86,7 +88,10 @@ namespace brassica {
 			watcher.RegisterShader(&fragShader);
 		}
 
-		void Destroy(vk::Device /*device*/) {}
+		void Destroy(vk::Device device) {
+			meshShader.Destroy(device);
+			fragShader.Destroy(device);
+		}
 
 		void SetFrameParams(const render::NodeFrameParams& /*p*/) {
 			if (ServiceLocator::Instance().Has<IFoliageManager>()) {
@@ -98,9 +103,10 @@ namespace brassica {
 			}
 		}
 
-		// Real Read<>() on all five buffers this node consumes via buffer_reference (device
-		// address in a push constant) -- each is catalog-converted (ResourceKeys.hpp), so an
-		// un-Desc()'d Read<>() here can never win against FoliageBakeNode's/FoliageNode's own
+		// Real Read<>() on all five buffers this node consumes via bindless storage-buffer index
+		// (ctx.BufferIndex<K>(), binding 6 in a push constant) -- each is catalog-converted
+		// (ResourceKeys.hpp), so an un-Desc()'d Read<>() here can never win against
+		// FoliageBakeNode's/FoliageNode's own
 		// Create<>() regardless of schedule order (the lesson-10 hazard EntityNode.hpp's identical-
 		// looking EntityInstanceBuffer/EntityIndirectBuffer still have to dodge via After<>() only
 		// applies to non-catalog-converted keys). That makes a real resource edge safe to declare,
@@ -124,34 +130,25 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			vk::Buffer    indirectBuf{};
+			vk::Buffer     indirectBuf{};
 			vk::DeviceSize indirectOffset = 0;
 
-			if (auto* physReg = dynamic_cast<graph::PhysicalResourceRegistry*>(ctx.resources)) {
-				if (auto buf = physReg->GetBuffer<FoliageInstanceBuffer>()) {
-					vk::BufferDeviceAddressInfo info(buf->GetBuffer());
-					push.instanceBufAddress = physReg->GetDevice().getBufferAddress(info);
-				}
-				if (auto buf = physReg->GetBuffer<FoliageArchetypeVertexBuffer>()) {
-					vk::BufferDeviceAddressInfo info(buf->GetBuffer());
-					push.vertexBufAddress = physReg->GetDevice().getBufferAddress(info);
-				}
-				if (auto buf = physReg->GetBuffer<FoliageArchetypeIndexBuffer>()) {
-					vk::BufferDeviceAddressInfo info(buf->GetBuffer());
-					push.indexBufAddress = physReg->GetDevice().getBufferAddress(info);
-				}
-				if (auto buf = physReg->GetBuffer<FoliageArchetypeMetaBuffer>()) {
-					vk::BufferDeviceAddressInfo info(buf->GetBuffer());
-					push.metaBufAddress = physReg->GetDevice().getBufferAddress(info);
-				}
-				if (auto buf = physReg->GetBuffer<FoliageIndirectArgsBuffer>()) {
-					indirectBuf = buf->GetBuffer();
-				}
-			}
-
-			if (!indirectBuf || push.instanceBufAddress == 0 || push.vertexBufAddress == 0) {
+			auto* physReg = dynamic_cast<graph::PhysicalResourceRegistry*>(ctx.resources);
+			if (!physReg || !physReg->GetBuffer<FoliageInstanceBuffer>() ||
+			    !physReg->GetBuffer<FoliageArchetypeVertexBuffer>()) {
 				return;
 			}
+			if (auto buf = physReg->GetBuffer<FoliageIndirectArgsBuffer>()) {
+				indirectBuf = buf->GetBuffer();
+			}
+			if (!indirectBuf) {
+				return;
+			}
+
+			push.instanceBufIdx = ctx.BufferIndex<FoliageInstanceBuffer>();
+			push.vertexBufIdx = ctx.BufferIndex<FoliageArchetypeVertexBuffer>();
+			push.indexBufIdx = ctx.BufferIndex<FoliageArchetypeIndexBuffer>();
+			push.metaBufIdx = ctx.BufferIndex<FoliageArchetypeMetaBuffer>();
 
 			std::array<GraphicsShader*, 2> stages{&meshShader, &fragShader};
 			std::array<vk::Format, 3>      colorFormats{

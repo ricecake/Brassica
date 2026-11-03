@@ -19,6 +19,7 @@
 #include "graph/Execution.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "lighting/Light.hpp"
+#include "model/ModelTypes.hpp"
 
 namespace brassica {
 
@@ -631,7 +632,6 @@ namespace brassica {
 		graph::ResourceDesc desc = graph::StorageBufferDesc(
 			static_cast<std::uint64_t>(kFoliageArchetypeCount) * kFoliageArchetypeMaxVerts * 80
 		);
-		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
 		desc.persistent = true;
 		return desc;
 	}
@@ -640,7 +640,6 @@ namespace brassica {
 		graph::ResourceDesc desc = graph::StorageBufferDesc(
 			static_cast<std::uint64_t>(kFoliageArchetypeCount) * kFoliageArchetypeMaxTris * 16
 		);
-		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
 		desc.persistent = true;
 		return desc;
 	}
@@ -648,16 +647,16 @@ namespace brassica {
 	inline graph::ResourceDesc FoliageArchetypeMetaBufferDesc() {
 		graph::ResourceDesc desc =
 			graph::StorageBufferDesc(static_cast<std::uint64_t>(kFoliageArchetypeCount) * 8);
-		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
 		desc.persistent = true;
 		return desc;
 	}
 
 	// Persistent, GPU-baked (not host-written) tree/bush archetype shapes -- see
 	// shaders/foliage_archetype.glsl for the layout and FoliageBakeNode.hpp for how/when these
-	// get populated. Still read via buffer_reference (device address in a push constant, not a
-	// bindless SSBO index -- no generic bindless-buffer GLSL array exists in this codebase yet,
-	// see shaders/bindless.glsl); only the graph-side declaration changed, not the GPU-side access.
+	// get populated. Read via a bindless storage-buffer index (ctx.BufferIndex<K>(), binding 6 --
+	// see shaders/model_instance.glsl's own comment), not a device address -- no
+	// eShaderDeviceAddress usage needed, since StorageBufferDesc's eStorageBuffer bit alone
+	// already gets every buffer here auto-registered into that catalog.
 	struct FoliageArchetypeVertexBuffer {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
 			return FoliageArchetypeVertexBufferDesc();
@@ -690,7 +689,6 @@ namespace brassica {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
 			graph::ResourceDesc desc =
 				graph::StorageBufferDesc(static_cast<std::uint64_t>(kFoliageInstanceCapacity) * 32);
-			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
 			desc.persistent = true;
 			return desc;
 		}
@@ -698,41 +696,171 @@ namespace brassica {
 	struct FoliageIndirectArgsBuffer {
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
 			graph::ResourceDesc desc = graph::StorageBufferDesc(16); // real struct is 12 bytes; 16 for safety margin
+			// eTransferSrc: lets a debug/test readback (vkCmdCopyBuffer out of this buffer)
+			// actually work -- added while writing test_foliage_node.cpp's own
+			// FoliageIndirectResetNode regression test, which needs to verify this exact
+			// buffer's real post-reset contents. Harmless to leave on a 16-byte buffer, and
+			// this is specifically the kind of silent, hard-to-observe buffer that benefits
+			// from being readable.
 			desc.usageMask |= static_cast<std::uint32_t>(
-				vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eIndirectBuffer |
-				// eTransferSrc: lets a debug/test readback (vkCmdCopyBuffer out of this buffer)
-				// actually work -- added while writing test_foliage_node.cpp's own
-				// FoliageIndirectResetNode regression test, which needs to verify this exact
-				// buffer's real post-reset contents. Harmless to leave on a 16-byte buffer, and
-				// this is specifically the kind of silent, hard-to-observe buffer that benefits
-				// from being readable.
-				vk::BufferUsageFlagBits::eTransferSrc
+				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
 			);
 			desc.persistent = true;
 			return desc;
 		}
 	};
 
-	// Stage 1 of the GLTF/GLB pipeline (GltfModel/GltfModelManager): one asset's vertex/meshlet
-	// data, host-uploaded once at load time via graph::PredefinedBufferNode -- same mechanism as
-	// MaterialBuffer above, not catalog-converted. Unlike the foliage archetype buffers above,
-	// byte size depends on which asset was loaded, so there's no FrameContext-only Desc() a bare
-	// tag struct could compute; GltfModelManager's PredefinedBufferNode members are each key's
-	// sole Create<>(), with the real (data-size-derived, eShaderDeviceAddress-flagged) desc passed
-	// explicitly to SetData() there. Every reader's Read<>() of these stays bare (no .Desc()) --
-	// same reasoning as ParticleGridBuildNode's bare Read<ParticleTypeBuffer>() above, since
-	// there's exactly one real producer per key here, not ParticleBuffer's dual-Modify case where
-	// two touchers must agree on an identical explicit .Desc().
+	// Stage 2 (model/ModelRegistry.hpp): every registered model's geometry, concatenated and
+	// host-uploaded via graph::PredefinedBufferNode -- same mechanism as MaterialBuffer above,
+	// not catalog-converted. Byte size depends on how many models are registered, so there's no
+	// FrameContext-only Desc() a bare tag struct could compute; ModelRegistry's
+	// PredefinedBufferNode members are each key's sole Create<>(), with the real data-size-
+	// derived desc passed explicitly to SetData() there.
+	// Read via a bindless storage-buffer index (ctx.BufferIndex<K>(), binding 6 -- see
+	// shaders/model_instance.glsl's own comment), not a device address. Every reader's Read<>() of
+	// these stays bare (no .Desc()) -- same reasoning as ParticleGridBuildNode's bare
+	// Read<ParticleTypeBuffer>() above, since there's exactly one real producer per key here, not
+	// ParticleBuffer's dual-Modify case where two touchers must agree on an identical explicit
+	// .Desc().
 	struct GltfVertexBuffer {};
 	struct GltfMeshletVertexBuffer {};
 	struct GltfMeshletTriangleBuffer {};
 	struct GltfMeshletBuffer {};
 
-	// Stage 4 (GPU skinning): one mat4 per joint, in skin-joint order (GltfModel::EvaluatePose's
-	// own output order), recomputed and re-uploaded every frame as the current animation plays --
-	// unlike the other four GLTF buffers above, this one's *contents* change every frame even
-	// though its size doesn't, same PredefinedBufferNode mechanism either way. Same non-catalog
-	// reasoning as the others: joint count depends on which asset's skin was loaded.
-	struct GltfJointMatrixBuffer {};
+	// GPU-driven model instances (model/ModelInstanceManager.hpp, passes/ModelRenderNode.hpp):
+	// the baked-clip successor to the old GltfJointMatrixBuffer (removed -- that was one mat4 per
+	// joint, re-evaluated and re-uploaded on the CPU every frame; see project memory for why that
+	// doesn't scale to N instances). Palette/clip-table are one-shot PredefinedBufferNode uploads
+	// at load, same non-catalog "exactly one real producer" reasoning as the four GLTF buffers
+	// above -- joint/clip count depends on which asset was loaded, so there's no FrameContext-only
+	// Desc() a bare tag struct could compute.
+	struct ModelClipPaletteBuffer {}; // flat glm::mat4[], see ModelClipEntry::paletteBase
+	struct ModelClipTableBuffer {};   // ModelClipEntry[], one entry per clip
+
+	// The GPU-driven instance table itself. Unlike the buffers above, this is genuinely persistent
+	// across many frames with no writer at all (sparse CPU writes only on spawn/clip-change/
+	// despawn, via ModelInstanceScatterNode) -- catalog-converted so every Read<>() gets a real,
+	// correctly-kinded desc, and kLifetime = Persistent so RelationalCompiler's zero-init-reads
+	// never clears it on an idle frame (it would otherwise: Create-before-accessor only exempts a
+	// key from that if it's flagged Persistent, matching TransmittanceLUT/MultiScatteringLUT's own
+	// precedent, not just ResourceDesc::persistent -- see PhysicalExecutionBackend.hpp's
+	// ZeroInitializeInactiveReads and RelationalCompiler.hpp's IsPersistentKey). desc.persistent =
+	// true alongside it for the separate alias-pool hazard (matches CloudShadowMap/
+	// FoliageIndirectArgsBuffer) -- both execution backends run with aliasing disabled today, so
+	// this is defensive, not load-bearing, but it's free and matches established precedent.
+	struct ModelInstanceBuffer {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc =
+				graph::StorageBufferDesc(static_cast<std::uint64_t>(kModelInstanceCapacity) * sizeof(ModelInstance));
+			// eTransferSrc: same reasoning as FoliageIndirectArgsBuffer's own -- lets a debug/test
+			// readback (vkCmdCopyBuffer) work, harmless on a persistent buffer this size. No
+			// eShaderDeviceAddress: this is read via a bindless storage-buffer index
+			// (ctx.BufferIndex<K>(), binding 6), not a device address.
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Pending sparse writes, coalesced per-slot on the CPU (ModelInstanceManager) and applied to
+	// ModelInstanceBuffer by ModelInstanceScatterNode's compute shader. Not catalog-converted and
+	// not persistent: its one real producer (a PredefinedBufferNode) and its one real consumer
+	// (the scatter node) are both active only on the same frames (there are pending writes), so
+	// Create-before-accessor's ordinary "an active writer precedes this active reader" check
+	// always holds whenever this key is actually read -- no idle-frame zero-init gap to guard
+	// against, unlike ModelInstanceBuffer above.
+	struct ModelInstanceWriteBuffer {};
+
+	// Stage 2: one ModelDescEntry per registered model (model/ModelRegistry.hpp), indexed by
+	// ModelInstance::modelIndex. Size depends on how many models are registered, so -- same
+	// non-catalog reasoning as GltfVertexBuffer above -- this stays a bare tag struct; its real
+	// producer (ModelRegistry's own PredefinedBufferNode) supplies the real desc directly.
+	struct ModelDescBuffer {};
+
+	// Stage 3 (passes/ModelCullNode.hpp): ModelCullNode's compacted survivor list and its paired
+	// indirect task-dispatch args (VkDrawMeshTasksIndirectCommandEXT-shaped: groupCountX/Y/Z),
+	// replacing model_render.task's old direct dispatch over every capacity slot. Rebuilt fully
+	// every active frame -- same "Create-before-accessor, no stale read possible" reasoning as
+	// FoliageInstanceBuffer/FoliageIndirectArgsBuffer above, which these two mirror closely.
+	// Catalog-converted (unlike ModelDescBuffer above) because, also like Foliage's pair, their
+	// byte size is capacity-derived at compile time, not producer-data-dependent.
+	struct ModelVisibleListBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(
+				static_cast<std::uint64_t>(kModelInstanceCapacity) * sizeof(ModelVisibleEntry)
+			);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	struct ModelIndirectArgsBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(16); // real struct is 12 bytes; 16 for safety margin
+			// eIndirectBuffer: consumed directly by drawMeshTasksIndirectEXT. eTransferSrc: same
+			// debug-readback reasoning as FoliageIndirectArgsBuffer's own.
+			desc.usageMask |= static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
+			);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Stage 4: one ModelSkeletonJoint range per registered model that has skeleton data
+	// (ModelAsset::skeleton), indexed by ModelDescEntry::skeletonBase. Same non-catalog
+	// reasoning as ModelDescBuffer/the four GLTF geometry buffers above -- size depends on how
+	// many models register skeletons, and this is ModelRegistry's own PredefinedBufferNode's
+	// sole output.
+	struct ModelSkeletonBuffer {};
+
+	// Stage 4 (passes/ModelCullNode.hpp's live-mode claim, passes/ModelLiveEvalNode.hpp): the
+	// compacted list of instances ModelCullNode claimed a live-pool slot for this frame (flat
+	// uint instanceIndex[], one per claimed slot -- the slot index IS the claim order, so no
+	// separate slot field is needed), its indirect-dispatch args, and the transient live-palette
+	// pool ModelLiveEvalNode writes into. All three are catalog-converted (fixed-budget sizing,
+	// same reasoning as ModelVisibleListBuffer/ModelIndirectArgsBuffer above) and rebuilt fully
+	// every active frame -- no kLifetime::Persistent needed, same "no stale read possible"
+	// argument.
+	struct ModelLiveListBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(static_cast<std::uint64_t>(kModelLiveBudget) * 4u);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// {groupCountX, groupCountY, groupCountZ, rawLiveCount} -- 16 bytes. groupCountX/Y/Z are
+	// ModelLiveEvalNode's own indirect-dispatch args (64-wide workgroups, so groupCountX is
+	// ceil(rawLiveCount/64), NOT rawLiveCount itself -- unlike ModelIndirectArgsBuffer's
+	// one-workgroup-per-entry draw, this is a plain many-threads-per-workgroup compute dispatch,
+	// so the raw atomic claim count needs a real divide step before it's a valid workgroup
+	// count). rawLiveCount is ModelCullNode's own atomic claim counter (word offset 12); a tiny
+	// dedicated ModelLiveFinalizeNode does that divide between ModelCullNode and
+	// ModelLiveEvalNode, same "let the graph insert the barrier between distinct nodes" reasoning
+	// as the Reset/Cull split above -- not a hand-rolled intra-node barrier.
+	struct ModelLiveIndirectArgsBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(16);
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eIndirectBuffer);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Flat mat4[kModelLiveBudget * kModelLiveMaxJointCount], addressed as
+	// liveSlot * kModelLiveMaxJointCount + joint -- see ModelVisibleEntry's own comment on how a
+	// live-mode entry's paletteBaseA/B point in here instead of ModelClipPaletteBuffer.
+	struct ModelLivePaletteBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(
+				static_cast<std::uint64_t>(kModelLiveBudget) * kModelLiveMaxJointCount * sizeof(glm::mat4)
+			);
+			desc.persistent = true;
+			return desc;
+		}
+	};
 
 } // namespace brassica

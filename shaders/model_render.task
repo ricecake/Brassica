@@ -1,0 +1,70 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "gltf_mesh.glsl"
+#include "model_instance.glsl"
+
+// Stage 3: model_cull.comp has already culled and pose-resolved every survivor into
+// ModelVisibleListBuffer, and sized the indirect dispatch (ModelIndirectArgsBuffer.groupCountX)
+// to exactly that survivor count -- so gl_WorkGroupID.x here is already a valid compacted
+// survivor index with no bounds check needed, one task workgroup per survivor (matching
+// entity.task's own established shape for an indirect task+mesh dispatch, see EntityNode.hpp).
+// Each workgroup's own EmitMeshTasksEXT call is scoped to just its one instance, so there's no
+// cross-survivor amplification bookkeeping left to do here -- Stage 2's prefix sum (needed only
+// because a single task workgroup used to batch up to 32 differently-shaped survivors) is gone.
+layout(push_constant) uniform ModelRenderPushConstants {
+	uint instanceBufIdx;
+	uint modelDescBufIdx;
+	uint clipTableBufIdx;
+	uint vertexBufIdx;
+	uint meshletVertexBufIdx;
+	uint meshletTriangleBufIdx;
+	uint meshletBufIdx;
+	uint paletteBufIdx;
+	uint materialBufferIndex;
+	uint visibleListBufIdx;
+	uint livePaletteBufIdx;
+}
+push;
+
+struct ModelTaskPayload {
+	vec3  relPosition;
+	float scale;
+	vec4  rotation;
+	uint  paletteBufIdx; // Stage 4: push.paletteBufIdx or push.livePaletteBufIdx, by entry.mode
+	uint  paletteBaseA;
+	uint  paletteBaseB;
+	float blend;
+	uint  vertexBase;
+	uint  meshletVertexBase;
+	uint  meshletTriangleWordBase;
+	uint  meshletBase;
+};
+
+taskPayloadSharedEXT ModelTaskPayload payload;
+
+void main() {
+	ModelVisibleEntry entry = uModelVisibleListBuffers[nonuniformEXT(push.visibleListBufIdx)].entries[gl_WorkGroupID.x];
+	ModelInstance     inst = uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[entry.instanceIndex];
+	ModelDescEntry    desc = uModelDescBuffers[nonuniformEXT(push.modelDescBufIdx)].entries[inst.modelIndex];
+
+	payload.relPosition = inst.position - uCameraPosition.xyz;
+	payload.scale = inst.scale;
+	payload.rotation = inst.rotation;
+	// "One skinning interface for every mode" (the plan's own phrase): the mesh shader's blend
+	// math never branches on mode, it just reads whichever bindless buffer index this resolves
+	// to -- picked once here, not re-derived per vertex.
+	payload.paletteBufIdx = (entry.mode == kModelVisibleModeLive) ? push.livePaletteBufIdx : push.paletteBufIdx;
+	payload.paletteBaseA = entry.paletteBaseA;
+	payload.paletteBaseB = entry.paletteBaseB;
+	payload.blend = entry.blend;
+	payload.vertexBase = desc.vertexBase;
+	payload.meshletVertexBase = desc.meshletVertexBase;
+	payload.meshletTriangleWordBase = desc.meshletTriangleWordBase;
+	payload.meshletBase = desc.meshletBase;
+
+	EmitMeshTasksEXT(desc.meshletCount, 1, 1);
+}

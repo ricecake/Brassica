@@ -31,6 +31,13 @@
 // of FoliageNode::Execute() into its own Compute-domain node -- see FoliageNode.hpp's comment;
 // the Graphics-domain original was issuing an illegal barrier+fillBuffer inside its own
 // already-open dynamic-rendering scope, confirmed via real GPU-assisted validation).
+// 34 -> 35: Replaced GltfRenderNode with ModelRenderNode (GPU-driven model instances, baked
+// clips) and added ModelInstanceScatterNode (applies ModelInstanceManager's sparse CPU writes to
+// ModelInstanceBuffer) -- net +1.
+// 35 -> 37: Added ModelCullResetNode and ModelCullNode (Stage 3 -- compacted-visible-list cull
+// pass + indirect task dispatch, passes/ModelCullNode.hpp).
+// 37 -> 39: Added ModelLiveFinalizeNode and ModelLiveEvalNode (Stage 4 -- live wind/seed-bend
+// eval, passes/ModelLiveEvalNode.hpp).
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 34);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 39);
 }

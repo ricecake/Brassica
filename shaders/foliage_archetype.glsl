@@ -1,8 +1,7 @@
 #ifndef BRASSICA_FOLIAGE_ARCHETYPE_GLSL
 #define BRASSICA_FOLIAGE_ARCHETYPE_GLSL
 
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_buffer_reference2 : require
+#include "bindless.glsl"
 
 // Shared between foliage_bake.mesh (the sole writer) and whatever Stage 3 render pass becomes the
 // reader: one struct definition included by both, instead of two hand-copied ones drifting apart
@@ -52,16 +51,23 @@ struct FoliageArchetypeMeta {
 	uint triangleCount;
 };
 
-layout(buffer_reference, std430) buffer FoliageArchetypeVertexRef {
+// Binding 6 aliases (see material_system.glsl's own comment on this binding) -- all three
+// buffers are eStorageBuffer-usage and already auto-registered by
+// PhysicalRegistry::AssignAndWriteBindlessBufferIndex. Not readonly: FoliageBakeNode's
+// foliage_bake.mesh writes through this same alias (FoliageArchetypeRenderNode only reads).
+layout(set = 1, binding = 6, std430) buffer FoliageArchetypeVertexBufferArray {
 	FoliageArchetypeVertex vertices[];
-};
+}
+uFoliageArchetypeVertexBuffers[];
 
-layout(buffer_reference, std430) buffer FoliageArchetypeIndexRef {
+layout(set = 1, binding = 6, std430) buffer FoliageArchetypeIndexBufferArray {
 	uvec3 triangles[];
-};
+}
+uFoliageArchetypeIndexBuffers[];
 
-layout(buffer_reference, std430) buffer FoliageArchetypeMetaRef {
+layout(set = 1, binding = 6, std430) buffer FoliageArchetypeMetaBufferArray {
 	FoliageArchetypeMeta slots[];
-};
+}
+uFoliageArchetypeMetaBuffers[];
 
 #endif // BRASSICA_FOLIAGE_ARCHETYPE_GLSL

@@ -1,8 +1,7 @@
 #ifndef BRASSICA_FOLIAGE_INSTANCE_GLSL
 #define BRASSICA_FOLIAGE_INSTANCE_GLSL
 
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_buffer_reference2 : require
+#include "bindless.glsl"
 
 // Per-frame tree/bush instance list, collected by foliage.mesh (the same per-clump pass that
 // still generates live geometry for every foliage type today -- see foliage.mesh's own comment
@@ -34,12 +33,16 @@ struct FoliageIndirectArgs {
 	uint groupCountZ;
 };
 
-layout(buffer_reference, std430) buffer FoliageInstanceRef {
+// Binding 6 aliases (see material_system.glsl's own comment on this binding) -- both buffers are
+// eStorageBuffer-usage and already auto-registered by PhysicalRegistry::AssignAndWriteBindlessBufferIndex.
+layout(set = 1, binding = 6, std430) buffer FoliageInstanceBufferArray {
 	FoliageInstanceData instances[];
-};
+}
+uFoliageInstanceBuffers[];
 
-layout(buffer_reference, std430) buffer FoliageIndirectArgsRef {
+layout(set = 1, binding = 6, std430) buffer FoliageIndirectArgsBufferArray {
 	FoliageIndirectArgs args;
-};
+}
+uFoliageIndirectArgsBuffers[];
 
 #endif // BRASSICA_FOLIAGE_INSTANCE_GLSL

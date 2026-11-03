@@ -23,13 +23,15 @@ namespace brassica {
 	// kFoliageArchetypeCount etc. live in ResourceKeys.hpp now, alongside the catalog-converted
 	// FoliageArchetypeVertexBuffer/IndexBuffer/MetaBuffer Desc()s that need them too.
 
+	// Bindless storage-buffer indices (ctx.BufferIndex<K>(), binding 6 -- see
+	// shaders/model_instance.glsl's own comment), not device addresses.
 	struct FoliageBakePushConstants {
-		std::uint64_t vertexBufAddress{0};
-		std::uint64_t indexBufAddress{0};
-		std::uint64_t metaBufAddress{0};
+		std::uint32_t vertexBufIdx{0};
+		std::uint32_t indexBufIdx{0};
+		std::uint32_t metaBufIdx{0};
 	};
 
-	static_assert(sizeof(FoliageBakePushConstants) == 24, "FoliageBakePushConstants size must be 24 bytes");
+	static_assert(sizeof(FoliageBakePushConstants) == 12, "FoliageBakePushConstants size must be 12 bytes");
 
 	// Bakes a small fixed palette of tree/bush archetype shapes into persistent buffers, once,
 	// instead of every visible clump regenerating its own unique tree/bush procedurally every
@@ -109,14 +111,6 @@ namespace brassica {
 			r.Create<FoliageBakeDummyTarget>().Desc(graph::ColorAttachmentDesc(w, h, vk::Format::eR8G8B8A8Unorm));
 		}
 
-		static std::uint64_t BufferAddress(vk::Device device, vk::Buffer buf) {
-			if (!buf) {
-				return 0;
-			}
-			vk::BufferDeviceAddressInfo info(buf);
-			return device.getBufferAddress(info);
-		}
-
 		void Execute(graph::NodeContext& ctx) {
 			// The three buffers are re-asserted via Create<>() every frame (same reason
 			// TerrainGenNode's clipmap textures are, see its own comment: ProvisionBuffer's
@@ -126,31 +120,19 @@ namespace brassica {
 				return;
 			}
 
-			vk::Buffer vertexBuf{};
-			vk::Buffer indexBuf{};
-			vk::Buffer metaBuf{};
-			vk::Device device{};
-			if (ctx.resources) {
-				if (const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
-					device = physReg->GetDevice();
-					if (auto p = physReg->GetBuffer<FoliageArchetypeVertexBuffer>()) {
-						vertexBuf = p->GetBuffer();
-					}
-					if (auto p = physReg->GetBuffer<FoliageArchetypeIndexBuffer>()) {
-						indexBuf = p->GetBuffer();
-					}
-					if (auto p = physReg->GetBuffer<FoliageArchetypeMetaBuffer>()) {
-						metaBuf = p->GetBuffer();
-					}
+			if (const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+				if (!physReg->GetBuffer<FoliageArchetypeVertexBuffer>() ||
+				    !physReg->GetBuffer<FoliageArchetypeIndexBuffer>() ||
+				    !physReg->GetBuffer<FoliageArchetypeMetaBuffer>()) {
+					return;
 				}
-			}
-			if (!vertexBuf || !indexBuf || !metaBuf || !device) {
+			} else {
 				return;
 			}
 
-			push.vertexBufAddress = BufferAddress(device, vertexBuf);
-			push.indexBufAddress = BufferAddress(device, indexBuf);
-			push.metaBufAddress = BufferAddress(device, metaBuf);
+			push.vertexBufIdx = ctx.BufferIndex<FoliageArchetypeVertexBuffer>();
+			push.indexBufIdx = ctx.BufferIndex<FoliageArchetypeIndexBuffer>();
+			push.metaBufIdx = ctx.BufferIndex<FoliageArchetypeMetaBuffer>();
 
 			std::array<GraphicsShader*, 2> stages{&meshShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR8G8B8A8Unorm};

@@ -40,8 +40,8 @@ layout(push_constant) uniform FoliagePushConstants {
 	// Appended, not interleaved -- see feedback_push_constant_struct_editing. foliage.task's own
 	// copy of this struct is deliberately NOT updated to match: it never touches these, and the
 	// shared fields above stay at identical offsets in both either way.
-	FoliageInstanceRef     instanceBuf;
-	FoliageIndirectArgsRef indirectArgsBuf;
+	uint instanceBufIdx;
+	uint indirectArgsBufIdx;
 }
 params;
 
@@ -695,14 +695,17 @@ void main() {
 				archetypeSlot = foliageBushArchetypeSlot(variant);
 			}
 
-			uint writeIdx = atomicAdd(params.indirectArgsBuf.args.groupCountX, 1u);
+			uint writeIdx = atomicAdd(
+				uFoliageIndirectArgsBuffers[nonuniformEXT(params.indirectArgsBufIdx)].args.groupCountX,
+				1u
+			);
 			if (writeIdx < kFoliageInstanceCapacity) {
 				FoliageInstanceData inst;
 				inst.relPosition = basePos;
 				inst.rotationAngle = angle;
 				inst.fade = fade;
 				inst.archetypeSlot = archetypeSlot;
-				params.instanceBuf.instances[writeIdx] = inst;
+				uFoliageInstanceBuffers[nonuniformEXT(params.instanceBufIdx)].instances[writeIdx] = inst;
 			}
 		}
 

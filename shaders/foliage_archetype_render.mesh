@@ -9,12 +9,12 @@ layout(triangles, max_vertices = 128, max_primitives = 128) out;
 #include "foliage_instance.glsl"
 
 layout(push_constant) uniform FoliageArchetypeRenderPushConstants {
-	FoliageInstanceRef        instanceBuf;
-	FoliageArchetypeVertexRef vertexBuf;
-	FoliageArchetypeIndexRef  indexBuf;
-	FoliageArchetypeMetaRef   metaBuf;
-	float                     lengthMultiplier;
-	float                     widthMultiplier;
+	uint  instanceBufIdx;
+	uint  vertexBufIdx;
+	uint  indexBufIdx;
+	uint  metaBufIdx;
+	float lengthMultiplier;
+	float widthMultiplier;
 }
 push;
 
@@ -32,14 +32,15 @@ layout(location = 5) out float     outFade[];
 
 void main() {
 	uint instanceIdx = gl_WorkGroupID.x;
-	FoliageInstanceData inst = push.instanceBuf.instances[instanceIdx];
+	FoliageInstanceData inst =
+		uFoliageInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[instanceIdx];
 
 	if (inst.archetypeSlot >= kFoliageArchetypeCount) {
 		SetMeshOutputsEXT(0u, 0u);
 		return;
 	}
 
-	FoliageArchetypeMeta meta = push.metaBuf.slots[inst.archetypeSlot];
+	FoliageArchetypeMeta meta = uFoliageArchetypeMetaBuffers[nonuniformEXT(push.metaBufIdx)].slots[inst.archetypeSlot];
 	uint vCount = min(meta.vertexCount, kFoliageArchetypeMaxVerts);
 	uint pCount = min(meta.triangleCount, kFoliageArchetypeMaxTris);
 	SetMeshOutputsEXT(vCount, pCount);
@@ -58,7 +59,8 @@ void main() {
 	uint triBase = inst.archetypeSlot * kFoliageArchetypeMaxTris;
 
 	for (uint i = 0u; i < vCount; ++i) {
-		FoliageArchetypeVertex v = push.vertexBuf.vertices[vertBase + i];
+		FoliageArchetypeVertex v =
+			uFoliageArchetypeVertexBuffers[nonuniformEXT(push.vertexBufIdx)].vertices[vertBase + i];
 
 		vec3 scaled = vec3(v.position.x * scaleXZ, v.position.y * scaleY, v.position.z * scaleXZ);
 		vec3 rotated = vec3(scaled.x * c - scaled.z * s, scaled.y, scaled.x * s + scaled.z * c);
@@ -77,6 +79,7 @@ void main() {
 	}
 
 	for (uint i = 0u; i < pCount; ++i) {
-		gl_PrimitiveTriangleIndicesEXT[i] = push.indexBuf.triangles[triBase + i];
+		gl_PrimitiveTriangleIndicesEXT[i] =
+			uFoliageArchetypeIndexBuffers[nonuniformEXT(push.indexBufIdx)].triangles[triBase + i];
 	}
 }
