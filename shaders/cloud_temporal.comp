@@ -104,52 +104,56 @@ const ivec2 bayer_offsets[16] = ivec2[](
 
 vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
-	// 1. Get THIS thread's actual scene depth from the G-Buffer
+// 1. Get THIS thread's actual scene depth from the G-Buffer
 	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, uv);
 	vec3 relPos = SAMPLE_NEAREST(push.gPositionIndex, uv).rgb;
 	float threadSurfaceDist = (albedo.a >= 0.01) ? length(relPos) : 1e9;
 	bool isForeground = threadSurfaceDist < 1e8;
 
-	// 2. Depth-Aware Bilateral Search: Find the best fresh pixel in a 3x3 block neighborhood
-	// that matches our thread's scene depth. Prevents sky/cloud from bleeding into trees.
+	// 2. Determine freshUV
 	ivec2 blockOrigin = pixel & ~3;
-	ivec2 bestFreshCoord = blockOrigin + offset;
-	float minDepthDiff = 1e9;
+	ivec2 freshCoord = blockOrigin + offset;
 
-	for (int dy = -1; dy <= 1; dy++) {
-		for (int dx = -1; dx <= 1; dx++) {
-			ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
-			ivec2 testCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
-			vec2 testUV = (vec2(testCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+	// FIX 1: ONLY run Bilateral Search to protect foreground objects.
+	// Running this on the sky actively erodes the fuzzy cloud edges!
+	if (isForeground) {
+		float minDepthDiff = 1e9;
+		for (int dy = -1; dy <= 1; dy++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
+				ivec2 testCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+				vec2 testUV = (vec2(testCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
-			vec4 testAlbedo = SAMPLE_NEAREST(push.gAlbedoIndex, testUV);
-			vec3 testRelPos = SAMPLE_NEAREST(push.gPositionIndex, testUV).rgb;
-			float testSurfaceDist = (testAlbedo.a >= 0.01) ? length(testRelPos) : 1e9;
+				vec4 testAlbedo = SAMPLE_NEAREST(push.gAlbedoIndex, testUV);
+				vec3 testRelPos = SAMPLE_NEAREST(push.gPositionIndex, testUV).rgb;
+				float testSurfaceDist = (testAlbedo.a >= 0.01) ? length(testRelPos) : 1e9;
 
-			float diff = abs(threadSurfaceDist - testSurfaceDist);
-			if (diff < minDepthDiff) {
-				minDepthDiff = diff;
-				bestFreshCoord = testCoord;
+				float diff = abs(threadSurfaceDist - testSurfaceDist);
+				if (diff < minDepthDiff) {
+					minDepthDiff = diff;
+					freshCoord = testCoord;
+				}
 			}
 		}
 	}
 
-vec2 freshUV = (vec2(bestFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+	vec2 freshUV = (vec2(freshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
-vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
+	// 3. Fetch current data
+	vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
 	vec3  curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, freshUV).rgb;
 	float curDepth = SAMPLE_NEAREST(push.depthIndex, freshUV).r;
 	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, freshUV).rg;
 
-	// FIX 1: Mask Dilated Search. If this thread is on a foreground tree AND the
-	// raymarch missed the cloud (1e9), do NOT search neighbors. The tree occludes it!
-	bool cloudOccludedByForeground = isForeground && (curDepth > 1e8);
+	// 4. Dilated Parallax Search
+	// ONLY used to find a motion vector for the sky so it smoothly follows the cloud edge.
+	// We NEVER overwrite curColor or curTransmittance here!
+	float reprojDepth = curDepth;
+	vec2 reprojVelocity = curVelocity;
+	vec2 reprojFreshUV = freshUV;
 
-	float closestCloudDepth = 1e9;
-	vec2 dilatedVelocity = curVelocity;
-	vec2 dilatedFreshUV = freshUV;
-
-	if (!cloudOccludedByForeground) {
+	if (curDepth > 1e8) {
+		float closestCloudDepth = 1e9;
 		for (int dy = -1; dy <= 1; dy++) {
 			for (int dx = -1; dx <= 1; dx++) {
 				ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
@@ -159,30 +163,27 @@ vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
 				float sDepth = SAMPLE_NEAREST(push.depthIndex, sampleUV).r;
 				if (sDepth < closestCloudDepth) {
 					closestCloudDepth = sDepth;
-					dilatedVelocity = SAMPLE_NEAREST(push.velocityIndex, sampleUV).rg;
-					dilatedFreshUV = sampleUV;
+					reprojVelocity = SAMPLE_NEAREST(push.velocityIndex, sampleUV).rg;
+					reprojFreshUV = sampleUV;
 				}
 			}
 		}
+		reprojDepth = closestCloudDepth;
 	}
 
-	float reprojDepth = closestCloudDepth;
-	bool hasCloud = reprojDepth < 1e8;
-
-	if (!hasCloud && !isForeground) {
+	// If the entire neighborhood is sky, borrow the fading history's depth
+	if (reprojDepth > 1e8 && !isForeground) {
 		float staticHistDepth = SAMPLE_NEAREST(push.historyMomentsIndex, uv).w;
-		if (staticHistDepth < 1e8) {
-			reprojDepth = staticHistDepth;
-			hasCloud = true;
-		}
+		if (staticHistDepth < 1e8) reprojDepth = staticHistDepth;
 	}
 
+	// 5. Calculate Motion
 	vec2 historyUV = uv;
-	bool inBounds = false;
-	vec2 totalMotion = vec2(0.0); // FIX 2: Track total motion (Camera + Wind)
+	vec2 totalMotion = vec2(0.0);
+	bool inBounds = true;
 
-	if (hasCloud) {
-		vec2 freshClipCoord = dilatedFreshUV * 2.0 - 1.0;
+	if (reprojDepth < 1e8) {
+		vec2 freshClipCoord = reprojFreshUV * 2.0 - 1.0;
 		vec4 freshViewRay4 = uInvProjMatrix * vec4(freshClipCoord, 1.0, 1.0);
 		vec3 freshViewDir = freshViewRay4.xyz / freshViewRay4.w;
 		vec3 freshWorldRay = normalize((uInvViewMatrix * vec4(freshViewDir, 0.0)).xyz);
@@ -191,50 +192,38 @@ vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
 		vec4 prevClip = uPreviousViewProjMatrix * vec4(freshWorldPos, 1.0);
 		vec2 prevFreshUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
 
-		vec2 cameraMotion = prevFreshUV - dilatedFreshUV;
-		totalMotion = cameraMotion - dilatedVelocity;
+		vec2 cameraMotion = prevFreshUV - reprojFreshUV;
+		totalMotion = cameraMotion - reprojVelocity;
 		historyUV = uv + totalMotion;
 		inBounds = all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0)));
+	}
+
+	// FIX 2: Treat empty sky as VALID history so fuzzy edges can accumulate!
+	// ONLY invalidate if a tree is in the way or we went off screen.
+	bool validHistory = inBounds;
+	if (isForeground && curDepth > 1e8) {
+		validHistory = false;
 	}
 
 	vec3 histColor = vec3(0.0);
 	vec3 histTransmittance = vec3(1.0);
 	vec4 histMoments = vec4(0.0);
-	bool validHistory = hasCloud && inBounds;
 
 	if (validHistory) {
 		vec2 texSize = vec2(push.outputWidth, push.outputHeight);
-
-		// Use the Mitchell filter to fetch history, instantly fixing camera motion blur
 		histColor = textureMitchellColor(push.historyColorIndex, historyUV, texSize);
 		histTransmittance = textureMitchellColor(push.historyTransmittanceIndex, historyUV, texSize);
-
-		// Moments can remain bilinear; sharp tracking is only strictly needed for visual channels
 		histMoments = SAMPLE_LINEAR(push.historyMomentsIndex, historyUV);
 	}
 
-	// FIX 3: Transmittance Parallax Rejection
-	// Ported from the older shader to instantly destroy smearing on disocclusion
-	float curOpacity = 1.0 - dot(curTransmittance, vec3(0.3333));
-	float histOpacity = 1.0 - dot(histTransmittance, vec3(0.3333));
-	float relativeDiff = (curOpacity - histOpacity) / max(max(curOpacity, histOpacity), 0.001);
-
-	// If cloud leaves pixel during strafe (-), or enters pixel (+)
-	float trailingEdgeRejection = 1.0 - smoothstep(-0.6, -0.2, relativeDiff);
-	float leadingEdgeRejection = smoothstep(0.5, 0.9, relativeDiff);
-	float edgeRejection = max(trailingEdgeRejection, leadingEdgeRejection);
-
-// FIX A: Reset history for ALL threads in the 4x4 block, not just the fresh pixel!
+	// Removed hard-surface Parallax Edge Rejection. Volumes naturally fade.
 	float historyLength = min(8.0, histMoments.z + 1.0);
-	if (validHistory) {
-		historyLength = mix(historyLength, 1.0, edgeRejection);
-	}
 	float alpha = 1.0 / historyLength;
 
 	vec3 m1 = vec3(0.0);
 	vec3 m2 = vec3(0.0);
-	vec3 t_m1 = vec3(0.0); // Transmittance mean
-	vec3 t_m2 = vec3(0.0); // Transmittance squared mean
+	vec3 t_m1 = vec3(0.0);
+	vec3 t_m2 = vec3(0.0);
 	float weightSum = 0.0;
 	float weights[3] = float[](0.25, 0.5, 0.25);
 
@@ -261,27 +250,22 @@ vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
 	t_m1 /= weightSum;
 	t_m2 /= weightSum;
 
-	// Color Sigma & Bounds
 	vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
-	vec3 nMin = m1 - 1.5 * sigma;
-	vec3 nMax = m1 + 1.5 * sigma;
-
-	// Transmittance Sigma & Bounds
 	vec3 t_sigma = sqrt(max(vec3(0.0), t_m2 - t_m1 * t_m1));
-	vec3 t_nMin = t_m1 - 1.5 * t_sigma;
-	vec3 t_nMax = t_m1 + 1.5 * t_sigma;
 
-	// Clip both Color (YCoCg) and Transmittance
+	// FIX 3: Widen Gamma to 2.5. A 3x3 block in a 4x4 interleave spans 12x12 pixels!
+	// We must widen the bounds to let high-frequency noise survive the clip.
+	vec3 nMin = m1 - 2.5 * sigma;
+	vec3 nMax = m1 + 2.5 * sigma;
+	vec3 t_nMin = t_m1 - 2.5 * t_sigma;
+	vec3 t_nMax = t_m1 + 2.5 * t_sigma;
+
 	vec3 historyYCoCg = RGBToYCoCg(histColor);
 	vec3 clippedYCoCg = clamp(historyYCoCg, nMin, nMax);
 	vec3 clippedTrans = clamp(histTransmittance, t_nMin, t_nMax);
 
-	// FIX B: Use totalMotion (Camera + Wind) instead of dilatedVelocity (Wind only).
 	float pixelSpeed = length(totalMotion * vec2(push.outputWidth, push.outputHeight));
 	float motionConfidenceFactor = smoothstep(3.0, 0.5, pixelSpeed);
-
-	// FIX C: Force the variance clip to 100% strictness when a tearing edge is detected.
-	motionConfidenceFactor *= (1.0 - edgeRejection);
 
 	vec3 blendedYCoCg = mix(clippedYCoCg, historyYCoCg, motionConfidenceFactor * 0.9);
 	vec3 blendedTrans = mix(clippedTrans, histTransmittance, motionConfidenceFactor * 0.9);
@@ -301,20 +285,10 @@ vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
 			blendedTransmittance = clippedHistTrans;
 		}
 	} else {
-		// 5. Foreground-Aware Disocclusion Fallback
-		if (hasCloud) {
-			// Newly appeared cloud: use local neighborhood average
-			// FIX 1: m1 is in YCoCg space! It MUST be converted back to RGB.
-			blendedColor = YCoCgToRGB(m1);
-			blendedTransmittance = t_m1;
-			historyLength = 1.0;
-		} else {
-			// Empty sky or solid foreground object: INSTANTLY output empty space.
-			// This prevents the neighborhood average (m1) from smearing cloud shadows onto trees.
-			blendedColor = curColor; // vec3(0.0)
-			blendedTransmittance = curTransmittance; // vec3(1.0)
-			historyLength = 0.0;
-		}
+		// Tree Disocclusion Fallback
+		blendedColor = curColor;
+		blendedTransmittance = curTransmittance;
+		historyLength = 0.0;
 	}
 
 	// Clean up phantom depths once the soft edge fully fades into empty sky
