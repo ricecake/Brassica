@@ -31,6 +31,8 @@ namespace brassica {
 		std::uint32_t outMomentsStorageIdx{0};
 		std::uint32_t outputWidth{0};
 		std::uint32_t outputHeight{0};
+		std::uint32_t gPositionIndex{0};
+		std::uint32_t gAlbedoIndex{0};
 	};
 
 	// Stage B: reprojects+accumulates CloudRenderNode's fresh per-frame raymarch
@@ -81,6 +83,8 @@ namespace brassica {
 			r.ReadPrevious<CloudAccumulatedTransmittance>();
 			r.Create<CloudMoments>();
 			r.ReadPrevious<CloudMoments>();
+			r.Read<GBufferAlbedo>();
+			r.Read<GBufferPosition>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -94,6 +98,8 @@ namespace brassica {
 			push.outColorStorageIdx = ctx.StorageIndex<CloudAccumulatedColor>();
 			push.outTransmittanceStorageIdx = ctx.StorageIndex<CloudAccumulatedTransmittance>();
 			push.outMomentsStorageIdx = ctx.StorageIndex<CloudMoments>();
+			push.gPositionIndex = ctx.StorageIndex<GBufferPosition>();
+			push.gAlbedoIndex = ctx.StorageIndex<GBufferAlbedo>();
 			push.outputWidth = width;
 			push.outputHeight = height;
 

@@ -26,11 +26,27 @@ layout(push_constant) uniform CloudTemporalPushConstants {
 	uint outMomentsStorageIdx;
 	uint outputWidth;
 	uint outputHeight;
+	uint gPositionIndex; // NEW
+	uint gAlbedoIndex;   // NEW
 } push;
 
 float luminance(vec3 c) {
 	return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
+
+vec3 RGBToYCoCg(vec3 rgb) {
+		return vec3(
+			dot(rgb, vec3(0.25, 0.5, 0.25)),
+			dot(rgb, vec3(0.5, 0.0, -0.5)),
+			dot(rgb, vec3(-0.25, 0.5, -0.25))
+		);
+	}
+
+	vec3 YCoCgToRGB(vec3 ycocg) {
+		float y = ycocg.x; float co = ycocg.y; float cg = ycocg.z;
+		return vec3(y + co - cg, y + cg, y - co - cg);
+	}
+
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -47,14 +63,41 @@ const ivec2 bayer_offsets[16] = ivec2[](
 	ivec2 offset = bayer_offsets[uFrameIndex % 16];
 	bool freshPixel = (pixel % 4) == offset;
 
-	vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
-	// 1. Move the freshUV calculation UP here
-	ivec2 blockOrigin = pixel & ~3; // Top-left of the 4x4 block
-	ivec2 freshPixelCoord = blockOrigin + offset;
-	vec2 freshUV = (vec2(freshPixelCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+	// 1. Get THIS thread's actual scene depth from the G-Buffer
+	vec4 albedo = SAMPLE_NEAREST(push.gAlbedoIndex, uv);
+	vec3 relPos = SAMPLE_NEAREST(push.gPositionIndex, uv).rgb;
+	float threadSurfaceDist = (albedo.a >= 0.01) ? length(relPos) : 1e9;
+	bool isForeground = threadSurfaceDist < 1e8;
 
-// 2. Fetch all current data using freshUV, never uv!
+	// 2. Depth-Aware Bilateral Search: Find the best fresh pixel in a 3x3 block neighborhood
+	// that matches our thread's scene depth. Prevents sky/cloud from bleeding into trees.
+	ivec2 blockOrigin = pixel & ~3;
+	ivec2 bestFreshCoord = blockOrigin + offset;
+	float minDepthDiff = 1e9;
+
+	for (int dy = -1; dy <= 1; dy++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
+			ivec2 testCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+			vec2 testUV = (vec2(testCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+			vec4 testAlbedo = SAMPLE_NEAREST(push.gAlbedoIndex, testUV);
+			vec3 testRelPos = SAMPLE_NEAREST(push.gPositionIndex, testUV).rgb;
+			float testSurfaceDist = (testAlbedo.a >= 0.01) ? length(testRelPos) : 1e9;
+
+			float diff = abs(threadSurfaceDist - testSurfaceDist);
+			if (diff < minDepthDiff) {
+				minDepthDiff = diff;
+				bestFreshCoord = testCoord;
+			}
+		}
+	}
+
+	vec2 freshUV = (vec2(bestFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+	// 3. Fetch current data using the depth-matched freshUV
 	vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
 	vec3  curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, freshUV).rgb;
 	float curDepth = SAMPLE_NEAREST(push.depthIndex, freshUV).r;
@@ -63,10 +106,11 @@ const ivec2 bayer_offsets[16] = ivec2[](
 	float reprojDepth = curDepth;
 	bool hasCloud = reprojDepth < 1e8;
 
-	// FIX 1: Preserve Reprojection on Misses. If the stochastic ray missed the soft edge this
-	// frame, borrow the history's depth. This allows the reprojection math to run so the edge
-	// can smoothly fade out, instead of instantly aborting and snapping to jitter.
-	if (!hasCloud) {
+
+	// 4. Foreground-Aware Edge Preservation
+	// ONLY borrow history depth if we are looking at the sky. If a tree covers the pixel,
+	// we WANT the cloud to instantly disappear.
+	if (!hasCloud && !isForeground) {
 		float staticHistDepth = SAMPLE_NEAREST(push.historyMomentsIndex, uv).w;
 		if (staticHistDepth < 1e8) {
 			reprojDepth = staticHistDepth;
@@ -108,10 +152,12 @@ const ivec2 bayer_offsets[16] = ivec2[](
 	float historyLength = min(8.0, histMoments.z + 1.0);
 	float alpha = 1.0 / historyLength;
 
-	// Calculate spatial variance for Color, but ONLY the spatial mean for Transmittance
 	vec3 m1 = vec3(0.0);
 	vec3 m2 = vec3(0.0);
-	vec3 t_m1 = vec3(0.0);
+	vec3 t_m1 = vec3(0.0); // Transmittance mean
+	vec3 t_m2 = vec3(0.0); // Transmittance squared mean
+	float weightSum = 0.0;
+	float weights[3] = float[](0.25, 0.5, 0.25);
 
 	for (int dy = -1; dy <= 1; dy++) {
 		for (int dx = -1; dx <= 1; dx++) {
@@ -121,39 +167,72 @@ const ivec2 bayer_offsets[16] = ivec2[](
 
 			vec3 c = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
 			vec3 t = SAMPLE_NEAREST(push.transmittanceIndex, sampleUV).rgb;
+			vec3 ycocg = RGBToYCoCg(c);
 
-			m1 += c;
-			m2 += c * c;
-			t_m1 += t;
+			float w = weights[abs(dx)] * weights[abs(dy)];
+			m1 += ycocg * w;
+			m2 += ycocg * ycocg * w;
+			t_m1 += t * w;
+			t_m2 += t * t * w;
+			weightSum += w;
 		}
 	}
-	m1 /= 9.0;
-	m2 /= 9.0;
-	t_m1 /= 9.0;
+	m1 /= weightSum;
+	m2 /= weightSum;
+	t_m1 /= weightSum;
+	t_m2 /= weightSum;
 
+	// Color Sigma & Bounds
 	vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
 	vec3 nMin = m1 - 1.5 * sigma;
 	vec3 nMax = m1 + 1.5 * sigma;
 
-	// FIX 3: ONLY clip color. Clipping transmittance forces the smooth opacity average
-	// to snap back to the noisy bounds of the 3x3 block, destroying the soft edge.
-	vec3 clippedHistColor = clamp(histColor, nMin, nMax);
+	// Transmittance Sigma & Bounds
+	vec3 t_sigma = sqrt(max(vec3(0.0), t_m2 - t_m1 * t_m1));
+	vec3 t_nMin = t_m1 - 1.5 * t_sigma;
+	vec3 t_nMax = t_m1 + 1.5 * t_sigma;
 
-	vec3 blendedColor;
+	// Clip both Color (YCoCg) and Transmittance
+	vec3 historyYCoCg = RGBToYCoCg(histColor);
+	vec3 clippedYCoCg = clamp(historyYCoCg, nMin, nMax);
+	vec3 clippedTrans = clamp(histTransmittance, t_nMin, t_nMax);
+
+	// Relax the clip when mostly static to prevent boiling
+	float pixelSpeed = length(curVelocity * vec2(push.outputWidth, push.outputHeight));
+	float motionConfidenceFactor = smoothstep(2.0, 0.2, pixelSpeed);
+
+	vec3 blendedYCoCg = mix(clippedYCoCg, historyYCoCg, motionConfidenceFactor * 0.9);
+	vec3 blendedTrans = mix(clippedTrans, histTransmittance, motionConfidenceFactor * 0.9);
+
+	vec3 clippedHistColor = YCoCgToRGB(blendedYCoCg);
+	vec3 clippedHistTrans = blendedTrans;
+
+vec3 blendedColor;
 	vec3 blendedTransmittance;
 
 	if (validHistory) {
 		if (freshPixel) {
 			blendedColor = mix(clippedHistColor, curColor, alpha);
-			blendedTransmittance = mix(histTransmittance, curTransmittance, alpha);
+			blendedTransmittance = mix(clippedHistTrans, curTransmittance, alpha);
 		} else {
 			blendedColor = clippedHistColor;
-			blendedTransmittance = histTransmittance; // Unclipped exponential average
+			blendedTransmittance = clippedHistTrans;
 		}
 	} else {
-		blendedColor = m1;
-		blendedTransmittance = t_m1;
-		historyLength = 1.0;
+		// 5. Foreground-Aware Disocclusion Fallback
+		if (hasCloud) {
+			// Newly appeared cloud: use local neighborhood average
+			// FIX 1: m1 is in YCoCg space! It MUST be converted back to RGB.
+			blendedColor = YCoCgToRGB(m1);
+			blendedTransmittance = t_m1;
+			historyLength = 1.0;
+		} else {
+			// Empty sky or solid foreground object: INSTANTLY output empty space.
+			// This prevents the neighborhood average (m1) from smearing cloud shadows onto trees.
+			blendedColor = curColor; // vec3(0.0)
+			blendedTransmittance = curTransmittance; // vec3(1.0)
+			historyLength = 0.0;
+		}
 	}
 
 	// Clean up phantom depths once the soft edge fully fades into empty sky
