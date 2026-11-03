@@ -54,7 +54,7 @@ void main() {
 		float meshletSize = baseMeshletSize * getLODScale(float(lodLevel));
 		float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
 
-		vec2 cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
+		vec2 cameraSnap = floor(uCameraPosition.xz / meshletSize) * meshletSize;
 		vec2 relCameraSnap = cameraSnap - uCameraPosition.xz;
 
 		vec3 relMinB = vec3(
@@ -72,7 +72,7 @@ void main() {
 			// 	lodLevel,
 			// 	params.gridParams.w
 			// );
-			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, centerXZ, lodLevel, 5, params.gridParams.w);
+			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, centerXZ, lodLevel, 0, params.gridParams.w);
 			relMinB.y = minMax.x - 100.0 - uCameraPosition.y;
 			relMaxB.y = minMax.y + 100.0 - uCameraPosition.y;
 		}
@@ -109,7 +109,7 @@ void main() {
 		if (visible && lodLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(lodLevel - 1));
 			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel - 1));
-			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
+			vec2 prevCameraSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize;
 			vec2 prevRelSnap = prevCameraSnap - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
@@ -158,11 +158,14 @@ void main() {
 			float geomError = variance * nodeSpacing * 2.5; // Scale to your specific heightmap amplitude
 
 			vec3 closestPoint = clamp(vec3(0.0), relMinB, relMaxB); // Camera is at 0,0,0
-			float dist = max(length(closestPoint), 1.0);
+// terrain.task line ~158
+vec2 gridRelMin = (vec2(float(col), float(row)) - float(meshletsPerRow) * 0.5) * meshletSize;
+vec2 gridRelMax = gridRelMin + vec2(meshletSize);
+vec2 closestGridXZ = clamp(vec2(0.0), gridRelMin, gridRelMax);
+float dist = max(length(vec3(closestGridXZ.x, relMinB.y, closestGridXZ.y)), 1.0);
 
-			float K = 1000.0; // Pass ScreenHeight / (2 * tan(FOV/2)) via push constants later
-			float sse = (geomError * K) / dist;
-
+float K = 1000.0;
+float sse = (geomError * K) / dist;
 			// 3. Determine Subdivision (Target LOD)
 			uint targetLOD = lodLevel;
 			if (sse > 4.0 && lodLevel >= 2) targetLOD = lodLevel - 2; // Subdivide into 16

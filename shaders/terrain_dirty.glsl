@@ -42,20 +42,28 @@ struct TerrainClipmapUpdate {
 };
 
 TerrainClipmapUpdate terrainClipmapUpdateFor(uint level, uint textureDim, bool forceRegeneration) {
-	float ts = texelSize(level);
-	float dim = float((textureDim > 0u) ? textureDim : 1088u);
-	int   dimInt = int(dim);
+    float ts = texelSize(level);
+    float dim = float((textureDim > 0u) ? textureDim : 1088u);
+    int   dimInt = int(dim);
 
-	vec2  camGrid = floor(uCameraPosition.xz / ts);
-	vec2  prevCamGrid = floor(uPreviousCameraPosition.xz / ts);
-	ivec2 delta = ivec2(camGrid) - ivec2(prevCamGrid);
+    // Snap camera to the block grid FIRST, so clipmap only shifts with the mesh
+    float baseMeshletSize = 32.0;
+    float meshletSize = baseMeshletSize * getLODScale(float(level));
 
-	TerrainClipmapUpdate u;
-	u.gridOffset = ivec2(mod(camGrid, dim));
-	u.delta = delta;
-	u.isFull =
-		forceRegeneration || uFrameIndex == 0u || abs(delta.x) >= dimInt || abs(delta.y) >= dimInt;
-	return u;
+    vec2 snappedCam = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+    vec2 prevSnappedCam = floor(uPreviousCameraPosition.xz / meshletSize) * meshletSize;
+
+    // Convert the block-snapped world positions into texel coordinates
+    vec2  camGrid = floor(snappedCam / ts);
+    vec2  prevCamGrid = floor(prevSnappedCam / ts);
+    ivec2 delta = ivec2(camGrid) - ivec2(prevCamGrid);
+
+    TerrainClipmapUpdate u;
+    u.gridOffset = ivec2(mod(camGrid, dim));
+    u.delta = delta;
+    u.isFull =
+        forceRegeneration || uFrameIndex == 0u || abs(delta.x) >= dimInt || abs(delta.y) >= dimInt;
+    return u;
 }
 
 // colIdx/rowIdx are the toroidal-wrapped indices terrain_gen.comp already computes per texel --

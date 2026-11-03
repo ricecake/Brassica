@@ -79,7 +79,7 @@ void main() {
 	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lodLevel));
 
 	float parentTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(morphLOD));
-	vec2  cameraSnapForMorph = floor(uCameraPosition.xz / parentTexelSize) * parentTexelSize;
+	vec2 cameraSnapForMorph = floor(uCameraPosition.xz / parentMeshletSize) * parentMeshletSize;
 	vec2  pureGridOffset =
 		(vec2(float(macroCol), float(macroRow)) - float(meshletsPerRow) * 0.5) * parentMeshletSize +
 		vec2(float(cx), float(cy)) * meshletSize;
@@ -94,17 +94,24 @@ void main() {
 
 	float alpha = 0.0;
 	vec2  relMorphedXZ = relBaseXZ;
+	vec2 morphedWorldXZ = cameraSnapForMorph + pureGridOffset + localPos;
+
+	// terrain.mesh line ~52
+	float morphTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(morphLOD));
 
 	if (morphLOD < params.gridParams.x - 1 && outerDist > 0.0) {
-		float morphWidth = 2 * texelSize;
+		float morphWidth = 2.0 * parentTexelSize; // Use parentTexelSize instead of texelSize
 		float morphStart = max(0.0, outerDist - morphWidth);
 
-		if (distToCam > morphStart) {
-			alpha = clamp((distToCam - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
+		vec2 snappedRelPos = pureGridOffset + localPos;
+		float snappedDist = max(abs(snappedRelPos.x), abs(snappedRelPos.y));
+
+		if (snappedDist > morphStart) {
+			alpha = clamp((snappedDist - morphStart) / max(outerDist - morphStart, 0.001), 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
 		}
 	}
-	vec2 morphedWorldXZ = cameraSnapForMorph + pureGridOffset + localPos;
+
 
 	vec4 texSample = sampleTerrainClipmap(
 		params.clipmapIndex,
@@ -137,13 +144,15 @@ void main() {
 
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
+	// if (morphLOD == 0) dropOff *= smoothstep(32.0, 128.0, distSq);
 	vec3 relWorldPos = vec3(relMorphedXZ.x, height - dropOff - uCameraPosition.y, relMorphedXZ.y);
 
 	sharedPos[vertexIndex] = relWorldPos;
 	barrier();
 
-	bool isOddBoundary = ((lx % 2 != 0) && (ly == 0 || ly == 10)) ||
-	                     ((ly % 2 != 0) && (lx == 0 || lx == 10));
+	// terrain.mesh - Limit T-junction stitching to outer macro edges:
+	bool isOddBoundary = ((lx % 2 != 0) && ((ly == 0 && isTopMacroEdge) || (ly == 10 && isBottomMacroEdge))) ||
+						((ly % 2 != 0) && ((lx == 0 && isLeftMacroEdge) || (lx == 10 && isRightMacroEdge)));
 
 	if (isOddBoundary) {
 		uint neighborA = (ly == 0 || ly == 10) ? vertexIndex - 1 : vertexIndex - 11;
@@ -288,11 +297,12 @@ void main() {
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 0] = uvec3(v0, v2, v1);
 		gl_PrimitiveTriangleIndicesEXT[quadIdx * 2 + 1] = uvec3(v1, v2, v3);
 
+		// terrain.mesh line ~194
 		bool cullQuad = false;
-		if (morphLOD > 0) {
+		if (morphLOD > 0 && lodLevel == morphLOD) {
 			float prevMeshletSize = baseMeshletSize * getLODScale(float(morphLOD - 1));
 			float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(morphLOD - 1));
-			vec2  prevRelSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize - uCameraPosition.xz;
+			vec2 prevRelSnap = floor(uCameraPosition.xz / prevMeshletSize) * prevMeshletSize - uCameraPosition.xz;
 			float prevExtent = float(meshletsPerRow) * 0.5 * prevMeshletSize;
 
 			vec2 quadCenterLocal = vec2(float(lx) + 0.5, float(ly) + 0.5) / 10.0 * meshletSize;
