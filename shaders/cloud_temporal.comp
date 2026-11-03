@@ -47,6 +47,45 @@ vec3 RGBToYCoCg(vec3 rgb) {
 		return vec3(y + co - cg, y + cg, y - co - cg);
 	}
 
+// Mitchell-Netravali Weight Function
+float mitchell(float x, float B, float C) {
+	float ax = abs(x);
+	if (ax < 1.0) {
+		return ((12.0 - 9.0 * B - 6.0 * C) * ax * ax * ax +
+				(-18.0 + 12.0 * B + 6.0 * C) * ax * ax +
+				(6.0 - 2.0 * B)) / 6.0;
+	} else if (ax < 2.0) {
+		return ((-B - 6.0 * C) * ax * ax * ax +
+				(5.0 * B + 30.0 * C) * ax * ax +
+				(-8.0 * B - 48.0 * C) * ax +
+				(4.0 * B + 24.0 * C)) / 6.0;
+	}
+	return 0.0;
+}
+
+// Custom manual texture fetch for sharp history retention
+vec3 textureMitchellColor(uint texIndex, vec2 uv, vec2 textureSize) {
+	vec2 texelSize = 1.0 / textureSize;
+	uv = uv * textureSize - 0.5;
+	vec2 f = fract(uv);
+	vec2 c = floor(uv);
+	vec3 color = vec3(0.0);
+	float weightsSum = 0.0;
+	for (int j = -1; j <= 2; j++) {
+		float wy = mitchell(float(j) - f.y, 0.0, 0.75); // C=0.75 adds the sharpening lobe
+		for (int i = -1; i <= 2; i++) {
+			float wx = mitchell(float(i) - f.x, 0.0, 0.75);
+			float weight = wx * wy;
+			vec2 pos = (c + vec2(i, j) + 0.5) * texelSize;
+
+			// Use NEAREST to fetch the exact pixel for the manual kernel
+			color += SAMPLE_NEAREST(texIndex, pos).rgb * weight;
+			weightsSum += weight;
+		}
+	}
+	return color / max(weightsSum, 0.0001);
+}
+
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -95,21 +134,41 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 		}
 	}
 
-	vec2 freshUV = (vec2(bestFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+vec2 freshUV = (vec2(bestFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
-	// 3. Fetch current data using the depth-matched freshUV
-	vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
+vec3  curColor = SAMPLE_NEAREST(push.colorIndex, freshUV).rgb;
 	vec3  curTransmittance = SAMPLE_NEAREST(push.transmittanceIndex, freshUV).rgb;
 	float curDepth = SAMPLE_NEAREST(push.depthIndex, freshUV).r;
 	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, freshUV).rg;
 
-	float reprojDepth = curDepth;
+	// FIX 1: Mask Dilated Search. If this thread is on a foreground tree AND the
+	// raymarch missed the cloud (1e9), do NOT search neighbors. The tree occludes it!
+	bool cloudOccludedByForeground = isForeground && (curDepth > 1e8);
+
+	float closestCloudDepth = 1e9;
+	vec2 dilatedVelocity = curVelocity;
+	vec2 dilatedFreshUV = freshUV;
+
+	if (!cloudOccludedByForeground) {
+		for (int dy = -1; dy <= 1; dy++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
+				ivec2 neighborFreshCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+				vec2 sampleUV = (vec2(neighborFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+				float sDepth = SAMPLE_NEAREST(push.depthIndex, sampleUV).r;
+				if (sDepth < closestCloudDepth) {
+					closestCloudDepth = sDepth;
+					dilatedVelocity = SAMPLE_NEAREST(push.velocityIndex, sampleUV).rg;
+					dilatedFreshUV = sampleUV;
+				}
+			}
+		}
+	}
+
+	float reprojDepth = closestCloudDepth;
 	bool hasCloud = reprojDepth < 1e8;
 
-
-	// 4. Foreground-Aware Edge Preservation
-	// ONLY borrow history depth if we are looking at the sky. If a tree covers the pixel,
-	// we WANT the cloud to instantly disappear.
 	if (!hasCloud && !isForeground) {
 		float staticHistDepth = SAMPLE_NEAREST(push.historyMomentsIndex, uv).w;
 		if (staticHistDepth < 1e8) {
@@ -120,9 +179,10 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
 	vec2 historyUV = uv;
 	bool inBounds = false;
+	vec2 totalMotion = vec2(0.0); // FIX 2: Track total motion (Camera + Wind)
 
 	if (hasCloud) {
-		vec2 freshClipCoord = freshUV * 2.0 - 1.0;
+		vec2 freshClipCoord = dilatedFreshUV * 2.0 - 1.0;
 		vec4 freshViewRay4 = uInvProjMatrix * vec4(freshClipCoord, 1.0, 1.0);
 		vec3 freshViewDir = freshViewRay4.xyz / freshViewRay4.w;
 		vec3 freshWorldRay = normalize((uInvViewMatrix * vec4(freshViewDir, 0.0)).xyz);
@@ -131,8 +191,9 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 		vec4 prevClip = uPreviousViewProjMatrix * vec4(freshWorldPos, 1.0);
 		vec2 prevFreshUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
 
-		vec2 cameraMotion = prevFreshUV - freshUV;
-		historyUV = uv + cameraMotion - curVelocity;
+		vec2 cameraMotion = prevFreshUV - dilatedFreshUV;
+		totalMotion = cameraMotion - dilatedVelocity;
+		historyUV = uv + totalMotion;
 		inBounds = all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0)));
 	}
 
@@ -142,14 +203,32 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 	bool validHistory = hasCloud && inBounds;
 
 	if (validHistory) {
-		histColor = SAMPLE_LINEAR(push.historyColorIndex, historyUV).rgb;
-		histTransmittance = SAMPLE_LINEAR(push.historyTransmittanceIndex, historyUV).rgb;
+		vec2 texSize = vec2(push.outputWidth, push.outputHeight);
+
+		// Use the Mitchell filter to fetch history, instantly fixing camera motion blur
+		histColor = textureMitchellColor(push.historyColorIndex, historyUV, texSize);
+		histTransmittance = textureMitchellColor(push.historyTransmittanceIndex, historyUV, texSize);
+
+		// Moments can remain bilinear; sharp tracking is only strictly needed for visual channels
 		histMoments = SAMPLE_LINEAR(push.historyMomentsIndex, historyUV);
-		// FIX 2: Removed historyWasSky check. Resetting the history length to 0 when
-		// transmittance > 0.99 was forcing the faint edges to render as raw 16Hz noise.
 	}
 
+	// FIX 3: Transmittance Parallax Rejection
+	// Ported from the older shader to instantly destroy smearing on disocclusion
+	float curOpacity = 1.0 - dot(curTransmittance, vec3(0.3333));
+	float histOpacity = 1.0 - dot(histTransmittance, vec3(0.3333));
+	float relativeDiff = (curOpacity - histOpacity) / max(max(curOpacity, histOpacity), 0.001);
+
+	// If cloud leaves pixel during strafe (-), or enters pixel (+)
+	float trailingEdgeRejection = 1.0 - smoothstep(-0.6, -0.2, relativeDiff);
+	float leadingEdgeRejection = smoothstep(0.5, 0.9, relativeDiff);
+	float edgeRejection = max(trailingEdgeRejection, leadingEdgeRejection);
+
 	float historyLength = min(8.0, histMoments.z + 1.0);
+	if (validHistory && freshPixel) {
+		historyLength = mix(historyLength, 1.0, edgeRejection); // Force reset on heavy disocclusion
+	}
+
 	float alpha = 1.0 / historyLength;
 
 	vec3 m1 = vec3(0.0);
@@ -192,14 +271,14 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 	vec3 t_nMin = t_m1 - 1.5 * t_sigma;
 	vec3 t_nMax = t_m1 + 1.5 * t_sigma;
 
-	// Clip both Color (YCoCg) and Transmittance
 	vec3 historyYCoCg = RGBToYCoCg(histColor);
 	vec3 clippedYCoCg = clamp(historyYCoCg, nMin, nMax);
 	vec3 clippedTrans = clamp(histTransmittance, t_nMin, t_nMax);
 
-	// Relax the clip when mostly static to prevent boiling
-	float pixelSpeed = length(curVelocity * vec2(push.outputWidth, push.outputHeight));
-	float motionConfidenceFactor = smoothstep(2.0, 0.2, pixelSpeed);
+	// FIX 4: Use TOTAL motion for confidence, and override if edge is rejecting
+	float pixelSpeed = length(totalMotion * vec2(push.outputWidth, push.outputHeight));
+	float motionConfidenceFactor = smoothstep(3.0, 0.5, pixelSpeed);
+	motionConfidenceFactor *= (1.0 - edgeRejection); // Don't relax clip on tearing edges
 
 	vec3 blendedYCoCg = mix(clippedYCoCg, historyYCoCg, motionConfidenceFactor * 0.9);
 	vec3 blendedTrans = mix(clippedTrans, histTransmittance, motionConfidenceFactor * 0.9);
@@ -207,7 +286,7 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 	vec3 clippedHistColor = YCoCgToRGB(blendedYCoCg);
 	vec3 clippedHistTrans = blendedTrans;
 
-vec3 blendedColor;
+	vec3 blendedColor;
 	vec3 blendedTransmittance;
 
 	if (validHistory) {
