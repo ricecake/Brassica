@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <vector>
 
 #include <glm/glm.hpp>
+#include <manifold/manifold.h>
 
 #include "model/ModelAsset.hpp"
 
@@ -21,6 +24,26 @@ namespace brassica {
 		float         radiusHigh;
 		std::uint32_t parentIndex; // kModelNoSkeletonSentinel for the root
 		float         rigidity;   // 0 = fully flexible, 1 = rigid (no wind/seed bend)
+
+		// Procedural plant generation v2: intermediate waypoints (absolute rest-space, same space
+		// as start/end) a curved segment should pass through, in order from start to end. Empty
+		// (the default) means a straight segment -- byte-identical to every joint built before
+		// this field existed, since the construction code below only takes the curved path when
+		// this is non-empty. See ManifoldSkeletalMeshBuilder.cpp's own comment on how a straight
+		// tapered Manifold::Extrude gets bent along this path via Warp + a parallel-transport
+		// frame, and what happens if the bend is tight enough to self-intersect.
+		std::vector<glm::vec3> curveWaypoints;
+
+		// Procedural plant generation v2: if set, replaces the default straight/curved-cylinder
+		// construction for this joint entirely -- the callback must return a Manifold in the same
+		// canonical local frame a straight segment would occupy (base at local z=0, growing to
+		// +Z, same convention Manifold::Cylinder itself uses), which still gets positioned via the
+		// normal start/end transform below it. start/end/parentIndex/rigidity still govern the
+		// skeleton bone's own transform regardless of what geometry this produces -- e.g. a flower
+		// head (ManifoldFlowerAsset.hpp) is a real joint via this hook, not a separate attachment
+		// concept, so it inherits rigidity/wind-bend for free. Ignored if curveWaypoints is also
+		// set -- a joint is either a custom shape or a (possibly curved) tube, not both.
+		std::function<manifold::Manifold()> customShape;
 	};
 
 	// Shared Manifold-CSG-to-skinned-ModelAsset pipeline, extracted from Stage 5.0's

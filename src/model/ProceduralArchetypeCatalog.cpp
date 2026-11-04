@@ -3,6 +3,7 @@
 #include "model/ManifoldBranchingTreeAsset.hpp"
 #include "model/ManifoldRockAsset.hpp"
 #include "model/ModelRegistry.hpp"
+#include "model/ProceduralPlantGenerator.hpp"
 
 namespace brassica {
 
@@ -108,6 +109,48 @@ namespace brassica {
 			return p;
 		}
 
+		// Flowers: a short, unbranched stem capped with a real flower head (ManifoldFlowerAsset.hpp
+		// via ProceduralPlantGenerator's customShape hook), not a bare disembodied head -- a
+		// placeable decor archetype needs a stem to root it to the ground the same way tree/bush
+		// do. branchChance=0 since a single flower doesn't need side branches; flowerChance=1
+		// guarantees the stem's one terminal tip actually grows a head.
+		PlantGenParams SmallFlower() {
+			PlantGenParams p;
+			p.seed = 401;
+			p.maxSegments = 4;
+			p.segmentLength = 0.10f;
+			p.directionJitterDegrees = 8.0f;
+			p.branchChance = 0.0f;
+			p.trunkRadiusLow = 0.012f;
+			p.trunkRadiusHigh = 0.008f;
+			p.baseRigidity = 0.3f; // flowers sway more than a woody stem
+			p.rigidityFalloffPerSegment = 0.05f;
+			p.circularSegments = 8;
+			p.maxJoints = 6;
+			p.enableFlowers = true;
+			p.flowerChance = 1.0f;
+			p.flowerSize = 0.10f;
+			return p;
+		}
+
+		PlantGenParams MediumFlower() {
+			PlantGenParams p = SmallFlower();
+			p.seed = 402;
+			p.maxSegments = 5;
+			p.segmentLength = 0.14f;
+			p.flowerSize = 0.15f;
+			return p;
+		}
+
+		PlantGenParams LargeFlower() {
+			PlantGenParams p = SmallFlower();
+			p.seed = 403;
+			p.maxSegments = 6;
+			p.segmentLength = 0.18f;
+			p.flowerSize = 0.22f;
+			return p;
+		}
+
 	} // namespace
 
 	ProceduralArchetypeIndices RegisterProceduralArchetypes(ModelRegistry& registry) {
@@ -123,6 +166,10 @@ namespace brassica {
 		indices.rockBase = registry.RegisterAsset(BuildProceduralRock(SmallRock()));
 		registry.RegisterAsset(BuildProceduralRock(MediumRock()));
 		registry.RegisterAsset(BuildProceduralRock(LargeRock()));
+
+		indices.flowerBase = registry.RegisterAsset(BuildProceduralPlant(SmallFlower()));
+		registry.RegisterAsset(BuildProceduralPlant(MediumFlower()));
+		registry.RegisterAsset(BuildProceduralPlant(LargeFlower()));
 
 		return indices;
 	}

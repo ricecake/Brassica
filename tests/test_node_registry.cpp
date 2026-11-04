@@ -40,6 +40,10 @@
 // eval, passes/ModelLiveEvalNode.hpp).
 // 39 -> 40: Added DecorPopulationNode (Stage 5.2 -- persistent, disocclusion-driven decor
 // population, passes/DecorPopulationNode.hpp).
+// 40 -> 37: Removed FoliageBakeNode, FoliageArchetypeRenderNode, and FoliageIndirectResetNode
+// (Stage 5.1/5.2 cleanup -- the GPU-baked tree/bush archetype path they served is fully
+// superseded by real ManifoldBranchingTreeAsset/ManifoldRockAsset models + DecorPopulationNode's
+// persistent population; see the plan's Stage 5.1 cleanup note).
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 40);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 37);
 }

@@ -32,7 +32,64 @@ namespace {
 		return asset;
 	}
 
+	// Same shape, plus a real (if synthetic) skeleton -- MakeTinyAsset alone never populates
+	// asset.skeleton, so every model it builds reads as jointless to the registry
+	// (skeletonBase == kModelNoSkeletonSentinel) regardless of jointCount; this variant exercises
+	// the actual skeleton-bookkeeping path ReplaceAsset also has to get right.
+	ModelAsset MakeTinyAssetWithSkeleton(
+		std::uint32_t vertexCount, std::uint32_t meshletVertexCount, std::uint32_t triangleWordCount,
+		std::uint32_t meshletCount, std::uint32_t jointCount, std::uint32_t clipCount
+	) {
+		ModelAsset asset = MakeTinyAsset(vertexCount, meshletVertexCount, triangleWordCount, meshletCount, jointCount, clipCount);
+		asset.skeleton.resize(jointCount);
+		return asset;
+	}
+
 } // namespace
+
+TEST_CASE("ModelRegistry::ReplaceAsset overwrites one model in place, leaving siblings untouched") {
+	ModelRegistry registry;
+	std::uint32_t first = registry.RegisterAsset(MakeTinyAsset(10, 20, 5, 2, 0, 0));
+	std::uint32_t middle = registry.RegisterAsset(MakeTinyAsset(7, 14, 3, 1, 0, 1));
+	std::uint32_t last = registry.RegisterAsset(MakeTinyAsset(5, 10, 2, 1, 0, 0));
+
+	registry.ReplaceAsset(middle, MakeTinyAsset(20, 40, 9, 4, 0, 2));
+
+	CHECK(registry.ModelCount() == 3);
+	CHECK(registry.GetMeshletCount(first) == 2);
+	CHECK(registry.GetMeshletCount(middle) == 4); // the new asset's own count
+	CHECK(registry.GetClipCount(middle) == 2);
+	CHECK(registry.GetMeshletCount(last) == 1);
+	CHECK(registry.GetClipCount(last) == 0);
+	CHECK(registry.GetTotalMeshletCount() == 2 + 4 + 1);
+}
+
+TEST_CASE("ModelRegistry::ReplaceAsset shifts a later model's skeleton correctly when joint counts differ") {
+	ModelRegistry registry;
+	std::uint32_t first = registry.RegisterAsset(MakeTinyAssetWithSkeleton(4, 8, 2, 1, 3, 0));
+	std::uint32_t second = registry.RegisterAsset(MakeTinyAssetWithSkeleton(4, 8, 2, 1, 5, 0));
+
+	registry.ReplaceAsset(first, MakeTinyAssetWithSkeleton(4, 8, 2, 1, 9, 0));
+
+	CHECK(registry.GetJointCount(first) == 9);
+	CHECK(registry.GetJointCount(second) == 5); // untouched by the replace, just shifted
+}
+
+TEST_CASE("ModelRegistry::ReplaceAsset handles a jointless model becoming skeletal, and back") {
+	ModelRegistry registry;
+	std::uint32_t jointless = registry.RegisterAsset(MakeTinyAsset(4, 8, 2, 1, 0, 0));
+	std::uint32_t skeletal = registry.RegisterAsset(MakeTinyAssetWithSkeleton(4, 8, 2, 1, 6, 0));
+
+	// Was jointless -- gains a real skeleton.
+	registry.ReplaceAsset(jointless, MakeTinyAssetWithSkeleton(4, 8, 2, 1, 3, 0));
+	CHECK(registry.GetJointCount(jointless) == 3);
+	CHECK(registry.GetJointCount(skeletal) == 6); // still correct after the earlier model's skeleton insert
+
+	// Now goes back to jointless.
+	registry.ReplaceAsset(jointless, MakeTinyAsset(4, 8, 2, 1, 0, 0));
+	CHECK(registry.GetJointCount(jointless) == 0);
+	CHECK(registry.GetJointCount(skeletal) == 6); // still correct after the removal too
+}
 
 TEST_CASE("ModelRegistry concatenates multiple models with correct base offsets") {
 	ModelRegistry registry;

@@ -34,6 +34,18 @@ namespace brassica {
 		// model's index, for ModelInstance::modelIndex.
 		std::uint32_t RegisterAsset(const ModelAsset& asset);
 
+		// Procedural plant generation v2's ad-hoc designer: overwrites one already-registered
+		// model's data in place (re-concatenating the shared buffers, same "re-upload everything"
+		// shape as RegisterAsset) instead of appending a new model index -- RegisterAsset is
+		// append-only and was never meant to be hammered by a Generate/Regenerate button, which
+        // would otherwise leak one more permanently-resident model every press. index must
+		// already be a real, previously-registered model (from RegisterAsset or an earlier
+		// ReplaceAsset); no-op if out of range. Caller contract: despawn any live instance of
+		// this model index *before* calling this, then spawn fresh after -- a live instance
+		// still pointing at this index mid-call would read a stale jointCount/meshletCount for
+		// one frame otherwise.
+		void ReplaceAsset(std::uint32_t index, const ModelAsset& asset);
+
 		[[nodiscard]] std::uint32_t ModelCount() const { return static_cast<std::uint32_t>(m_descs.size()); }
 
 		[[nodiscard]] std::uint32_t GetMeshletCount(std::uint32_t modelIndex) const {
@@ -58,6 +70,11 @@ namespace brassica {
 		void RegisterBufferNodes(graph::Graph& frameGraph);
 
 	private:
+		// Re-stages every shared buffer + the desc buffer from the current member vectors --
+		// shared by RegisterAsset (append) and ReplaceAsset (in-place overwrite), both of which
+		// need to re-upload everything regardless of which model actually changed.
+		void UploadAll();
+
 		std::vector<GltfVertex>     m_vertices;
 		std::vector<std::uint32_t>  m_meshletVertices;
 		std::vector<std::uint32_t>  m_meshletTrianglesPacked;

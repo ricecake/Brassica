@@ -21,8 +21,6 @@
 #include "passes/DeferredNode.hpp"
 #include "passes/EntityNode.hpp"
 #include "passes/EntityPrepareNode.hpp"
-#include "passes/FoliageArchetypeRenderNode.hpp"
-#include "passes/FoliageBakeNode.hpp"
 #include "passes/FoliageNode.hpp"
 #include "passes/GTAONode.hpp"
 #include "passes/HiZDownsampleNode.hpp"
