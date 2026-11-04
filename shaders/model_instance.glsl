@@ -11,7 +11,16 @@ const uint kModelInstanceAliveBit = 1u;
 const uint kModelInstanceLoopBit = 2u;
 const uint kModelInstanceLiveCapableBit = 4u;
 const uint kModelClipRestPose = 0xFFFFFFFFu;
-const uint kModelInstanceCapacity = 1024u; // mirrors include/model/ModelTypes.hpp
+// Stage 5.2: ModelInstanceBuffer splits into [0, kManualInstanceCapacity) for CPU-driven manual
+// spawn/despawn and [kDecorSlotBase, kModelInstanceCapacity) reserved for GPU-direct decor
+// population -- see include/model/ModelTypes.hpp's own comment. kModelInstanceCapacity mirrors
+// that file's *total* buffer size, not just the manual range.
+const uint kManualInstanceCapacity = 1024u;
+const uint kDecorInstancesPerChunk = 16u;
+const uint kDecorMaxActiveChunks = 96u; // mirrors include/model/ModelTypes.hpp
+const uint kDecorCapacity = kDecorInstancesPerChunk * kDecorMaxActiveChunks;
+const uint kDecorSlotBase = kManualInstanceCapacity;
+const uint kModelInstanceCapacity = kManualInstanceCapacity + kDecorCapacity; // mirrors include/model/ModelTypes.hpp
 const uint kModelNoSkeletonSentinel = 0xFFFFFFFFu;
 const uint kModelLiveBudget = 256u;
 const uint kModelLiveMaxJointCount = 32u;

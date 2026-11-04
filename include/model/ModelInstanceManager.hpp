@@ -29,9 +29,15 @@ namespace brassica {
 	// with nothing dirty, nothing is uploaded and the scatter node goes inactive, matching the
 	// plan's "a fully GPU-driven instance never has to be communicated to the CPU explicitly
 	// unless specifically needed."
+	//
+	// Stage 5.2: this only ever owns slots [0, kManualInstanceCapacity) -- the default
+	// constructor argument, not kModelInstanceCapacity (the *total* buffer size). The remaining
+	// [kDecorSlotBase, kModelInstanceCapacity) range is DecorChunkAllocator's, written directly
+	// from the GPU, never through this class's free list at all. Two disjoint ranges in one
+	// shared buffer, not two buffers -- see ModelTypes.hpp's own comment on why.
 	class ModelInstanceManager {
 	public:
-		explicit ModelInstanceManager(std::uint32_t capacity = kModelInstanceCapacity):
+		explicit ModelInstanceManager(std::uint32_t capacity = kManualInstanceCapacity):
 			m_records(capacity), m_capacity(capacity) {
 			m_freeSlots.reserve(capacity);
 			for (std::uint32_t slot = capacity; slot-- > 0;) {

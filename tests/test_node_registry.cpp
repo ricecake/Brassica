@@ -38,6 +38,8 @@
 // pass + indirect task dispatch, passes/ModelCullNode.hpp).
 // 37 -> 39: Added ModelLiveFinalizeNode and ModelLiveEvalNode (Stage 4 -- live wind/seed-bend
 // eval, passes/ModelLiveEvalNode.hpp).
+// 39 -> 40: Added DecorPopulationNode (Stage 5.2 -- persistent, disocclusion-driven decor
+// population, passes/DecorPopulationNode.hpp).
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 39);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 40);
 }

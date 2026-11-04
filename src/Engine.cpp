@@ -13,6 +13,7 @@
 #include "graph/Util.hpp"
 #include "model/ModelAsset.hpp"
 #include "model/ManifoldTreeAsset.hpp"
+#include "model/ProceduralArchetypeCatalog.hpp"
 #include "model/ProceduralTreeAsset.hpp"
 #include "terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
@@ -535,9 +536,13 @@ namespace brassica {
 		modelRegistry.RegisterAsset(cowAsset);
 		modelRegistry.RegisterAsset(BuildProceduralTreeAsset());
 		modelRegistry.RegisterAsset(BuildManifoldTestTree());
+		proceduralArchetypeIndices = RegisterProceduralArchetypes(modelRegistry);
 		serviceLocator.Provide<ModelRegistry>(std::shared_ptr<ModelRegistry>(&modelRegistry, [](ModelRegistry*) {}));
 		serviceLocator.Provide<ModelInstanceManager>(
 			std::shared_ptr<ModelInstanceManager>(&modelInstanceManager, [](ModelInstanceManager*) {})
+		);
+		serviceLocator.Provide<ProceduralArchetypeIndices>(
+			std::shared_ptr<ProceduralArchetypeIndices>(&proceduralArchetypeIndices, [](ProceduralArchetypeIndices*) {})
 		);
 
 		particleManager.Initialize();

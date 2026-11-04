@@ -39,7 +39,29 @@ namespace brassica {
 	// pool-budget dependent, never stored back to the record) -- see the plan's "the record
 	// stores capability, not the mode used this frame."
 	inline constexpr std::uint32_t kModelInstanceLiveCapableBit = 1u << 2;
-	inline constexpr std::uint32_t kModelInstanceCapacity = 1024u;
+
+	// Stage 5.2: ModelInstanceBuffer is split into two non-overlapping ranges within one shared
+	// buffer (the plan's own "no new buffer" requirement) -- [0, kManualInstanceCapacity) for
+	// ModelInstanceManager's CPU-driven sparse spawn/despawn (unchanged from Stages 1-4, same
+	// 1024 slots as before), and [kDecorSlotBase, kDecorSlotBase + kDecorCapacity) reserved for
+	// the GPU-direct decor population (DecorChunkAllocator/DecorChunkGenNode) -- a fixed pool of
+	// kDecorMaxActiveChunks chunk-blocks, each kDecorInstancesPerChunk slots, matching the
+	// per-tile clump count foliage.mesh's own cellCoord/cellSeed grid already uses (16 clumps/
+	// tile), not an arbitrary number. kModelInstanceCapacity is the *total* buffer size (what
+	// ModelInstanceBuffer's own Desc(), ModelCullNode's full-table walk, and the GLSL mirror in
+	// model_instance.glsl all need) -- ModelInstanceManager's own capacity is a separate, smaller
+	// constant specifically so its free-list can never wander into the decor range.
+	inline constexpr std::uint32_t kManualInstanceCapacity = 1024u;
+	inline constexpr std::uint32_t kDecorInstancesPerChunk = 16u;
+	// A 9x9 grid of FoliageNode's own LOD-0 tiles (baseTileSize=16 -- include/passes/
+	// FoliageNode.hpp's FoliagePushConstants) centered on the camera's current tile, +margin for
+	// boundary churn -- roughly a 70-unit radius, in the same ballpark as the existing foliage
+	// LOD falloff range (lodBaseRange=20). Not an arbitrary number: DecorChunkAllocator's own
+	// candidate generation targets this same 9x9 coverage.
+	inline constexpr std::uint32_t kDecorMaxActiveChunks = 96u;
+	inline constexpr std::uint32_t kDecorCapacity = kDecorInstancesPerChunk * kDecorMaxActiveChunks;
+	inline constexpr std::uint32_t kDecorSlotBase = kManualInstanceCapacity;
+	inline constexpr std::uint32_t kModelInstanceCapacity = kManualInstanceCapacity + kDecorCapacity;
 	inline constexpr std::uint32_t kModelClipRestPose = 0xFFFFFFFFu;
 
 	// One slot in ModelInstanceWriteBuffer -- a pending sparse write the scatter shader applies

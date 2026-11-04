@@ -17,6 +17,7 @@
 #include "passes/CloudVolumeDownsampleNode.hpp"
 #include "passes/CloudVolumeGenNode.hpp"
 #include "passes/ClusterLightAssignmentNode.hpp"
+#include "passes/DecorPopulationNode.hpp"
 #include "passes/DeferredNode.hpp"
 #include "passes/EntityNode.hpp"
 #include "passes/EntityPrepareNode.hpp"

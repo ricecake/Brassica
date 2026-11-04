@@ -30,10 +30,11 @@ namespace brassica {
 	static_assert(sizeof(ModelInstanceScatterPushConstants) == 12, "ModelInstanceScatterPushConstants size must be 12 bytes");
 
 	// Compute-domain sole Create<>() of ModelInstanceBuffer -- applies ModelInstanceManager's
-	// pending sparse writes (see that class's own comment) via a GPU scatter, the only path
-	// that ever touches the table. Active only on frames with at least one pending write; a
-	// quiet frame contributes nothing to the graph at all, same shape as
-	// FoliageIndirectResetNode/ParticleResetNode's own activity-gated Setup().
+	// pending sparse writes (see that class's own comment) via a GPU scatter, the CPU-driven
+	// path onto the table (Stage 5.2's decor population writes directly from the GPU instead,
+	// bypassing this node's scatter dispatch but still relying on its one-time zero-clear).
+	// Unconditionally active -- see Setup()'s own comment for why this isn't gated on pending
+	// writes the way it used to be.
 	struct ModelInstanceScatterNode: render::NodeRegistrar<ModelInstanceScatterNode> {
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
@@ -62,46 +63,52 @@ namespace brassica {
 			return nullptr;
 		}
 
+		// Unconditionally active, not gated on "the CPU has pending writes" (the old gate) or on
+		// any other service's state -- Stage 5.2's decor population writes directly into
+		// ModelInstanceBuffer from the GPU, with no CPU spawn call ever involved, so this node's
+		// Create<>() (and the one-time zero-clear in Execute() below) must not depend on a
+		// manual spawn ever having happened. Tried gating on ModelRegistry::GetTotalMeshletCount
+		// first (matching ModelRenderNode/ModelCullNode's own gate) but that coupled this node to
+		// a service that isolated tests (e.g. tests/test_model_instance_scatter_node.cpp) don't
+		// register -- a real regression caught by that existing test, not hypothetical.
+		// Unconditional is simpler and has no real cost: Execute() below still exits cheaply on
+		// a quiet frame with nothing to scatter.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
-			auto*         mgr = QueryManager();
-			std::uint32_t writeCount = mgr ? mgr->GetLastFlushCount() : 0u;
-
 			r.Domain(graph::ExecutionDomain::Compute);
-			r.Active(writeCount > 0);
+			r.Active(true);
 			r.Create<ModelInstanceBuffer>();
 			r.Read<ModelInstanceWriteBuffer>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			auto* mgr = QueryManager();
-			if (!mgr) {
-				return;
-			}
-			std::uint32_t writeCount = mgr->GetLastFlushCount();
-			if (writeCount == 0) {
-				return;
-			}
-
 			auto* physReg = dynamic_cast<graph::PhysicalResourceRegistry*>(ctx.resources);
 			if (!physReg) {
 				return;
 			}
-
-			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			auto instanceBuf = physReg->GetBuffer<ModelInstanceBuffer>();
 			if (!instanceBuf) {
 				return;
 			}
 
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+
 			// First time this buffer is ever provisioned, its contents are undefined -- every
-			// slot this frame's writes don't touch must still read as all-zero (dead, rest
-			// pose) rather than garbage. Only needed once: kLifetime::Persistent plus
-			// desc.persistent keep it alive and correctly flagged defined from here on (see
-			// ModelInstanceBuffer's own comment).
+			// slot nobody writes (CPU scatter below, or Stage 5.2's GPU-direct decor writes)
+			// must still read as all-zero (dead, rest pose) rather than garbage. Only needed
+			// once: kLifetime::Persistent plus desc.persistent keep it alive and correctly
+			// flagged defined from here on (see ModelInstanceBuffer's own comment). Decoupled
+			// from the writeCount-gated scatter dispatch below on purpose -- see this struct's
+			// own Setup() comment on why.
 			if (!initialized) {
 				graph::ClearBufferToZero(vkCmd, *instanceBuf, graph::AccessKind::ReadWrite, ctx.domain);
 				initialized = true;
+			}
+
+			auto* mgr = QueryManager();
+			std::uint32_t writeCount = mgr ? mgr->GetLastFlushCount() : 0u;
+			if (writeCount == 0) {
+				return;
 			}
 
 			if (!physReg->GetBuffer<ModelInstanceWriteBuffer>()) {

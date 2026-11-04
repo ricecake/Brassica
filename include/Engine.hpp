@@ -25,6 +25,7 @@
 #include "model/GltfModelManager.hpp"
 #include "model/ModelInstanceManager.hpp"
 #include "model/ModelRegistry.hpp"
+#include "model/ProceduralArchetypeCatalog.hpp"
 #include "particle/ParticleManager.hpp"
 #include "passes/AllNodes.hpp"
 #include "render/MaterialManager.hpp"
@@ -343,6 +344,11 @@ namespace brassica {
 		GltfModelManager  gltfModelManager;
 		ModelRegistry     modelRegistry;
 		ModelInstanceManager modelInstanceManager;
+		// Populated from RegisterProceduralArchetypes()'s return value -- Stage 5.2's
+		// DecorPopulationNode needs these base model indices and queries them via ServiceLocator
+		// (ProceduralArchetypeCatalog.hpp), same pattern as modelRegistry/modelInstanceManager
+		// below.
+		ProceduralArchetypeIndices proceduralArchetypeIndices;
 		AtmosphereManager         atmosphereManager;
 		VolumetricLightingManager volumetricLightingManager;
 		CloudLightingManager      cloudLightingManager;
