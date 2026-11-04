@@ -216,7 +216,17 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 		histMoments = SAMPLE_LINEAR(push.historyMomentsIndex, historyUV);
 	}
 
-	// Removed hard-surface Parallax Edge Rejection. Volumes naturally fade.
+	// FIX 3: Transmittance Parallax Rejection
+	// Ported from the older shader to instantly destroy smearing on disocclusion
+	float curOpacity = 1.0 - dot(curTransmittance, vec3(0.3333));
+	float histOpacity = 1.0 - dot(histTransmittance, vec3(0.3333));
+	float relativeDiff = (curOpacity - histOpacity) / max(max(curOpacity, histOpacity), 0.001);
+
+	// If cloud leaves pixel during strafe (-), or enters pixel (+)
+	float trailingEdgeRejection = 1.0 - smoothstep(-0.6, -0.2, relativeDiff);
+	float leadingEdgeRejection = smoothstep(0.5, 0.9, relativeDiff);
+	float edgeRejection = max(trailingEdgeRejection, leadingEdgeRejection);
+
 	float historyLength = min(8.0, histMoments.z + 1.0);
 	float alpha = 1.0 / historyLength;
 
@@ -266,6 +276,9 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
 	float pixelSpeed = length(totalMotion * vec2(push.outputWidth, push.outputHeight));
 	float motionConfidenceFactor = smoothstep(3.0, 0.5, pixelSpeed);
+
+	// FIX C: Force the variance clip to 100% strictness when a tearing edge is detected.
+	motionConfidenceFactor *= (1.0 - edgeRejection);
 
 	vec3 blendedYCoCg = mix(clippedYCoCg, historyYCoCg, motionConfidenceFactor * 0.9);
 	vec3 blendedTrans = mix(clippedTrans, histTransmittance, motionConfidenceFactor * 0.9);

@@ -197,17 +197,17 @@ void main() {
 		float autoExposure = layers[isSky].targetLuminance / max(layers[isSky].adaptedLuminance, 0.0001);
 		autoExposure = clamp(autoExposure, layers[isSky].minExposure, layers[isSky].maxExposure);
 
-		if (isSky == 1) {
-			vec2 ndc = inUV * 2.0 - 1.0;
-			vec4 ray_view = uInvProjMatrix * vec4(ndc, -1.0, 1.0);
-			ray_view = vec4(ray_view.xy, -1.0, 0.0);
-			vec3 worldDir = normalize((uInvViewMatrix * ray_view).xyz);
+		// if (isSky == 1) {
+		// 	vec2 ndc = inUV * 2.0 - 1.0;
+		// 	vec4 ray_view = uInvProjMatrix * vec4(ndc, -1.0, 1.0);
+		// 	ray_view = vec4(ray_view.xy, -1.0, 0.0);
+		// 	vec3 worldDir = normalize((uInvViewMatrix * ray_view).xyz);
 
-			float attenuation = calculateSkyAttenuation(result * autoExposure, layers[1].autoUchimuraM, layers[1].autoUchimuraL, 1.20);
-			float mask = smoothstep(-3.14 * 0.125, 0.5 * 1.5707, asin(worldDir.y));
-			attenuation = mix(attenuation, 1.0, mask);
-			autoExposure *= attenuation;
-		}
+		// 	float attenuation = calculateSkyAttenuation(result * autoExposure, layers[1].autoUchimuraM, layers[1].autoUchimuraL, 1.20);
+		// 	float mask = smoothstep(-3.14 * 0.125, 0.5 * 1.5707, asin(worldDir.y));
+		// 	attenuation = mix(attenuation, 1.0, mask);
+		// 	autoExposure *= attenuation;
+		// }
 
 		result *= autoExposure;
 	} else {
