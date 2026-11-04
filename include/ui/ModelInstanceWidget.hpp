@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "model/ManifoldBranchingTreeAsset.hpp"
 #include "model/ManifoldRockAsset.hpp"
 #include "model/ModelInstanceManager.hpp"
 #include "model/ProceduralPlantGenerator.hpp"
@@ -46,11 +45,11 @@ namespace brassica::ui {
 		bool                 m_designerHasModel{false};
 		std::uint32_t        m_designerModelIndex{0};
 		ModelInstanceHandle  m_designerInstance{kInvalidModelInstanceHandle};
-		// Tree and Bush both go through BuildProceduralBranchingTree (same generator, different
+		// Tree, Bush, and Flower all go through BuildProceduralPlant (same generator, different
 		// defaults -- see ProceduralArchetypeCatalog.cpp's own identical reasoning), so each gets
 		// its own tuned param set rather than sharing one.
-		TreeGenParams  m_designerTreeParams;
-		TreeGenParams  m_designerBushParams;
+		PlantGenParams m_designerTreeParams;
+		PlantGenParams m_designerBushParams;
 		PlantGenParams m_designerFlowerParams;
 		RockGenParams  m_designerRockParams;
 

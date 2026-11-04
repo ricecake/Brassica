@@ -20,18 +20,25 @@ namespace brassica::ui {
 	ModelInstanceWidget::ModelInstanceWidget() {
 		m_visible = false;
 
-		// Bush starts from different defaults than Tree -- shorter trunk, more branches, wider
-		// pitch, lower rigidity -- matching ProceduralArchetypeCatalog.cpp's own BushVariantA(),
-		// even though both go through the exact same BuildProceduralBranchingTree generator.
-		m_designerBushParams.maxDepth = 2;
+		// Bush starts from different defaults than Tree -- shorter segments, more branches,
+		// wider pitch, lower rigidity -- matching ProceduralArchetypeCatalog.cpp's own
+		// BushVariantA(), even though both go through the exact same BuildProceduralPlant
+		// generator.
+		m_designerBushParams.maxSegments = 20;
+		m_designerBushParams.segmentLength = 0.14f;
+		m_designerBushParams.directionJitterDegrees = 16.0f;
+		m_designerBushParams.branchChance = 0.5f;
 		m_designerBushParams.minBranchesPerNode = 3;
 		m_designerBushParams.maxBranchesPerNode = 4;
-		m_designerBushParams.trunkLength = 0.35f;
 		m_designerBushParams.trunkRadiusLow = 0.08f;
 		m_designerBushParams.trunkRadiusHigh = 0.06f;
-		m_designerBushParams.pitchDegreesMin = 45.0f;
-		m_designerBushParams.pitchDegreesMax = 85.0f;
+		m_designerBushParams.radiusFalloffPerSegment = 0.85f;
+		m_designerBushParams.branchPitchMinDegrees = 45.0f;
+		m_designerBushParams.branchPitchMaxDegrees = 85.0f;
 		m_designerBushParams.baseRigidity = 0.6f;
+		m_designerBushParams.rigidityFalloffPerSegment = 0.10f;
+		m_designerBushParams.circularSegments = 8;
+		m_designerBushParams.maxJoints = 18;
 
 		m_designerFlowerParams.maxSegments = 5;
 		m_designerFlowerParams.segmentLength = 0.14f;
@@ -170,19 +177,21 @@ namespace brassica::ui {
 		switch (m_designerType) {
 		case DesignerType::Tree:
 			ImGui::InputScalar("Seed##tree", ImGuiDataType_U32, &m_designerTreeParams.seed);
-			ImGui::SliderInt("Max Depth", &m_designerTreeParams.maxDepth, 1, 5);
+			ImGui::SliderInt("Max Segments", &m_designerTreeParams.maxSegments, 4, 40);
+			ImGui::SliderFloat("Branch Chance", &m_designerTreeParams.branchChance, 0.0f, 1.0f);
 			ImGui::SliderInt("Min Branches", &m_designerTreeParams.minBranchesPerNode, 1, 5);
 			ImGui::SliderInt("Max Branches", &m_designerTreeParams.maxBranchesPerNode, 1, 6);
-			ImGui::SliderFloat("Trunk Length", &m_designerTreeParams.trunkLength, 0.3f, 6.0f);
+			ImGui::SliderFloat("Segment Length", &m_designerTreeParams.segmentLength, 0.1f, 0.8f);
 			ImGui::SliderFloat("Trunk Radius", &m_designerTreeParams.trunkRadiusLow, 0.02f, 0.6f);
 			ImGui::SliderFloat("Base Rigidity", &m_designerTreeParams.baseRigidity, 0.0f, 1.0f);
 			break;
 		case DesignerType::Bush:
 			ImGui::InputScalar("Seed##bush", ImGuiDataType_U32, &m_designerBushParams.seed);
-			ImGui::SliderInt("Max Depth##bush", &m_designerBushParams.maxDepth, 1, 4);
+			ImGui::SliderInt("Max Segments##bush", &m_designerBushParams.maxSegments, 4, 40);
+			ImGui::SliderFloat("Branch Chance##bush", &m_designerBushParams.branchChance, 0.0f, 1.0f);
 			ImGui::SliderInt("Min Branches##bush", &m_designerBushParams.minBranchesPerNode, 1, 6);
 			ImGui::SliderInt("Max Branches##bush", &m_designerBushParams.maxBranchesPerNode, 1, 8);
-			ImGui::SliderFloat("Trunk Length##bush", &m_designerBushParams.trunkLength, 0.1f, 2.0f);
+			ImGui::SliderFloat("Segment Length##bush", &m_designerBushParams.segmentLength, 0.05f, 0.4f);
 			ImGui::SliderFloat("Trunk Radius##bush", &m_designerBushParams.trunkRadiusLow, 0.02f, 0.3f);
 			ImGui::SliderFloat("Base Rigidity##bush", &m_designerBushParams.baseRigidity, 0.0f, 1.0f);
 			break;
@@ -205,11 +214,11 @@ namespace brassica::ui {
 			ModelAsset asset;
 			switch (m_designerType) {
 			case DesignerType::Tree:
-				asset = BuildProceduralBranchingTree(m_designerTreeParams);
+				asset = BuildProceduralPlant(m_designerTreeParams);
 				++m_designerTreeParams.seed;
 				break;
 			case DesignerType::Bush:
-				asset = BuildProceduralBranchingTree(m_designerBushParams);
+				asset = BuildProceduralPlant(m_designerBushParams);
 				++m_designerBushParams.seed;
 				break;
 			case DesignerType::Flower:

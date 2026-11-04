@@ -43,13 +43,12 @@ namespace brassica {
 			);
 
 			glm::vec3 trunkDir(0.0f, 1.0f, 0.0f);
-			float     trunkRadiusHigh = std::max(0.01f, params.trunkRadiusLow * params.radiusFalloffPerSegment);
 			int       trunkIdx = ir.AddTube(
-				glm::vec3(0.0f), trunkDir * params.segmentLength, params.trunkRadiusLow, trunkRadiusHigh, params.baseRigidity
+				glm::vec3(0.0f), trunkDir * params.segmentLength, params.trunkRadiusLow, params.trunkRadiusHigh, params.baseRigidity
 			);
 
 			std::deque<PendingSegment> queue;
-			queue.push_back(PendingSegment{trunkIdx, trunkDir, trunkRadiusHigh, params.baseRigidity});
+			queue.push_back(PendingSegment{trunkIdx, trunkDir, params.trunkRadiusHigh, params.baseRigidity});
 
 			int segmentsGrown = 1;
 			while (!queue.empty() && segmentsGrown < params.maxSegments) {

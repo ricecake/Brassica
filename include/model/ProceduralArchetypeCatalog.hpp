@@ -30,10 +30,11 @@ namespace brassica {
 	//
 	// Procedural plant generation v2: added a Flower category (BuildProceduralPlant with a
 	// short, unbranched stem and enableFlowers=true -- a real flower head via
-	// ManifoldFlowerAsset.hpp, not the GPU's own flat-fan emitFlowerItem). Tree/bush here still
-	// use the original BuildProceduralBranchingTree generator, not the new curved-tube/IR-
-	// optimizer pipeline -- swapping those over is a deliberately separate, deferred decision
-	// pending a real-hardware visual check of the new generator's own output first.
+	// ManifoldFlowerAsset.hpp, not the GPU's own flat-fan emitFlowerItem). Tree/bush also now go
+	// through BuildProceduralPlant (curved branches via the Catmull-Rom warp, real flared
+	// junctions) instead of the old BuildProceduralBranchingTree's straight segments -- that
+	// generator itself is kept (still tested, still a real working fallback), just no longer
+	// called from here.
 	ProceduralArchetypeIndices RegisterProceduralArchetypes(ModelRegistry& registry);
 
 } // namespace brassica

@@ -1,6 +1,5 @@
 #include "model/ProceduralArchetypeCatalog.hpp"
 
-#include "model/ManifoldBranchingTreeAsset.hpp"
 #include "model/ManifoldRockAsset.hpp"
 #include "model/ModelRegistry.hpp"
 #include "model/ProceduralPlantGenerator.hpp"
@@ -10,73 +9,98 @@ namespace brassica {
 	namespace {
 
 		// Trees: tall, mostly-vertical trunk, moderate branch spread, rigid trunk tapering to
-		// flexible tips (TreeGenParams' own defaults already land close to "medium" -- these
-		// three presets scale around that).
-		TreeGenParams SmallTree() {
-			TreeGenParams p;
+		// flexible tips -- now via BuildProceduralPlant (curved branches via the Catmull-Rom
+		// warp, real flared junctions, same single generator Bush below also uses with bushier
+		// parameters) instead of the old BuildProceduralBranchingTree's straight segments.
+		// maxSegments/segmentLength/branchChance here are this generator's own stand-ins for the
+		// old maxDepth/trunkLength -- there's no direct 1:1 field mapping (growth here is one
+		// short jittered segment at a time, not one branch-level at a time), so these presets
+		// are a fresh tuning aimed at reproducing the old presets' own relative scale (small/
+		// medium/large) rather than a mechanical field-for-field translation. Not yet confirmed
+		// on real hardware at these specific values -- flag for a visual check.
+		PlantGenParams SmallTree() {
+			PlantGenParams p;
 			p.seed = 101;
-			p.maxDepth = 2;
+			p.maxSegments = 14;
+			p.segmentLength = 0.35f;
+			p.directionJitterDegrees = 10.0f;
+			p.branchChance = 0.3f;
 			p.minBranchesPerNode = 2;
 			p.maxBranchesPerNode = 2;
-			p.trunkLength = 1.6f;
 			p.trunkRadiusLow = 0.14f;
-			p.trunkRadiusHigh = 0.10f;
+			p.trunkRadiusHigh = 0.11f;
+			p.radiusFalloffPerSegment = 0.92f;
+			p.rigidityFalloffPerSegment = 0.07f;
+			p.circularSegments = 10;
 			p.maxJoints = 12;
 			return p;
 		}
 
-		TreeGenParams MediumTree() {
-			TreeGenParams p;
+		PlantGenParams MediumTree() {
+			PlantGenParams p;
 			p.seed = 102;
-			p.maxDepth = 3;
+			p.maxSegments = 24;
+			p.segmentLength = 0.42f;
+			p.directionJitterDegrees = 10.0f;
+			p.branchChance = 0.3f;
 			p.minBranchesPerNode = 2;
 			p.maxBranchesPerNode = 3;
-			p.trunkLength = 2.5f;
 			p.trunkRadiusLow = 0.22f;
 			p.trunkRadiusHigh = 0.16f;
+			p.radiusFalloffPerSegment = 0.94f;
+			p.rigidityFalloffPerSegment = 0.045f;
+			p.circularSegments = 10;
 			p.maxJoints = 20;
 			return p;
 		}
 
-		TreeGenParams LargeTree() {
-			TreeGenParams p;
+		PlantGenParams LargeTree() {
+			PlantGenParams p;
 			p.seed = 103;
-			p.maxDepth = 3;
+			p.maxSegments = 30;
+			p.segmentLength = 0.48f;
+			p.directionJitterDegrees = 9.0f;
+			p.branchChance = 0.32f;
 			p.minBranchesPerNode = 3;
 			p.maxBranchesPerNode = 3;
-			p.trunkLength = 3.3f;
 			p.trunkRadiusLow = 0.30f;
 			p.trunkRadiusHigh = 0.22f;
+			p.radiusFalloffPerSegment = 0.945f;
+			p.rigidityFalloffPerSegment = 0.04f;
+			p.circularSegments = 10;
 			p.maxJoints = 24;
 			return p;
 		}
 
 		// Bushes: short trunk, more branches per node, a much wider pitch range (closer to
-		// horizontal than a tree's own mostly-vertical spread), shallower depth -- the same
-		// generator, just parametrized bushier rather than a separate mechanism.
-		TreeGenParams BushVariantA() {
-			TreeGenParams p;
+		// horizontal than a tree's own mostly-vertical spread), higher branchChance (splits
+		// sooner/more often) -- the same generator as Tree above, just parametrized bushier
+		// rather than a separate mechanism (same reasoning the old presets already used).
+		PlantGenParams BushVariantA() {
+			PlantGenParams p;
 			p.seed = 201;
-			p.maxDepth = 2;
+			p.maxSegments = 20;
+			p.segmentLength = 0.14f;
+			p.directionJitterDegrees = 16.0f;
+			p.branchChance = 0.5f;
 			p.minBranchesPerNode = 3;
 			p.maxBranchesPerNode = 4;
-			p.trunkLength = 0.35f;
+			p.branchPitchMinDegrees = 45.0f;
+			p.branchPitchMaxDegrees = 85.0f;
 			p.trunkRadiusLow = 0.08f;
 			p.trunkRadiusHigh = 0.06f;
-			p.lengthFalloff = 0.7f;
-			p.radiusFalloff = 0.7f;
-			p.pitchDegreesMin = 45.0f;
-			p.pitchDegreesMax = 85.0f;
+			p.radiusFalloffPerSegment = 0.85f;
 			p.baseRigidity = 0.6f; // bushes sway more overall than a tree's own rigid trunk
-			p.rigidityFalloffPerLevel = 0.25f;
+			p.rigidityFalloffPerSegment = 0.10f;
+			p.circularSegments = 8;
 			p.maxJoints = 18;
 			return p;
 		}
 
-		TreeGenParams BushVariantB() {
-			TreeGenParams p = BushVariantA();
+		PlantGenParams BushVariantB() {
+			PlantGenParams p = BushVariantA();
 			p.seed = 202;
-			p.trunkLength = 0.5f;
+			p.maxSegments = 24;
 			p.maxBranchesPerNode = 5;
 			p.maxJoints = 22;
 			return p;
@@ -156,12 +180,12 @@ namespace brassica {
 	ProceduralArchetypeIndices RegisterProceduralArchetypes(ModelRegistry& registry) {
 		ProceduralArchetypeIndices indices;
 
-		indices.treeBase = registry.RegisterAsset(BuildProceduralBranchingTree(SmallTree()));
-		registry.RegisterAsset(BuildProceduralBranchingTree(MediumTree()));
-		registry.RegisterAsset(BuildProceduralBranchingTree(LargeTree()));
+		indices.treeBase = registry.RegisterAsset(BuildProceduralPlant(SmallTree()));
+		registry.RegisterAsset(BuildProceduralPlant(MediumTree()));
+		registry.RegisterAsset(BuildProceduralPlant(LargeTree()));
 
-		indices.bushBase = registry.RegisterAsset(BuildProceduralBranchingTree(BushVariantA()));
-		registry.RegisterAsset(BuildProceduralBranchingTree(BushVariantB()));
+		indices.bushBase = registry.RegisterAsset(BuildProceduralPlant(BushVariantA()));
+		registry.RegisterAsset(BuildProceduralPlant(BushVariantB()));
 
 		indices.rockBase = registry.RegisterAsset(BuildProceduralRock(SmallRock()));
 		registry.RegisterAsset(BuildProceduralRock(MediumRock()));
