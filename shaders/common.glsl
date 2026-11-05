@@ -430,6 +430,101 @@ OrganicMacroCell generateOrganicMacroCell(vec2 gridOriginSkew, float scale, floa
 
 // --- Required Helper Functions ---
 
+// Computes barycentric coordinates (u, v, w) from vertex positions and distances to them
+vec3 getBarycentricFromDistances(vec3 p, vec3 A, vec3 B, vec3 C) {
+    float dA = distance(p, A);
+    float dB = distance(p, B);
+    float dC = distance(p, C);
+    // 1. Compute side lengths squared
+    float a2 = dot(B - C, B - C); // BC squared
+    float b2 = dot(A - C, A - C); // AC squared
+    float c2 = dot(A - B, A - B); // AB squared
+
+    // 2. Square the given vertex distances
+    float dA2 = dA * dA;
+    float dB2 = dB * dB;
+    float dC2 = dC * dC;
+
+    // 3. Set up the 3x3 linear system: M * uvw = rhs
+    // Row 0: u + v + w = 1
+    // Row 1 & 2 come from distance differences:
+    // (d_A^2 - d_C^2) and (d_B^2 - d_C^2)
+    mat3 M = mat3(
+        vec3(1.0, -b2,      -c2),                // Column 0 (u coefficients)
+        vec3(1.0, c2 - a2,  c2),                 // Column 1 (v coefficients)
+        vec3(1.0, b2,       a2 - b2)             // Column 2 (w coefficients)
+    );
+
+    vec3 rhs = vec3(
+        1.0,
+        dA2 - dC2 - b2,
+        dB2 - dC2 - c2
+    );
+
+    // 4. Solve the system by multiplying by the inverse matrix
+    // GLSL's inverse() is highly optimized and branchless hardware-side
+    return inverse(M) * rhs;
+}
+
+// Computes barycentric coordinates (u, v, w) from 2D vertices and distances to them
+vec3 getBarycentricFromDistances2D(vec2 p, vec2 A, vec2 B, vec2 C) {
+    float dA = distance(p, A);
+    float dB = distance(p, B);
+    float dC = distance(p, C);
+    // 1. Compute side lengths squared using native 2D dot products
+    vec2 AB = B - A;
+    vec2 AC = C - A;
+    vec2 BC = C - B;
+
+    float c2 = dot(AB, AB); // Side c^2 (AB)
+    float b2 = dot(AC, AC); // Side b^2 (AC)
+    float a2 = dot(BC, BC); // Side a^2 (BC)
+
+    // 2. Square the incoming distances
+    float dA2 = dA * dA;
+    float dB2 = dB * dB;
+    float dC2 = dC * dC;
+
+    // 3. Set up a 2x2 system for u and v by subtracting the dC^2 equation
+    // Row 1: (2*b^2)u       + (b^2 + c^2 - a^2)v = dA2 - dC2 + b^2
+    // Row 2: (a^2 + b^2 - c^2)u + (2*a^2)v       = dB2 - dC2 + a^2
+    mat2 M = mat2(
+        vec2(2.0 * b2,         a2 + b2 - c2), // Column 0 (u coefficients)
+        vec2(b2 + c2 - a2,     2.0 * a2)      // Column 1 (v coefficients)
+    );
+
+    vec2 rhs = vec2(
+        dA2 - dC2 + b2,
+        dB2 - dC2 + a2
+    );
+
+    // 4. Solve the 2x2 system analytically using matrix inversion
+    // GLSL handles 2x2 inverse operations extremely efficiently in hardware
+    vec2 uv = inverse(M) * rhs;
+
+    // 5. Recover w using the normalization constraint
+    float w = 1.0 - uv.x - uv.y;
+
+    return vec3(uv.x, uv.y, w);
+}
+
+// Standard 2D Cramer's Rule Area Barycentrics (Recommended)
+vec3 getBarycentric2D(vec2 p, vec2 a, vec2 b, vec2 c) {
+    vec2 v0 = b - a;
+    vec2 v1 = c - a;
+    vec2 v2 = p - a;
+
+    float det = v0.x * v1.y - v1.x * v0.y;
+
+    // Protect against degenerate zero-area triangles
+    if (abs(det) < 0.00001) return vec3(0.3333);
+
+    float v = (v2.x * v1.y - v1.x * v2.y) / det;
+    float w = (v0.x * v2.y - v2.x * v0.y) / det;
+
+    return vec3(1.0 - v - w, v, w);
+}
+
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453123);
 }
@@ -444,7 +539,7 @@ float getRadius(vec2 v_skew, vec2 v_cart, vec2 target_cart, float lobes) {
     vec2 dir = target_cart - v_cart;
     float theta = atan(dir.y, dir.x);
     float offset = hash21(v_skew) * 6.2831853;
-    return 0.5 + 0.25 * sin(lobes * theta + offset);
+    return 0.5 + 0.25 * sin(lobes *theta + offset);
 }
 
 vec2 getEdgePoint(vec2 vA_skew, vec2 vA, vec2 vB_skew, vec2 vB, float lobes) {
@@ -460,12 +555,24 @@ struct OrganicPlateData {
     float edgeDist;    // The explicit distance to the generated straight-line boundary
     vec2 regionCenter;
     vec2 nearestCentroid;
+    vec3 barycentric;
 };
 
+// Assumes cross2d(a, b) is defined as (a.x * b.y - a.y * b.x)
+
+// Assumes cross2d(a, b) is defined as (a.x * b.y - a.y * b.x)
+
+// Safely hashes integer coordinates to exactly 0, 1, or 2,
+// resolving negative wrapping issues safely.
+int hash3(vec2 v) {
+    int sum = int(v.x) + int(v.y);
+    return (sum % 3 + 3) % 3;
+}
+
+// Assumes cross2d(a, b) is defined as (a.x * b.y - a.y * b.x)
 OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
     vec2 p = worldPos * scale;
 
-    // 1. Map Cartesian space to the specific Simplex Triangle
     const float F2 = 0.36602540378;
     const float G2 = 0.21132486540;
 
@@ -483,50 +590,70 @@ OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
     vec2 v1 = v1_skew - (v1_skew.x + v1_skew.y) * G2;
     vec2 v2 = v2_skew - (v2_skew.x + v2_skew.y) * G2;
 
-    // 2. Evaluate the function exactly on the 3 edges of this triangle
-    vec2 p01 = getEdgePoint(v0_skew, v0, v1_skew, v1, lobes);
-    vec2 p12 = getEdgePoint(v1_skew, v1, v2_skew, v2, lobes);
-    vec2 p20 = getEdgePoint(v2_skew, v2, v0_skew, v0, lobes);
+    vec2 V_skew[3];
+    vec2 V_cart[3];
 
-    // 3. Define the central convergence point
-    vec2 center = (p01 + p12 + p20) / 3.0;
+    V_skew[hash3(v0_skew)] = v0_skew; V_cart[hash3(v0_skew)] = v0;
+    V_skew[hash3(v1_skew)] = v1_skew; V_cart[hash3(v1_skew)] = v1;
+    V_skew[hash3(v2_skew)] = v2_skew; V_cart[hash3(v2_skew)] = v2;
 
-    // 4. Identify which of the 3 sub-regions the fragment falls into
-    vec2 closest_v_skew = v0_skew;
-    vec2 closest_v = v0;
+    vec2 E01 = getEdgePoint(V_skew[0], V_cart[0], V_skew[1], V_cart[1], lobes);
+    vec2 E12 = getEdgePoint(V_skew[1], V_cart[1], V_skew[2], V_cart[2], lobes);
+    vec2 E20 = getEdgePoint(V_skew[2], V_cart[2], V_skew[0], V_cart[0], lobes);
 
-    bool sign01_p = cross2d(p01 - center, p - center) > 0.0;
-    bool sign01_v0 = cross2d(p01 - center, v0 - center) > 0.0;
-    bool sign20_p = cross2d(p20 - center, p - center) > 0.0;
-    bool sign20_v0 = cross2d(p20 - center, v0 - center) > 0.0;
+    vec2 center = (E01 + E12 + E20) / 3.0;
 
-    if (sign01_p == sign01_v0 && sign20_p == sign20_v0) {
-        closest_v_skew = v0_skew;
-        closest_v = v0;
+    // Test exactly which of the 4 sub-triangles 'p' is inside
+    bool inC0 = cross2d(E01 - E20, p - E20) * cross2d(E01 - E20, V_cart[0] - E20) >= 0.0;
+    bool inC1 = cross2d(E12 - E01, p - E01) * cross2d(E12 - E01, V_cart[1] - E01) >= 0.0;
+    bool inC2 = cross2d(E20 - E12, p - E12) * cross2d(E20 - E12, V_cart[2] - E12) >= 0.0;
+
+    int tri_id = -1;
+    if (inC0) tri_id = 0;
+    else if (inC1) tri_id = 1;
+    else if (inC2) tri_id = 2;
+
+    vec2 pA = E01;
+    vec2 pB = E12;
+    vec2 pC = E20;
+
+    vec2 active_v_skew;
+    vec2 active_v;
+
+    if (tri_id == 0) {
+        pB = V_cart[0];
+        active_v_skew = V_skew[0];
+        active_v = V_cart[0];
+    } else if (tri_id == 1) {
+        pC = V_cart[1];
+        active_v_skew = V_skew[1];
+        active_v = V_cart[1];
+    } else if (tri_id == 2) {
+        pA = V_cart[2];
+        active_v_skew = V_skew[2];
+        active_v = V_cart[2];
     } else {
-        bool sign12_p = cross2d(p12 - center, p - center) > 0.0;
-        bool sign12_v1 = cross2d(p12 - center, v1 - center) > 0.0;
-        bool sign01_v1 = cross2d(p01 - center, v1 - center) > 0.0;
+        float d0 = dot(p - V_cart[0], p - V_cart[0]);
+        float d1 = dot(p - V_cart[1], p - V_cart[1]);
+        float d2 = dot(p - V_cart[2], p - V_cart[2]);
+        int closest_id = (d0 < d1 && d0 < d2) ? 0 : ((d1 < d2) ? 1 : 2);
 
-        if (sign12_p == sign12_v1 && sign01_p == sign01_v1) {
-            closest_v_skew = v1_skew;
-            closest_v = v1;
-        } else {
-            closest_v_skew = v2_skew;
-            closest_v = v2;
-        }
+        active_v_skew = V_skew[closest_id];
+        active_v = V_cart[closest_id];
     }
 
-    // 5. Populate and return the struct
     OrganicPlateData data;
-    data.regionVertex = closest_v_skew;
-    data.regionID = hash21(closest_v_skew + 123.456);
-    data.regionCenter = closest_v;
-    data.nearestCentroid = center-(center.x+center.y)*G2;
+    data.regionVertex = active_v_skew;
+    data.regionID = hash21(active_v_skew + 123.456);
+    data.regionCenter = active_v;
+    data.nearestCentroid = center;
 
-    data.edgeDist = min(sdLine(p, center, p01),
-                    min(sdLine(p, center, p12),
-                        sdLine(p, center, p20)));
+    // Pass the globally stable slots to the corrected barycentric solver
+    data.barycentric = getBarycentric2D(p, pA, pB, pC);
+
+    data.edgeDist = min(sdLine(p, center, E01),
+                    min(sdLine(p, center, E12),
+                        sdLine(p, center, E20)));
 
     return data;
 }
