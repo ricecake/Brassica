@@ -263,11 +263,6 @@ float evaluate_terrain_analytical(
     float Z_max = 0.5 * PI * FAKE_PLANET_RADIUS;
     float X_max = PI * FAKE_PLANET_RADIUS;
 
-    // East / West seam wrapping (X axis)
-    p_local.x = mod(p_local.x + X_max, 2.0 * X_max);
-    if (p_local.x < 0.0) p_local.x += 2.0 * X_max;
-    p_local.x -= X_max;
-
     // North / South polar wrapping (Z axis past poles)
     bool poleFlipped = false;
     float periodZ = 4.0 * Z_max;
@@ -277,11 +272,18 @@ float evaluate_terrain_analytical(
 
     if (p_local.z > Z_max) {
         p_local.z = 2.0 * Z_max - p_local.z;
+        p_local.x += X_max;
         poleFlipped = true;
     } else if (p_local.z < -Z_max) {
+        p_local.x += X_max;
         p_local.z = -2.0 * Z_max - p_local.z;
         poleFlipped = true;
     }
+
+    // East / West seam wrapping (X axis)
+    p_local.x = mod(p_local.x + X_max, 2.0 * X_max);
+    if (p_local.x < 0.0) p_local.x += 2.0 * X_max;
+    p_local.x -= X_max;
 
     mat3 J_tectonicWarp;
     vec3 tectonicWarp = cross_noise_fbm(16*p_local / FAKE_PLANET_RADIUS, 6, 0.0, J_tectonicWarp);

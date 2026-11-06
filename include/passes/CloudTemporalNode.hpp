@@ -98,8 +98,8 @@ namespace brassica {
 			push.outColorStorageIdx = ctx.StorageIndex<CloudAccumulatedColor>();
 			push.outTransmittanceStorageIdx = ctx.StorageIndex<CloudAccumulatedTransmittance>();
 			push.outMomentsStorageIdx = ctx.StorageIndex<CloudMoments>();
-			push.gPositionIndex = ctx.StorageIndex<GBufferPosition>();
-			push.gAlbedoIndex = ctx.StorageIndex<GBufferAlbedo>();
+			push.gPositionIndex = ctx.Index<GBufferPosition>();
+			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.outputWidth = width;
 			push.outputHeight = height;
 
