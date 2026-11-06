@@ -87,6 +87,15 @@ namespace brassica::ui {
 				}
 			}
 
+			if (ImGui::CollapsingHeader("Procedural Music Effect")) {
+				modified |= ImGui::Checkbox("Enable Procedural Music Effect", &state.enableProceduralMusic);
+				if (state.enableProceduralMusic) {
+					// modified |= ImGui::SliderFloat("Speed Woosh Volume Level", &state.speedWooshVolume, 0.0f, 2.0f, "%.2f");
+					// modified |= ImGui::SliderFloat("Speed Woosh Pitch / Sweep", &state.speedWooshPitch, 0.1f, 3.0f, "%.2f");
+					// modified |= ImGui::SliderFloat("Speed Woosh Resonance", &state.speedWooshResonance, 0.1f, 3.0f, "%.2f");
+				}
+			}
+
 			if (modified) {
 				mgr->SetState(state);
 				if (ServiceLocator::Instance().Has<ConfigManager>()) {

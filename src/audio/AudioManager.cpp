@@ -16,6 +16,7 @@
 #include "audio/SpaceAudioEffect.hpp"
 #include "audio/SpeedWooshAudioEffect.hpp"
 #include "audio/WindAudioEffect.hpp"
+#include "audio/ProceduralMusicEffect.hpp"
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -41,12 +42,14 @@ namespace brassica {
 		std::shared_ptr<RustleAudioEffect>     rustleEffect;
 		std::shared_ptr<SpaceAudioEffect>      spaceEffect;
 		std::shared_ptr<SpeedWooshAudioEffect> speedWooshEffect;
+		std::shared_ptr<ProceduralMusicEffect> proceduralMusicEffect;
 
 		std::shared_ptr<Sound> windSound;
 		std::shared_ptr<Sound> rainSound;
 		std::shared_ptr<Sound> rustleSound;
 		std::shared_ptr<Sound> spaceSound;
 		std::shared_ptr<Sound> speedWooshSound;
+		std::shared_ptr<Sound> proceduralMusicSound;
 
 		std::mutex m_soundsMutex;
 		std::mutex m_stateMutex;
@@ -89,12 +92,14 @@ namespace brassica {
 			rustleSound.reset();
 			spaceSound.reset();
 			speedWooshSound.reset();
+			proceduralMusicSound.reset();
 
 			windEffect.reset();
 			rainEffect.reset();
 			rustleEffect.reset();
 			spaceEffect.reset();
 			speedWooshEffect.reset();
+			proceduralMusicEffect.reset();
 
 			music.reset();
 			ambientSounds.clear();
@@ -200,6 +205,13 @@ namespace brassica {
 				speedWooshEffect->SetResonanceScale(mgrState.speedWooshResonance);
 			}
 
+			if (proceduralMusicSound && proceduralMusicEffect) {
+				proceduralMusicSound->SetVolume(mgrState.enableProceduralMusic ? 1.0f : 0.0f);
+				// proceduralMusicEffect->SetVolumeScale(mgrState.proceduralMusicVolume);
+				// proceduralMusicEffect->SetPitchScale(mgrState.proceduralMusicPitch);
+				// proceduralMusicEffect->SetResonanceScale(mgrState.proceduralMusicResonance);
+			}
+
 			// Update procedural sources
 			{
 				std::lock_guard<std::mutex> lock(m_soundsMutex);
@@ -245,6 +257,7 @@ namespace brassica {
 		m_pimpl->rustleEffect = std::make_shared<RustleAudioEffect>();
 		m_pimpl->spaceEffect = std::make_shared<SpaceAudioEffect>();
 		m_pimpl->speedWooshEffect = std::make_shared<SpeedWooshAudioEffect>();
+		m_pimpl->proceduralMusicEffect = std::make_shared<ProceduralMusicEffect>();
 
 		// Create non-spatialized background procedural sounds
 		m_pimpl->windSound = CreateProceduralSound(m_pimpl->windEffect, glm::vec3(0.0f), 1.0f, true, false);
@@ -252,6 +265,7 @@ namespace brassica {
 		m_pimpl->rustleSound = CreateProceduralSound(m_pimpl->rustleEffect, glm::vec3(0.0f), 1.0f, true, false);
 		m_pimpl->spaceSound = CreateProceduralSound(m_pimpl->spaceEffect, glm::vec3(0.0f), 1.0f, true, false);
 		m_pimpl->speedWooshSound = CreateProceduralSound(m_pimpl->speedWooshEffect, glm::vec3(0.0f), 1.0f, true, false);
+		m_pimpl->proceduralMusicSound = CreateProceduralSound(m_pimpl->proceduralMusicEffect, glm::vec3(0.0f), 1.0f, true, false);
 
 		spdlog::info("AudioManager initialized successfully with procedural audio effects.");
 	}

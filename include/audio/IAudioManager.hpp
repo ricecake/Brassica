@@ -50,6 +50,11 @@ namespace brassica {
 		float speedWooshPitch{1.0f};
 		float speedWooshResonance{1.0f};
 
+		bool  enableProceduralMusic{true};
+		// float speedWooshVolume{1.0f};
+		// float speedWooshPitch{1.0f};
+		// float speedWooshResonance{1.0f};
+
 		auto GetReflection() const {
 			return std::make_tuple(
 				MakeField("masterVolume", "Master Volume", &AudioManagerState::masterVolume, 0.0f, 1.0f, UIHint::Slider),
@@ -80,7 +85,13 @@ namespace brassica {
 				MakeField("enableSpeedWoosh", "Enable Speed Woosh Effect", &AudioManagerState::enableSpeedWoosh),
 				MakeField("speedWooshVolume", "Speed Woosh Volume", &AudioManagerState::speedWooshVolume, 0.0f, 2.0f, UIHint::Slider),
 				MakeField("speedWooshPitch", "Speed Woosh Pitch / Sweep", &AudioManagerState::speedWooshPitch, 0.1f, 3.0f, UIHint::Slider),
-				MakeField("speedWooshResonance", "Speed Woosh Resonance", &AudioManagerState::speedWooshResonance, 0.1f, 3.0f, UIHint::Slider)
+				MakeField("speedWooshResonance", "Speed Woosh Resonance", &AudioManagerState::speedWooshResonance, 0.1f, 3.0f, UIHint::Slider),
+
+				MakeField("enableProceduralMusic", "Enable Speed Woosh Effect", &AudioManagerState::enableProceduralMusic)
+				// MakeField("proceduralMusicVolume", "Speed Woosh Volume", &AudioManagerState::proceduralMusicVolume, 0.0f, 2.0f, UIHint::Slider),
+				// MakeField("proceduralMusicPitch", "Speed Woosh Pitch / Sweep", &AudioManagerState::proceduralMusicPitch, 0.1f, 3.0f, UIHint::Slider),
+				// MakeField("proceduralMusicResonance", "Speed Woosh Resonance", &AudioManagerState::proceduralMusicResonance, 0.1f, 3.0f, UIHint::Slider)
+
 			);
 		}
 	};
