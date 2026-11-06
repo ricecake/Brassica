@@ -186,8 +186,8 @@ void main() {
 			// vec3 nebula = computeNebula(worldRay, uTime);
 			// spaceBackground = (stars + nebula) * skyTransmittance * starVisibility;
 			spaceBackground = (stars) * skyTransmittance * starVisibility;
-			float warp = dot_noise_fbm(worldRay*5, 3, uTime*0.1);
-			spaceBackground += vec3(warp,0.7*abs(warp),1)*500000.0*smoothstep(9.9999, 10.0, (0.5+0.5*sin(0.1*warp))*(10*dot_noise_fbm((worldRay+warp)*20.2, 3, 0.1*uTime)));
+			// float warp = dot_noise_fbm(worldRay*5, 3, uTime*0.1);
+			// spaceBackground += vec3(warp,0.7*abs(warp),1)*500000.0*smoothstep(9.9999, 10.0, (0.5+0.5*sin(0.1*warp))*(10*dot_noise_fbm((worldRay+warp)*20.2, 3, 0.1*uTime)));
 		}
 	}
 
