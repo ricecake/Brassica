@@ -1,6 +1,27 @@
 #include "helpers/constants.glsl"
 #include "helpers/math.glsl"
 
+// Assumes a period of 1.0 instead of 2 * PI
+float poly_wave(float phase) {
+    float x = fract(phase) * 2.0 - 1.0;
+    float y = 1.0 - (x * x);
+    return (y * y) * 2.0 - 1.0;
+}
+
+vec3 poly_wave(vec3 phase) {
+    vec3 x = fract(phase) * 2.0 - 1.0;
+    vec3 y = 1.0 - (x * x);
+    return (y * y) * 2.0 - 1.0;
+}
+
+float dnoise(vec3 p, vec3 dir, float phase) {
+	vec3 axis = cross(p, dir);
+	float pwS = poly_wave(phase);
+	float pwC = poly_wave(phase - 0.25);
+	vec3 b = p * pwC + cross(axis, p)*pwS + axis*(dot(axis, p))*(1,0 - pwC);
+	return dot(poly_wave(p+fract(phase)), poly_wave(dir+floor(phase)));
+}
+
 mat3 rotate_offsets(vec3 dir) {
 	float s = dir.z >= 0.0 ? 1.0 : -1.0;
 	float a = -1.0 / (s + dir.z);

@@ -55,19 +55,28 @@ void main() {
 	vec3 B = normalize(cross(N, T));
 
 	mat3 warpNoiseGrad;
-	vec3 warpNoise = cross_noise_fbm(worldPos*0.025, 3, 0.0, warpNoiseGrad);
-	OrganicPlateData mCell = getOrganicPlate((warpNoiseGrad*(50*warpNoise)).xz, 0.025, 7.0);
+	vec3 warpNoise = 0.0*10000*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
+	OrganicPlateData mCellS = getOrganicPlate(((worldPos+warpNoise)).xz, 0.00625, 5.0);
+	OrganicPlateData mCellM = getOrganicPlate(((worldPos+warpNoise)).xz, 0.003125, 7.0);
+	OrganicPlateData mCellL = getOrganicPlate(((worldPos+warpNoise)).xz, 0.0015625, 11.0);
 
-	vec3 noisePos = clamp(mCell.barycentric, 0.0, 1.0);
+	// vec3 noisePos = clamp(mCell.barycentric, 0.0, 1.0);
+	vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + ((2.0*mCellL.barycentric)-1.0);
+	vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + ((2.0*mCellM.barycentric)-1.0);
+	vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + ((2.0*mCellS.barycentric)-1.0);
+
+	// vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + (mCellL.barycentric-vec3(1.0/3.0));
+	// vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + (mCellM.barycentric-vec3(1.0/3.0));
+	// vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + (mCellS.barycentric-vec3(1.0/3.0));
 
 	vec3 macroGrad3D;
-	float macroVal = dot_noise_fbm(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 3, 0.0, macroGrad3D);
+	float macroVal = abs(0.5+0.5*dot_noise_fbm(noisePosL, 2, 0.0, macroGrad3D));
 
 	vec3 mediumGrad3D;
-	float mediumVal = dot_noise_fbm(vec3(noisePos.xz * 0.22, noisePos.y * 0.11), 2, 37.0, mediumGrad3D);
+	float mediumVal = abs(0.5+0.5*dot_noise_fbm(noisePosM, 3, 37.0, mediumGrad3D));
 
 	vec3 microGrad3D;
-	float microVal = dot_noise_fbm(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), 2, 83.0, microGrad3D);
+	float microVal = abs(0.5+0.5*dot_noise_fbm(noisePosS, 4, 83.0, microGrad3D));
 
 /*
 	vec3 scaled_pos = noisePos;//vec3(noisePos.xz * 0.022, noisePos.y * 0.011);
@@ -92,39 +101,27 @@ void main() {
 	float microVal = dot_noise_fbm(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), 2, 83.0, microGrad3D);
 */
 	// Scale analytical gradients by base frequency (chain rule: d(noise)/d(noisePos) = d(noise)/dp * freq)
-	vec2 macroGrad  = macroGrad3D.xz * 0.035;
-	vec2 mediumGrad = mediumGrad3D.xz * 0.22;
-	vec2 microGrad  = microGrad3D.xz * 1.40;
+	vec2 macroGrad  = macroGrad3D.xz;
+	vec2 mediumGrad = mediumGrad3D.xz;
+	vec2 microGrad  = microGrad3D.xz;
 
 	// -------------------------------------------------------------------------
 	// 3-Band Distance Cross-Fading: One fading out, one sustaining, one fading in.
 	// Near transition (~15m to ~120m): Micro fades out, Medium sustains, Macro fades in.
 	// Sum of active noise weight is preserved to maintain consistent surface complexity.
 	// -------------------------------------------------------------------------
-	float nearBlend = smoothstep(250.0, 1000.0, effDist);
+	vec4 fadeRanges = vec4(250.0, 1000.0, 25000.0, 250000.0);
+	float nearBlend = smoothstep(fadeRanges[0], fadeRanges[1], effDist);
+	float farBlend = smoothstep(fadeRanges[1], fadeRanges[2], effDist);
+	float horizonFade = smoothstep(fadeRanges[2], fadeRanges[3], effDist);
+
 	float wMicroColor  = (1.0 - nearBlend);
+	float wMediumColor = (1.0 - farBlend);
+	float wMacroColor  = (1.0 - horizonFade);
 
-	// Far transition (~120m to ~700m): Medium fades out, Macro sustains.
-	float farBlend = smoothstep(1000.0, 40000.0, effDist);
-	float wMediumColor = nearBlend;
-	wMediumColor *= (1.0 - farBlend);
-
-	// Horizon transition (>700m to 2500m): Macro tapers smoothly to base terrain albedo.
-	float horizonFade = smoothstep(40000.0, 200000.0, effDist);
-	float wMacroColor  = farBlend;
-	wMacroColor *= (1.0 - horizonFade);
-
-	// Normal perturbation weights (fade slightly earlier to prevent specular shimmer / subpixel aliasing):
-	float nearNormBlend = smoothstep(250.0, 1000.0, effDist);
-	float wMicroNorm  = 1.0 - nearNormBlend;
-
-	float farNormBlend = smoothstep(1000.0, 40000.0, effDist);
-	float wMediumNorm = nearNormBlend;
-	wMediumNorm *= (1.0 - farNormBlend);
-
-	float horizonNormFade = 1.0 - smoothstep(40000.0, 2000000.0, effDist);
-	float wMacroNorm  = farNormBlend;
-	wMacroNorm *= 1.0-horizonNormFade;
+	float wMicroNorm  = (1.0 - nearBlend);
+	float wMediumNorm = (1.0 - farBlend);
+	float wMacroNorm  = (1.0 - horizonFade);
 
 	vec4 weights = inMaterialWeights;
 	float grassW = weights.x;
@@ -362,7 +359,7 @@ void main() {
 	// finalAlbedo = vec3(0.5+0.5*(dot_noise_dir(worldPos*0.25, uTime, normalize(cross(vec3(sin(uTime*0.1),1,0), normalize(N))))*0.25), 0, 0);
 	// finalAlbedo = vec3(0.5+0.5*(dot_noise(worldPos*0.25, uTime)*0.25), 0, 0);
 	// finalAlbedo = worldPos;
-	// finalAlbedo = mCell.barycentric;
+	// finalAlbedo = mCellS.barycentric;
 	outPosition = vec4(inPosition, 0.0);
 	outNormal   = vec4(normalize(N), 1.0);
 	outAlbedo   = vec4(finalAlbedo, inAlbedo.a > 0.0 ? inAlbedo.a : 1.0);

@@ -657,3 +657,311 @@ OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
 
     return data;
 }
+
+vec3 hash_and_rotate(ivec3 grid_p, vec2 osc, int tile_size) {
+    // Perfect tiling using bitmasking
+    grid_p &= (tile_size - 1);
+
+    uvec3 u = uvec3(grid_p);
+    u.x = u.x * 1664525u + 1013904223u;
+    u.y = u.y * 1664525u + 1013904223u;
+    u.z = u.z * 1664525u + 1013904223u;
+    u.x += u.y * u.z; u.y += u.x * u.z; u.z += u.x * u.y;
+    u ^= u >> 16u;
+
+    vec3 grad = vec3(u) * (1.0 / float(0xffffffffu)) * 2.0 - 1.0;
+    grad = normalize(grad);
+
+    // Internal Flow Noise boiling (replaces dual-evaluation Shepard tones)
+    return vec3(
+        grad.x * osc.x - grad.y * osc.y,
+        grad.x * osc.y + grad.y * osc.x,
+        grad.z
+    );
+}
+
+
+void eval_simplex_node(ivec3 grid_p, vec3 x, vec2 osc, int tile_size, inout float val, inout vec3 grad) {
+    float d2 = dot(x, x);
+    if (d2 < 0.6) {
+        vec3 g = hash_and_rotate(grid_p, osc, tile_size);
+        float w = 0.6 - d2;
+        float w3 = w * w * w;
+        float w4 = w3 * w;
+        float dot_gx = dot(g, x);
+
+        val += w4 * dot_gx;
+
+        grad += w4 * g - 8.0 * w3 * dot_gx * x;
+    }
+}
+
+vec4 simplex_flow_noise_grad(vec3 p, vec2 osc, int tile_size) {
+    const float F3 = 0.333333333;
+    const float G3 = 0.166666667;
+
+    vec3 s = floor(p + dot(p, vec3(F3)));
+    vec3 x0 = p - s + dot(s, vec3(G3));
+
+    vec3 g = step(x0.yzx, x0);
+    vec3 l = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+
+    vec3 x1 = x0 - i1 + G3;
+    vec3 x2 = x0 - i2 + 2.0 * G3;
+    vec3 x3 = x0 - 1.0 + 3.0 * G3;
+
+    ivec3 grid_base = ivec3(s);
+    float val = 0.0; vec3 grad = vec3(0.0);
+
+    eval_simplex_node(grid_base, x0, osc, tile_size, val, grad);
+    eval_simplex_node(grid_base + ivec3(i1), x1, osc, tile_size, val, grad);
+    eval_simplex_node(grid_base + ivec3(i2), x2, osc, tile_size, val, grad);
+    eval_simplex_node(grid_base + ivec3(1), x3, osc, tile_size, val, grad);
+
+    return vec4(val, grad) * 31.316;
+}
+
+float simplex_fbm_curl(vec3 p, int oct, float phase, vec3 dir, float footprint, int tile_size) {
+    float val = 0.0;
+    float amp = 1.0;
+    float freq = 1.0;
+    float max_amp = 0.0;
+
+    vec3 warp_curl = vec3(0.0);
+    float max_nyquist_freq = 0.5 / max(footprint, 1e-7);
+    vec3 curl_axis = normalize(dir);
+
+    // Initia
+    vec2 osc = vec2(cos(phase), sin(phase));
+    float epsilon = 0.5;
+
+    for (int i = 0; i < 16; i++) {
+        if (i >= oct) break;
+
+        float nyquist_fade = max(0.0, 1.0 - (freq / max_nyquist_freq));
+        if (nyquist_fade <= 0.0) break;
+
+        float current_amp = amp * nyquist_fade;
+        float curl_len = length(warp_curl);
+
+        // ALU-only Algebraic Pushbacks
+        float theoretical_freq = freq * (1.0 + curl_len * 0.5);
+        float current_freq = (max_nyquist_freq * theoretical_freq) / (max_nyquist_freq + theoretical_freq);
+
+        float max_warp = 0.5 / current_freq;
+        float safe_max_warp = max(max_warp, 1e-7);
+        float bounded_warp = (safe_max_warp * curl_len) / (safe_max_warp + curl_len);
+
+        vec3 warp_vec = curl_len > 0.0 ? (warp_curl / curl_len) * bounded_warp : vec3(0.0);
+        vec3 warped_p = p + warp_vec;
+
+        // Evolve oscillator for the next octave
+        osc.x -= epsilon * osc.y;
+        osc.y += epsilon * osc.x;
+
+        vec4 n = simplex_flow_noise_grad(warped_p * current_freq, osc, tile_size);
+        vec3 current_curl = cross(n.yzw, curl_axis);
+
+        val += current_amp * n.x;
+        warp_curl += current_curl * current_amp;
+
+        max_amp += current_amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    return val / max_amp;
+}
+
+
+// Organic Simplex Phasor Noise with Phase Advection
+// Drop directly into Shadertoy's Image tab.
+
+// --- Hashes & Base Noise ---
+vec3 hash32(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yzz) * p3.zyx);
+}
+
+float hash12(vec2 p) {
+    vec3 p3  = fract(vec3(p.xyx) * .1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Cheap 2D value noise for organic jitter and masking
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash12(i + vec2(0.0,0.0)), hash12(i + vec2(1.0,0.0)), u.x),
+               mix(hash12(i + vec2(0.0,1.0)), hash12(i + vec2(1.0,1.0)), u.x), u.y);
+}
+
+// Assumes a period of 1.0 instead of 2 * PI
+vec4 poly_wave(vec4 phase) {
+    vec4 x = fract(phase) * 2.0 - 1.0;
+    vec4 y = 1.0 - (x * x);
+    return (y * y) * 2.0 - 1.0;
+}
+
+// --- Differentiable Polynomial Oscillator ---
+float polyWave(float phase) {
+    phase = fract(phase);
+    float t = abs(fract(phase + 0.5) * 2.0 - 1.0);
+    return t * t * (3.0 - 2.0 * t) * 2.0 - 1.0;
+}
+
+// --- Vector Fields ---
+// 1. Spatial frequency (Direction and tightness of the ridges)
+vec2 getVectorField(vec2 p) {
+    return vec2(-sin(p.y * 0.3), cos(p.x * 0.3)) * 3.0;
+}
+
+// 2. Wind Velocity (Direction and speed the waves drift)
+vec2 getWindVector(vec2 p) {
+    // A slow, non-uniform drift moving generally up and right
+    return vec2(0.5 + sin(p.y * 0.1)*0.2, 0.5 + cos(p.x * 0.2)*0.2);
+}
+
+// --- Kernel Evaluation ---
+vec2 evaluatePhasorKernel(vec2 gridCell, vec2 d, vec2 worldP, vec2 fieldDir, float phase) {
+    vec3 h = hash32(gridCell);
+
+    vec2 jitter = (h.xy - 0.5) * 0.4;
+    vec2 kernelPos = d - jitter;
+
+    float distSq = dot(kernelPos, kernelPos);
+    float A = max(0.0, 0.5 - distSq);
+    if (A <= 0.0) return vec2(0.0);
+    A = A * A * A * A; // C2 continuous amplitude falloff
+
+    vec2 kernelWorld = worldP - kernelPos;
+
+    // ORGANIC VECTOR 2: Amplitude Masking (Patchiness)
+    // Evaluated at kernel center so it doesn't break the amplitude envelope bounds
+    float mask = vnoise(kernelWorld * 0.2);
+    mask = smoothstep(0.3, 0.7, mask); // Sharpen to create distinct patches
+    A *= mask;
+
+    // Evaluate spatial frequency and wind velocity
+    vec2 F = fieldDir;//getVectorField(kernelWorld);
+    vec2 W = getWindVector(kernelWorld);
+
+    // ORGANIC VECTOR 1: Phase Jitter (Micro-Wobble)
+    // Low frequency structural wobble injected directly into the phase
+    float phaseJitter = (vnoise(kernelWorld * 1.5) - 0.5) * 1.5;
+
+    float phi0 = h.z;
+
+    // PHASE ADVECTION: dot(F, W) is the temporal frequency.
+    // Subtracting it from phase slides the wave along the wind vector continuously.
+    float phi = dot(F, kernelPos) + phi0 + phaseJitter - (dot(F, W) * phase * 0.5);
+
+    return A * vec2(polyWave(phi), polyWave(phi - 0.25));
+}
+
+float phasimpleNoise(vec2 uv, vec2 fieldDir, float phase) {
+    // Simplex Skewing
+    const float F2 = 0.366025403;
+    const float G2 = 0.211324865;
+
+    vec2 skew = uv + (uv.x + uv.y) * F2;
+    vec2 cell = floor(skew);
+    vec2 internal_pos = skew - cell;
+
+    // Simplex Routing
+    vec2 v1 = step(internal_pos.yx, internal_pos.xy);
+
+    vec2 p0 = uv - (cell - (cell.x + cell.y) * G2);
+    vec2 p1 = p0 - v1 + G2;
+    vec2 p2 = p0 - 1.0 + 2.0 * G2;
+
+    // Complex Summation
+    vec2 Z = vec2(0.0);
+    Z += evaluatePhasorKernel(cell, p0, uv, fieldDir, phase);
+    Z += evaluatePhasorKernel(cell + v1, p1, uv, fieldDir, phase);
+    Z += evaluatePhasorKernel(cell + 1.0, p2, uv, fieldDir, phase);
+
+    // ORGANIC VECTOR 3: Algebraic Profile Shaping
+    // 1. Normalize the continuous field to cleanly isolate the wave from kernel overlap intensities
+    float normalized_wave = Z.x / max(length(Z), 0.0001);
+
+    // 2. Map from [-1.0, 1.0] to [0.0, 1.0]
+    float unshaped_ridges = normalized_wave * 0.5 + 0.5;
+
+    // 3. Power curve for sharp asymmetrical peaks (x^4)
+    float organic_ridges = unshaped_ridges * unshaped_ridges;
+    organic_ridges *= organic_ridges;
+    return organic_ridges;
+}
+
+
+// 3D to 4D hash: xyz for spatial jitter, w for initial phase
+vec4 hash43(vec3 p) {
+    vec4 p4 = fract(vec4(p.xyzx)  * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+    p4 += dot(p4, p4.wzxy + 33.33);
+    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+
+// float polyWave(float phase) {
+//     phase = fract(phase);
+//     float t = abs(fract(phase + 0.5) * 2.0 - 1.0);
+//     return t * t * (3.0 - 2.0 * t) * 2.0 - 1.0;
+// }
+
+// Internal kernel evaluator
+vec2 evalPhasorKernel3D(vec3 cell, vec3 d, float mask, vec3 F, vec3 W, float phaseJitter, float time) {
+    vec4 h = hash43(cell);
+
+    // Jitter kernel center. Bound to 0.4 to stay within the 0.6 simplex radius
+    vec3 jitter = (h.xyz - 0.5) * 0.4;
+    vec3 kernelPos = d - jitter;
+
+    // 3D Simplex boundary is 0.6
+    float distSq = dot(kernelPos, kernelPos);
+    float A = max(0.0, 0.6 - distSq);
+    if (A <= 0.0) return vec2(0.0);
+
+    // Apply C2 falloff and inject the external mask
+    A = A * A * A * A * mask;
+
+    float phi0 = h.w;
+    float phi = dot(F, kernelPos) + phi0 + phaseJitter - (dot(F, W) * time);
+
+    return A * vec2(polyWave(phi), polyWave(phi - 0.25));
+}
+
+// Main 3D entry point
+vec2 phasorNoise3D(vec3 p, float mask, vec3 F, vec3 W, float phaseJitter, float time) {
+    const float F3 = 1.0 / 3.0;
+    const float G3 = 1.0 / 6.0;
+
+    // 1. Simplex Skewing
+    vec3 skew = p + dot(p, vec3(F3));
+    vec3 cell = floor(skew);
+    vec3 internal_pos = skew - cell;
+
+    // 2. Simplex Routing
+    vec3 g = step(internal_pos.yzx, internal_pos.xyz);
+    vec3 l = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+
+    // Unskew
+    vec3 p0 = p - cell + dot(cell, vec3(G3));
+    vec3 p1 = p0 - i1 + vec3(G3);
+    vec3 p2 = p0 - i2 + vec3(G3 * 2.0);
+    vec3 p3 = p0 - 1.0 + vec3(G3 * 3.0);
+
+    // 3. Summation (4 kernels instead of 27 for Cartesian)
+    vec2 Z = vec2(0.0);
+    Z += evalPhasorKernel3D(cell, p0, mask, F, W, phaseJitter, time);
+    Z += evalPhasorKernel3D(cell + i1, p1, mask, F, W, phaseJitter, time);
+    Z += evalPhasorKernel3D(cell + i2, p2, mask, F, W, phaseJitter, time);
+    Z += evalPhasorKernel3D(cell + 1.0, p3, mask, F, W, phaseJitter, time);
+
+    return Z;
+}
