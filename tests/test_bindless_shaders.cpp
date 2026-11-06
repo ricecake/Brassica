@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
-#include "passes/TerrainNode.hpp"
-#include "passes/WaterNode.hpp"
+#include "passes/terrain/nodes/TerrainNode.hpp"
+#include "passes/water/nodes/WaterNode.hpp"
 #include "Shader.hpp"
 
 using namespace brassica;

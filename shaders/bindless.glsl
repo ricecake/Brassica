@@ -126,4 +126,10 @@ layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
 #define SAMPLE_3D_LINEAR(idx, uvw)                                                                                    \
 	texture(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
 
+// Explicit-LOD variant of SAMPLE_3D_LINEAR -- for callers picking a mip by hand (e.g.
+// distance-based LOD selection) rather than relying on implicit screen-space derivatives, which
+// aren't meaningful for a raymarch loop's per-step world-space sample position.
+#define SAMPLE_3D_LINEAR_LOD(idx, uvw, lod)                                                                           \
+	textureLod(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw, lod)
+
 #endif // BRASSICA_BINDLESS_GLSL

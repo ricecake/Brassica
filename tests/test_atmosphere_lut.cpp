@@ -8,13 +8,16 @@
 #include "graph/Graph.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
-#include "passes/AtmosphereLUTNode.hpp"
+#include "passes/atmosphere/nodes/AtmosphereLUTNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/AtmospherePushConstants.hpp"
 
 TEST_CASE("AtmospherePushConstants Struct Layout and Size") {
-	CHECK(sizeof(brassica::AtmospherePushConstants) == 128);
+	// 128 -> 272: cloud and volumetric settings now land in this same common UBO/push-struct
+	// instead of per-node push constants (AtmosphereManager/CloudLightingManager/
+	// VolumetricLightingManager::ApplyTo) -- appended fields only, every offset below unchanged.
+	CHECK(sizeof(brassica::AtmospherePushConstants) == 272);
 
 	brassica::AtmospherePushConstants push{};
 	CHECK(offsetof(brassica::AtmospherePushConstants, rayleighScatteringBase) == 0);

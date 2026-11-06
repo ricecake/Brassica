@@ -1,0 +1,100 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 128, max_primitives = 128) out;
+
+#include "bindless.glsl"
+#include "gltf_mesh.glsl"
+
+// No task shader stage: one workgroup per meshlet, dispatched 1:1 via drawMeshTasksEXT(meshletCount,
+// 1, 1) from GltfRenderNode -- same "mesh-only, no amplification needed" shape as
+// FoliageArchetypeRenderNode's pipeline (see its own comment). Per-meshlet frustum/cone culling
+// would belong in a task shader stage using the bounds already carried on GltfMeshlet, but Stage 1's
+// goal is a working static-mesh render path, not that optimization -- worth adding once there's an
+// asset actually large enough for it to matter.
+layout(push_constant) uniform GltfRenderPushConstants {
+	GltfVertexRef          vertexBuf;
+	GltfMeshletVertexRef   meshletVertexBuf;
+	GltfMeshletTriangleRef meshletTriangleBuf;
+	GltfMeshletDescRef     meshletBuf;
+	GltfJointMatrixRef     jointMatrixBuf;
+	vec3                   relModelPosition; // model position relative to camera -- see GltfRenderNode::Execute
+	float                  modelScale;
+	// Which bindless slot (uMaterialBuffers[], material_system.glsl binding 6) MaterialBuffer
+	// landed in this frame -- push constants are mesh-stage-only in this engine's convention (no
+	// frag shader here declares its own push_constant block), so this is forwarded to gltf.frag
+	// as a flat varying below rather than read directly there.
+	uint materialBufferIndex;
+}
+push;
+
+layout(location = 0) out vec3      outWorldPos[];
+layout(location = 1) out vec3      outNormal[];
+layout(location = 2) out vec2      outUv[];
+layout(location = 3) flat out uint outMaterialIndex[];
+layout(location = 4) flat out uint outMaterialBufferIndex[];
+
+void main() {
+	uint        meshletIndex = gl_WorkGroupID.x;
+	GltfMeshlet meshlet = push.meshletBuf.meshlets[meshletIndex];
+
+	uint vCount = min(meshlet.vertexCount, 128u);
+	uint pCount = min(meshlet.triangleCount, 128u);
+	SetMeshOutputsEXT(vCount, pCount);
+
+	for (uint i = 0u; i < vCount; ++i) {
+		uint       srcVertexIndex = push.meshletVertexBuf.indices[meshlet.vertexOffset + i];
+		GltfVertex v = push.vertexBuf.vertices[srcVertexIndex];
+
+		// Stage 4 (GPU skinning): a real skinned vertex's WEIGHTS_0 sums to ~1.0 (glTF's own
+		// normalization contract); a non-skinned primitive's zero-filled default (GltfModel.cpp's
+		// LoadPrimitive) sums to 0 -- that's the only signal needed to tell the two apart, and it
+		// means mixed skinned/non-skinned primitives in one model render correctly without any
+		// per-primitive flag. Indexing jointMatrixBuf at all in the zero-weight branch would be
+        // wrong even if harmless here (GltfModelManager::UpdatePose always keeps at least one
+        // identity matrix resident) -- skip it outright rather than relying on that incidentally
+        // being safe.
+		float weightSum = v.weights.x + v.weights.y + v.weights.z + v.weights.w;
+		vec3  localPos = v.position;
+		vec3  localNormal = v.normal;
+		if (weightSum > 0.0001) {
+			mat4 skinMatrix = v.weights.x * push.jointMatrixBuf.matrices[v.joints.x] +
+				v.weights.y * push.jointMatrixBuf.matrices[v.joints.y] +
+				v.weights.z * push.jointMatrixBuf.matrices[v.joints.z] +
+				v.weights.w * push.jointMatrixBuf.matrices[v.joints.w];
+			localPos = (skinMatrix * vec4(v.position, 1.0)).xyz;
+			// Upper-3x3 only, no inverse-transpose -- correct as long as no joint's rest-to-pose
+			// transform introduces significant non-uniform scale, true for every real test asset
+			// here (ordinary bone rotation/translation rigs). A rig relying on non-uniform joint
+			// scaling would need the inverse-transpose instead; flagged, not silently assumed.
+			localNormal = normalize(mat3(skinMatrix) * v.normal);
+		}
+
+		vec3 relWorldPos = push.relModelPosition + localPos * push.modelScale;
+
+		vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
+		gl_MeshVerticesEXT[i].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+		outWorldPos[i] = relWorldPos + uCameraPosition.xyz;
+		outNormal[i] = localNormal;
+		outUv[i] = v.uv;
+		outMaterialIndex[i] = meshlet.materialIndex;
+		outMaterialBufferIndex[i] = push.materialBufferIndex;
+	}
+
+	// meshlet.triangleOffset is in *triangle* units (see shaders/gltf_mesh.glsl's
+	// GltfMeshletTriangleRef comment and GltfModel.cpp's matching /3 conversion when writing it) --
+	// multiply by 3 to reach the corner-byte index space the packed uint buffer actually addresses.
+	uint triangleByteBase = meshlet.triangleOffset * 3u;
+	for (uint t = 0u; t < pCount; ++t) {
+		uint byte0 = triangleByteBase + t * 3u + 0u;
+		uint byte1 = triangleByteBase + t * 3u + 1u;
+		uint byte2 = triangleByteBase + t * 3u + 2u;
+
+		uint i0 = (push.meshletTriangleBuf.indices[byte0 >> 2u] >> ((byte0 & 3u) * 8u)) & 0xFFu;
+		uint i1 = (push.meshletTriangleBuf.indices[byte1 >> 2u] >> ((byte1 & 3u) * 8u)) & 0xFFu;
+		uint i2 = (push.meshletTriangleBuf.indices[byte2 >> 2u] >> ((byte2 & 3u) * 8u)) & 0xFFu;
+
+		gl_PrimitiveTriangleIndicesEXT[t] = uvec3(i0, i1, i2);
+	}
+}

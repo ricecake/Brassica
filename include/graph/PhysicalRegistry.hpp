@@ -8,8 +8,6 @@
 #include <string>
 #include <unordered_map>
 
-#include "spdlog/spdlog.h"
-
 #include "EngineConstants.hpp"
 #include "graph/Execution.hpp"
 #include "graph/Graph.hpp"
@@ -335,6 +333,20 @@ namespace brassica::graph {
 			vk::ImageLayout     targetLayout
 		);
 
+		// Not ResourceId-keyed, unlike UploadTextureImmediate above -- for a caller with a
+		// runtime-counted set of textures with no compile-time key per texture (e.g. GltfModel's
+		// textures, one per loaded glTF image), where there is no single "the" resource id to
+		// store this under. The caller owns the returned PhysicalTexture (keeps it alive via the
+		// shared_ptr) and reads its bindless index back via GetSampledBindlessIndex(). A
+        // deliberately independent implementation from UploadTextureImmediate rather than a
+        // shared refactor -- see Util.hpp's definition for why.
+		std::shared_ptr<PhysicalTexture> CreateAndUploadTexture2D(
+			const void*         pixelData,
+			std::size_t         sizeBytes,
+			const ResourceDesc& desc,
+			vk::ImageLayout     targetLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+		);
+
 		// ResourceServices: NodeContext::Write<K>/WriteSpan<K> call through to these. Defined in
 		// Util.hpp, same as the three above -- the real bodies need vk::Buffer(Image)Copy/VMA,
 		// which would bloat this class if inlined here.
@@ -478,6 +490,21 @@ namespace brassica::graph {
 			std::span<const NodeHandle> nodes = {},
 			const FrameContext&         ctx = {}
 		) {
+			// Design plan's S2 auto-registration: runs every realization's ensureCatalog
+			// (Execution.hpp/ResourceCatalog.hpp) for EVERY recipe, active or not -- registration
+			// must never depend on a node's Setup() being active this frame, or a key only ever
+			// touched by a currently-disabled feature would never get a catalog entry at all.
+			// Deliberately its own pass, before ProvisionTemporalPairs or anything else below that
+			// might query m_catalog.DescFor(): a key's first Create/Read/Modify<K>() access,
+			// wherever it appears in the recipe list, is enough to seed its catalog instance.
+			for (const Recipe& recipe : recipes) {
+				for (const ResourceRealization& r : recipe.realizations) {
+					if (r.ensureCatalog) {
+						r.ensureCatalog(m_catalog);
+					}
+				}
+			}
+
 			ProvisionTemporalPairs(recipes, frameIndex, ctx);
 
 			// Bindless indices retired by an earlier Provision() (a texture replaced by a resize,
@@ -545,16 +572,22 @@ namespace brassica::graph {
 						// PhysicalAccelerationStructure's class comment). Skip anything that
 						// isn't an image, rather than skip only Buffer, so a new non-image kind
 						// added later doesn't silently fall through into DeriveImageState.
-						if (r.desc.kind != ResourceDesc::Kind::Image2D && r.desc.kind != ResourceDesc::Kind::Image3D) {
+						// Resolved through EffectiveDesc, which reads the catalog -- a realization
+						// no longer carries a desc of its own at all (the .Desc() escape hatch is
+						// gone, S2b), so this is the only way to know what kind resolvedKey
+						// actually is.
+						const ResourceDesc effectiveForLayoutCheck = EffectiveDesc(resolvedKey, ctx);
+						if (effectiveForLayoutCheck.kind != ResourceDesc::Kind::Image2D &&
+						    effectiveForLayoutCheck.kind != ResourceDesc::Kind::Image3D) {
 							continue;
 						}
 						const vk::ImageLayout derivedLayout = DeriveImageState(
 																  r.access,
 																  recipe.domain,
-																  r.desc.usageMask
-																	  ? vk::ImageUsageFlags(r.desc.usageMask)
+																  effectiveForLayoutCheck.usageMask
+																	  ? vk::ImageUsageFlags(effectiveForLayoutCheck.usageMask)
 																	  : vk::ImageUsageFlags{},
-																  static_cast<vk::Format>(r.desc.formatCode)
+																  static_cast<vk::Format>(effectiveForLayoutCheck.formatCode)
 						)
 																  .layout;
 
@@ -607,13 +640,13 @@ namespace brassica::graph {
 				}
 			}
 
-			std::unordered_map<ResourceId, ResourceRealization> realizationsToProvision;
-			// Diagnostic-only: which node's realization currently occupies realizationsToProvision
-			// for a given key, so a later disagreeing realization can be warned about by name
-			// instead of just silently winning -- see the desc-equality check below. Lesson #10:
-			// the schedule-last toucher's desc is what actually reaches ProvisionTexture/Buffer,
-			// which is harmless only as long as every toucher of one key agrees on its desc.
-			std::unordered_map<ResourceId, std::size_t> realizationSourceNode;
+			// Every key reaching the catalog lookup below is a real CatalogKey (SetupBuilder::
+			// Record<K>'s requires-clause, S2b) -- its own Desc() is the only source of truth,
+			// unconditionally, with no schedule-order dependence and nothing to disagree with:
+			// every realization of one key necessarily resolves to the exact same desc. This
+			// collapses what used to be a last-writer-wins apparatus (lessons #9/#10/#12a) into a
+			// plain map of resolved descs.
+			std::unordered_map<ResourceId, ResourceDesc> descsToProvision;
 			for (const auto& stage : schedule.stages) {
 				for (std::size_t nodeIndex : stage.nodes) {
 					if (nodeIndex >= recipes.size()) {
@@ -625,16 +658,17 @@ namespace brassica::graph {
 					}
 
 					for (const auto& r : recipe.realizations) {
+						const ResourceId resolvedKey = ResolveId(r.key);
+
 						// AccelerationStructure is always pre-registered by the caller (via
-						// RegisterImportedAccelerationStructure) before Setup/Compile run -- there
-						// is nothing to provision, and neither ProvisionBuffer nor
-						// ProvisionTexture below knows how to handle this kind. Skip it outright
-						// rather than falling into the image branch by default.
-						if (r.desc.kind == ResourceDesc::Kind::AccelerationStructure) {
+						// RegisterImportedAccelerationStructure) before Setup/Compile run --
+						// there is nothing to provision, and neither ProvisionBuffer nor
+						// ProvisionTexture below knows how to handle this kind. Checked against
+						// m_accelStructs directly (ground truth: every AS key is registered
+						// there, nowhere else).
+						if (m_accelStructs.contains(resolvedKey)) {
 							continue;
 						}
-
-						const ResourceId resolvedKey = ResolveId(r.key);
 
 						auto texIt = m_textures.find(resolvedKey);
 						if (texIt != m_textures.end() && texIt->second->IsImported()) {
@@ -645,91 +679,28 @@ namespace brassica::graph {
 							continue;
 						}
 
-						// A converted key's own Desc() (ResourceCatalog) always wins over
-						// whatever a legacy node realization supplied -- the type is now the
-						// one true source for it. Warn rather than silently override, so a
-						// node still carrying a stale hand-rolled desc for a converted key
-						// shows up for cleanup during its own conversion (S2b), instead of just
-						// becoming unreachable dead code with no diagnostic. Skipped when r.desc
-						// is exactly the default ResourceDesc{}: that's a builder node's
-						// deliberately-empty realization (SetupBuilder.hpp's Create/Read/Modify
-						// never set one, by design -- the catalog is the only source), not a
-						// stale hand-rolled value worth flagging.
-						ResourceRealization effective = r;
-						if (auto catalogDesc = m_catalog.DescFor(resolvedKey, ctx)) {
-							if (!DescsFullyMatch(r.desc, ResourceDesc{}) && !DescsFullyMatch(r.desc, *catalogDesc)) {
-								spdlog::warn(
-									"PhysicalResourceRegistry::Provision: {}'s realization of '{}' "
-									"disagrees with the type's own Desc() -- the type wins; update "
-									"or remove this node's hand-rolled desc",
-									NodeNameOrIndex(nodes, nodeIndex),
-									resolvedKey->name
-								);
-							}
-							effective.desc = *catalogDesc;
+						const auto catalogDesc = m_catalog.DescFor(resolvedKey, ctx);
+						if (!catalogDesc) {
+							// Should be unreachable: every non-AS, non-Imported key declared
+							// through SetupBuilder::Create/Read/Modify is required to be a
+							// CatalogKey, so EnsureCatalogEntry (run for every realization of
+							// every recipe at the top of this function) already registered it.
+							throw std::runtime_error(
+								"PhysicalResourceRegistry::Provision: resource '" + std::string(resolvedKey->name) +
+								"' has no catalog entry -- every non-AS, non-Imported key must be a "
+								"CatalogKey"
+							);
 						}
-
-						const bool currEmpty = DescsFullyMatch(effective.desc, ResourceDesc{});
-
-						if (auto prevIt = realizationsToProvision.find(resolvedKey);
-						    prevIt != realizationsToProvision.end() &&
-						    !DescsFullyMatch(prevIt->second.desc, effective.desc)) {
-							const bool prevEmpty = DescsFullyMatch(prevIt->second.desc, ResourceDesc{});
-							// A builder node's Read<K>()/Modify<K>() on a key with no catalog entry
-							// (not yet converted, or converted but nothing registered it in THIS
-							// run -- an isolated test with a fake producer, most likely) carries an
-							// empty desc by construction, same as the warning suppression above.
-							// Letting it win just because it schedules later would silently
-							// corrupt whatever real desc an earlier, genuine producer/reader
-							// already supplied -- confirmed as a real regression (not hypothetical)
-							// the first time a converted-but-unregistered-in-test key was read this
-							// way. Only warn, and only let the schedule-last one actually win, when
-							// BOTH sides have a real opinion -- an empty one is simply ignored for
-							// provisioning purposes, regardless of where it falls in the schedule.
-							if (!prevEmpty && !currEmpty) {
-								const std::size_t prevNodeIndex = realizationSourceNode.at(resolvedKey);
-								spdlog::warn(
-									"PhysicalResourceRegistry::Provision: resource '{}' is realized with "
-									"disagreeing descs by {} and {} -- the schedule-last one ({}) wins, "
-									"per Provision()'s last-writer-wins collapse (see lesson #10)",
-									resolvedKey->name,
-									NodeNameOrIndex(nodes, prevNodeIndex),
-									NodeNameOrIndex(nodes, nodeIndex),
-									NodeNameOrIndex(nodes, nodeIndex)
-								);
-							}
-							if (currEmpty && !prevEmpty) {
-								continue; // keep the existing non-empty entry
-							}
-						} else if (currEmpty && prevIt == realizationsToProvision.end()) {
-							// Same "an empty desc is simply ignored for provisioning purposes" rule
-							// as above, but for the case the comment there didn't cover: this key's
-							// *only* realization so far this frame is this empty one -- there is no
-							// non-empty prevIt to lose to. Falling through used to insert the empty
-							// desc anyway, and ProvisionTexture/Buffer's ImageDescMatches would then
-							// see it mismatch against whatever real desc is already physically
-							// allocated (width/format/usage all zero) and destroy+recreate the
-							// resource from garbage. Confirmed as a real bug, not hypothetical:
-							// FoliageBiomeTableTexture's producer (a PredefinedTextureNode) is only
-							// Active on the frame its data actually changes, so on every other frame
-							// FoliageNode's bare Read<FoliageBiomeTableTexture>() (no .Desc(), and
-							// this key isn't catalog-converted) was the sole realization reaching
-							// here -- silently wiping the texture's real eTransferDst usage down to
-							// 0 the very next frame. Leave whatever's already provisioned alone.
-							continue;
-						}
-
-						realizationsToProvision[resolvedKey] = effective;
-						realizationSourceNode[resolvedKey] = nodeIndex;
+						descsToProvision[resolvedKey] = *catalogDesc;
 					}
 				}
 			}
 
-			for (const auto& [id, r] : realizationsToProvision) {
-				if (r.desc.kind == ResourceDesc::Kind::Buffer) {
-					ProvisionBuffer(id, r.desc, lifetimes[id], enableAliasing, frameIndex);
+			for (const auto& [id, desc] : descsToProvision) {
+				if (desc.kind == ResourceDesc::Kind::Buffer) {
+					ProvisionBuffer(id, desc, lifetimes[id], enableAliasing, frameIndex);
 				} else { // Image2D / Image3D
-					ProvisionTexture(id, r.desc, lifetimes[id], enableAliasing, frameIndex);
+					ProvisionTexture(id, desc, lifetimes[id], enableAliasing, frameIndex);
 				}
 			}
 		}
@@ -1110,15 +1081,21 @@ namespace brassica::graph {
 				a.usageMask == b.usageMask && a.mips == b.mips && a.layers == b.layers;
 		}
 
-		// Stricter than ImageDescMatches above (every field, not just the seven that matter for
-		// reprovisioning) and kind-agnostic (buffers included) -- this backs the diagnostic-only
-		// disagreement warning in Provision()'s realizationsToProvision loop, not a reprovisioning
-		// decision, so a false positive here only ever produces a spurious warning, never a bug.
-		static bool DescsFullyMatch(const ResourceDesc& a, const ResourceDesc& b) {
-			return a.kind == b.kind && a.width == b.width && a.height == b.height && a.depth == b.depth &&
-				a.mips == b.mips && a.layers == b.layers && a.formatCode == b.formatCode &&
-				a.usageMask == b.usageMask && a.byteSize == b.byteSize && a.hostAccess == b.hostAccess &&
-				a.persistent == b.persistent;
+		// Every key reaching here is a real CatalogKey (SetupBuilder::Record<K>'s requires-clause,
+		// S2b) -- its own Desc() is the only source now, unconditionally, the same reasoning
+		// Provision()'s own descsToProvision loop applies. No realization parameter needed
+		// anymore: there is nothing left to fall back to.
+		[[nodiscard]] ResourceDesc EffectiveDesc(ResourceId resolvedKey, const FrameContext& ctx) const {
+			if (auto catalogDesc = m_catalog.DescFor(resolvedKey, ctx)) {
+				return *catalogDesc;
+			}
+			// Unreachable: Provision() runs every realization's ensureCatalog (ResourceCatalog.hpp)
+			// before this check ever sees a key, so DescFor() always succeeds for anything with a
+			// realization this frame.
+			throw std::runtime_error(
+				"PhysicalResourceRegistry::EffectiveDesc: resource '" + std::string(resolvedKey->name) +
+				"' has no catalog entry"
+			);
 		}
 
 		// Diagnostic-only name lookup -- nodes is empty for a caller that built its own
@@ -1146,18 +1123,19 @@ namespace brassica::graph {
 					}
 					const ResourceId base = r.key->historyTarget;
 					historyIdForBase[base] = r.key;
-					// Prefer the base type's own Desc() (ResourceCatalog), once it's been
-					// converted and registered -- eliminates lesson #9's whole failure mode for
-					// a converted key, since the desc no longer depends on the reader having
-					// pushed a correct realization at all. Falls back to the reader's
-					// realization (the original lesson #9 workaround) for any key not yet
-					// converted, so unconverted keys are completely unaffected.
-					if (auto catalogDesc = m_catalog.DescFor(base, ctx)) {
-						descForBase[base] = *catalogDesc;
-						continue;
+					// The base type's own Desc() (ResourceCatalog) is the only source now --
+					// ReadPrevious<K>() requires K to be a CatalogKey (SetupBuilder.hpp's
+					// Record<K>), same as every other access, so this always succeeds; it no
+					// longer depends on the reader having pushed a correct realization at all
+					// (the original lesson #9 workaround, now obsolete).
+					const auto catalogDesc = m_catalog.DescFor(base, ctx);
+					if (!catalogDesc) {
+						throw std::runtime_error(
+							"PhysicalResourceRegistry::ProvisionTemporalPairs: resource '" +
+							std::string(base->name) + "' has no catalog entry"
+						);
 					}
-					descForBase[base] = r.desc; // PreviousFrame has no realizations of its own --
-					                            // the reader's desc is the only one available.
+					descForBase[base] = *catalogDesc;
 				}
 			}
 
@@ -1249,8 +1227,12 @@ namespace brassica::graph {
 
 			// A persistent resource never goes through the alias pool -- see ResourceDesc::persistent's
 			// comment (Execution.hpp) for why a pool block can't track this resource's real lifetime
-			// once it starts hitting the desc-match early return above.
-			std::shared_ptr<PhysicalTexture> tex = (enableAliasing && !desc.persistent)
+			// once it starts hitting the desc-match early return above. Lifetime::Persistent/
+			// External is checked too (design plan's S2 lifetime-unification in progress, both
+			// mechanisms checked for now) -- id is the resolved key, so this is free.
+			const bool isPersistentLifetime =
+				id->lifetime == Lifetime::Persistent || id->lifetime == Lifetime::External;
+			std::shared_ptr<PhysicalTexture> tex = (enableAliasing && !desc.persistent && !isPersistentLifetime)
 				? m_imagePool.Acquire(desc, lifetime.firstPass, lifetime.lastPass, m_concurrentFamilies)
 				: std::make_shared<PhysicalTexture>(
 					  m_device,
@@ -1317,9 +1299,12 @@ namespace brassica::graph {
 			// to exist), but a host-write resource is explicitly meant to persist *across* frames
 			// -- aliasing it would let some unrelated same-frame resource's next-frame write
 			// silently stomp it.
-			// Same persistent-bypass reasoning as ProvisionTexture above.
+			// Same persistent-bypass reasoning as ProvisionTexture above, including the
+			// Lifetime::Persistent/External widening.
+			const bool isPersistentLifetime =
+				id->lifetime == Lifetime::Persistent || id->lifetime == Lifetime::External;
 			std::shared_ptr<PhysicalBuffer> newBuffer;
-			if (enableAliasing && !hostWrite && !desc.persistent) {
+			if (enableAliasing && !hostWrite && !desc.persistent && !isPersistentLifetime) {
 				newBuffer = m_bufferPool.Acquire(desc, lifetime.firstPass, lifetime.lastPass, m_concurrentFamilies);
 			} else if (hostWrite) {
 				newBuffer =

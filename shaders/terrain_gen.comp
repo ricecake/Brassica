@@ -51,7 +51,14 @@ void main() {
 		return;
 	}
 
-	vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
+	// Around line 46 in terrain_gen.comp
+	float baseMeshletSize = 32.0;
+	float meshletSize = baseMeshletSize * getLODScale(float(lod));
+
+	// Replace the old texelSize snap:
+	// vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
+	vec2 centerWorldPos = floor(uCameraPosition.xz / meshletSize) * meshletSize;
+
 	vec2 deltaWorld = (vec2(float(colIdx), float(rowIdx)) - vec2(float(dim) * 0.5)) * texelSize;
 	vec2 worldXZ = centerWorldPos + deltaWorld;
 

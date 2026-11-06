@@ -19,6 +19,12 @@ namespace brassica {
 	 * - shadingBitmask: uint shading control flow bitmask.
 	 * - uvScaleOffset: vec4 for mapping or displacement (x,y: scale; z,w: offset).
 	 * - palette: four vec3s for a cosine color palette (stored as 4 x vec4 for 16-byte std430 alignment).
+	 * - baseColorFactor/emissiveFactor: appended, not interleaved (see
+	 *   feedback_push_constant_struct_editing) -- real RGBA color factors, for a photoreal
+	 *   textured/flat-colored material (e.g. a glTF import). colorTintOffset's x/w scalars are a
+	 *   different, procedural-palette-oriented contract (see evaluateCosinePalette,
+	 *   material_system.glsl) that can't represent an arbitrary base or emissive color; this was a
+	 *   real gap, not something to approximate by reusing those scalars.
 	 */
 	struct alignas(16) MaterialData {
 		/// Texture indices (x: albedo, y: normal, z: occlusion/roughness/metallic, w: emission)
@@ -41,8 +47,18 @@ namespace brassica {
 			glm::vec4(1.0f, 1.0f, 1.0f, 0.0f),
 			glm::vec4(0.0f, 0.33f, 0.67f, 0.0f)
 		};
+
+		/// RGBA base-color multiply (applied on top of the sampled albedo texture, or the flat
+		/// color itself when textureIds.x is unbound). w is unused (alpha blending isn't wired up
+		/// yet) but kept for std430 alignment and glTF baseColorFactor's own RGBA shape.
+		glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+
+		/// RGB emissive multiply (applied on top of the sampled emissive texture, or the flat
+		/// emissive color itself when textureIds.w is unbound); colorTintOffset.w ("emission
+		/// strength") further scales this. w is unused, kept for alignment.
+		glm::vec4 emissiveFactor{0.0f, 0.0f, 0.0f, 0.0f};
 	};
 
-	static_assert(sizeof(MaterialData) == 128, "MaterialData struct size must be 128 bytes");
+	static_assert(sizeof(MaterialData) == 160, "MaterialData struct size must be 160 bytes");
 
 } // namespace brassica

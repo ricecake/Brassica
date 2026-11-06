@@ -140,6 +140,16 @@ set(FASTNOISE2_TESTS OFF CACHE BOOL "" FORCE)
 set(FASTNOISE2_UTILITY OFF CACHE BOOL "" FORCE)
 set(FASTNOISE2_STRICT_FP OFF CACHE BOOL "Disable strict floating point calculations for maximum performance" FORCE)
 
+# SPIRV-Reflect: only the static library (the shader-push-constant validation plan's S4) --
+# skip its own CLI executable/examples/test suite, which the default options build unasked.
+# S0 spike (deleted after capturing the answer, see tests/ history if needed): reflecting
+# gtao.comp's real compiled SPIR-V against GTAOPushConstants recovered the exact push-block
+# size, member count, member names, AND every member offset, byte for byte -- this project's
+# shaderc settings (SetGenerateDebugInfo(), optimization_level_performance) do NOT strip the
+# OpName/member-offset decorations S4's reflection check needs.
+set(SPIRV_REFLECT_EXECUTABLE OFF CACHE BOOL "" FORCE)
+set(SPIRV_REFLECT_STATIC_LIB ON CACHE BOOL "" FORCE)
+
 # Subdirectories
 add_subdirectory(external/glfw)
 add_subdirectory(external/efsw)
@@ -158,6 +168,7 @@ add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
 add_subdirectory(external/geometry-central)
 add_subdirectory(external/ozz-animation)
+add_subdirectory(external/SPIRV-Reflect)
 if(TARGET eigen)
     target_compile_definitions(eigen INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
 endif()

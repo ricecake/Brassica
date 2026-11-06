@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -41,10 +42,9 @@ namespace brassica::graph {
 		}
 
 		for (const auto& r : recipe.realizations) {
-			if (r.desc.kind != ResourceDesc::Kind::Image2D && r.desc.kind != ResourceDesc::Kind::Image3D) {
-				continue;
-			}
-
+			// No kind pre-filter: every realization's desc is empty by construction now (S2b, the
+			// .Desc() escape hatch is gone) -- registry.GetTexture(r.key) below is the only real
+			// filter, returning nullptr for a buffer/AS key exactly as it always has.
 			auto tex = registry.GetTexture(r.key);
 			if (!tex || !tex->GetView()) {
 				continue;
@@ -69,18 +69,8 @@ namespace brassica::graph {
 				continue;
 			}
 
-			// From the real provisioned texture, not r.desc: a builder node's realization
-			// (SetupBuilder.hpp) carries an empty desc by construction for any catalog-converted
-			// key (ResourceCatalog.hpp) -- Provision()'s catalog-desc override only ever updates
-			// a local copy for its own realizationsToProvision map, it never writes back into
-			// this Recipe's own stored realizations. format/usage just above already read
-			// through tex->GetDesc() for the same reason; width/height hadn't, which this closes.
-			// Confirmed as a real bug, not a hypothetical: with r.desc.width/height silently
-			// staying 0 for every attachment on a fully-converted node, DeriveAttachments
-			// reported a 0x0 render size, and Begin's `derived.width ? ... : 1` fallback below
-			// collapsed the real render area down to a single pixel -- no validation error
-			// (1x1 fits inside any real image), but only that one pixel's worth of a frame's
-			// geometry/shading ever actually got drawn.
+			// From the real provisioned texture, not a realization's own (always-empty) desc --
+			// format/usage just above already read through tex->GetDesc() for the same reason.
 			out.width = std::max(out.width, tex->GetDesc().width);
 			out.height = std::max(out.height, tex->GetDesc().height);
 
@@ -120,10 +110,7 @@ namespace brassica::graph {
 			vk::RenderingFragmentShadingRateAttachmentInfoKHR shadingRateAttachment{};
 
 			for (const auto& r : recipe.realizations) {
-				if (r.desc.kind != ResourceDesc::Kind::Image2D && r.desc.kind != ResourceDesc::Kind::Image3D) {
-					continue;
-				}
-
+				// No kind pre-filter: see DeriveAttachments' identical comment above.
 				auto tex = registry.GetTexture(r.key);
 				if (!tex || !tex->GetView()) {
 					continue;
@@ -407,6 +394,87 @@ namespace brassica::graph {
 		buf.SetHasDefinedContents(true);
 	}
 
+	// One (offset, size, 32-bit word) region for FillBufferRegions below.
+	struct BufferFillRegion {
+		vk::DeviceSize offset;
+		vk::DeviceSize size;
+		std::uint32_t  value;
+	};
+
+	// Generalizes ClearBufferToZero to N regions, each filled with its own repeated 32-bit word,
+	// under a single barrier pair spanning the whole buffer -- for a buffer whose correct reset
+	// state isn't simply "everything zero" (e.g. a VkDrawMeshTasksIndirectCommandEXT-shaped
+	// buffer, where groupCountX is a live per-frame counter that resets to 0 but groupCountY/Z
+	// are a fixed non-zero dispatch shape -- resetting the whole buffer to zero and then
+	// separately patching the non-zero fields back in is strictly worse than just writing the
+	// correct steady state directly in one pass). Regions must not overlap; each offset/size must
+	// be a multiple of 4, per vkCmdFillBuffer's own requirement.
+	inline void FillBufferRegions(
+		vk::CommandBuffer                  cmd,
+		PhysicalBuffer&                    buf,
+		AccessKind                         access,
+		ExecutionDomain                    domain,
+		std::span<const BufferFillRegion> regions
+	) {
+		const auto& desc = buf.GetDesc();
+
+		// Defensive: vkCmdFillBuffer requires eTransferDst -- see ClearImageToZero's identical
+		// guard and comment for why this degrades to a skip instead of an invalid call.
+		if (!(desc.usageMask & static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferDst))) {
+			static bool warned = false;
+			if (!warned) {
+				spdlog::warn(
+					"FillBufferRegions: skipping fill for a buffer whose desc lacks eTransferDst "
+					"usage -- add it to this key's Desc()."
+				);
+				warned = true;
+			}
+			return;
+		}
+
+		const vk::DeviceSize size = desc.byteSize ? desc.byteSize : VK_WHOLE_SIZE;
+
+		vk::BufferMemoryBarrier2 toTransferDst{
+			buf.GetLastStage() ? buf.GetLastStage() : vk::PipelineStageFlagBits2::eTopOfPipe,
+			buf.GetLastAccess(),
+			vk::PipelineStageFlagBits2::eAllTransfer,
+			vk::AccessFlagBits2::eTransferWrite,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			buf.GetBuffer(),
+			0,
+			size,
+		};
+		vk::DependencyInfo preFillDep{};
+		preFillDep.setBufferMemoryBarriers(toTransferDst);
+		cmd.pipelineBarrier2(preFillDep);
+
+		for (const BufferFillRegion& region : regions) {
+			cmd.fillBuffer(buf.GetBuffer(), region.offset, region.size, region.value);
+		}
+
+		const ResourceState postFill =
+			DeriveBufferState(access, domain, desc.usageMask ? vk::BufferUsageFlags(desc.usageMask) : vk::BufferUsageFlags{});
+
+		vk::BufferMemoryBarrier2 toFinal{
+			vk::PipelineStageFlagBits2::eAllTransfer,
+			vk::AccessFlagBits2::eTransferWrite,
+			postFill.stage,
+			postFill.access,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			buf.GetBuffer(),
+			0,
+			size,
+		};
+		vk::DependencyInfo postFillDep{};
+		postFillDep.setBufferMemoryBarriers(toFinal);
+		cmd.pipelineBarrier2(postFillDep);
+
+		buf.SetLastStageAccess(postFill.stage, postFill.access);
+		buf.SetHasDefinedContents(true);
+	}
+
 	// A History<K> realization's physical resource genuinely has no producer within this frame's
 	// own schedule -- PreviousFrame (Frame.hpp) exists purely to satisfy validation/phase
 	// ordering and does zero real work, so on the very first frame that slot has never actually
@@ -432,10 +500,8 @@ namespace brassica::graph {
 				if (r.access != AccessKind::Read || !r.key->isHistory) {
 					continue;
 				}
-				if (r.desc.kind != ResourceDesc::Kind::Image2D && r.desc.kind != ResourceDesc::Kind::Image3D) {
-					continue; // no zero-init needed/expressible for buffers or an AS here
-				}
-
+				// No kind pre-filter: see DeriveAttachments' identical comment (above in this
+				// file) -- registry.GetTexture(r.key) below returns nullptr for a buffer/AS key.
 				auto tex = registry.GetTexture(r.key);
 				if (!tex || tex->HasDefinedContents()) {
 					continue;
@@ -485,37 +551,43 @@ namespace brassica::graph {
 				continue;
 			}
 
-			if (realization->desc.kind == ResourceDesc::Kind::Buffer) {
-				auto buf = registry.GetBuffer(key);
-				if (!buf) {
-					continue;
-				}
-				// A persistent resource (ResourceDesc::persistent) exists specifically to survive
-				// frames its producer is inactive -- see that flag's own comment (Execution.hpp).
-				// Once it has real content, an inactive-producer frame reading it is the intended
-				// use, not an undefined gap: zeroing it here on every such frame would permanently
-				// defeat the entire reason it is marked persistent. Confirmed as a real bug, not
-				// hypothetical: FoliageBiomeTableTexture (a PredefinedTextureNode, Active only when
-				// its data actually changes) read back as all-zero every frame after the first --
-				// every biome's enabled flag reads false, so foliage renders nowhere.
-				if (buf->GetDesc().persistent && buf->HasDefinedContents()) {
+			// Branches on which map the registry actually provisioned K into, not
+			// realization->desc.kind -- a catalog-converted key's ordinary Create/Read/
+			// Modify<K>() carries the empty ResourceDesc{} default (kind=Image2D) regardless of
+			// what K actually is (see PhysicalResourceRegistry::EffectiveDesc's identical
+			// reasoning for the same-stage layout check), which would silently mis-branch a
+			// converted buffer key into the texture path below, find nothing, and skip the
+			// zero-init entirely. Asking the registry which map K is actually in sidesteps
+			// needing a FrameContext to resolve through the catalog here too.
+			if (auto buf = registry.GetBuffer(key)) {
+				// A persistent resource (Lifetime::Persistent/External, or the legacy
+				// ResourceDesc::persistent flag some keys still carry instead -- design plan's
+				// S2 lifetime-unification is in progress, both are checked for now) exists
+				// specifically to survive frames its producer is inactive -- see that flag's own
+				// comment (Execution.hpp). Once it has real content, an inactive-producer frame
+				// reading it is the intended use, not an undefined gap: zeroing it here on every
+				// such frame would permanently defeat the entire reason it is marked persistent.
+				// Confirmed as a real bug, not hypothetical: FoliageBiomeTableTexture (a
+				// PredefinedTextureNode, Active only when its data actually changes) read back as
+				// all-zero every frame after the first -- every biome's enabled flag reads
+				// false, so foliage renders nowhere.
+				const bool isPersistentLifetime =
+					key->lifetime == Lifetime::Persistent || key->lifetime == Lifetime::External;
+				if ((buf->GetDesc().persistent || isPersistentLifetime) && buf->HasDefinedContents()) {
 					continue;
 				}
 				ClearBufferToZero(cmd, *buf, realization->access, recipe.domain);
 				continue;
 			}
 
-			if (realization->desc.kind != ResourceDesc::Kind::Image2D &&
-			    realization->desc.kind != ResourceDesc::Kind::Image3D) {
-				continue; // AccelerationStructure etc. -- no zero-init concept
-			}
-
 			auto tex = registry.GetTexture(key);
 			if (!tex) {
-				continue;
+				continue; // AccelerationStructure etc. -- no zero-init concept, or not provisioned
 			}
 			// Same persistent-resource exemption as the buffer branch above.
-			if (tex->GetDesc().persistent && tex->HasDefinedContents()) {
+			const bool isPersistentLifetime =
+				key->lifetime == Lifetime::Persistent || key->lifetime == Lifetime::External;
+			if ((tex->GetDesc().persistent || isPersistentLifetime) && tex->HasDefinedContents()) {
 				continue;
 			}
 			ClearImageToZero(cmd, *tex, realization->access, recipe.domain, key);

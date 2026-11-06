@@ -12,7 +12,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
-#include "lighting/ILightManager.hpp"
+#include "passes/lighting/ILightManager.hpp"
 #include "ui/AudioWidget.hpp"
 #include "ui/FoliageWidget.hpp"
 #include "ui/LightingWidget.hpp"

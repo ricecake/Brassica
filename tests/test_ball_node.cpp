@@ -7,8 +7,8 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "passes/EntityNode.hpp"
-#include "passes/EntityPrepareNode.hpp"
+#include "passes/entity/nodes/EntityNode.hpp"
+#include "passes/entity/nodes/EntityPrepareNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -19,13 +19,13 @@ using namespace brassica;
 namespace {
 
 	struct FakeSceneProducer {
-		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Create<GBufferPosition>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat));
-			r.Create<GBufferNormal>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
-			r.Create<GBufferAlbedo>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
-			r.Create<GBufferMaterial>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm));
-			r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
+			r.Create<GBufferPosition>();
+			r.Create<GBufferNormal>();
+			r.Create<GBufferAlbedo>();
+			r.Create<GBufferMaterial>();
+			r.Create<GBufferDepth>();
 		}
 
 		void Execute(graph::NodeContext&) {}

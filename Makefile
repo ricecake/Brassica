@@ -39,7 +39,32 @@ clean-build:
 clean:
 	rm -rf $(BUILD_DIR)
 
+# Include paths tests/graph/test_graph.cpp needs to parse on its own, without configuring the
+# whole CMake project: the engine headers it pulls in (ArgparseManager/IManager/ManagerReflection/
+# PhysicalResource/VulkanSeam/...) reach argparse, glm, VMA and real vulkan.hpp (found here via
+# Homebrew's MoltenVK SDK, not a vendored copy -- adjust if Vulkan isn't installed at this path).
+# This is NOT the "Vulkan-free" build the file's own header comment once promised: ResourceKeys.hpp
+# and TerrainMapExporter.hpp (both genuinely used by later TEST_CASEs in this file) unconditionally
+# include vulkan/vulkan.hpp, so there's no way to syntax-check the real file without it.
+GRAPH_CXXFLAGS = -std=c++23 \
+	-Iinclude \
+	-Iexternal/entt/src \
+	-Iexternal/doctest \
+	-Iexternal/spdlog/include \
+	-Iexternal/imgui \
+	-Iexternal/argparse/include \
+	-Iexternal/glm \
+	-Iexternal/VulkanMemoryAllocator/include \
+	-I/opt/homebrew/include
+
 # Compile-time assertions only, no link/run step. Fastest inner loop while iterating on the
 # declaration/validation layers.
 graph-check:
 	@$(CXX) $(GRAPH_CXXFLAGS) -fsyntax-only tests/graph/test_graph.cpp
+
+# Builds and runs just the graph-layer test binary through the real CMake project (needed to
+# actually run it, not just syntax-check it -- graph-check above is the fast no-link loop).
+graph-test:
+	@cmake -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG)
+	@cmake --build $(BUILD_DIR) --target test_graph
+	@cd $(BUILD_DIR) && ctest -R test_graph --output-on-failure

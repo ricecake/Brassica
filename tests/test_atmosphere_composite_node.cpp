@@ -11,9 +11,9 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "passes/AtmosphereLUTNode.hpp"
-#include "passes/VolumetricFroxelGenNode.hpp"
-#include "passes/VolumetricRenderNode.hpp"
+#include "passes/atmosphere/nodes/AtmosphereLUTNode.hpp"
+#include "passes/volumetrics/nodes/VolumetricFroxelGenNode.hpp"
+#include "passes/volumetrics/nodes/VolumetricRenderNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -29,20 +29,18 @@ namespace {
 		float     albedoAlpha = 0.0f;
 		glm::vec3 relPos{0.0f};
 
-		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Create<GBufferPosition>()
-				.Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat))
-				.Clear({relPos.x, relPos.y, relPos.z, 0.0f});
-			r.Create<GBufferAlbedo>()
-				.Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb))
-				.Clear({0.5f, 0.5f, 0.5f, albedoAlpha});
-			r.Create<GBufferNormal>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
-			r.Create<GBufferMaterial>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm));
-			r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
-			r.Create<HdrColor>()
-				.Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat))
-				.Clear({1.0f, 1.0f, 1.0f, 1.0f});
+			// GBuffer*/HdrColor are all catalog-converted -- no .Desc() needed, just .Clear().
+			r.Create<GBufferPosition>().Clear({relPos.x, relPos.y, relPos.z, 0.0f});
+			r.Create<GBufferAlbedo>().Clear({0.5f, 0.5f, 0.5f, albedoAlpha});
+			r.Create<GBufferNormal>();
+			r.Create<GBufferMaterial>();
+			r.Create<GBufferDepth>();
+			// Known white baseline -- lets the GPU readback test below compare "left alone
+			// (discarded, above water)" against "actually fogged (submerged)" against an exact
+			// starting value, instead of whatever an unspecified clear would give.
+			r.Create<HdrColor>().Clear({1.0f, 1.0f, 1.0f, 1.0f});
 		}
 
 		void Execute(graph::NodeContext&) {}
@@ -158,29 +156,39 @@ namespace {
 			.setBufferInfo(bufferDescs[1]);
 		device.updateDescriptorSets(uboWrites, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 4> layoutBindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 5> layoutBindings{};
 		layoutBindings[0]
 			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(16)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 1: uTextureArrays (shaders/bindless.glsl) -- needed now that VolumetricFroxelGenNode
+		// reads layered terrain/cloud textures (TerrainClipmapTexture, TerrainMinMaxTexture,
+		// TerrainWeatherBiomeTexture, CloudShadowMap, TerrainShadowMap) through this bindless slot,
+		// same descriptor type/count as Engine::InitGlobalDescriptors' real binding 1.
 		layoutBindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(64)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		layoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(4)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		layoutBindings[2]
+		layoutBindings[3]
 			.setBinding(3)
 			.setDescriptorType(vk::DescriptorType::eStorageImage)
 			.setDescriptorCount(16)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		layoutBindings[3]
+		layoutBindings[4]
 			.setBinding(5)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(16)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 4> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 5> bindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
@@ -195,8 +203,9 @@ namespace {
 		layoutInfo.pNext = &bindingFlagsInfo;
 		result.layout = device.createDescriptorSetLayout(layoutInfo);
 
-		std::array<vk::DescriptorPoolSize, 4> poolSizes{
+		std::array<vk::DescriptorPoolSize, 5> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 16},
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 64},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 16},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 16},
@@ -336,6 +345,15 @@ TEST_CASE("Unified VolumetricRenderNode executes cleanly in render graph with no
 
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{});
+		// VolumetricFroxelGenNode reads these real production keys (terrain occlusion, cloud
+		// shadow, lights), but nothing else in this minimal graph produces them -- same category
+		// as test_rendergraph.cpp's own FoliageBiomeTableTexture import.
+		graph.Register<graph::Import<CloudShadowMap>>();
+		graph.Register<graph::Import<TerrainWeatherBiomeTexture>>();
+		graph.Register<graph::Import<TerrainClipmapTexture>>();
+		graph.Register<graph::Import<TerrainMinMaxTexture>>();
+		graph.Register<graph::Import<LightsBuffer>>();
+		graph.Register<graph::Import<TerrainShadowMap>>();
 		graph.RegisterRef(transNode);
 		graph.RegisterRef(multiNode);
 		graph.RegisterRef(skyNode);

@@ -1,0 +1,59 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+// 16 segments -> 4 vertices/2 triangles each (same per-unit budget particle.mesh uses per
+// particle): 64 vertices, 32 primitives. Comfortably inside entity.mesh's demonstrated 256/256
+// cap, so one workgroup per strike is sufficient -- no further amplification needed.
+layout(triangles, max_vertices = 64, max_primitives = 32) out;
+
+struct LightningTaskPayload {
+	vec3  points[17];
+	float lifetime;
+	float maxLifetime;
+};
+
+taskPayloadSharedEXT LightningTaskPayload IN;
+
+layout(location = 0) out struct LightningVertexOutput {
+	vec3 color;
+} OUT[];
+
+const float kBoltHalfWidth = 6.0; // metres
+
+void main() {
+	float normalizedAge = 1.0 - clamp(IN.lifetime / max(IN.maxLifetime, 0.0001), 0.0, 1.0);
+	// Same flicker envelope as lightning_age.comp's reserved-light-slot write (and the CPU
+	// LightningManager::Update() it was ported from) -- kept visually in sync with the real
+	// dynamic light this same strike also drives.
+	float flicker = max(0.0, sin(normalizedAge * PI) * (0.8 + 0.2 * sin(IN.lifetime * 50.0)));
+	vec3  color = vec3(0.85, 0.9, 1.0) * flicker;
+
+	SetMeshOutputsEXT(64, 32);
+
+	for (uint seg = 0u; seg < 16u; seg++) {
+		vec3 a = IN.points[seg];
+		vec3 b = IN.points[seg + 1u];
+		vec3 segDir = normalize(b - a);
+		vec3 toCam = normalize(uCameraPosition.xyz - (a + b) * 0.5);
+		vec3 right = normalize(cross(segDir, toCam)) * kBoltHalfWidth;
+
+		uint v0 = seg * 4u;
+		gl_MeshVerticesEXT[v0 + 0u].gl_Position = uViewProjMatrix * vec4(a - right, 1.0);
+		gl_MeshVerticesEXT[v0 + 1u].gl_Position = uViewProjMatrix * vec4(a + right, 1.0);
+		gl_MeshVerticesEXT[v0 + 2u].gl_Position = uViewProjMatrix * vec4(b - right, 1.0);
+		gl_MeshVerticesEXT[v0 + 3u].gl_Position = uViewProjMatrix * vec4(b + right, 1.0);
+
+		OUT[v0 + 0u].color = color;
+		OUT[v0 + 1u].color = color;
+		OUT[v0 + 2u].color = color;
+		OUT[v0 + 3u].color = color;
+
+		uint p0 = seg * 2u;
+		gl_PrimitiveTriangleIndicesEXT[p0 + 0u] = uvec3(v0, v0 + 1u, v0 + 2u);
+		gl_PrimitiveTriangleIndicesEXT[p0 + 1u] = uvec3(v0 + 2u, v0 + 1u, v0 + 3u);
+	}
+}

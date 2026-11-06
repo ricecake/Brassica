@@ -60,6 +60,44 @@ layout(std430, set = 0, binding = 2) readonly buffer LightsBuffer {
 };
 #endif
 
+// Number of concurrent GPU-authored lightning strikes -- matches
+// include/types/LightningStrike.hpp's kMaxLightningStrikes exactly (that header sizes the
+// buffer allocation; this is the GLSL side's copy of the same constant, same convention as
+// every other *PushConstants mirror in this codebase).
+#define LIGHTNING_MAX_STRIKES 32
+
+// Reserved uLights[] slot range for lightning flash lights -- static per-slot assignment,
+// same idiom as particle_behavior.comp's firefly lights (16u + particleIdx): slots
+// LIGHTNING_LIGHT_SLOT_BASE..+LIGHTNING_MAX_STRIKES-1, written by shaders/lightning_age.comp.
+#define LIGHTNING_LIGHT_SLOT_BASE 256u
+
+struct LightningStrikeSlot {
+	vec4  originAndSeed; // xyz = cloud-side origin world pos, w = PRNG seed
+	vec4  endPos;        // xyz = second cloud-side point, w = unused
+	float lifetime;
+	float maxLifetime;
+	float _pad0;
+	float _pad1;
+};
+
+// climate_ca.comp claims a slot (atomicAdd(uStrikeRingCounter, 1u) % LIGHTNING_MAX_STRIKES) and
+// writes a fresh strike when weather conditions trigger one; lightning_age.comp ages every slot
+// each frame and writes its reserved uLights[] entry; lightning.task reads (read-only) to plot
+// the bolt polyline and cull dead slots.
+#ifdef LIGHTNING_STRIKE_POOL_WRITABLE
+layout(std430, set = 0, binding = 7) buffer LightningStrikePool {
+	uint                 uStrikeRingCounter;
+	uint                 uStrikePad[3];
+	LightningStrikeSlot  uStrikes[];
+};
+#else
+layout(std430, set = 0, binding = 7) readonly buffer LightningStrikePool {
+	uint                 uStrikeRingCounter;
+	uint                 uStrikePad[3];
+	LightningStrikeSlot  uStrikes[];
+};
+#endif
+
 struct Cluster {
 	uint count;
 	uint lightIndices[64];

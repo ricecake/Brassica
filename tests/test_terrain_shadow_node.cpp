@@ -4,9 +4,9 @@
 #include "doctest/doctest.h"
 
 #include "graph/Graph.hpp"
-#include "passes/TerrainGenNode.hpp"
-#include "passes/TerrainMinMaxDownsampleNode.hpp"
-#include "passes/TerrainShadowNode.hpp"
+#include "passes/terrain/nodes/TerrainGenNode.hpp"
+#include "passes/terrain/nodes/TerrainMinMaxDownsampleNode.hpp"
+#include "passes/terrain/nodes/TerrainShadowNode.hpp"
 
 using namespace brassica;
 

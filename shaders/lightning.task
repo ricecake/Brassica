@@ -1,0 +1,79 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "helpers/hash.glsl"
+#include "lighting.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+struct LightningTaskPayload {
+	vec3  points[17];
+	float lifetime;
+	float maxLifetime;
+};
+
+taskPayloadSharedEXT LightningTaskPayload OUT;
+
+// Perpendicular-to-dir random offset direction, seeded -- used to displace each midpoint off
+// the segment it splits. `dir` is assumed normalized.
+vec3 randomPerp(vec3 dir, uint seed) {
+	vec3  arbitrary = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3  perp1 = normalize(cross(dir, arbitrary));
+	vec3  perp2 = cross(dir, perp1);
+	float angle = pcg_hash(seed) * 6.28318530718;
+	return perp1 * cos(angle) + perp2 * sin(angle);
+}
+
+// One workgroup per strike-pool slot (fixed-count dispatch, LIGHTNING_MAX_STRIKES workgroups --
+// mirrors entity.task's per-instance-not-per-alive-list model, not particle's alive-index
+// indirection). Plots this frame's bolt polyline via iterative midpoint displacement (GLSL has
+// no function recursion) seeded from the slot's stored seed, so the shape is stable across the
+// strike's whole lifetime even though it's recomputed every frame -- 17 points of pure ALU, no
+// loops over other data, cheap regardless. v1 scope: trunk only, no branch segments.
+void main() {
+	uint slot = gl_WorkGroupID.x;
+	if (slot >= LIGHTNING_MAX_STRIKES || uStrikes[slot].lifetime <= 0.0) {
+		EmitMeshTasksEXT(0, 0, 0);
+		return;
+	}
+
+	vec3 start = uStrikes[slot].originAndSeed.xyz;
+	vec3 end = uStrikes[slot].endPos.xyz;
+	uint seed = floatBitsToUint(uStrikes[slot].originAndSeed.w);
+
+	OUT.points[0] = start;
+	OUT.points[16] = end;
+
+	uint activeCount = 1u;
+	uint stride = 16u;
+	for (int level = 0; level < 4; level++) {
+		uint halfStride = stride / 2u;
+		for (uint i = 0u; i < activeCount; i++) {
+			uint i0 = i * stride;
+			uint i2 = i0 + stride;
+			uint i1 = i0 + halfStride;
+
+			vec3  segStart = OUT.points[i0];
+			vec3  segEnd = OUT.points[i2];
+			vec3  mid = (segStart + segEnd) * 0.5;
+			vec3  dir = normalize(segEnd - segStart);
+			float segLen = length(segEnd - segStart);
+
+			uint pointSeed = hashUint(seed + i0 * 97u + uint(level) * 131u);
+			vec3  perp = randomPerp(dir, pointSeed);
+			float displace = (pcg_hash(pointSeed ^ 0x55u) * 2.0 - 1.0) * segLen * 0.15;
+
+			OUT.points[i1] = mid + perp * displace;
+		}
+		activeCount *= 2u;
+		stride = halfStride;
+	}
+
+	OUT.lifetime = uStrikes[slot].lifetime;
+	OUT.maxLifetime = uStrikes[slot].maxLifetime;
+
+	EmitMeshTasksEXT(1, 1, 1);
+}

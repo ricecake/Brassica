@@ -5,10 +5,10 @@
 #include "graph/Graph.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
-#include "passes/AtmosphereLUTNode.hpp"
-#include "passes/CirrusNode.hpp"
-#include "passes/SkyBackgroundNode.hpp"
-#include "passes/TerrainBiomeNode.hpp"
+#include "passes/atmosphere/nodes/AtmosphereLUTNode.hpp"
+#include "passes/clouds/nodes/CirrusNode.hpp"
+#include "passes/atmosphere/nodes/SkyBackgroundNode.hpp"
+#include "passes/biome/nodes/TerrainBiomeNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 
@@ -17,14 +17,14 @@ using namespace brassica;
 namespace {
 
 	struct FakeSceneProducer {
-		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Create<GBufferPosition>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR32G32B32A32Sfloat));
-			r.Create<GBufferAlbedo>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
-			r.Create<GBufferNormal>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
-			r.Create<GBufferMaterial>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm));
-			r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
-			r.Create<HdrColor>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			r.Create<GBufferPosition>();
+			r.Create<GBufferAlbedo>();
+			r.Create<GBufferNormal>();
+			r.Create<GBufferMaterial>();
+			r.Create<GBufferDepth>();
+			r.Create<HdrColor>();
 		}
 
 		void Execute(graph::NodeContext&) {}
@@ -33,7 +33,7 @@ namespace {
 	struct FakeWeatherProducer {
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
-			r.Create<TerrainWeatherBiomeTexture>().Desc(WeatherBiomeImageDesc(256));
+			r.Create<TerrainWeatherBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext&) {}

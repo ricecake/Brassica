@@ -25,13 +25,13 @@
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"
 #include <entt/entity/registry.hpp>
-#include "lighting/ILightManager.hpp"
-#include "lighting/LightManager.hpp"
-#include "lighting/LightningManager.hpp"
+#include "passes/lighting/ILightManager.hpp"
+#include "passes/lighting/LightManager.hpp"
+#include "passes/lighting/LightningManager.hpp"
 #include "passes/RenderPhases.hpp"
-#include "passes/ResourceKeys.hpp"
+#include "resources.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/TerrainMapExporter.hpp"
+#include "passes/terrain/TerrainMapExporter.hpp"
 #include "types/CameraData.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "ui/QuickSettingsWidget.hpp"
@@ -42,15 +42,25 @@ namespace {
 
 	// -- example resource keys -------------------------------------------------------
 
-	struct Swapchain {};
+	// Pure graph-layer tests never call Provision()/GetTexture()/GetBuffer() -- only
+	// compile-time scheduling (stage assignment, barrier/relation derivation, cycle/ambiguity
+	// detection) is under test in this file, so the actual desc content a key carries is never
+	// read by anything. A single dummy Desc() is enough to satisfy CatalogKey (S2b tightened
+	// SetupBuilder::Record<K> to require it of every key, deleting the .Desc() escape hatch that
+	// used to let a bare `struct Foo {};` through).
+	struct DummyDesc {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return {}; }
+	};
 
-	struct GBufferAlbedo {};
+	struct Swapchain: DummyDesc {};
 
-	struct GBufferNormal {};
+	struct GBufferAlbedo: DummyDesc {};
 
-	struct GTAOData {};
+	struct GBufferNormal: DummyDesc {};
 
-	struct HdrColor {};
+	struct GTAOData: DummyDesc {};
+
+	struct HdrColor: DummyDesc {};
 
 	// -- example passes ---------------------------------------------------------------
 
@@ -98,9 +108,9 @@ namespace {
 
 	// Two nodes with disjoint resources on different domains -- nothing connects them, so a
 	// Graph containing only these two should place them in the same stage with zero barriers.
-	struct KeyP {};
+	struct KeyP: DummyDesc {};
 
-	struct KeyQ {};
+	struct KeyQ: DummyDesc {};
 
 	struct NodeP {
 		void Setup(SetupBuilder& r, const FrameContext&) {
@@ -144,7 +154,7 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	struct StandaloneKey {};
+	struct StandaloneKey: DummyDesc {};
 
 	struct StandaloneLateNode {
 		static constexpr Phase kPhase = Phase::Late;
@@ -166,7 +176,7 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	struct ViolationKey {};
+	struct ViolationKey: DummyDesc {};
 
 	struct LateProducer {
 		static constexpr Phase kPhase = Phase::Late;
@@ -190,9 +200,9 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	struct CycleKeyA {};
+	struct CycleKeyA: DummyDesc {};
 
-	struct CycleKeyB {};
+	struct CycleKeyB: DummyDesc {};
 
 	struct CycleNodeA {
 		void Setup(SetupBuilder& r, const FrameContext&) {
@@ -498,7 +508,7 @@ TEST_CASE("Compile() reports a cycle when a later-phase node is the only produce
 // chain becomes in this same stage (§F) -- demonstrated here with builder-shaped nodes.
 namespace {
 
-	struct SeqKey {};
+	struct SeqKey: DummyDesc {};
 
 	struct SeqSecondWriter;
 
@@ -954,7 +964,7 @@ TEST_CASE("ImGuiNode toggles active state in frame graph based on ImGuiManager v
 }
 
 namespace {
-	struct EntityDataKey {};
+	struct EntityDataKey: DummyDesc {};
 
 	struct HostEntityLogicNode {
 		bool* executedFlag = nullptr;
@@ -1379,9 +1389,9 @@ TEST_CASE("CompileRelational: independent nodes on different domains land in the
 
 namespace {
 
-	struct RelOrderKeyA {};
+	struct RelOrderKeyA: DummyDesc {};
 
-	struct RelOrderKeyB {};
+	struct RelOrderKeyB: DummyDesc {};
 
 	struct RelOrderNodeB;
 
@@ -1425,7 +1435,7 @@ TEST_CASE("CompileRelational orders two resource-disjoint nodes purely from an e
 
 namespace {
 
-	struct AmbiguousKey {};
+	struct AmbiguousKey: DummyDesc {};
 
 	struct AmbiguousWriterA {
 		void Setup(SetupBuilder& r, const FrameContext&) {
@@ -1494,7 +1504,7 @@ TEST_CASE("CompileRelational reports a hard error when two explicit relations di
 
 namespace {
 
-	struct DroppedRelKey {};
+	struct DroppedRelKey: DummyDesc {};
 
 	struct NoSuchNode;
 
@@ -1526,9 +1536,9 @@ TEST_CASE("CompileRelational drops a relation naming an unregistered node type i
 
 namespace {
 
-	struct KeyGBufferOnly {};
+	struct KeyGBufferOnly: DummyDesc {};
 
-	struct KeyLightingOnly {};
+	struct KeyLightingOnly: DummyDesc {};
 
 	struct GBufferPhaseNodeA {
 		void Setup(SetupBuilder& r, const FrameContext&) {
@@ -1727,7 +1737,7 @@ TEST_CASE("Requires<A>() leaves this node active when A is active") {
 
 namespace {
 
-	struct RequiredKey {};
+	struct RequiredKey: DummyDesc {};
 
 	struct InactiveProducer {
 		void Setup(SetupBuilder& r, const FrameContext&) {
@@ -1766,7 +1776,7 @@ TEST_CASE(".Required() deactivates a reader when its only writer is inactive") {
 
 namespace {
 
-	struct LateWriterKey {};
+	struct LateWriterKey: DummyDesc {};
 
 	struct LateWriter;
 
@@ -1813,8 +1823,8 @@ TEST_CASE(".Required() deactivates a reader when its only writer is ordered afte
 
 namespace {
 
-	struct ChainKey {};
-	struct ChainMiddleOutputKey {};
+	struct ChainKey: DummyDesc {};
+	struct ChainMiddleOutputKey: DummyDesc {};
 
 	struct ChainRoot {
 		void Setup(SetupBuilder& r, const FrameContext&) {
@@ -1869,7 +1879,7 @@ TEST_CASE(".Required() cascades: a node downstream of a deactivated .Required() 
 
 namespace {
 
-	struct ZeroInitKey {};
+	struct ZeroInitKey: DummyDesc {};
 
 	struct ZeroInitWriter {
 		void Setup(SetupBuilder& r, const FrameContext&) {
@@ -1924,7 +1934,7 @@ namespace {
 	// "no valid data" -- unlike ZeroInitKey above, which models a genuine feature toggle. Without
 	// Lifetime::Persistent, a plain Read of a throttled-but-cached key gets wrongly zero-cleared
 	// every frame once the producer stops regenerating it.
-	struct PersistentZeroInitKey {
+	struct PersistentZeroInitKey: DummyDesc {
 		static constexpr Lifetime kLifetime = Lifetime::Persistent;
 	};
 
@@ -1994,7 +2004,7 @@ TEST_CASE(".Required() does not deactivate a reader of a Persistent-lifetime key
 
 namespace {
 
-	struct PreviousFrameTemporalKey {};
+	struct PreviousFrameTemporalKey: DummyDesc {};
 
 	using PreviousFrameTemporal = TypeList<PreviousFrameTemporalKey>;
 

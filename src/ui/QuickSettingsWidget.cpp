@@ -6,10 +6,10 @@
 #include "ConfigManager.hpp"
 #include "EngineConstants.hpp"
 #include "imgui.h"
-#include "lighting/LightManager.hpp"
-#include "particle/IParticleManager.hpp"
+#include "passes/lighting/LightManager.hpp"
+#include "passes/particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/ITerrainManager.hpp"
+#include "passes/terrain/ITerrainManager.hpp"
 #include "types/CameraData.hpp"
 
 namespace brassica::ui {

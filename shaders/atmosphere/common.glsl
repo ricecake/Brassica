@@ -35,6 +35,60 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	// opacity -- see marchAtmosphereSegment's caller in composite.frag. 1.0 = fully physically
 	// motivated blend; 0.0 = old behavior (pure single/multi-scatter march, no convergence).
 	float skyConvergenceStrength;
+
+	// Cloud lighting settings (CloudLightingManager) -- previously threaded per-frame through
+	// NodeFrameParams into CloudRenderPushConstants/CirrusPushConstants, which kept pushing
+	// those structs toward the 128-byte guaranteed-safe push-constant ceiling for data that
+	// only changes when a UI slider moves, not per-draw.
+	float cloudPhaseG1;
+	float cloudPhaseG2;
+	float cloudPhaseAlpha;
+	float cloudPhaseIsotropic;
+	// ambientBeerPowderScale: Brassica's own ambient-glow term (cloud_render.frag). The other
+	// 3 are beerPowder()'s own terms (shaders/common.glsl's beerPowder function), previously
+	// hardcoded literals -- not the same quantity as ambientBeerPowderScale.
+	float ambientBeerPowderScale;
+	float directBeerPowderScale;
+	float cloudPowderMultiplier;
+	float cloudPowderLocalScale;
+	float cloudBeerPowderMix;
+	float cloudShadowOpticalDepthMultiplier;
+	float cloudSunLightScale;
+	float cloudMoonLightScale;
+	float cirrusOpacity;
+	float cloudFlowSpeed;
+	float cloudFlowDirection;
+	float cloudFlowHeightScale;
+	// Final flat tint on the cloud march's accumulated light -- applied as the very last step
+	// before marchClouds() returns (cloud_render.frag).
+	vec3  cloudColor;
+	// Per-channel extinction: rgbExtinction = cloudExtinctionColor * cloudExtinctionScale,
+	// multiplied into the density->optical-depth->transmittance chain throughout
+	// marchClouds() (stepDensity/stepOpticalDepth/cloudTransmittance, all vec3 for this).
+	float cloudExtinctionScale;
+	vec3  cloudExtinctionColor;
+	// Scales the cloud's reflected light (direct + ambient, NOT the lightning emissive glow).
+	vec3  cloudAlbedo;
+	// GPU-driven lightning (climate_ca.comp's trigger, lightning_age.comp's reserved-light-
+	// slot write) -- lightningFrequencyScale multiplies the per-cell trigger probability;
+	// lightningFlashIntensity scales the reserved uLights[] range's intensity.
+	float lightningFrequencyScale;
+	float lightningFlashIntensity;
+	// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
+	// literal with no settings surface.
+	float sunAureoleStrength;
+	// Time-animated shimmer on sky_view_lut.comp's rayleigh/mie scattering coefficients --
+	// previously had no GLSL consumer in Brassica at all.
+	float colorVarianceScale;
+	float colorVarianceStrength;
+
+	// Volumetric fog settings (VolumetricLightingManager) -- same rationale, previously in
+	// VolumetricFroxelGenPushConstants (fogParams.xyz plus mieHumidityBoost bit-cast through a
+	// spare uint slot to avoid growing that struct past 128 bytes).
+	float fogDensity;
+	float fogHeightFalloff;
+	float fogBaseHeight;
+	float mieHumidityBoost;
 }
 u_atmosphere;
 
@@ -61,6 +115,43 @@ u_atmosphere;
 #define kWaterExtinction u_atmosphere.waterExtinctionBase
 #define u_skyConvergence u_atmosphere.skyConvergenceStrength
 #define kTopRadius (kEarthRadius + kAtmosphereHeight)
+
+// Cloud/volumetric settings aliases -- deliberately `u_`-prefixed, NOT bare field names: the
+// bare names (fogDensity, mieHumidityBoost, ...) still collide with existing push-constant
+// struct members/locals of the exact same name in volumetric_froxel_gen.comp (Stage C,
+// pending), which hasn't been migrated off push constants onto this UBO yet. cloud_render.frag
+// and cirrus.frag have already been migrated (CloudRenderPushConstants/CirrusPushConstants no
+// longer declare these fields) but the aliases stay `u_`-prefixed regardless, so this section
+// doesn't need touching again once volumetric_froxel_gen.comp's migration lands.
+#define u_cloudPhaseG1 u_atmosphere.cloudPhaseG1
+#define u_cloudPhaseG2 u_atmosphere.cloudPhaseG2
+#define u_cloudPhaseAlpha u_atmosphere.cloudPhaseAlpha
+#define u_cloudPhaseIsotropic u_atmosphere.cloudPhaseIsotropic
+#define u_ambientBeerPowderScale u_atmosphere.ambientBeerPowderScale
+#define u_directBeerPowderScale u_atmosphere.directBeerPowderScale
+#define u_cloudPowderMultiplier u_atmosphere.cloudPowderMultiplier
+#define u_cloudPowderLocalScale u_atmosphere.cloudPowderLocalScale
+#define u_cloudBeerPowderMix u_atmosphere.cloudBeerPowderMix
+#define u_cloudShadowOpticalDepthMultiplier u_atmosphere.cloudShadowOpticalDepthMultiplier
+#define u_cloudSunLightScale u_atmosphere.cloudSunLightScale
+#define u_cloudMoonLightScale u_atmosphere.cloudMoonLightScale
+#define u_cirrusOpacity u_atmosphere.cirrusOpacity
+#define u_cloudFlowSpeed u_atmosphere.cloudFlowSpeed
+#define u_cloudFlowDirection u_atmosphere.cloudFlowDirection
+#define u_cloudFlowHeightScale u_atmosphere.cloudFlowHeightScale
+#define u_cloudColor u_atmosphere.cloudColor
+#define u_cloudExtinctionScale u_atmosphere.cloudExtinctionScale
+#define u_cloudExtinctionColor u_atmosphere.cloudExtinctionColor
+#define u_cloudAlbedo u_atmosphere.cloudAlbedo
+#define u_lightningFrequencyScale u_atmosphere.lightningFrequencyScale
+#define u_lightningFlashIntensity u_atmosphere.lightningFlashIntensity
+#define u_sunAureoleStrength u_atmosphere.sunAureoleStrength
+#define u_colorVarianceScale u_atmosphere.colorVarianceScale
+#define u_colorVarianceStrength u_atmosphere.colorVarianceStrength
+#define u_fogDensity u_atmosphere.fogDensity
+#define u_fogHeightFalloff u_atmosphere.fogHeightFalloff
+#define u_fogBaseHeight u_atmosphere.fogBaseHeight
+#define u_mieHumidityBoost u_atmosphere.mieHumidityBoost
 
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {
 	float b = dot(ro, rd);

@@ -1,0 +1,82 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 128, max_primitives = 128) out;
+
+#include "bindless.glsl"
+#include "foliage_archetype.glsl"
+#include "foliage_instance.glsl"
+
+layout(push_constant) uniform FoliageArchetypeRenderPushConstants {
+	FoliageInstanceRef        instanceBuf;
+	FoliageArchetypeVertexRef vertexBuf;
+	FoliageArchetypeIndexRef  indexBuf;
+	FoliageArchetypeMetaRef   metaBuf;
+	float                     lengthMultiplier;
+	float                     widthMultiplier;
+}
+push;
+
+// Same varyings, same locations, same semantics foliage.mesh's own output already feeds
+// foliage.frag -- reused unchanged (foliage.frag doesn't care which mesh shader produced its
+// inputs). outFade is always 1.0 here: foliage.mesh's per-vertex dither-fade exists for the
+// live path's own distance-based LOD transition, which an archetype instance doesn't need --
+// Stage 2 already decided whether this instance exists at all, by distance, before collecting it.
+layout(location = 0) out vec3      outWorldPos[];
+layout(location = 1) out vec3      outNormal[];
+layout(location = 2) out vec2      outUV[];
+layout(location = 3) out vec4      outColor[];
+layout(location = 4) flat out uint outMaterialType[];
+layout(location = 5) out float     outFade[];
+
+void main() {
+	uint instanceIdx = gl_WorkGroupID.x;
+	FoliageInstanceData inst = push.instanceBuf.instances[instanceIdx];
+
+	if (inst.archetypeSlot >= kFoliageArchetypeCount) {
+		SetMeshOutputsEXT(0u, 0u);
+		return;
+	}
+
+	FoliageArchetypeMeta meta = push.metaBuf.slots[inst.archetypeSlot];
+	uint vCount = min(meta.vertexCount, kFoliageArchetypeMaxVerts);
+	uint pCount = min(meta.triangleCount, kFoliageArchetypeMaxTris);
+	SetMeshOutputsEXT(vCount, pCount);
+
+	float c = cos(inst.rotationAngle);
+	float s = sin(inst.rotationAngle);
+
+	// fade only applies to tree archetypes, matching emitBushItem's own existing behavior of
+	// never taking a fade parameter at all (see foliage.mesh's live call site, which omits it
+	// specifically for bush) -- preserved here so this path doesn't newly diverge from it.
+	float sizeFade = (inst.archetypeSlot < kFoliageTreeArchetypeCount) ? inst.fade : 1.0;
+	float scaleY = push.lengthMultiplier * sizeFade;
+	float scaleXZ = push.widthMultiplier * sizeFade;
+
+	uint vertBase = inst.archetypeSlot * kFoliageArchetypeMaxVerts;
+	uint triBase = inst.archetypeSlot * kFoliageArchetypeMaxTris;
+
+	for (uint i = 0u; i < vCount; ++i) {
+		FoliageArchetypeVertex v = push.vertexBuf.vertices[vertBase + i];
+
+		vec3 scaled = vec3(v.position.x * scaleXZ, v.position.y * scaleY, v.position.z * scaleXZ);
+		vec3 rotated = vec3(scaled.x * c - scaled.z * s, scaled.y, scaled.x * s + scaled.z * c);
+		vec3 relWorldPos = inst.relPosition + rotated;
+
+		vec3 rotatedNormal = vec3(v.normal.x * c - v.normal.z * s, v.normal.y, v.normal.x * s + v.normal.z * c);
+
+		vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
+		gl_MeshVerticesEXT[i].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+		outWorldPos[i] = relWorldPos + uCameraPosition.xyz;
+		outNormal[i] = normalize(rotatedNormal);
+		outUV[i] = v.uv;
+		outColor[i] = v.color;
+		outMaterialType[i] = v.materialType;
+		outFade[i] = 1.0;
+	}
+
+	for (uint i = 0u; i < pCount; ++i) {
+		gl_PrimitiveTriangleIndicesEXT[i] = push.indexBuf.triangles[triBase + i];
+	}
+}
