@@ -54,9 +54,11 @@ void main() {
 	vec3 T = normalize(cross(referenceUp, N));
 	vec3 B = normalize(cross(N, T));
 
-	OrganicPlateData mCell = getOrganicPlate(worldXZ * dot(B+N, vec3(0,1,0)), 0.00025, 3.0);
+	mat3 warpNoiseGrad;
+	vec3 warpNoise = cross_noise_fbm(worldPos*0.025, 3, 0.0, warpNoiseGrad);
+	OrganicPlateData mCell = getOrganicPlate((warpNoiseGrad*(50*warpNoise)).xz, 0.025, 7.0);
 
-	vec3 noisePos = mCell.barycentric;
+	vec3 noisePos = clamp(mCell.barycentric, 0.0, 1.0);
 
 	vec3 macroGrad3D;
 	float macroVal = dot_noise_fbm(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 3, 0.0, macroGrad3D);
@@ -99,30 +101,30 @@ void main() {
 	// Near transition (~15m to ~120m): Micro fades out, Medium sustains, Macro fades in.
 	// Sum of active noise weight is preserved to maintain consistent surface complexity.
 	// -------------------------------------------------------------------------
-	float nearBlend = smoothstep(300.0, 900.0, effDist);
-	float wMicroColor  = 1.0 - nearBlend;
-	float wMacroColor  = nearBlend;
-	float wMediumColor = 1.0;
+	float nearBlend = smoothstep(250.0, 1000.0, effDist);
+	float wMicroColor  = (1.0 - nearBlend);
 
 	// Far transition (~120m to ~700m): Medium fades out, Macro sustains.
-	float farBlend = smoothstep(900.0, 1500.0, effDist);
+	float farBlend = smoothstep(1000.0, 40000.0, effDist);
+	float wMediumColor = nearBlend;
 	wMediumColor *= (1.0 - farBlend);
 
 	// Horizon transition (>700m to 2500m): Macro tapers smoothly to base terrain albedo.
-	float horizonFade = 1.0 - smoothstep(1500.0, 5000.0, effDist);
-	wMacroColor *= horizonFade;
+	float horizonFade = smoothstep(40000.0, 200000.0, effDist);
+	float wMacroColor  = farBlend;
+	wMacroColor *= (1.0 - horizonFade);
 
 	// Normal perturbation weights (fade slightly earlier to prevent specular shimmer / subpixel aliasing):
-	float nearNormBlend = smoothstep(10.0, 500.0, effDist);
+	float nearNormBlend = smoothstep(250.0, 1000.0, effDist);
 	float wMicroNorm  = 1.0 - nearNormBlend;
-	float wMacroNorm  = nearNormBlend;
-	float wMediumNorm = 1.0;
 
-	float farNormBlend = smoothstep(50.0, 800.0, effDist);
+	float farNormBlend = smoothstep(1000.0, 40000.0, effDist);
+	float wMediumNorm = nearNormBlend;
 	wMediumNorm *= (1.0 - farNormBlend);
 
-	float horizonNormFade = 1.0 - smoothstep(250.0, 1500.0, effDist);
-	wMacroNorm *= horizonNormFade;
+	float horizonNormFade = 1.0 - smoothstep(40000.0, 2000000.0, effDist);
+	float wMacroNorm  = farNormBlend;
+	wMacroNorm *= 1.0-horizonNormFade;
 
 	vec4 weights = inMaterialWeights;
 	float grassW = weights.x;
@@ -226,7 +228,7 @@ void main() {
 
 		if (forestDensity > 0.01) {
 			// Proxy weight increases with distance as explicit foliage mesh instances fade out beyond ~40-180m
-			float proxyDistFade = mix(0.35, 1.0, smoothstep(30.0, 180.0, camDist));
+			float proxyDistFade = mix(0.35, 1.0, smoothstep(100.0, 1800.0, camDist));
 			float proxyAmount = grassW * forestDensity * proxyDistFade;
 
 			vec2 forestGrad = vec2(0.0);
