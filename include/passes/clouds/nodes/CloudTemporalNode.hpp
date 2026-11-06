@@ -98,12 +98,6 @@ namespace brassica {
 			push.outColorStorageIdx = ctx.StorageIndex<CloudAccumulatedColor>();
 			push.outTransmittanceStorageIdx = ctx.StorageIndex<CloudAccumulatedTransmittance>();
 			push.outMomentsStorageIdx = ctx.StorageIndex<CloudMoments>();
-			// GBufferPosition/GBufferAlbedo are sampled (color-attachment) images, not storage
-			// images -- StorageIndex<K>() has no sampled-image fallback by design
-			// (PhysicalRegistry::StorageIndexOf), so this was unconditionally returning 0,
-			// confirmed on real hardware via RenderDoc (both push-constant fields reading as
-			// zero, every frame). CloudRenderNode.hpp reads these same two keys correctly via
-			// Index<>() for comparison.
 			push.gPositionIndex = ctx.Index<GBufferPosition>();
 			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
 			push.outputWidth = width;
