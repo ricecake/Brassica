@@ -1,0 +1,149 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(scalar, buffer_reference) buffer PageTableRef {
+	uint entries[];
+};
+
+layout(scalar, buffer_reference) buffer IndirectionRef {
+	uint activeChunkCount;
+	uint freeStackCount;
+	uint allocCounter;
+	uint padding0;
+	// VkDrawIndexedIndirectCommand
+	uint indexCount;
+	uint instanceCount;
+	uint firstIndex;
+	int  vertexOffset;
+	uint firstInstance;
+	uint padding1[3];
+	// freeStack begins at offset 64 bytes (16 uints)
+	// activeChunks begins at offset 64 + maxAllocatedChunks * 4
+	uint data[];
+};
+
+layout(push_constant) uniform TerrainProxyCullAllocPush {
+	uvec2 pageTableBufferAddr;
+	uvec2 indirectionBufferAddr;
+	vec4  sunDir;           // xyz = sun direction, w = cascade distance max
+	uvec4 gridParams;       // x = numLODs, y = chunksPerRow (e.g. 16), z = totalChunks, w = textureDim
+	uint  maxVirtualChunks;
+	uint  maxAllocatedChunks;
+	uint  minMaxIndex;
+	uint  passMode;         // 0: prepare/clear active count, 1: evaluate/allocate, 2: finalize indirect command
+} push;
+
+void main() {
+	uint gId = gl_GlobalInvocationID.x;
+	IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+	PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
+
+	if (push.passMode == 0u) {
+		// Reset active chunk counter for this frame
+		if (gId == 0u) {
+			indir.activeChunkCount = 0u;
+		}
+		return;
+	}
+
+	if (push.passMode == 2u) {
+		// Finalize indirect command
+		if (gId == 0u) {
+			indir.instanceCount = indir.activeChunkCount;
+		}
+		return;
+	}
+
+	// passMode == 1u: Evaluate virtual chunks and allocate
+	uint totalVirtualChunks = push.gridParams.z;
+	if (gId >= totalVirtualChunks || gId >= push.maxVirtualChunks) {
+		return;
+	}
+
+	uint chunksPerRow = push.gridParams.y;
+	uint chunksPerLOD = chunksPerRow * chunksPerRow;
+	uint lod = gId / chunksPerLOD;
+	uint rem = gId % chunksPerLOD;
+	uint row = rem / chunksPerRow;
+	uint col = rem % chunksPerRow;
+
+	float baseChunkSize = 64.0;
+	float chunkSize = baseChunkSize * getLODScale(float(lod));
+	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod));
+	vec2  cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
+
+	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
+	vec2 chunkCenter = chunkMinXZ + vec2(chunkSize * 0.5);
+
+	// Distance from camera to chunk
+	float distToCam = length(chunkCenter - uCameraPosition.xz);
+
+	// Shadow caster visibility test:
+	// A chunk is considered a candidate if it lies within the shadow cascade range or along the sun direction
+	float maxShadowRange = (push.sunDir.w > 0.0) ? push.sunDir.w : 1500.0;
+	bool isCandidate = (distToCam < maxShadowRange * getLODScale(float(lod) * 0.5));
+
+	// Inner radius culling for higher LODs
+	if (isCandidate && lod > 0u) {
+		float prevChunkSize = baseChunkSize * getLODScale(float(lod - 1u));
+		float innerRadius = (float(chunksPerRow) * 0.5 - 1.0) * prevChunkSize;
+		if (distToCam < innerRadius) {
+			isCandidate = false;
+		}
+	}
+
+	uint currentSlot = pt.entries[gId];
+
+	if (isCandidate) {
+		// If unallocated, try to allocate from the free stack with CAS loop to prevent underflow
+		if (currentSlot == 0xFFFFFFFFu) {
+			while (true) {
+				uint count = indir.freeStackCount;
+				if (count == 0u || count > push.maxAllocatedChunks) {
+					break; // No free slots available
+				}
+				if (atomicCompSwap(indir.freeStackCount, count, count - 1u) == count) {
+					uint freeSlotIdx = count - 1u;
+					// Read slot index from freeStack: data[0 .. maxAllocatedChunks - 1]
+					uint allocatedSlot = indir.data[freeSlotIdx];
+					pt.entries[gId] = allocatedSlot;
+					currentSlot = allocatedSlot;
+					break;
+				}
+			}
+		}
+
+		// If successfully allocated, record into active chunks list
+		if (currentSlot != 0xFFFFFFFFu && currentSlot < push.maxAllocatedChunks) {
+			uint activeIdx = atomicAdd(indir.activeChunkCount, 1u);
+			if (activeIdx < push.maxAllocatedChunks) {
+				// activeChunks array is located after freeStack: offset = maxAllocatedChunks
+				indir.data[push.maxAllocatedChunks + activeIdx] = (currentSlot & 0xFFFFu) | (gId << 16u);
+			}
+		}
+	} else {
+		// Chunk is no longer needed; if currently allocated, reclaim slot to free stack
+		if (currentSlot != 0xFFFFFFFFu && currentSlot < push.maxAllocatedChunks) {
+			pt.entries[gId] = 0xFFFFFFFFu;
+			while (true) {
+				uint count = indir.freeStackCount;
+				if (count >= push.maxAllocatedChunks) {
+					break; // Stack full
+				}
+				if (atomicCompSwap(indir.freeStackCount, count, count + 1u) == count) {
+					indir.data[count] = currentSlot;
+					break;
+				}
+			}
+		}
+	}
+}

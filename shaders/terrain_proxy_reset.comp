@@ -1,0 +1,71 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(scalar, buffer_reference) buffer PageTableRef {
+	uint entries[];
+};
+
+layout(scalar, buffer_reference) buffer IndirectionRef {
+	uint activeChunkCount;
+	uint freeStackCount;
+	uint allocCounter;
+	uint padding0;
+	// VkDrawIndexedIndirectCommand
+	uint indexCount;
+	uint instanceCount;
+	uint firstIndex;
+	int  vertexOffset;
+	uint firstInstance;
+	uint padding1[3];
+	uint freeStack[];
+};
+
+layout(push_constant) uniform TerrainProxyResetPush {
+	uvec2 pageTableBufferAddr;
+	uvec2 indirectionBufferAddr;
+	uint  maxVirtualChunks;
+	uint  maxAllocatedChunks;
+	uint  indicesPerChunk;
+	uint  pad;
+} push;
+
+void main() {
+	uint gId = gl_GlobalInvocationID.x;
+
+	// Thread 0 initializes the indirection header
+	if (gId == 0) {
+		IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+		indir.activeChunkCount = 0;
+		indir.freeStackCount = push.maxAllocatedChunks;
+		indir.allocCounter = 0;
+		indir.padding0 = 0;
+
+		indir.indexCount = push.indicesPerChunk;
+		indir.instanceCount = 0; // will be updated to activeChunkCount
+		indir.firstIndex = 0;
+		indir.vertexOffset = 0;
+		indir.firstInstance = 0;
+		indir.padding1[0] = 0;
+		indir.padding1[1] = 0;
+		indir.padding1[2] = 0;
+	}
+
+	// Initialize free stack: slots 0 .. maxAllocatedChunks - 1
+	if (gId < push.maxAllocatedChunks) {
+		IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+		indir.freeStack[gId] = gId;
+	}
+
+	// Reset page table entries to 0xFFFFFFFF (unallocated)
+	if (gId < push.maxVirtualChunks) {
+		PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
+		pt.entries[gId] = 0xFFFFFFFFu;
+	}
+}

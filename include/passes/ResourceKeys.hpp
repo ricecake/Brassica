@@ -576,4 +576,128 @@ namespace brassica {
 
 	struct MaterialBuffer {};
 
+	// --- Terrain Proxy Geometry for Shadow Casting ---
+	// Buffer key definitions and descriptors for terrain proxy geometry management:
+	// 1. TerrainProxyPageTableBuffer: Maps virtual chunks -> physical chunk indices & status.
+	// 2. TerrainProxyIndirectionBuffer: Manages alloc/free counters, free stack, and indirect draw/dispatch args.
+	// 3. TerrainProxyVertexBuffer: Pool of physical vertex chunks (vec4 position / data per vertex).
+	// 4. TerrainProxyIndexBuffer: Shared canonical index buffer for proxy chunk quad meshing.
+
+	struct TerrainProxyVertexGPU {
+		glm::vec4 position{0.0f}; // xyz = position, w = height / data
+		glm::vec4 normal{0.0f, 1.0f, 0.0f, 0.0f};
+	};
+
+	struct TerrainProxyIndirectionGPU {
+		std::uint32_t activeChunkCount{0};
+		std::uint32_t freeStackCount{0};
+		std::uint32_t allocCounter{0};
+		std::uint32_t padding0{0};
+		// Indirect draw command for shadow casting (VkDrawIndexedIndirectCommand layout: 5 uints)
+		std::uint32_t indexCount{0};
+		std::uint32_t instanceCount{0};
+		std::uint32_t firstIndex{0};
+		std::int32_t  vertexOffset{0};
+		std::uint32_t firstInstance{0};
+		std::uint32_t padding1[3]{0, 0, 0};
+	};
+
+	inline graph::ResourceDesc TerrainProxyPageTableDesc() {
+		// uint32 physical chunk index per virtual chunk entry (0xFFFFFFFF = unallocated)
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Buffer,
+			.width = constants::Class::Terrain::Proxy::MaxVirtualChunks * sizeof(std::uint32_t),
+			.height = 1,
+			.depth = 1,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = 0,
+			.usageMask = static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress |
+				vk::BufferUsageFlagBits::eTransferDst
+			),
+			.persistent = true,
+		};
+	}
+
+	struct TerrainProxyPageTableBuffer {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return TerrainProxyPageTableDesc();
+		}
+	};
+
+	inline graph::ResourceDesc TerrainProxyIndirectionDesc() {
+		// Header + free stack + active chunk index list
+		// Sized to hold: TerrainProxyIndirectionGPU (64 bytes)
+		// + freeStack[MaxAllocatedChunks] (uint32)
+		// + activeChunks[MaxAllocatedChunks] (uint32)
+		constexpr std::size_t size = sizeof(TerrainProxyIndirectionGPU) +
+			constants::Class::Terrain::Proxy::MaxAllocatedChunks * sizeof(std::uint32_t) * 2;
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Buffer,
+			.width = static_cast<std::uint32_t>(size),
+			.height = 1,
+			.depth = 1,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = 0,
+			.usageMask = static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndirectBuffer |
+				vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst
+			),
+			.persistent = true,
+		};
+	}
+
+	struct TerrainProxyIndirectionBuffer {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return TerrainProxyIndirectionDesc();
+		}
+	};
+
+	inline graph::ResourceDesc TerrainProxyVertexBufferDesc() {
+		constexpr std::size_t size = constants::Class::Terrain::Proxy::MaxAllocatedChunks *
+			constants::Class::Terrain::Proxy::VerticesPerChunk * sizeof(TerrainProxyVertexGPU);
+		return graph::ResourceDesc{
+			.kind = graph::ResourceDesc::Kind::Buffer,
+			.width = static_cast<std::uint32_t>(size),
+			.height = 1,
+			.depth = 1,
+			.mips = 1,
+			.layers = 1,
+			.formatCode = 0,
+			.usageMask = static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer |
+				vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst
+			),
+			.persistent = true,
+		};
+	}
+
+	struct TerrainProxyVertexBuffer {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return TerrainProxyVertexBufferDesc();
+		}
+	};
+
+	inline graph::ResourceDesc TerrainProxyIndexBufferDesc() {
+		constexpr std::size_t size = constants::Class::Terrain::Proxy::IndicesPerChunk * sizeof(std::uint32_t);
+		graph::ResourceDesc desc = graph::MappedStorageBufferDesc(size);
+		desc.usageMask |= static_cast<std::uint32_t>(
+			vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst
+		);
+		desc.persistent = true;
+		return desc;
+	}
+
+	struct TerrainProxyIndexBuffer {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::Persistent;
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			return TerrainProxyIndexBufferDesc();
+		}
+	};
+
 } // namespace brassica
