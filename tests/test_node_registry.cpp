@@ -31,6 +31,8 @@
 // of FoliageNode::Execute() into its own Compute-domain node -- see FoliageNode.hpp's comment;
 // the Graphics-domain original was issuing an illegal barrier+fillBuffer inside its own
 // already-open dynamic-rendering scope, confirmed via real GPU-assisted validation).
+// 34 -> 36: Resynced with auto-registered nodes (including TonemapComputeNode / TonemapNode).
+// 36 -> 37: Added GroundDebrisNode for camera proximity terrain debris mesh rendering.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 34);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 37);
 }

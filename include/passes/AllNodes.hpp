@@ -26,6 +26,7 @@
 #include "passes/FoliageBakeNode.hpp"
 #include "passes/FoliageNode.hpp"
 #include "passes/GltfRenderNode.hpp"
+#include "passes/GroundDebrisNode.hpp"
 #include "passes/GTAONode.hpp"
 #include "passes/HiZDownsampleNode.hpp"
 #include "passes/ImGuiNode.hpp"
