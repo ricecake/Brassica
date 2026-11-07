@@ -29,6 +29,7 @@
 #include "passes/TerrainGenNode.hpp"
 #include "passes/TerrainMinMaxDownsampleNode.hpp"
 #include "passes/TerrainNode.hpp"
+#include "passes/TerrainProxyNode.hpp"
 #include "passes/TerrainReadbackNode.hpp"
 #include "passes/TerrainShadowNode.hpp"
 #include "passes/TonemapNode.hpp"

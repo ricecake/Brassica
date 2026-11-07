@@ -1,0 +1,97 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+// Dispatch 5x5 threads per workgroup = 1 workgroup per active chunk
+layout(local_size_x = 5, local_size_y = 5, local_size_z = 1) in;
+
+struct TerrainProxyVertex {
+	vec4 position; // xyz = position, w = height
+	vec4 normal;
+};
+
+layout(scalar, buffer_reference) buffer VertexPoolRef {
+	TerrainProxyVertex vertices[];
+};
+
+layout(scalar, buffer_reference) buffer IndirectionRef {
+	uint activeChunkCount;
+	uint freeStackCount;
+	uint allocCounter;
+	uint padding0;
+	// VkDrawIndexedIndirectCommand
+	uint indexCount;
+	uint instanceCount;
+	uint firstIndex;
+	int  vertexOffset;
+	uint firstInstance;
+	uint padding1[3];
+	uint data[];
+};
+
+layout(push_constant) uniform TerrainProxyGeneratePush {
+	uvec2 vertexBufferAddr;
+	uvec2 indirectionBufferAddr;
+	uvec4 gridParams;       // x = numLODs, y = chunksPerRow, z = totalChunks, w = textureDim
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	uint  maxAllocatedChunks;
+	uint  chunkDimension;   // 5
+} push;
+
+void main() {
+	uint chunkIdx = gl_WorkGroupID.x;
+	IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+
+	if (chunkIdx >= indir.activeChunkCount || chunkIdx >= push.maxAllocatedChunks) {
+		return;
+	}
+
+	// Retrieve active chunk entry: (currentSlot & 0xFFFF) | (virtualChunkId << 16)
+	uint packedData = indir.data[push.maxAllocatedChunks + chunkIdx];
+	uint physicalSlot = packedData & 0xFFFFu;
+	uint virtualChunkId = packedData >> 16u;
+
+	uint lx = gl_LocalInvocationID.x;
+	uint ly = gl_LocalInvocationID.y;
+	uint dim = push.chunkDimension;
+	uint vertIdxInChunk = ly * dim + lx;
+
+	uint chunksPerRow = push.gridParams.y;
+	uint chunksPerLOD = chunksPerRow * chunksPerRow;
+	uint lod = virtualChunkId / chunksPerLOD;
+	uint rem = virtualChunkId % chunksPerLOD;
+	uint row = rem / chunksPerRow;
+	uint col = rem % chunksPerRow;
+
+	float baseChunkSize = 64.0;
+	float chunkSize = baseChunkSize * getLODScale(float(lod));
+	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod));
+	vec2  cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
+
+	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
+	vec2 vertLocalXZ = vec2(float(lx) / float(dim - 1u), float(ly) / float(dim - 1u)) * chunkSize;
+	vec2 worldXZ = chunkMinXZ + vertLocalXZ;
+
+	// Sample terrain height & normal from clipmap
+	vec4 clipSample = sampleTerrainClipmap(push.clipmapIndex, worldXZ, lod, push.gridParams.w);
+	float height = clipSample.r;
+	vec3 norm = octahedralUVToDirection(clipSample.ba);
+
+	// Account for spherical planet drop-off
+	vec2 relFlatXZ = worldXZ - uCameraPosition.xz;
+	float dropOff = dot(relFlatXZ, relFlatXZ) / (2.0 * FAKE_PLANET_RADIUS);
+	vec3 worldPos = vec3(worldXZ.x, height - dropOff, worldXZ.y);
+
+	VertexPoolRef vertPool = VertexPoolRef(push.vertexBufferAddr);
+	uint totalVertIdx = physicalSlot * (dim * dim) + vertIdxInChunk;
+
+	vertPool.vertices[totalVertIdx].position = vec4(worldPos, height);
+	vertPool.vertices[totalVertIdx].normal = vec4(norm, 0.0);
+}

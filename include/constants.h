@@ -186,6 +186,16 @@ namespace brassica {
 				constexpr int   MeshletCountPerLOD = MeshletsPerRow * MeshletsPerRow;               // 256
 				constexpr int   TotalMeshlets = DefaultMaxLODs * MeshletCountPerLOD;               // 3584
 				constexpr float PathCorridorWidth = 0.15f;
+
+				// Low-resolution proxy geometry for terrain shadow casting
+				namespace Proxy {
+					constexpr std::uint32_t ChunkDimension = 5; // 5x5 vertices per proxy chunk
+					constexpr std::uint32_t VerticesPerChunk = ChunkDimension * ChunkDimension; // 25
+					constexpr std::uint32_t QuadsPerChunk = (ChunkDimension - 1) * (ChunkDimension - 1); // 16 quads
+					constexpr std::uint32_t IndicesPerChunk = QuadsPerChunk * 6; // 96 indices per chunk
+					constexpr std::uint32_t MaxVirtualChunks = 2048; // Max addressable entries in page table
+					constexpr std::uint32_t MaxAllocatedChunks = 512; // Physical chunk allocation pool capacity
+				} // namespace Proxy
 			} // namespace Terrain
 
 			namespace AsyncTerrain {
