@@ -3,14 +3,17 @@
 #include <vector>
 
 #include "ArgparseManager.hpp"
+#include "AtmosphereManager.hpp"
 #include "audio/IAudioManager.hpp"
+#include "CloudLightingManager.hpp"
 #include "ConfigManager.hpp"
 #include "IManager.hpp"
 #include "imgui.h"
-#include "lighting/ILightManager.hpp"
-#include "particle/IParticleManager.hpp"
+#include "passes/lighting/ILightManager.hpp"
+#include "passes/particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/ITerrainManager.hpp"
+#include "passes/terrain/ITerrainManager.hpp"
+#include "VolumetricLightingManager.hpp"
 
 namespace brassica::ui {
 
@@ -49,6 +52,15 @@ namespace brassica::ui {
 			}
 			if (ServiceLocator::Instance().Has<ConfigManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<ConfigManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<AtmosphereManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<AtmosphereManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<VolumetricLightingManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<VolumetricLightingManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<CloudLightingManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<CloudLightingManager>().get());
 			}
 
 			for (auto* mgr : managers) {

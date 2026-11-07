@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -59,6 +60,7 @@ namespace brassica::render {
 		glm::vec3       moonDir{0.0f, -1.0f, 0.0f};
 		glm::vec3       moonRadiance{0.1f, 0.12f, 0.16f};
 		float           time{0.0f};
+		std::uint32_t   timeMs{0};
 		float           worldScale{1.0f};
 		float           multiScatScale{1.0f};
 		float           cloudShadowIntensity{0.5f};

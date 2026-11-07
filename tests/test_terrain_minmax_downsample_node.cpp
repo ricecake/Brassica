@@ -11,8 +11,8 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "passes/TerrainGenNode.hpp"
-#include "passes/TerrainMinMaxDownsampleNode.hpp"
+#include "passes/terrain/nodes/TerrainGenNode.hpp"
+#include "passes/terrain/nodes/TerrainMinMaxDownsampleNode.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
 
@@ -143,7 +143,7 @@ namespace {
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
-			r.Create<TerrainMinMaxTexture>().Desc(TerrainMinMaxDesc(gridParams.x));
+			r.Create<TerrainMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -593,7 +593,7 @@ namespace {
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
-			r.Modify<TerrainMinMaxTexture>().Desc(TerrainMinMaxDesc(gridParams.x));
+			r.Modify<TerrainMinMaxTexture>();
 			r.Before<TerrainMinMaxDownsampleNode>();
 		}
 

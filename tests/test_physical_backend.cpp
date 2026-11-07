@@ -20,17 +20,32 @@ using namespace brassica::graph;
 
 namespace {
 
-	struct TestColorTarget {};
+	// Escape-hatch deletion (S2b): every fixture below now owns its real Desc(), the same
+	// catalog-conversion pattern as TestCatalogMask/TestCatalogTemporalMask just below -- those
+	// two used to be the ONLY converted fixtures here, proving Provision() prefers the type's own
+	// Desc() over whatever a node hand-rolled; now it's the only mechanism, for every fixture.
 
-	struct TestDepthTarget {};
+	struct TestColorTarget {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
-	struct TestBufferTarget {};
+	struct TestDepthTarget {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return DepthBufferDesc(ctx.width, ctx.height);
+		}
+	};
+
+	struct TestBufferTarget {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return StorageBufferDesc(1024); }
+	};
 
 	struct PassA {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<TestColorTarget>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
-			r.Create<TestDepthTarget>().Desc(DepthBufferDesc(ctx.width, ctx.height));
+			r.Create<TestColorTarget>();
+			r.Create<TestDepthTarget>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -43,16 +58,23 @@ namespace {
 		// (PhysicalExecutionBackend.hpp), not this realization's own desc, so a genuine
 		// cross-node size mismatch here surfaces as a real color/depth attachment-size
 		// validation error instead of staying silently masked.
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Read<TestColorTarget>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
-			r.Create<TestBufferTarget>().Desc(StorageBufferDesc(1024));
+			r.Read<TestColorTarget>();
+			r.Create<TestBufferTarget>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
-	struct TestTLAS {};
+	// Imported: pre-registered via RegisterImportedAccelerationStructure before Setup/Compile run
+	// (same pattern as production's TerrainTLAS) -- Provision() skips it via m_accelStructs
+	// directly, never reaching this Desc() at all, but CatalogKey still requires one to exist.
+	struct TestTLAS {
+		static constexpr Lifetime kLifetime = Lifetime::Imported;
+
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return AccelerationStructureDesc(); }
+	};
 
 	// Mirrors what the migration's TerrainNode declares: a Graphics-domain node that refreshes
 	// an already-built acceleration structure (the real build stays entirely out-of-band,
@@ -63,7 +85,7 @@ namespace {
 	struct PassTLASBuild {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<TestTLAS>().Desc(AccelerationStructureDesc());
+			r.Create<TestTLAS>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -73,21 +95,25 @@ namespace {
 	struct PassTLASRead {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Read<TestTLAS>().Desc(AccelerationStructureDesc());
+			r.Read<TestTLAS>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
-	struct TestTemporalMask {};
+	struct TestTemporalMask {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
 	using TemporalTestTemporal = TypeList<TestTemporalMask>;
 
 	// Writes this frame's mask in place -- mirrors ShadingRateNode's Modify<ShadingRateMap>.
 	struct TemporalWriter {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Modify<TestTemporalMask>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Modify<TestTemporalMask>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -98,9 +124,9 @@ namespace {
 	// this declaratively, and PhysicalRegistry::ProvisionTemporalPairs is what satisfies it
 	// physically (see PhysicalExecutionBackend.hpp).
 	struct TemporalReader {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.ReadPrevious<TestTemporalMask>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.ReadPrevious<TestTemporalMask>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -163,74 +189,104 @@ namespace {
 
 	// -- bindless set 0 fixtures ------------------------------------------------------
 
-	struct TestBindlessSampledA {};
+	struct TestBindlessSampledA {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
-	struct TestBindlessSampledB {};
+	struct TestBindlessSampledB {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
-	struct TestBindlessStorage {};
+	// eStorage | eSampled, like the real atmosphere LUTs -- needs a slot in *both* bindless
+	// arrays at once (PhysicalTexture::GetSampledBindlessIndex's comment).
+	struct TestBindlessStorage {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat);
+		}
+	};
 
-	struct TestBindlessArray {};
+	// layers > 1: routes to the sampled-2D-*array* binding, not the plain sampled-2D one --
+	// mirrors the terrain clipmap's real shape (PhysicalResource.hpp's CreateView fix).
+	struct TestBindlessArray {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			ResourceDesc desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+			desc.layers = 4;
+			return desc;
+		}
+	};
 
-	struct TestBindlessResizable {};
+	// Setup()'s desc tracks ctx.width/height directly, so re-running with a different FrameContext
+	// extent is what exercises ProvisionTexture's desc-mismatch replace-and-retire path.
+	struct TestBindlessResizable {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
-	struct TestBindlessFresh {};
+	struct TestBindlessFresh {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
 	struct SampledWriterA {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<TestBindlessSampledA>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<TestBindlessSampledA>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct SampledWriterB {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<TestBindlessSampledB>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<TestBindlessSampledB>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
-	// eStorage | eSampled, like the real atmosphere LUTs (ComputeStorageImageDesc) -- written by
-	// one node via imageStore, sampled by a different one via texture(). Needs a slot in *both*
-	// bindless arrays at once (PhysicalTexture::GetSampledBindlessIndex's comment).
 	struct StorageWriter {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Create<TestBindlessStorage>().Desc(ComputeStorageImageDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			r.Create<TestBindlessStorage>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
-	// layers > 1: routes to the sampled-2D-*array* binding, not the plain sampled-2D one --
-	// mirrors the terrain clipmap's real shape (PhysicalResource.hpp's CreateView fix).
 	struct ArrayWriter {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			ResourceDesc desc = ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
-			desc.layers = 4;
-			r.Create<TestBindlessArray>().Desc(desc);
+			r.Create<TestBindlessArray>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
-
-	struct TestMipStorage {};
 
 	// desc.mips > 1 with eStorage usage -- the shape CreateView (PhysicalResource.hpp) branches
 	// on to build one single-mip view per level instead of the single full-range view every
 	// other resource in this file uses. eTransferSrc added on top of ComputeStorageImageDesc's
-	// usual mask so the test below can read each mip back directly.
-	struct MipStorageWriter {
-		void Setup(SetupBuilder& r, const FrameContext&) {
-			r.Domain(ExecutionDomain::Compute);
+	// usual mask so the test below can read each mip back directly. Fixed 8x8, not ctx-based --
+	// MipStorageWriter never varied this by FrameContext even before the escape hatch existed.
+	struct TestMipStorage {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const {
 			ResourceDesc desc = ComputeStorageImageDesc(8, 8, vk::Format::eR16G16B16A16Sfloat);
 			desc.mips = 4; // 8 -> 4 -> 2 -> 1
 			desc.usageMask |= static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eTransferSrc);
-			r.Create<TestMipStorage>().Desc(desc);
+			return desc;
+		}
+	};
+
+	struct MipStorageWriter {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Create<TestMipStorage>();
 		}
 
 		// The real per-mip imageStore writes happen by hand in the test body, directly after
@@ -238,21 +294,19 @@ namespace {
 		void Execute(NodeContext&) {}
 	};
 
-	// Setup()'s desc tracks ctx.width/height directly, so re-running with a different FrameContext
-	// extent is what exercises ProvisionTexture's desc-mismatch replace-and-retire path.
 	struct ResizableWriter {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Modify<TestBindlessResizable>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Modify<TestBindlessResizable>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct FreshWriter {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<TestBindlessFresh>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<TestBindlessFresh>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -342,9 +396,24 @@ namespace {
 	// ResourceServices::BeginHostWrite/EndHostWrite, NodeContext::Write/WriteSpan) -- these
 	// fixtures now exercise it directly instead of hand-rolling it.
 
-	struct TestHostBuffer {};
+	struct TestHostBuffer {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const {
+			return MappedStorageBufferDesc(sizeof(std::uint32_t));
+		}
+	};
 
-	struct TestStagedTexture {};
+	// width/height is genuine per-test config published onto the catalog instance (see the test
+	// body below), not a type-level constant -- StagedWriterNode/StagedTextureReaderNode still
+	// keep their own width/height fields for Execute's pixel-buffer sizing (the writer) and for
+	// aggregate-init symmetry (the reader), but no longer feed them through .Desc().
+	struct TestStagedTexture {
+		std::uint32_t width = 0;
+		std::uint32_t height = 0;
+
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const {
+			return StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
 	// HostAccess::Mapped: WriteSpan writes straight into this frame's ring slot, no copy command.
 	struct HostWriterNode {
@@ -352,7 +421,7 @@ namespace {
 
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Host);
-			r.Create<TestHostBuffer>().Desc(MappedStorageBufferDesc(sizeof(std::uint32_t)));
+			r.Create<TestHostBuffer>();
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -363,7 +432,7 @@ namespace {
 	struct HostBufferReaderNode {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Read<TestHostBuffer>().Desc(MappedStorageBufferDesc(sizeof(std::uint32_t)));
+			r.Read<TestHostBuffer>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -377,7 +446,7 @@ namespace {
 
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Transfer);
-			r.Create<TestStagedTexture>().Desc(StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb));
+			r.Create<TestStagedTexture>();
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -387,12 +456,9 @@ namespace {
 	};
 
 	struct StagedTextureReaderNode {
-		std::uint32_t width = 0;
-		std::uint32_t height = 0;
-
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Read<TestStagedTexture>().Desc(StagedTextureDesc(width, height, vk::Format::eR8G8B8A8Srgb));
+			r.Read<TestStagedTexture>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -400,16 +466,20 @@ namespace {
 
 	// -- CPU-write + sync helper: Stage 2 (HostAccess + the PhysicalBuffer ring) --------------
 	// See .claude/plans/ancient-booping-magpie.md. No node-facing write API yet (that's Stage 3)
-	// -- this only exercises real Provision()'s shape for a Mapped buffer: byteSize varies frame
-	// to frame purely to drive ProvisionBuffer's grow-only/retirement paths, not to write data.
-	struct TestMappedRingBuffer {};
+	// -- this only exercises real Provision()'s shape for a Mapped buffer: byteSize is genuine
+	// per-frame config the test body publishes onto the catalog instance directly (see below),
+	// varying frame to frame purely to drive ProvisionBuffer's grow-only/retirement paths, not to
+	// write data.
+	struct TestMappedRingBuffer {
+		std::uint64_t byteSize = 0;
+
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return MappedStorageBufferDesc(byteSize); }
+	};
 
 	struct MappedRingWriterNode {
-		std::uint64_t byteSize = sizeof(std::uint32_t);
-
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Host);
-			r.Create<TestMappedRingBuffer>().Desc(MappedStorageBufferDesc(byteSize));
+			r.Create<TestMappedRingBuffer>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -420,15 +490,23 @@ namespace {
 	// realization below) and tries a Staged write from inside it -- BeginHostWrite's
 	// insideRendering check exists specifically to reject this before it becomes a cryptic
 	// "vkCmdCopyBuffer inside a render pass" validation error instead.
-	struct TestIllegalStagedTarget {};
+	struct TestIllegalStagedTarget {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb);
+		}
+	};
 
-	struct TestIllegalStagedBuffer {};
+	struct TestIllegalStagedBuffer {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const {
+			return StagedStorageBufferDesc(sizeof(std::uint32_t));
+		}
+	};
 
 	struct IllegalStagedWriteNode {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<TestIllegalStagedTarget>().Desc(ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
-			r.Create<TestIllegalStagedBuffer>().Desc(StagedStorageBufferDesc(sizeof(std::uint32_t)));
+			r.Create<TestIllegalStagedTarget>();
+			r.Create<TestIllegalStagedBuffer>();
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -469,7 +547,7 @@ TEST_CASE("PhysicalResourceRegistry provisions real GPU resources with correct R
 		graph.Setup(ctx);
 		REQUIRE(graph.Compile().has_value());
 
-		registry.Provision(graph.GetSchedule(), graph.Recipes(), 0, true);
+		registry.Provision(graph.GetSchedule(), graph.Recipes(), 0, true, {}, ctx);
 
 		auto colorTex = registry.GetTexture<TestColorTarget>();
 		REQUIRE(colorTex != nullptr);
@@ -585,13 +663,13 @@ TEST_CASE(
 
 namespace {
 
-	struct ZeroInitBufferKey {};
-
-	ResourceDesc ZeroInitBufferDesc() {
-		ResourceDesc desc = StorageBufferDesc(64);
-		desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
-		return desc;
-	}
+	struct ZeroInitBufferKey {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const {
+			ResourceDesc desc = StorageBufferDesc(64);
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eTransferSrc);
+			return desc;
+		}
+	};
 
 	// Never active -- stands in for e.g. GTAONode disabled: declares the key unconditionally (so
 	// ValidateRuntime's renderability check is satisfied) but never actually runs or writes it.
@@ -599,7 +677,7 @@ namespace {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
 			r.Active(false);
-			r.Create<ZeroInitBufferKey>().Desc(ZeroInitBufferDesc());
+			r.Create<ZeroInitBufferKey>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -610,7 +688,7 @@ namespace {
 	struct ActiveZeroInitReader {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Read<ZeroInitBufferKey>().Desc(ZeroInitBufferDesc());
+			r.Read<ZeroInitBufferKey>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -1759,12 +1837,15 @@ TEST_CASE(
 		constexpr std::uint32_t kTexWidth = 4;
 		constexpr std::uint32_t kTexHeight = 4;
 
+		registry.Catalog().Get<TestStagedTexture>().width = kTexWidth;
+		registry.Catalog().Get<TestStagedTexture>().height = kTexHeight;
+
 		auto runFrame = [&](std::uint64_t frameIndex, std::uint32_t sentinel) {
 			Graph g;
 			g.Register<HostWriterNode>(HostWriterNode{.sentinel = sentinel});
 			g.Register<HostBufferReaderNode>();
 			g.Register<StagedWriterNode>(StagedWriterNode{.width = kTexWidth, .height = kTexHeight});
-			g.Register<StagedTextureReaderNode>(StagedTextureReaderNode{.width = kTexWidth, .height = kTexHeight});
+			g.Register<StagedTextureReaderNode>();
 
 			FrameContext ctx{.width = kTexWidth, .height = kTexHeight, .frameIndex = frameIndex};
 
@@ -1883,8 +1964,10 @@ TEST_CASE("ProvisionBuffer provisions a real Mapped ring with the correct shape,
 		PhysicalExecutionBackend backend(registry);
 
 		auto runFrame = [&](std::uint64_t frameIndex, std::uint64_t byteSize) {
+			registry.Catalog().Get<TestMappedRingBuffer>().byteSize = byteSize;
+
 			Graph g;
-			g.Register<MappedRingWriterNode>(MappedRingWriterNode{.byteSize = byteSize});
+			g.Register<MappedRingWriterNode>();
 
 			FrameContext ctx{.width = 4, .height = 4, .frameIndex = frameIndex};
 

@@ -1,0 +1,403 @@
+#include "passes/model/ProceduralArchetypeCatalog.hpp"
+
+#include "passes/material/MaterialManager.hpp"
+#include "passes/model/ManifoldRockAsset.hpp"
+#include "passes/model/ModelRegistry.hpp"
+#include "passes/model/ProceduralPlantGenerator.hpp"
+#include "types/MaterialData.hpp"
+
+namespace brassica {
+
+	namespace {
+
+		// Trees: tall, mostly-vertical trunk, moderate branch spread, rigid trunk tapering to
+		// flexible tips -- now via BuildProceduralPlant (curved branches via the Catmull-Rom
+		// warp, real flared junctions, same single generator Bush below also uses with bushier
+		// parameters) instead of the old BuildProceduralBranchingTree's straight segments.
+		// maxSegments/segmentLength/branchChance here are this generator's own stand-ins for the
+		// old maxDepth/trunkLength -- there's no direct 1:1 field mapping (growth here is one
+		// short jittered segment at a time, not one branch-level at a time), so these presets
+		// are a fresh tuning aimed at reproducing the old presets' own relative scale (small/
+		// medium/large) rather than a mechanical field-for-field translation. Not yet confirmed
+		// on real hardware at these specific values -- flag for a visual check.
+		PlantGenParams SmallTree() {
+			PlantGenParams p;
+			p.seed = 101;
+			p.maxSegments = 14;
+			p.segmentLength = 0.35f;
+			p.directionJitterDegrees = 10.0f;
+			p.branchChance = 0.3f;
+			p.minBranchesPerNode = 2;
+			p.maxBranchesPerNode = 2;
+			p.trunkRadiusLow = 0.14f;
+			p.trunkRadiusHigh = 0.11f;
+			p.radiusFalloffPerSegment = 0.92f;
+			p.rigidityFalloffPerSegment = 0.07f;
+			p.circularSegments = 10;
+			p.maxJoints = 12;
+			return p;
+		}
+
+		PlantGenParams MediumTree() {
+			PlantGenParams p;
+			p.seed = 102;
+			p.maxSegments = 24;
+			p.segmentLength = 0.42f;
+			p.directionJitterDegrees = 10.0f;
+			p.branchChance = 0.3f;
+			p.minBranchesPerNode = 2;
+			p.maxBranchesPerNode = 3;
+			p.trunkRadiusLow = 0.22f;
+			p.trunkRadiusHigh = 0.16f;
+			p.radiusFalloffPerSegment = 0.94f;
+			p.rigidityFalloffPerSegment = 0.045f;
+			p.circularSegments = 10;
+			p.maxJoints = 20;
+			return p;
+		}
+
+		PlantGenParams LargeTree() {
+			PlantGenParams p;
+			p.seed = 103;
+			p.maxSegments = 30;
+			p.segmentLength = 0.48f;
+			p.directionJitterDegrees = 9.0f;
+			p.branchChance = 0.32f;
+			p.minBranchesPerNode = 3;
+			p.maxBranchesPerNode = 3;
+			p.trunkRadiusLow = 0.30f;
+			p.trunkRadiusHigh = 0.22f;
+			p.radiusFalloffPerSegment = 0.945f;
+			p.rigidityFalloffPerSegment = 0.04f;
+			p.circularSegments = 10;
+			p.maxJoints = 24;
+			return p;
+		}
+
+		// Pine: a narrower, more layered silhouette than the deciduous Tree presets above --
+		// shorter segments and low directionJitter keep the main leader fairly straight, a
+		// moderate branchChance puts several branch whorls along its length, and a near-
+		// horizontal-to-downward branchPitch range (vs. Tree's much narrower, mostly-vertical
+		// one) is what reads as "conifer" rather than "deciduous." This generator has no
+		// explicit "the leader always continues past a branch point" concept (every branch
+		// event's children, including a single-child one, replace the parent's own direction
+		// wholesale -- see GrowPlantIR's own comment) and no ribbed/noisy radius control, so
+		// this is a real approximation within the existing knobs, not a botanically accurate
+		// conifer generator -- flag for a visual check same as every other preset here.
+		PlantGenParams Pine() {
+			PlantGenParams p;
+			p.seed = 501;
+			p.maxSegments = 34;
+			p.segmentLength = 0.30f;
+			p.directionJitterDegrees = 6.0f;
+			p.branchChance = 0.4f;
+			p.minBranchesPerNode = 1;
+			p.maxBranchesPerNode = 2;
+			p.branchPitchMinDegrees = 80.0f;
+			p.branchPitchMaxDegrees = 110.0f;
+			p.trunkRadiusLow = 0.16f;
+			p.trunkRadiusHigh = 0.03f;
+			p.radiusFalloffPerSegment = 0.90f;
+			p.baseRigidity = 0.95f;
+			p.rigidityFalloffPerSegment = 0.03f;
+			p.circularSegments = 8;
+			p.maxJoints = 24;
+			p.enableLeaves = true;
+			p.leafChance = 0.9f;
+			p.leafSize = 0.14f;
+			p.leafCount = 5;
+			p.leafWidthRatio = 0.14f; // needle-thin, not a rounded deciduous leaf
+			return p;
+		}
+
+		// Palm: branchChance 0 -- a single rigid unbranched trunk (GrowPlantIR never rolls a
+		// branch event, so every segment is just a small-jitter continuation of the same
+		// leader), topped with one guaranteed, large, wide-splayed leaf cluster standing in for
+		// a frond crown (same ManifoldLeafAsset shape Tree/Bush leaves use, just bigger, fewer,
+		// and much thinner via leafWidthRatio -- a real simplification rather than a dedicated
+		// frond generator, flagged here not hidden).
+		PlantGenParams Palm() {
+			PlantGenParams p;
+			p.seed = 502;
+			p.maxSegments = 20;
+			p.segmentLength = 0.45f;
+			p.directionJitterDegrees = 4.0f;
+			p.branchChance = 0.0f;
+			p.trunkRadiusLow = 0.14f;
+			p.trunkRadiusHigh = 0.11f;
+			p.radiusFalloffPerSegment = 0.985f; // stays thick almost the whole way up, unlike a tapering tree
+			p.baseRigidity = 0.9f;
+			p.rigidityFalloffPerSegment = 0.02f;
+			p.circularSegments = 10;
+			p.maxJoints = 20;
+			p.enableLeaves = true;
+			p.leafChance = 1.0f; // the one terminal tip always gets a frond crown
+			p.leafSize = 0.55f;
+			p.leafCount = 7;
+			p.leafWidthRatio = 0.12f; // long and thin -- a frond, not a rounded leaf
+			return p;
+		}
+
+		// Cactus: thick, rigid, mostly-unbranched column (low branchChance) with a couple of
+		// thick upward-curving arms (branchPitch skewed near-vertical, not horizontal) --
+		// aiming for a saguaro-like silhouette. No leaves. True ribbing (per-angle radius
+		// variation around the tube's circular cross-section) isn't supported by this
+		// cylinder/curved-tube pipeline, so the "ribbed" part of the original ask is dropped
+		// here, not faked -- flagged as a real scope cut, not a silent guess.
+		PlantGenParams Cactus() {
+			PlantGenParams p;
+			p.seed = 503;
+			p.maxSegments = 16;
+			p.segmentLength = 0.35f;
+			p.directionJitterDegrees = 3.0f;
+			p.branchChance = 0.18f;
+			p.minBranchesPerNode = 1;
+			p.maxBranchesPerNode = 1;
+			p.branchPitchMinDegrees = 15.0f;
+			p.branchPitchMaxDegrees = 40.0f;
+			p.trunkRadiusLow = 0.22f;
+			p.trunkRadiusHigh = 0.19f;
+			p.radiusFalloffPerSegment = 0.97f; // stays thick -- a column, not a tapering branch
+			p.baseRigidity = 1.0f;
+			p.rigidityFalloffPerSegment = 0.0f; // cacti don't sway
+			p.circularSegments = 8;
+			p.maxJoints = 14;
+			return p;
+		}
+
+		// Bushes: short trunk, more branches per node, a much wider pitch range (closer to
+		// horizontal than a tree's own mostly-vertical spread), higher branchChance (splits
+		// sooner/more often) -- the same generator as Tree above, just parametrized bushier
+		// rather than a separate mechanism (same reasoning the old presets already used).
+		PlantGenParams BushVariantA() {
+			PlantGenParams p;
+			p.seed = 201;
+			p.maxSegments = 20;
+			p.segmentLength = 0.14f;
+			p.directionJitterDegrees = 16.0f;
+			p.branchChance = 0.5f;
+			p.minBranchesPerNode = 3;
+			p.maxBranchesPerNode = 4;
+			p.branchPitchMinDegrees = 45.0f;
+			p.branchPitchMaxDegrees = 85.0f;
+			p.trunkRadiusLow = 0.08f;
+			p.trunkRadiusHigh = 0.06f;
+			p.radiusFalloffPerSegment = 0.85f;
+			p.baseRigidity = 0.6f; // bushes sway more overall than a tree's own rigid trunk
+			p.rigidityFalloffPerSegment = 0.10f;
+			p.circularSegments = 8;
+			p.maxJoints = 18;
+			return p;
+		}
+
+		PlantGenParams BushVariantB() {
+			PlantGenParams p = BushVariantA();
+			p.seed = 202;
+			p.maxSegments = 24;
+			p.maxBranchesPerNode = 5;
+			p.maxJoints = 22;
+			return p;
+		}
+
+		RockGenParams SmallRock() {
+			RockGenParams p;
+			p.seed = 301;
+			p.baseRadius = 0.35f;
+			p.clusterCount = 1;
+			p.noiseAmplitude = 0.25f;
+			return p;
+		}
+
+		RockGenParams MediumRock() {
+			RockGenParams p;
+			p.seed = 302;
+			p.baseRadius = 0.6f;
+			p.clusterCount = 2;
+			p.noiseAmplitude = 0.3f;
+			return p;
+		}
+
+		RockGenParams LargeRock() {
+			RockGenParams p;
+			p.seed = 303;
+			p.baseRadius = 0.9f;
+			p.clusterCount = 3;
+			p.noiseAmplitude = 0.35f;
+			return p;
+		}
+
+		// Flowers: a short, unbranched stem capped with a real flower head (ManifoldFlowerAsset.hpp
+		// via ProceduralPlantGenerator's customShape hook), not a bare disembodied head -- a
+		// placeable decor archetype needs a stem to root it to the ground the same way tree/bush
+		// do. branchChance=0 since a single flower doesn't need side branches; flowerChance=1
+		// guarantees the stem's one terminal tip actually grows a head.
+		PlantGenParams SmallFlower() {
+			PlantGenParams p;
+			p.seed = 401;
+			p.maxSegments = 4;
+			p.segmentLength = 0.10f;
+			p.directionJitterDegrees = 8.0f;
+			p.branchChance = 0.0f;
+			p.trunkRadiusLow = 0.012f;
+			p.trunkRadiusHigh = 0.008f;
+			p.baseRigidity = 0.3f; // flowers sway more than a woody stem
+			p.rigidityFalloffPerSegment = 0.05f;
+			p.circularSegments = 8;
+			p.maxJoints = 6;
+			p.enableFlowers = true;
+			p.flowerChance = 1.0f;
+			p.flowerSize = 0.10f;
+			return p;
+		}
+
+		PlantGenParams MediumFlower() {
+			PlantGenParams p = SmallFlower();
+			p.seed = 402;
+			p.maxSegments = 5;
+			p.segmentLength = 0.14f;
+			p.flowerSize = 0.15f;
+			return p;
+		}
+
+		PlantGenParams LargeFlower() {
+			PlantGenParams p = SmallFlower();
+			p.seed = 403;
+			p.maxSegments = 6;
+			p.segmentLength = 0.18f;
+			p.flowerSize = 0.22f;
+			return p;
+		}
+
+	} // namespace
+
+	ProceduralArchetypeIndices RegisterProceduralArchetypes(ModelRegistry& registry, MaterialManager& materialManager) {
+		ProceduralArchetypeIndices indices;
+
+		// Real materials instead of every procedural mesh defaulting to materialIndex 0 (flat
+		// white, fully rough -- MaterialData's own default) -- one per archetype *kind* (all
+		// three tree sizes share bark, all three rock sizes share rock color, etc.), since
+		// BuildSkinnedManifoldAsset/BuildMeshlets only take one materialIndex for a whole asset
+		// right now. Flower's color covers the whole stem+head, not just petals -- a real
+		// simplification, flagged here rather than hidden.
+		MaterialData barkMaterial;
+		barkMaterial.baseColorFactor = glm::vec4(0.36f, 0.24f, 0.14f, 1.0f);
+		barkMaterial.colorTintOffset.y = 0.9f; // roughness strength -- bark reads as matte
+		std::uint32_t barkMaterialIndex = materialManager.RegisterMaterial(barkMaterial);
+
+		MaterialData bushMaterial;
+		bushMaterial.baseColorFactor = glm::vec4(0.22f, 0.35f, 0.14f, 1.0f); // mostly leaf mass, not bark
+		bushMaterial.colorTintOffset.y = 0.8f;
+		std::uint32_t bushMaterialIndex = materialManager.RegisterMaterial(bushMaterial);
+
+		MaterialData rockMaterial;
+		rockMaterial.baseColorFactor = glm::vec4(0.45f, 0.43f, 0.40f, 1.0f);
+		rockMaterial.colorTintOffset.y = 0.95f;
+		std::uint32_t rockMaterialIndex = materialManager.RegisterMaterial(rockMaterial);
+
+		MaterialData flowerMaterial;
+		flowerMaterial.baseColorFactor = glm::vec4(0.85f, 0.35f, 0.55f, 1.0f);
+		flowerMaterial.colorTintOffset.y = 0.5f;
+		std::uint32_t flowerMaterialIndex = materialManager.RegisterMaterial(flowerMaterial);
+
+		// A real leaf tuft (ManifoldLeafAsset.hpp) on Tree/Bush terminal tips, via
+		// ManifoldJointSpec::materialIndex's per-joint override -- brighter/more saturated than
+		// either bark or the bush's own muted stem green, so leaves read as distinct from the
+		// wood they're attached to.
+		MaterialData leafMaterial;
+		leafMaterial.baseColorFactor = glm::vec4(0.25f, 0.55f, 0.16f, 1.0f);
+		leafMaterial.colorTintOffset.y = 0.75f;
+		std::uint32_t leafMaterialIndex = materialManager.RegisterMaterial(leafMaterial);
+
+		// Darker, bluer than leafMaterial -- real conifer needles read noticeably less bright
+		// than deciduous leaves -- and a grey-green for the cactus body, distinct from both.
+		MaterialData needleMaterial;
+		needleMaterial.baseColorFactor = glm::vec4(0.11f, 0.28f, 0.18f, 1.0f);
+		needleMaterial.colorTintOffset.y = 0.8f;
+		std::uint32_t needleMaterialIndex = materialManager.RegisterMaterial(needleMaterial);
+
+		MaterialData cactusMaterial;
+		cactusMaterial.baseColorFactor = glm::vec4(0.32f, 0.45f, 0.30f, 1.0f);
+		cactusMaterial.colorTintOffset.y = 0.7f;
+		std::uint32_t cactusMaterialIndex = materialManager.RegisterMaterial(cactusMaterial);
+
+		PlantGenParams smallTree = SmallTree();
+		smallTree.materialIndex = barkMaterialIndex;
+		smallTree.enableLeaves = true;
+		smallTree.leafChance = 0.85f;
+		smallTree.leafSize = 0.18f;
+		smallTree.leafCount = 5;
+		smallTree.leafMaterialIndex = leafMaterialIndex;
+		PlantGenParams mediumTree = MediumTree();
+		mediumTree.materialIndex = barkMaterialIndex;
+		mediumTree.enableLeaves = true;
+		mediumTree.leafChance = 0.85f;
+		mediumTree.leafSize = 0.22f;
+		mediumTree.leafCount = 6;
+		mediumTree.leafMaterialIndex = leafMaterialIndex;
+		PlantGenParams largeTree = LargeTree();
+		largeTree.materialIndex = barkMaterialIndex;
+		largeTree.enableLeaves = true;
+		largeTree.leafChance = 0.85f;
+		largeTree.leafSize = 0.26f;
+		largeTree.leafCount = 6;
+		largeTree.leafMaterialIndex = leafMaterialIndex;
+
+		PlantGenParams pine = Pine();
+		pine.materialIndex = barkMaterialIndex;
+		pine.leafMaterialIndex = needleMaterialIndex;
+
+		PlantGenParams palm = Palm();
+		palm.materialIndex = barkMaterialIndex;
+		palm.leafMaterialIndex = leafMaterialIndex;
+
+		PlantGenParams cactus = Cactus();
+		cactus.materialIndex = cactusMaterialIndex;
+
+		indices.treeBase = registry.RegisterAsset(BuildProceduralPlant(smallTree), "Small Tree");
+		registry.RegisterAsset(BuildProceduralPlant(mediumTree), "Medium Tree");
+		registry.RegisterAsset(BuildProceduralPlant(largeTree), "Large Tree");
+		registry.RegisterAsset(BuildProceduralPlant(pine), "Pine");
+		registry.RegisterAsset(BuildProceduralPlant(palm), "Palm");
+		registry.RegisterAsset(BuildProceduralPlant(cactus), "Cactus");
+
+		PlantGenParams bushA = BushVariantA();
+		bushA.materialIndex = bushMaterialIndex;
+		bushA.enableLeaves = true;
+		bushA.leafChance = 0.85f;
+		bushA.leafSize = 0.09f;
+		bushA.leafCount = 4;
+		bushA.leafMaterialIndex = leafMaterialIndex;
+		PlantGenParams bushB = BushVariantB();
+		bushB.materialIndex = bushMaterialIndex;
+		bushB.enableLeaves = true;
+		bushB.leafChance = 0.85f;
+		bushB.leafSize = 0.09f;
+		bushB.leafCount = 4;
+		bushB.leafMaterialIndex = leafMaterialIndex;
+		indices.bushBase = registry.RegisterAsset(BuildProceduralPlant(bushA), "Bush A");
+		registry.RegisterAsset(BuildProceduralPlant(bushB), "Bush B");
+
+		RockGenParams smallRock = SmallRock();
+		smallRock.materialIndex = rockMaterialIndex;
+		RockGenParams mediumRock = MediumRock();
+		mediumRock.materialIndex = rockMaterialIndex;
+		RockGenParams largeRock = LargeRock();
+		largeRock.materialIndex = rockMaterialIndex;
+		indices.rockBase = registry.RegisterAsset(BuildProceduralRock(smallRock), "Small Rock");
+		registry.RegisterAsset(BuildProceduralRock(mediumRock), "Medium Rock");
+		registry.RegisterAsset(BuildProceduralRock(largeRock), "Large Rock");
+
+		PlantGenParams smallFlower = SmallFlower();
+		smallFlower.materialIndex = flowerMaterialIndex;
+		PlantGenParams mediumFlower = MediumFlower();
+		mediumFlower.materialIndex = flowerMaterialIndex;
+		PlantGenParams largeFlower = LargeFlower();
+		largeFlower.materialIndex = flowerMaterialIndex;
+		indices.flowerBase = registry.RegisterAsset(BuildProceduralPlant(smallFlower), "Small Flower");
+		registry.RegisterAsset(BuildProceduralPlant(mediumFlower), "Medium Flower");
+		registry.RegisterAsset(BuildProceduralPlant(largeFlower), "Large Flower");
+
+		return indices;
+	}
+
+} // namespace brassica

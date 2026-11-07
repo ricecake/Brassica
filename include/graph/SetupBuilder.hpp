@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "graph/Execution.hpp"
+#include "graph/ResourceCatalog.hpp"
 #include "graph/ResourceKey.hpp"
 
 namespace brassica::graph {
@@ -34,12 +35,9 @@ namespace brassica::graph {
 	// The runtime counterpart of a node's compile-time `Resources` declaration (Declaration.hpp)
 	// -- see the design plan's §B. A builder node declares each access by calling
 	// Create/Read/Modify/ReadPrevious exactly where it used to hand-build a Recipe's realizations
-	// vector by hand. Every recorded access carries access.desc == ResourceDesc{} deliberately
-	// empty: PhysicalResourceRegistry::Provision already prefers a converted key's own catalog
-	// Desc() over whatever a realization supplies (see ResourceCatalog.hpp, built in S1) over
-	// whatever a realization's desc carries, so a builder node is never responsible for building
-	// one itself -- that's the whole point of pairing this with the type-owned-desc model, not an
-	// S2-specific shortcut.
+	// vector by hand. Record<K> below requires K to be a CatalogKey (ResourceCatalog.hpp): a
+	// builder node is never responsible for building a desc itself (S2b deleted the .Desc()
+	// escape hatch that used to let one try) -- the key's own catalog Desc() is the only source.
 	class SetupBuilder {
 	public:
 		// Returned by Create<K>()/Read<K>()/Modify<K>()/ReadPrevious<K>() below, to let a caller
@@ -59,17 +57,6 @@ namespace brassica::graph {
 
 			AccessHandle& ShadingRateTexelSize(std::array<std::uint32_t, 2> size) {
 				m_builder.m_realizations[m_index].shadingRateTexelSize = size;
-				return *this;
-			}
-
-			// Escape hatch for a key that can't go through the catalog yet (not converted) or
-			// ever (AccelerationStructure -- Provision() switches on this exact realization's
-			// own desc.kind to skip it entirely, before any catalog lookup runs, so an
-			// AccelerationStructure access must set this explicitly or it's silently treated as
-			// an empty Image2D instead). Prefer converting the key to the catalog over reaching
-			// for this, when the key's shape allows it.
-			AccessHandle& Desc(ResourceDesc desc) {
-				m_builder.m_realizations[m_index].desc = desc;
 				return *this;
 			}
 
@@ -180,9 +167,17 @@ namespace brassica::graph {
 	private:
 		friend class AccessHandle;
 
+		// Tightened (S2b): every resource key must now be a real CatalogKey, so a bare
+		// `struct Foo {};` with no Desc() no longer compiles as a key -- the .Desc() escape
+		// hatch that used to let an unconverted key through here is gone. HistoryTarget<K>, not
+		// K: History<K> never gets its own catalog instance (CatalogKey excludes it), it borrows
+		// the base key's.
 		template <ResourceRef K>
+			requires CatalogKey<HistoryTarget<K>>
 		AccessHandle Record(AccessKind access) {
-			m_realizations.push_back(ResourceRealization{.key = IdOf<K>(), .access = access});
+			ResourceRealization realization{.key = IdOf<K>(), .access = access};
+			realization.ensureCatalog = &EnsureCatalogEntry<HistoryTarget<K>>;
+			m_realizations.push_back(realization);
 			return AccessHandle(*this, m_realizations.size() - 1);
 		}
 

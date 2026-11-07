@@ -9,10 +9,15 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "particle/ParticleManager.hpp"
-#include "passes/ParticleSystemNode.hpp"
-#include "passes/ResourceKeys.hpp"
-#include "passes/WaterNode.hpp"
+#include "passes/particle/nodes/AboveWaterParticleRenderNode.hpp"
+#include "passes/particle/nodes/ParticleBehaviorNode.hpp"
+#include "passes/particle/nodes/ParticleGridBuildNode.hpp"
+#include "passes/particle/nodes/ParticleLivenessNode.hpp"
+#include "passes/particle/nodes/ParticleResetNode.hpp"
+#include "passes/particle/nodes/ParticleTypeBufferNode.hpp"
+#include "passes/particle/nodes/UnderwaterParticleRenderNode.hpp"
+#include "passes/particle/ParticleManager.hpp"
+#include "passes/water/nodes/WaterNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
@@ -311,6 +316,9 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		behaviorNode.Init(services);
 
 		graph::Graph g;
+		// ParticleBehaviorNode/ParticleLivenessNode read these real production terrain keys, but
+		// nothing else in this minimal graph produces them.
+		g.Register<graph::Import<TerrainClipmapTexture, TerrainMinMaxTexture, TerrainWeatherBiomeTexture>>();
 		g.RegisterRef(seedParticleNode);
 		g.RegisterRef(typeBufferNode);
 		g.RegisterRef(resetNode);
@@ -401,19 +409,28 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 			.setBufferInfo(lightsBufferDescInfo);
 		vkDevice.updateDescriptorSets(frameWrites, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 2> globalLayoutBindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 3> globalLayoutBindings{};
 		globalLayoutBindings[0]
 			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(8)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 1: uTextureArrays (shaders/bindless.glsl) -- needed now that
+		// ParticleBehaviorNode/ParticleLivenessNode read layered terrain textures
+		// (TerrainClipmapTexture, TerrainMinMaxTexture) through this bindless slot.
 		globalLayoutBindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		globalLayoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 2> globalBindingFlags{
+		std::array<vk::DescriptorBindingFlags, 3> globalBindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 		};
@@ -421,13 +438,14 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		globalBindingFlagsInfo.setBindingFlags(globalBindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo globalLayoutInfo{};
-		globalLayoutInfo.setBindingCount(2);
+		globalLayoutInfo.setBindingCount(3);
 		globalLayoutInfo.setBindings(globalLayoutBindings);
 		globalLayoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		globalLayoutInfo.pNext = &globalBindingFlagsInfo;
 		vk::DescriptorSetLayout globalLayout = vkDevice.createDescriptorSetLayout(globalLayoutInfo);
 
-		std::array<vk::DescriptorPoolSize, 2> globalPoolSizes{
+		std::array<vk::DescriptorPoolSize, 3> globalPoolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
 		};
@@ -684,19 +702,28 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		uboWrite.setBufferInfo(frameBufferDescInfo);
 		vkDevice.updateDescriptorSets(uboWrite, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 2> globalLayoutBindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 3> globalLayoutBindings{};
 		globalLayoutBindings[0]
 			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
 			.setDescriptorCount(8)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 1: uTextureArrays (shaders/bindless.glsl) -- needed now that
+		// ParticleBehaviorNode/ParticleLivenessNode read layered terrain textures
+		// (TerrainClipmapTexture, TerrainMinMaxTexture) through this bindless slot.
 		globalLayoutBindings[1]
+			.setBinding(1)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(8)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		globalLayoutBindings[2]
 			.setBinding(2)
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 2> globalBindingFlags{
+		std::array<vk::DescriptorBindingFlags, 3> globalBindingFlags{
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 		};
@@ -704,13 +731,14 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 		globalBindingFlagsInfo.setBindingFlags(globalBindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo globalLayoutInfo{};
-		globalLayoutInfo.setBindingCount(2);
+		globalLayoutInfo.setBindingCount(3);
 		globalLayoutInfo.setBindings(globalLayoutBindings);
 		globalLayoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		globalLayoutInfo.pNext = &globalBindingFlagsInfo;
 		vk::DescriptorSetLayout globalLayout = vkDevice.createDescriptorSetLayout(globalLayoutInfo);
 
-		std::array<vk::DescriptorPoolSize, 2> globalPoolSizes{
+		std::array<vk::DescriptorPoolSize, 3> globalPoolSizes{
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
 		};
@@ -766,6 +794,9 @@ TEST_CASE("Particle liveness bucket assignment swaps with which side of water th
 										  .front();
 
 			graph::Graph g;
+			// ParticleLivenessNode reads these real production terrain keys, but nothing else
+			// in this minimal graph produces them.
+			g.Register<graph::Import<TerrainClipmapTexture, TerrainMinMaxTexture, TerrainWeatherBiomeTexture>>();
 			g.RegisterRef(seedNode);
 			g.RegisterRef(typeBufferNode);
 			g.RegisterRef(resetNode);
@@ -942,22 +973,38 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the rea
 		graph::PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
 		graph::PhysicalExecutionBackend backend(registry);
 
-		struct TestBufKey {};
-		struct TestTexKey {};
+		// byteSize is genuine runtime config this test publishes directly onto the catalog
+		// instance (same pattern as MaterialManager::RegisterBufferNode) -- it has to track
+		// whatever bufNode.SetData() most recently set, since the resize assertion below checks
+		// the grown buffer's real byte size.
+		struct TestBufKey {
+			std::uint64_t byteSize = 0;
+
+			[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+				return graph::StagedStorageBufferDesc(byteSize);
+			}
+		};
+
+		struct TestTexKey {
+			[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+				return graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Image2D,
+					.width = 2,
+					.height = 2,
+					.formatCode = static_cast<uint32_t>(vk::Format::eR8G8B8A8Srgb),
+					.usageMask =
+						static_cast<uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
+					.hostAccess = graph::HostAccess::Staged,
+				};
+			}
+		};
 
 		std::vector<uint32_t> testData = {1, 2, 3, 4, 5, 6, 7, 8};
+		registry.Catalog().Get<TestBufKey>().byteSize = testData.size() * sizeof(uint32_t);
 		graph::PredefinedBufferNode<TestBufKey, uint32_t> bufNode(testData);
 
 		std::vector<uint8_t> pixelData = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255};
-		graph::ResourceDesc  texDesc{
-			.kind = graph::ResourceDesc::Kind::Image2D,
-			.width = 2,
-			.height = 2,
-			.formatCode = static_cast<uint32_t>(vk::Format::eR8G8B8A8Srgb),
-			.usageMask = static_cast<uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
-			.hostAccess = graph::HostAccess::Staged,
-		};
-		graph::PredefinedTextureNode<TestTexKey> texNode(pixelData, texDesc);
+		graph::PredefinedTextureNode<TestTexKey> texNode(pixelData);
 
 		auto runFrame = [&](std::uint64_t frameIndex) {
 			graph::Graph g;
@@ -996,6 +1043,7 @@ TEST_CASE("PredefinedBufferNode and PredefinedTextureNode upload through the rea
 		CHECK(registry.GetBuffer<TestBufKey>()->GetBuffer() == stableBufHandle);
 
 		std::vector<uint32_t> biggerData(16, 42u);
+		registry.Catalog().Get<TestBufKey>().byteSize = biggerData.size() * sizeof(uint32_t);
 		bufNode.SetData(biggerData);
 		CHECK(bufNode.dirty == true);
 		runFrame(2);
@@ -1031,7 +1079,7 @@ TEST_CASE("ExecuteOnce wrapper executes inner node once and skips subsequent run
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
-			r.Create<ParticleIndirectBuffer>().Desc(graph::StorageBufferDesc(12));
+			r.Create<ParticleIndirectBuffer>();
 		}
 
 		void Execute(graph::NodeContext&) {
@@ -1089,20 +1137,20 @@ TEST_CASE("ParticleTypeBufferNode satisfies the particle cluster's reads, with i
 	}
 	REQUIRE(result.has_value());
 
-	// The real second half of the bug: ParticleResetNode used to also declare its own
-	// Read<ParticleTypeBuffer>().Desc(StorageBufferDesc(...)) (hostAccess=None), which --
-	// scheduling after the producer -- would win Provision's schedule-last-wins collapse and
-	// silently turn the producer's WriteSpan into a no-op (BeginHostWrite returns an empty span
-	// for HostAccess::None). Confirms the producer's own Staged desc is what actually reaches
-	// Compile(), not a disagreeing one from a reader.
-	bool foundStagedProducer = false;
+	// ParticleTypeBuffer is catalog-converted (ExternalBuffer) -- its own Desc() is the sole
+	// source of hostAccess now, regardless of what any realization carries or which order nodes
+	// schedule in (the old schedule-last-wins collapse this test used to probe is gone, S2b). What
+	// still matters is that the real producer's Write access actually made it into the compiled
+	// graph at all.
+	CHECK(ParticleTypeBuffer{}.Desc(ctx).hostAccess == graph::HostAccess::Staged);
+
+	bool foundProducer = false;
 	for (const auto& recipe : graph.Recipes()) {
 		for (const auto& r : recipe.realizations) {
 			if (r.key == graph::IdOf<ParticleTypeBuffer>() && r.access == graph::AccessKind::Write) {
-				CHECK(r.desc.hostAccess == graph::HostAccess::Staged);
-				foundStagedProducer = true;
+				foundProducer = true;
 			}
 		}
 	}
-	CHECK(foundStagedProducer);
+	CHECK(foundProducer);
 }

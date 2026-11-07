@@ -179,7 +179,9 @@ namespace {
 	// Two cross-queue waits expected: C-waits-on-G before its write, G-waits-on-C before its
 	// read. Final data must be C's pattern, not G's stale one.
 	// ================================================================================
-	struct CaseABuf {};
+	struct CaseABuf {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return TransferOnlyBufferDesc(256); }
+	};
 
 	struct CaseA_Writer {
 		PhysicalResourceRegistry* registry = nullptr;
@@ -190,9 +192,9 @@ namespace {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(domain);
 			if (modify) {
-				r.Modify<CaseABuf>().Desc(TransferOnlyBufferDesc(256));
+				r.Modify<CaseABuf>();
 			} else {
-				r.Create<CaseABuf>().Desc(TransferOnlyBufferDesc(256));
+				r.Create<CaseABuf>();
 			}
 		}
 
@@ -206,7 +208,7 @@ namespace {
 	struct CaseA_Reader {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Read<CaseABuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Read<CaseABuf>();
 		}
 
 		void Execute(NodeContext&) {} // the barrier is what this case tests, not the read itself
@@ -256,21 +258,25 @@ namespace {
 	// Case (b): a plain cross-queue Read that changes layout still forces a wait, even though
 	// nothing about it is a "write."
 	// ================================================================================
-	struct CaseBImg {};
+	struct CaseBImg {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return SampledColorImageDesc(ctx.width, ctx.height);
+		}
+	};
 
 	struct CaseB_Writer {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<CaseBImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Create<CaseBImg>();
 		}
 
 		void Execute(NodeContext&) {} // DynamicRenderingWrapper's real (empty) render pass does the work
 	};
 
 	struct CaseB_Reader {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Read<CaseBImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Read<CaseBImg>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -304,14 +310,16 @@ namespace {
 	// Only the physical-state hazard table (not a compiler edge) is what makes the real G
 	// reader wait on the real C creator. One cross-queue wait expected.
 	// ================================================================================
-	struct CaseCBuf {};
+	struct CaseCBuf {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return TransferOnlyBufferDesc(256); }
+	};
 
 	struct CaseC_ComputeCreator {
 		PhysicalResourceRegistry* registry = nullptr;
 
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Create<CaseCBuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Create<CaseCBuf>();
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -327,7 +335,7 @@ namespace {
 	struct CaseC_InactiveGraphicsModifier {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Modify<CaseCBuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Modify<CaseCBuf>();
 			r.Active(false);
 		}
 
@@ -337,7 +345,7 @@ namespace {
 	struct CaseC_GraphicsReader {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Read<CaseCBuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Read<CaseCBuf>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -381,12 +389,14 @@ namespace {
 	// access and QueueRecorder::Execute clears it on the Graphics lane before anything else
 	// runs. One cross-queue wait expected (C waiting on G's clear); final data must be all zero.
 	// ================================================================================
-	struct CaseDBuf {};
+	struct CaseDBuf {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return TransferOnlyBufferDesc(256); }
+	};
 
 	struct CaseD_InactiveCreator {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<CaseDBuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Create<CaseDBuf>();
 			r.Active(false);
 		}
 
@@ -396,7 +406,7 @@ namespace {
 	struct CaseD_ComputeReader {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Read<CaseDBuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Read<CaseDBuf>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -440,7 +450,9 @@ namespace {
 	// desc matches") -- only its declared domain and fill pattern change between frames, via
 	// pointers to test-local variables the test mutates between Execute() calls.
 	// ================================================================================
-	struct CaseEBuf {};
+	struct CaseEBuf {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext&) const { return TransferOnlyBufferDesc(256); }
+	};
 
 	struct CaseE_Writer {
 		PhysicalResourceRegistry* registry = nullptr;
@@ -449,7 +461,7 @@ namespace {
 
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(*domain);
-			r.Create<CaseEBuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Create<CaseEBuf>();
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -609,30 +621,34 @@ namespace {
 	// pipeline barriers for T's own read -- the semaphore wait alone covers it, since nothing
 	// about T's access needs a layout change or a narrower access scope.
 	// ================================================================================
-	struct CaseFImg {};
+	struct CaseFImg {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return SampledColorImageDesc(ctx.width, ctx.height);
+		}
+	};
 
 	struct CaseF_Writer {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<CaseFImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Create<CaseFImg>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct CaseF_GraphicsSampler {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Read<CaseFImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Read<CaseFImg>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct CaseF_TransferCopier {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Transfer);
-			r.Read<CaseFImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Read<CaseFImg>();
 		}
 
 		void Execute(NodeContext&) {}
@@ -672,7 +688,7 @@ namespace {
 
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Modify<CaseABuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Modify<CaseABuf>();
 		}
 
 		void Execute(NodeContext& ctx) {
@@ -687,7 +703,7 @@ namespace {
 
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Modify<CaseABuf>().Desc(TransferOnlyBufferDesc(256));
+			r.Modify<CaseABuf>();
 			// Needed regardless of queue placement: two ReadWrite (Modify) accesses to the same
 			// key, with nothing else distinguishing them, are an ambiguous write order on their
 			// own (unlike a plain Write producer, a Modify's "which prior state am I reading"
@@ -762,30 +778,34 @@ namespace {
 	// own release, so both readers see an already-correct layout (no layout change at all) and
 	// each only waits on the producer -- never on each other.
 	// ================================================================================
-	struct CaseHImg {};
+	struct CaseHImg {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return SampledColorImageDesc(ctx.width, ctx.height);
+		}
+	};
 
 	struct CaseH_Writer {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);
-			r.Create<CaseHImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Create<CaseHImg>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct CaseH_ComputeReader {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Compute);
-			r.Read<CaseHImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Read<CaseHImg>();
 		}
 
 		void Execute(NodeContext&) {}
 	};
 
 	struct CaseH_TransferReader {
-		void Setup(SetupBuilder& r, const FrameContext& ctx) {
+		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Transfer);
-			r.Read<CaseHImg>().Desc(SampledColorImageDesc(ctx.width, ctx.height));
+			r.Read<CaseHImg>();
 		}
 
 		void Execute(NodeContext&) {}

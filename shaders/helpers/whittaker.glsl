@@ -9,42 +9,80 @@ struct WhittakerBiome {
 	float roughness;
 	float biomeIndex; // 0..9 index
 	float snowCover;
+	vec3  palA;
+	vec3  palB;
+	vec3  palC;
+	vec3  palD;
 };
 
-// Returns top and bottom colors for a Whittaker biome index (0..9) matching FoliageManager
-void getWhittakerBiomePalette(uint biomeIdx, out vec3 colorTop, out vec3 colorBottom) {
+// Cosine color palette evaluation: color(t) = a + b * cos(2 * PI * (c * t + d))
+vec3 evalCosinePalette(vec3 a, vec3 b, vec3 c, vec3 d, float t) {
+	return clamp(a + b * cos(6.28318530718 * (c * t + d)), 0.0, 1.0);
+}
+
+// Returns cosine palette parameters (a, b, c, d) for a Whittaker biome index (0..9)
+// Parameterized such that a + b corresponds to the top color and a - b to the bottom color matching FoliageManager
+void getWhittakerBiomePalette(uint biomeIdx, out vec3 a, out vec3 b, out vec3 c, out vec3 d) {
 	uint idx = min(biomeIdx, 9u);
-	if (idx == 0u) { // Ice / Glacier / Snow
-		colorTop = vec3(0.80, 0.85, 0.80);
-		colorBottom = vec3(0.55, 0.60, 0.55);
-	} else if (idx == 1u) { // Tundra
-		colorTop = vec3(0.45, 0.48, 0.30);
-		colorBottom = vec3(0.20, 0.22, 0.12);
-	} else if (idx == 2u) { // Taiga / Boreal Forest
-		colorTop = vec3(0.18, 0.40, 0.18);
-		colorBottom = vec3(0.07, 0.20, 0.08);
-	} else if (idx == 3u) { // Cold Desert / Temperate Grassland
-		colorTop = vec3(0.62, 0.58, 0.32);
-		colorBottom = vec3(0.30, 0.26, 0.12);
-	} else if (idx == 4u) { // Temperate Woodland / Shrubland
-		colorTop = vec3(0.32, 0.52, 0.20);
-		colorBottom = vec3(0.12, 0.28, 0.08);
-	} else if (idx == 5u) { // Temperate Deciduous Forest
-		colorTop = vec3(0.22, 0.55, 0.18);
-		colorBottom = vec3(0.08, 0.30, 0.06);
-	} else if (idx == 6u) { // Temperate Rainforest
-		colorTop = vec3(0.10, 0.48, 0.14);
-		colorBottom = vec3(0.04, 0.26, 0.08);
-	} else if (idx == 7u) { // Subtropical Desert
-		colorTop = vec3(0.72, 0.60, 0.35);
-		colorBottom = vec3(0.40, 0.32, 0.16);
-	} else if (idx == 8u) { // Savanna / Tropical Seasonal Forest
-		colorTop = vec3(0.58, 0.56, 0.22);
-		colorBottom = vec3(0.28, 0.28, 0.10);
-	} else { // 9u: Tropical Rainforest
-		colorTop = vec3(0.08, 0.46, 0.12);
-		colorBottom = vec3(0.03, 0.24, 0.06);
+	if (idx == 0u) { // Ice / Glacier / Snow (top: 0.80, 0.85, 0.80; bottom: 0.55, 0.60, 0.55)
+		a = vec3(0.675, 0.725, 0.675);
+		b = vec3(0.125, 0.125, 0.125);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.50, 0.48, 0.44);
+	} else if (idx == 1u) { // Tundra (top: 0.45, 0.48, 0.30; bottom: 0.20, 0.22, 0.12)
+		a = vec3(0.325, 0.350, 0.210);
+		b = vec3(0.125, 0.130, 0.090);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.48, 0.54, 0.46);
+	} else if (idx == 2u) { // Taiga / Boreal Forest (top: 0.18, 0.40, 0.18; bottom: 0.07, 0.20, 0.08)
+		a = vec3(0.125, 0.300, 0.130);
+		b = vec3(0.055, 0.100, 0.050);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.52, 0.55, 0.48);
+	} else if (idx == 3u) { // Cold Desert / Temperate Grassland (top: 0.62, 0.58, 0.32; bottom: 0.30, 0.26, 0.12)
+		a = vec3(0.460, 0.420, 0.220);
+		b = vec3(0.160, 0.160, 0.100);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.48, 0.52, 0.44);
+	} else if (idx == 4u) { // Temperate Woodland / Shrubland (top: 0.32, 0.52, 0.20; bottom: 0.12, 0.28, 0.08)
+		a = vec3(0.220, 0.400, 0.140);
+		b = vec3(0.100, 0.120, 0.060);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.50, 0.55, 0.45);
+	} else if (idx == 5u) { // Temperate Deciduous Forest (top: 0.22, 0.55, 0.18; bottom: 0.08, 0.30, 0.06)
+		a = vec3(0.150, 0.425, 0.120);
+		b = vec3(0.070, 0.125, 0.060);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.52, 0.56, 0.46);
+	} else if (idx == 6u) { // Temperate Rainforest (top: 0.10, 0.48, 0.14; bottom: 0.04, 0.26, 0.08)
+		a = vec3(0.070, 0.370, 0.110);
+		b = vec3(0.030, 0.110, 0.030);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.53, 0.55, 0.47);
+	} else if (idx == 7u) { // Subtropical Desert (top: 0.72, 0.60, 0.35; bottom: 0.40, 0.32, 0.16)
+		a = vec3(0.560, 0.460, 0.255);
+		b = vec3(0.160, 0.140, 0.095);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.46, 0.50, 0.42);
+	} else if (idx == 8u) { // Savanna / Tropical Seasonal Forest (top: 0.58, 0.56, 0.22; bottom: 0.28, 0.28, 0.10)
+		a = vec3(0.430, 0.420, 0.160);
+		b = vec3(0.150, 0.140, 0.060);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.48, 0.53, 0.45);
+	} else { // 9u: Tropical Rainforest (top: 0.08, 0.46, 0.12; bottom: 0.03, 0.24, 0.06)
+		a = vec3(0.055, 0.350, 0.090);
+		b = vec3(0.025, 0.110, 0.030);
+		c = vec3(0.50, 0.50, 0.50);
+		d = vec3(0.52, 0.56, 0.46);
 	}
+}
+
+// Backwards-compatible overload returning top and bottom colors matching FoliageManager
+void getWhittakerBiomePalette(uint biomeIdx, out vec3 colorTop, out vec3 colorBottom) {
+	vec3 a, b, c, d;
+	getWhittakerBiomePalette(biomeIdx, a, b, c, d);
+	colorTop = a + b;
+	colorBottom = a - b;
 }
 
 // Unified tree species selection across canopy proxies and mesh instances
@@ -157,9 +195,8 @@ WhittakerBiome evaluateWhittakerBiome(float temp, float moisture, float severity
 		}
 	}
 
-	vec3 cTop, cBottom;
-	getWhittakerBiomePalette(uint(clamp(b.biomeIndex, 0.0, 9.0)), cTop, cBottom);
-	b.color = mix(cBottom, cTop, 0.65);
+	getWhittakerBiomePalette(uint(clamp(b.biomeIndex, 0.0, 9.0)), b.palA, b.palB, b.palC, b.palD);
+	b.color = evalCosinePalette(b.palA, b.palB, b.palC, b.palD, 0.65);
 
 	// Apply thunderstorm severity weathering (darker lushness or storm darkening)
 	b.color = mix(b.color, b.color * 0.75 + vec3(0.02, 0.05, 0.08), severity * 0.4);
@@ -195,9 +232,8 @@ WhittakerBiome evaluateWhittakerBiomeWithHysteresis(
 			else if (prevIdx == 8u) b.roughness = 0.80;
 			else b.roughness = 0.60;
 
-			vec3 cTop, cBottom;
-			getWhittakerBiomePalette(prevIdx, cTop, cBottom);
-			b.color = mix(cBottom, cTop, 0.65);
+			getWhittakerBiomePalette(prevIdx, b.palA, b.palB, b.palC, b.palD);
+			b.color = evalCosinePalette(b.palA, b.palB, b.palC, b.palD, 0.65);
 			b.color = mix(b.color, b.color * 0.75 + vec3(0.02, 0.05, 0.08), severity * 0.4);
 			if (b.snowCover > 0.01) {
 				b.color = mix(b.color, vec3(0.92, 0.95, 0.98), b.snowCover);

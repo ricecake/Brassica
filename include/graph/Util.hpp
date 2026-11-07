@@ -276,6 +276,131 @@ namespace brassica::graph {
 		m_textures[resolvedId] = destTexture;
 	}
 
+	// Deliberately not a refactor of UploadTextureImmediate above into a shared core: that
+	// function's body is entangled with the ResourceId-keyed existing-vs-new branch (texDesc
+	// comes from either the caller's desc, for a new texture, or the existing texture's own real
+	// desc, for a re-upload) and already-proven Vulkan synchronization code other features
+	// depend on -- extracting a shared helper here risked introducing a subtle regression there
+	// for no benefit this caller needs (a texture created through this path is never re-uploaded
+	// into). Lower risk to duplicate the ~40 lines of staging-buffer/barrier/copy/fence mechanics
+	// once, operating directly on a freshly-created PhysicalTexture with no ResourceId or
+	// m_textures map involved at all.
+	inline std::shared_ptr<graph::PhysicalTexture> PhysicalResourceRegistry::CreateAndUploadTexture2D(
+		const void*         pixelData,
+		std::size_t         sizeBytes,
+		const ResourceDesc& desc,
+		vk::ImageLayout     targetLayout
+	) {
+		vk::Device   device = GetDevice();
+		VmaAllocator allocator = GetAllocator();
+		vk::Queue    queue = GetQueue();
+
+		ResourceDesc texDesc = desc;
+		if (texDesc.usageMask == 0) {
+			texDesc.usageMask =
+				static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst);
+		}
+		auto tex = std::make_shared<PhysicalTexture>(device, allocator, texDesc, m_concurrentFamilies);
+		tex->SetHasDefinedContents(true);
+
+		if (sizeBytes > 0 && allocator != VK_NULL_HANDLE && device && queue) {
+			VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = sizeBytes;
+			bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+			VmaAllocationCreateInfo allocInfo = {};
+			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+			VkBuffer          rawStagingBuffer = VK_NULL_HANDLE;
+			VmaAllocation     stagingAllocation = nullptr;
+			VmaAllocationInfo vmaAllocInfo{};
+			vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &rawStagingBuffer, &stagingAllocation, &vmaAllocInfo);
+
+			if (vmaAllocInfo.pMappedData) {
+				std::memcpy(vmaAllocInfo.pMappedData, pixelData, sizeBytes);
+			}
+
+			vk::CommandPoolCreateInfo poolInfo{vk::CommandPoolCreateFlagBits::eTransient, 0};
+			vk::CommandPool           transientPool = device.createCommandPool(poolInfo);
+
+			vk::CommandBufferAllocateInfo cmdAllocInfo{transientPool, vk::CommandBufferLevel::ePrimary, 1};
+			vk::CommandBuffer             cmd = device.allocateCommandBuffers(cmdAllocInfo).front();
+
+			cmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+			vk::ImageSubresourceRange subresourceRange{
+				vk::ImageAspectFlagBits::eColor,
+				0,
+				texDesc.mips ? texDesc.mips : 1,
+				0,
+				texDesc.layers ? texDesc.layers : 1
+			};
+
+			vk::ImageMemoryBarrier barrier1{};
+			barrier1.setOldLayout(vk::ImageLayout::eUndefined)
+				.setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+				.setSrcAccessMask({})
+				.setDstAccessMask(vk::AccessFlagBits::eTransferWrite)
+				.setImage(tex->GetImage())
+				.setSubresourceRange(subresourceRange);
+
+			cmd.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTopOfPipe,
+				vk::PipelineStageFlagBits::eTransfer,
+				{},
+				{},
+				{},
+				barrier1
+			);
+
+			vk::BufferImageCopy copyRegion{};
+			copyRegion.setBufferOffset(0)
+				.setBufferRowLength(0)
+				.setBufferImageHeight(0)
+				.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+				.setImageOffset({0, 0, 0})
+				.setImageExtent({texDesc.width, texDesc.height, std::max(1u, texDesc.depth)});
+
+			cmd.copyBufferToImage(rawStagingBuffer, tex->GetImage(), vk::ImageLayout::eTransferDstOptimal, copyRegion);
+
+			vk::ImageMemoryBarrier barrier2{};
+			barrier2.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+				.setNewLayout(targetLayout)
+				.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+				.setDstAccessMask(vk::AccessFlagBits::eShaderRead)
+				.setImage(tex->GetImage())
+				.setSubresourceRange(subresourceRange);
+
+			cmd.pipelineBarrier(
+				vk::PipelineStageFlagBits::eTransfer,
+				vk::PipelineStageFlagBits::eAllCommands,
+				{},
+				{},
+				{},
+				barrier2
+			);
+
+			tex->SetCurrentLayout(targetLayout);
+			tex->SetLastStageAccess(vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead);
+
+			cmd.end();
+
+			vk::Fence      fence = device.createFence(vk::FenceCreateInfo{});
+			vk::SubmitInfo submitInfo{};
+			submitInfo.setCommandBuffers(cmd);
+			(void)queue.submit(1, &submitInfo, fence);
+			(void)device.waitForFences(fence, VK_TRUE, UINT64_MAX);
+			device.destroyFence(fence);
+
+			device.destroyCommandPool(transientPool);
+			vmaDestroyBuffer(allocator, rawStagingBuffer, stagingAllocation);
+		}
+
+		AssignAndWriteBindlessIndices(*tex);
+		return tex;
+	}
+
 	inline void PhysicalResourceRegistry::WaitIdle() {
 		if (m_device) {
 			m_device.waitIdle();

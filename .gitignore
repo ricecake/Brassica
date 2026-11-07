@@ -207,7 +207,7 @@ gmon.out
 # XWD files
 *.xwd
 
-core.*
+/core.*
 *.ini
 
 scenes/*.dict

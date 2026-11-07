@@ -1,8 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
-#include "foliage/FoliageManager.hpp"
-#include "passes/FoliageNode.hpp"
+#include "graph/Execution.hpp"
+#include "passes/foliage/FoliageManager.hpp"
+#include "passes/foliage/nodes/FoliageNode.hpp"
+#include "resources.hpp"
 #include "ServiceLocator.hpp"
 
 TEST_CASE("FoliageManager state and global properties") {
@@ -83,3 +85,4 @@ TEST_CASE("FoliageNode registration and push constants sync") {
 
 	brassica::ServiceLocator::SetInstance(nullptr);
 }
+

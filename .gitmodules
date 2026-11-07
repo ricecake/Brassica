@@ -86,3 +86,9 @@
 [submodule "external/eigen"]
 	path = external/eigen
 	url = https://gitlab.com/libeigen/eigen.git
+[submodule "external/SPIRV-Reflect"]
+	path = external/SPIRV-Reflect
+	url = https://github.com/KhronosGroup/SPIRV-Reflect
+[submodule "external/manifold"]
+	path = external/manifold
+	url = https://github.com/elalish/manifold.git

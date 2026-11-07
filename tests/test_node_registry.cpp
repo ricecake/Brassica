@@ -20,8 +20,38 @@
 // 27 -> 28: Added GTAONode.
 // 28 -> 26: ParticleSystemNode sub-nodes dynamically registered, added CloudShadowGenNode.
 // 26 -> 27: Added TerrainReadbackNode (design plan's bug 6 fix -- the terrain ground-height
+// readback is now a real graph node instead of TerrainManager's own side-channel transfer-queue
+// submit).
 // 27 -> 28: Added TerrainShadowNode.
 // 28 -> 27: Unified AtmosphereCompositeNode into VolumetricRenderNode.
+// 27 -> 32: Drift found empirically while adding GltfRenderNode below -- the tracked count here
+// had already fallen behind several nodes' worth of uncommitted foliage/HiZ/multi-queue work
+// this session before this change, with no corresponding history entries. Not reconstructing
+// which specific additions those were; resynced to the real current count instead.
+// 32 -> 33: Added GltfRenderNode (Stage 1 of the GLTF/GLB pipeline).
+// 33 -> 34: Added FoliageIndirectResetNode (splitting FoliageIndirectArgsBuffer's zero-clear out
+// of FoliageNode::Execute() into its own Compute-domain node -- see FoliageNode.hpp's comment;
+// the Graphics-domain original was issuing an illegal barrier+fillBuffer inside its own
+// already-open dynamic-rendering scope, confirmed via real GPU-assisted validation).
+// 34 -> 43: Particle cluster reactivated (S2) -- ParticleResetNode, ParticleLivenessNode,
+// ParticleBehaviorNode, ParticleGridBuildNode, UnderwaterParticleRenderNode,
+// AboveWaterParticleRenderNode, ParticleTypeBufferNode all uncommented, gated at runtime by
+// IParticleManager::IsEnabled(). Landed independently of the cloud/model-work additions just
+// above (two lineages untangled onto the same branch); resynced to the real current count, same
+// precedent as the 27 -> 32 entry above.
+// 43 -> 46: model-work branch merge (generalized-model-mahem). Replaced GltfRenderNode with
+// ModelRenderNode (GPU-driven model instances, baked clips) and added ModelInstanceScatterNode
+// (applies ModelInstanceManager's sparse CPU writes to ModelInstanceBuffer); added
+// ModelCullResetNode and ModelCullNode (Stage 3 -- compacted-visible-list cull pass + indirect
+// task dispatch); added ModelLiveFinalizeNode and ModelLiveEvalNode (Stage 4 -- live wind/seed-
+// bend eval); added DecorPopulationNode (Stage 5.2 -- persistent, disocclusion-driven decor
+// population). Removed FoliageBakeNode, FoliageArchetypeRenderNode, and FoliageIndirectResetNode
+// (Stage 5.1/5.2 cleanup -- the GPU-baked tree/bush archetype path they served is fully
+// superseded by real ManifoldBranchingTreeAsset/ManifoldRockAsset models + DecorPopulationNode's
+// persistent population). Net: -4 (GltfRenderNode/FoliageBakeNode/FoliageArchetypeRenderNode/
+// FoliageIndirectResetNode) + 7 (ModelRenderNode/ModelInstanceScatterNode/ModelCullResetNode/
+// ModelCullNode/ModelLiveFinalizeNode/ModelLiveEvalNode/DecorPopulationNode); confirmed against
+// a real grep of every BRASSICA_REGISTER_NODE( call site, not just arithmetic.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 27);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 46);
 }

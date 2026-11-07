@@ -255,29 +255,28 @@ namespace brassica::graph {
 	// SetData) regardless of P -- P only affects *when in the frame* that write is scheduled
 	// relative to other nodes, never whether it happens.
 	template <ResourceRef Key, typename T = std::uint8_t, Phase P = Phase::Default>
+		requires CatalogKey<Key>
 	struct HostWriteNode {
 		static constexpr Phase kPhase = P;
 
 		std::vector<T> data;
-		ResourceDesc   desc{};
 		bool           everyFrame = false;
 		bool           dirty = true;
 
 		HostWriteNode() = default;
 
-		HostWriteNode(std::span<const T> initialData, const ResourceDesc& customDesc, bool writeEveryFrame = false):
-			data(initialData.begin(), initialData.end()), desc(customDesc), everyFrame(writeEveryFrame) {}
+		explicit HostWriteNode(std::span<const T> initialData, bool writeEveryFrame = false):
+			data(initialData.begin(), initialData.end()), everyFrame(writeEveryFrame) {}
 
-		void SetData(std::span<const T> newData, const ResourceDesc& newDesc) {
+		void SetData(std::span<const T> newData) {
 			data.assign(newData.begin(), newData.end());
-			desc = newDesc;
 			dirty = true;
 		}
 
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Transfer);
 			r.Active(everyFrame || dirty);
-			r.Create<Key>().Desc(desc);
+			r.Create<Key>();
 		}
 
 		// No isActive/dirty guard needed here: Graph::Compile culls a node whose Recipe came back
@@ -296,25 +295,20 @@ namespace brassica::graph {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 
-	// Thin wrapper: infers a Staged storage-buffer desc from data.size() when the caller doesn't
-	// supply one, the convenience the bare HostWriteNode deliberately doesn't have (a byteSize of
-	// 0 is also a legitimate image desc's steady state, so that inference can't live there
-	// without risking silently overwriting a caller's real Image2D/3D desc).
+	// Thin wrapper, purely for the call site to say "this HostWriteNode<Key, T> holds buffer
+	// data" -- no behavior difference from HostWriteNode itself now that the desc-inference
+	// convenience (a Staged storage-buffer desc guessed from data.size() when the caller passed
+	// none) is gone: Key's own catalog Desc() is the only source of a buffer's shape, same as
+	// every other catalog key. A caller whose byteSize is genuine runtime config (not a type-level
+	// constant) publishes it onto Key's catalog instance directly -- see passes/material/
+	// MaterialManager.cpp's RegisterBufferNode for the pattern.
 	template <ResourceRef Key, typename T = std::uint8_t, Phase P = Phase::Default>
 	struct PredefinedBufferNode: HostWriteNode<Key, T, P> {
 		using Base = HostWriteNode<Key, T, P>;
 
 		PredefinedBufferNode() = default;
 
-		explicit PredefinedBufferNode(std::span<const T> initialData, const ResourceDesc& customDesc = {}):
-			Base(
-				initialData,
-				customDesc.byteSize ? customDesc : StagedStorageBufferDesc(initialData.size() * sizeof(T))
-			) {}
-
-		void SetData(std::span<const T> newData, const ResourceDesc& newDesc = {}) {
-			Base::SetData(newData, newDesc.byteSize ? newDesc : StagedStorageBufferDesc(newData.size() * sizeof(T)));
-		}
+		explicit PredefinedBufferNode(std::span<const T> initialData): Base(initialData) {}
 	};
 
 	template <ResourceRef Key, typename T, Phase P>
@@ -322,18 +316,16 @@ namespace brassica::graph {
 		static constexpr NodeKind value = NodeKind::Import;
 	};
 
-	// Thin wrapper, named for symmetry with PredefinedBufferNode above -- an image desc always
-	// needs real width/height from the caller, so there is no default-desc inference to add here;
-	// this exists purely to spell out "this HostWriteNode<Key, uint8_t> is pixel data" at the call
-	// site.
+	// Thin wrapper, named for symmetry with PredefinedBufferNode above -- purely to spell out
+	// "this HostWriteNode<Key, uint8_t> is pixel data" at the call site. Key's own catalog Desc()
+	// supplies the real width/height/format now, same as PredefinedBufferNode's byteSize.
 	template <ResourceRef Key, Phase P = Phase::Default>
 	struct PredefinedTextureNode: HostWriteNode<Key, std::uint8_t, P> {
 		using Base = HostWriteNode<Key, std::uint8_t, P>;
 
 		PredefinedTextureNode() = default;
 
-		PredefinedTextureNode(std::span<const std::uint8_t> pixelData, const ResourceDesc& imageDesc):
-			Base(pixelData, imageDesc) {}
+		explicit PredefinedTextureNode(std::span<const std::uint8_t> pixelData): Base(pixelData) {}
 	};
 
 	template <ResourceRef Key, Phase P>

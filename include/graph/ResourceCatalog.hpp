@@ -73,4 +73,17 @@ namespace brassica::graph {
 		std::unordered_map<ResourceId, std::function<ResourceDesc(const FrameContext&)>> m_descFns;
 	};
 
+	// Design plan's S2 auto-registration hook: the one instantiation ResourceRealization::
+	// ensureCatalog (Execution.hpp) ever points at, per K. A plain function (not a lambda) so
+	// SetupBuilder::Record<K> can take its address with no capture/allocation -- a
+	// ResourceRealization is copied around a lot (recipes vectors, schedule stages), and this
+	// keeps that free. Just forwards to Get<K>(), which is itself idempotent (returns the
+	// existing instance on every call after the first), so calling this redundantly alongside a
+	// node's own manual Catalog().Get<K>() call (while any such calls still exist, pre-S2b
+	// cleanup) is always safe.
+	template <CatalogKey K>
+	void EnsureCatalogEntry(ResourceCatalog& catalog) {
+		catalog.Get<K>();
+	}
+
 } // namespace brassica::graph

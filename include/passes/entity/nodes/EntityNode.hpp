@@ -1,0 +1,191 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+
+#include "spdlog/spdlog.h"
+
+#include "graph/Execution.hpp"
+#include "graph/PhysicalRegistry.hpp"
+#include "graph/PhysicalResource.hpp"
+#include "graph/SetupBuilder.hpp"
+#include "passes/entity/nodes/EntityPrepareNode.hpp"
+#include "passes/RenderPhases.hpp"
+#include "passes/entity/resources.hpp"
+#include "resources/core.hpp"
+#include "render/NodeCommands.hpp"
+#include "render/NodeLifecycle.hpp"
+#include "render/PipelineLibrary.hpp"
+#include "Shader.hpp"
+#include "ShaderWatcher.hpp"
+#include "types/EntityRenderComponent.hpp"
+#include "VulkanCompat.hpp"
+
+namespace brassica {
+
+	// S4: no kPhase -- TerrainNode's sole Create<> of each GBuffer key this node Modify<>s
+	// already orders it after TerrainNode via Create-before-accessor, and every reader of those
+	// keys (WaterNode, GTAONode, HiZDownsampleNode, DeferredNode, the Composite-phase cluster)
+	// gets a real default edge from this node's writes regardless of phase -- confirmed none of
+	// them Modify<> the same keys (WaterNode only Reads them, despite depth-testing against
+	// them), so there's no writer-pairwise conflict left to resolve beyond FoliageNode's own
+	// AnyOrder() pairing below.
+	struct EntityNode: render::NodeRegistrar<EntityNode> {
+		static constexpr render::GraphicsPipelineState kPipelineState{
+			.cullMode = vk::CullModeFlagBits::eNone,
+			.depthTest = true,
+			.depthWrite = true,
+			.depthCompareOp = vk::CompareOp::eLess,
+			.enableShadingRate = false,
+		};
+
+		TaskShader     taskShader;
+		MeshShader     meshShader;
+		FragmentShader fragShader;
+
+		render::PipelineLibrary*     pipelineLibrary = nullptr;
+		const DispatchLoaderDynamic* dls = nullptr;
+
+		std::uint64_t m_overrideBufferAddress{0};
+		std::uint32_t m_overrideTotalInstances{0};
+
+		void SetEntityData(std::uint64_t addr, std::uint32_t count) {
+			m_overrideBufferAddress = addr;
+			m_overrideTotalInstances = count;
+		}
+
+		void Init(const render::NodeServices& services) {
+			pipelineLibrary = services.pipelineLibrary;
+			dls = services.dispatchLoader;
+			if (!taskShader.CompileTaskFromFile(services.device, "shaders/entity.task") ||
+			    !meshShader.CompileMeshFromFile(services.device, "shaders/entity.mesh") ||
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/entity.frag")) {
+				spdlog::critical("EntityNode shader compilation failed.");
+				throw std::runtime_error("EntityNode shader compilation failed.");
+			}
+			if (services.shaderWatcher) {
+				RegisterShaders(*services.shaderWatcher);
+			}
+		}
+
+		void RegisterShaders(ShaderWatcher& watcher) {
+			watcher.RegisterShader(&taskShader);
+			watcher.RegisterShader(&meshShader);
+			watcher.RegisterShader(&fragShader);
+		}
+
+		void Destroy(vk::Device device) {
+			taskShader.Destroy(device);
+			meshShader.Destroy(device);
+			fragShader.Destroy(device);
+		}
+
+		// Deliberately no Read<EntityInstanceBuffer/EntityIndirectBuffer>() here, matching this
+		// node's own pre-conversion Recipe exactly (it declared both at compile time but never
+		// realized either). Neither key is catalog-converted yet, so an empty-desc realization
+		// here would win via lesson #10 -- same reasoning as GTAONode.hpp. Ordering against
+		// EntityPrepareNode (whose GetBufferDeviceAddress()/GetTotalInstances() this node reads
+		// via a direct EngineNodeRegistry pointer lookup in Execute(), and whose
+		// EntityIndirectBuffer this node reads via ctx.resources directly -- neither going
+		// through the resource graph at all) now comes from this explicit After<>() (S4),
+		// instead of being an accident of EntityPrepareNode's Prepare phase sorting earlier than
+		// this node's old GBuffer phase.
+		//
+		// AnyOrder() on all five GBuffer keys, Material included: this node and GltfRenderNode
+		// (as of the GLTF pipeline's Stage 2) both Modify it now. Confirmed via
+		// test_rendergraph.cpp's force-all-active check (with a temporary diagnostic) that
+		// leaving Material bare here was NOT actually ambiguous -- this node and GltfRenderNode
+		// were already transitively ordered via the other four keys' own AnyOrder tie-break
+		// (RelationalCompiler.hpp's addResourceEdge updates global reachability, not a per-key
+		// one, so one key's tie-break edge orders the pair for every other key they jointly
+		// touch too). Added here anyway, explicitly, so that ordering isn't a silent accident of
+		// which other keys happen to pair these two nodes -- a future writer that only touches
+        // Material (no Position/Normal/Albedo/Depth) would have no such accidental edge to lean
+        // on. Safe specifically because every writer here is a depth-tested opaque write to
+        // disjoint screen regions -- the visual result doesn't depend on draw order -- but
+        // AnyOrder() still gets a real, deterministically-directed edge (and the barrier that
+        // comes with it): two same-stage Graphics nodes with *no* edge at all between them,
+        // writing the same attachment-backed images, would be a genuine WAW hazard regardless of
+        // how commutative the actual pixels are.
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Modify<GBufferPosition>().AnyOrder();
+			r.Modify<GBufferNormal>().AnyOrder();
+			r.Modify<GBufferAlbedo>().AnyOrder();
+			r.Modify<GBufferMaterial>().AnyOrder();
+			r.Modify<GBufferDepth>().AnyOrder();
+			r.After<EntityPrepareNode>();
+		}
+
+		void Execute(graph::NodeContext& ctx) {
+			vk::Buffer    indirectBuf{nullptr};
+			std::uint64_t indirectOffset = 0;
+
+			std::uint64_t bufferAddress = m_overrideBufferAddress;
+			std::uint32_t totalInstances = m_overrideTotalInstances;
+
+			if (bufferAddress == 0 || totalInstances == 0) {
+				if (auto* prepNode = render::EngineNodeRegistry::Instance().GetNode<EntityPrepareNode>()) {
+					bufferAddress = prepNode->GetBufferDeviceAddress();
+					totalInstances = prepNode->GetTotalInstances();
+				}
+			}
+
+			if (ctx.resources) {
+				if (const auto* registry = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources)) {
+					if (auto physBuf = registry->GetBuffer<EntityIndirectBuffer>()) {
+						indirectBuf = physBuf->GetBuffer();
+						indirectOffset = physBuf->SliceStride() * (ctx.frameIndex % physBuf->RingSlots());
+					}
+				}
+			}
+
+			if (totalInstances == 0) {
+				return;
+			}
+
+			EntityPushConstants push{
+				.entityBufferAddress = bufferAddress,
+				.totalInstances = totalInstances,
+				.baseInstanceIndex = 0
+			};
+
+			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
+			std::array<vk::Format, 4>      colorFormats{
+                vk::Format::eR32G32B32A32Sfloat,
+                vk::Format::eR16G16B16A16Sfloat,
+                vk::Format::eR8G8B8A8Srgb,
+                vk::Format::eR8G8B8A8Unorm
+            };
+			render::ResolvedPipeline resolved = render::BindGraphics(
+				ctx,
+				*pipelineLibrary,
+				stages,
+				kPipelineState,
+				colorFormats,
+				push,
+				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
+				vk::Format::eD32Sfloat
+			);
+			if (!resolved.pipeline) {
+				return;
+			}
+
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (dls && dls->vkCmdDrawMeshTasksIndirectEXT && indirectBuf) {
+				dls->vkCmdDrawMeshTasksIndirectEXT(
+					static_cast<VkCommandBuffer>(ctx.cmd.vkCmd),
+					static_cast<VkBuffer>(indirectBuf),
+					indirectOffset,
+					1,
+					sizeof(MeshTasksIndirectCommand)
+				);
+			} else if (dls && dls->vkCmdDrawMeshTasksEXT) {
+				vkCmd.drawMeshTasksEXT(totalInstances, 1, 1, *dls);
+			}
+		}
+	};
+
+	BRASSICA_REGISTER_NODE(EntityNode);
+
+} // namespace brassica

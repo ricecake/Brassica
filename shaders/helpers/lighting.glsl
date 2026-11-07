@@ -3,6 +3,7 @@
 
 #include "brdf.glsl"
 #include "material.glsl"
+#include "terrain.glsl"
 
 #ifndef LIGHTING_TYPES
 #define LIGHTING_TYPES
@@ -100,12 +101,47 @@ vec3 getSpatialAmbientSH(vec3 worldPos, vec3 N) {
 #endif
 
 /**
- * Macro terrain occlusion integration point.
+ * Macro terrain ambient occlusion: how much of the sky hemisphere nearby terrain blocks, from a
+ * coarse min-max mip neighborhood rather than a full per-direction march (traceTerrainOcclusion/
+ * calculateTerrainSoftShadow in terrain.glsl are too expensive to run per-shaded-fragment every
+ * frame -- those stay reserved for the once-per-frame shadow-map bake and cloud-shadow
+ * generation). Compares this point's height against the highest point in its coarse-mip
+ * neighborhood: sitting well below that peak (a valley/canyon) reads as more enclosed; sitting at
+ * or above it (a ridge) reads as open. Not directional or physically exact, but a real signal
+ * where this used to unconditionally return 1.0 (no occlusion at all).
+ *
+ * Blends 4 neighboring mip-4 texels by fractional position instead of a single texelFetch:
+ * sampleTerrainMinMaxMip's mip>=1 path is deliberately a hard nearest-texel fetch (correct for its
+ * real job, a conservative occlusion-culling bound), but reading that directly as a shading term
+ * produces a visible hard step every 2^mip texels -- a persistent, camera-independent grid baked
+ * into the static terrain data itself, which is what the reported "shadow acne" actually was (not
+ * the shadow map or anything camera/time-related -- it didn't move when the camera held still
+ * because it isn't a temporal artifact at all). sampleTerrainMinMaxMip itself is left alone since
+ * its hard edge is correct and needed for its other (real occlusion-culling) callers.
  */
 #ifndef TERRAIN_OCCLUSION_DEFINED
 #define TERRAIN_OCCLUSION_DEFINED
-float calculateTerrainOcclusion(vec3 worldPos, vec3 normal) {
-	return 1.0;
+float calculateTerrainOcclusion(vec3 worldPos, uint minMaxIndex, uint level, uint textureDim) {
+	if (minMaxIndex == 0u) {
+		return 1.0;
+	}
+
+	const uint kMip = 4u; // ~16-texel neighborhood at this level -- cheap, still locally meaningful
+	float cellSize = texelSize(level) * exp2(float(kMip));
+	vec2  frac = fract(worldPos.xz / cellSize);
+
+	float h00 = sampleTerrainMinMaxMip(minMaxIndex, worldPos.xz, level, kMip, textureDim).y;
+	float h10 = sampleTerrainMinMaxMip(minMaxIndex, worldPos.xz + vec2(cellSize, 0.0), level, kMip, textureDim).y;
+	float h01 = sampleTerrainMinMaxMip(minMaxIndex, worldPos.xz + vec2(0.0, cellSize), level, kMip, textureDim).y;
+	float h11 = sampleTerrainMinMaxMip(minMaxIndex, worldPos.xz + vec2(cellSize, cellSize), level, kMip, textureDim).y;
+	float localMax = mix(mix(h00, h10, frac.x), mix(h01, h11, frac.x), frac.y);
+
+	float heightBelowPeak = max(0.0, localMax - worldPos.y);
+
+	// Enclosure angle above the horizon subtended by the neighborhood's highest point; cos() of
+	// it is a cheap, bounded [0,1] stand-in for "fraction of the sky hemisphere still visible."
+	float enclosureAngle = atan(heightBelowPeak, max(cellSize, 1.0));
+	return clamp(cos(enclosureAngle), 0.0, 1.0);
 }
 #endif
 

@@ -9,35 +9,44 @@
 #include "vulkan/vulkan.hpp"
 
 #include "ArgparseManager.hpp"
+#include "AtmosphereManager.hpp"
 #include "audio/AudioManager.hpp"
+#include "CloudLightingManager.hpp"
 #include "ConfigManager.hpp"
 #include "EngineConstants.hpp"
-#include "foliage/FoliageManager.hpp"
+#include "passes/foliage/FoliageManager.hpp"
 #include "GLFW/glfw3.h"
 #include "graph/MultiQueueExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "ImGuiManager.hpp"
 #include "InputHandler.hpp"
-#include "lighting/LightManager.hpp"
-#include "lighting/LightningManager.hpp"
-#include "particle/ParticleManager.hpp"
+#include "passes/lighting/LightManager.hpp"
+#include "passes/lighting/LightningManager.hpp"
+#include "passes/model/GltfModelManager.hpp"
+#include "passes/model/ModelInstanceManager.hpp"
+#include "passes/model/ModelRegistry.hpp"
+#include "passes/model/ProceduralArchetypeCatalog.hpp"
+#include "passes/particle/ParticleManager.hpp"
 #include "passes/AllNodes.hpp"
-#include "render/MaterialManager.hpp"
+#include "passes/material/MaterialManager.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
 #include "SystemHandler.hpp"
 #include "TaskScheduler.h"
-#include "terrain/TerrainAccelerationStructure.hpp"
-#include "terrain/TerrainManager.hpp"
+#include "TextureDumpService.hpp"
+#include "passes/terrain/TerrainAccelerationStructure.hpp"
+#include "passes/terrain/TerrainManager.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/FrameDetails.hpp"
+#include "types/LightningStrike.hpp"
 #include "types/TransformComponent.hpp"
 #include "types/ubo/FrameUBO.hpp"
 #include "types/ubo/LightingUBO.hpp"
 #include "vk_mem_alloc.h"
+#include "VolumetricLightingManager.hpp"
 #include "VkBootstrap.h"
 #include <entt/entity/registry.hpp>
 
@@ -213,6 +222,18 @@ namespace brassica {
 
 		const ParticleManager& GetParticleManager() const { return particleManager; }
 
+		AtmosphereManager& GetAtmosphereManager() { return atmosphereManager; }
+
+		const AtmosphereManager& GetAtmosphereManager() const { return atmosphereManager; }
+
+		VolumetricLightingManager& GetVolumetricLightingManager() { return volumetricLightingManager; }
+
+		const VolumetricLightingManager& GetVolumetricLightingManager() const { return volumetricLightingManager; }
+
+		CloudLightingManager& GetCloudLightingManager() { return cloudLightingManager; }
+
+		const CloudLightingManager& GetCloudLightingManager() const { return cloudLightingManager; }
+
 		void UpdateCamera(float deltaTime);
 
 		void SetInputHandler(std::shared_ptr<IInputHandler> handler) { inputHandler = std::move(handler); }
@@ -315,16 +336,30 @@ namespace brassica {
 
 		std::shared_ptr<IInputHandler> inputHandler{nullptr};
 
-		LightManager     lightManager;
-		LightningManager lightningManager;
-		AudioManager     audioManager;
-		FoliageManager   foliageManager;
-		MaterialManager  materialManager;
-		ParticleManager  particleManager;
+		LightManager      lightManager;
+		LightningManager  lightningManager;
+		AudioManager      audioManager;
+		FoliageManager    foliageManager;
+		MaterialManager   materialManager;
+		ParticleManager   particleManager;
+		GltfModelManager  gltfModelManager;
+		ModelRegistry     modelRegistry;
+		ModelInstanceManager modelInstanceManager;
+		TextureDumpService   textureDumpService;
+		// Populated from RegisterProceduralArchetypes()'s return value -- Stage 5.2's
+		// DecorPopulationNode needs these base model indices and queries them via ServiceLocator
+		// (ProceduralArchetypeCatalog.hpp), same pattern as modelRegistry/modelInstanceManager
+		// below.
+		ProceduralArchetypeIndices proceduralArchetypeIndices;
+		AtmosphereManager         atmosphereManager;
+		VolumetricLightingManager volumetricLightingManager;
+		CloudLightingManager      cloudLightingManager;
 
-		// Live atmosphere tuning values -- the eventual hook for editing these via a UI, per-frame
-		// source of truth for the AtmosphereUBO (set 0, binding 4) and for the 3 LUT nodes'
-		// AtmosphereRegenerationState throttle (NodeFrameParams::atmosphere).
+		// Live atmosphere tuning values: per-frame source of truth for the AtmosphereUBO (set 0,
+		// binding 4) and for the 3 LUT nodes' AtmosphereRegenerationState throttle
+		// (NodeFrameParams::atmosphere). atmosphereManager.ApplyTo(atmosphere) (DrawFrame) is
+		// the UI-editable hook into this struct's cloud/sky-optics subset; water-specific
+		// fields here are untouched by that and keep their derived defaults.
 		AtmospherePushConstants atmosphere{};
 
 		TerrainAccelerationStructure terrainAS;
@@ -367,6 +402,14 @@ namespace brassica {
 		vk::Buffer    cdlGradingBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation cdlGradingAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*         cdlGradingMapped[FRAME_OVERLAP]{nullptr, nullptr};
+
+		// LightningStrikePool (frame set binding 7): a single persistent allocation, NOT one per
+		// FRAME_OVERLAP slot like every buffer above -- it's 100% GPU-owned state that must
+		// survive across frames unmodified by anything on the CPU side, same reasoning as
+		// TerrainReadbackStaging's single handle. Every frameDescriptorSets[i] below points its
+		// binding 7 at this same buffer.
+		vk::Buffer    lightningStrikePoolBuffer{nullptr};
+		VmaAllocation lightningStrikePoolAllocation{nullptr};
 
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 

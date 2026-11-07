@@ -1,0 +1,44 @@
+#pragma once
+
+#include <cstdint>
+
+namespace brassica {
+
+	class ModelRegistry;
+	class MaterialManager;
+
+	// First index of each contiguous model-index run RegisterProceduralArchetypes() registers --
+	// Stage 5.2's decor generation shader (decor_gen_chunk.comp) needs these to pick a real
+	// modelIndex per placed instance (treeModelBase + variant, etc.), since ModelRegistry hands
+	// out indices in registration order and nothing else in the engine knows this catalog's
+	// layout otherwise.
+	struct ProceduralArchetypeIndices {
+		std::uint32_t treeBase{0};   // 6 consecutive tree variants (3 deciduous sizes + pine/palm/cactus)
+		std::uint32_t bushBase{0};   // 2 consecutive bush variants
+		std::uint32_t rockBase{0};   // 3 consecutive rock variants
+		std::uint32_t flowerBase{0}; // 3 consecutive flower variants (procedural plant generation v2)
+	};
+
+	// Stage 5.1 of the GPU-driven model-instance plan: the real fixed archetype catalog
+	// (confirmed with sgreenhusted: a small bounded set, not per-instance/per-seed infinite
+	// variation), replacing the old GPU-baked FoliageBakeNode/FoliageArchetypeRenderNode tree/
+	// bush path and rocks' live-every-frame emitRockItem path. Bushes reuse
+	// BuildProceduralBranchingTree with different parameters (shorter, more branches per node,
+	// wider pitch spread) rather than a separate generator -- the only real difference between
+	// "tree" and "bush" here is parametrization, not mechanism. Registers every variant via the
+	// unchanged ModelRegistry::RegisterAsset(), same call site Engine.cpp already uses for the
+	// cow/procedural-tree/Manifold-test-tree.
+	//
+	// Procedural plant generation v2: added a Flower category (BuildProceduralPlant with a
+	// short, unbranched stem and enableFlowers=true -- a real flower head via
+	// ManifoldFlowerAsset.hpp, not the GPU's own flat-fan emitFlowerItem). Tree/bush also now go
+	// through BuildProceduralPlant (curved branches via the Catmull-Rom warp, real flared
+	// junctions) instead of the old BuildProceduralBranchingTree's straight segments -- that
+	// generator itself is kept (still tested, still a real working fallback), just no longer
+	// called from here.
+	// materialManager registers one real MaterialData per archetype kind (bark, rock, flower)
+	// instead of every procedural mesh defaulting to flat-white materialIndex 0 -- see
+	// feedback/project memory on the "grey decor" bug this fixes.
+	ProceduralArchetypeIndices RegisterProceduralArchetypes(ModelRegistry& registry, MaterialManager& materialManager);
+
+} // namespace brassica

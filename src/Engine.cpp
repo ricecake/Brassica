@@ -5,13 +5,21 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <thread>
 
 #include "spdlog/spdlog.h"
 
 #include "graph/Dot.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
-#include "terrain/TerrainMapExporter.hpp"
+#include "passes/biome/resources.hpp"
+#include "passes/clouds/resources.hpp"
+#include "passes/model/ManifoldTreeAsset.hpp"
+#include "passes/model/ModelAsset.hpp"
+#include "passes/model/ProceduralArchetypeCatalog.hpp"
+#include "passes/model/ProceduralTreeAsset.hpp"
+#include "passes/terrain/resources.hpp"
+#include "passes/terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
 #include "types/CdlGradingData.hpp"
 #include <glm/gtc/matrix_transform.hpp>
@@ -520,12 +528,71 @@ namespace brassica {
 			std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {})
 		);
 
+		// Stage 2: ModelRegistry is producer-agnostic -- GltfModelManager (a real glTF/GLB file)
+		// is one producer, BuildProceduralTreeAsset() (a hand-built asset, no file/textures at
+		// all) is another, proving the registry doesn't secretly assume glTF. Registered
+		// unconditionally regardless of the glTF load's success: a failed load just leaves
+		// cowAsset empty (0 meshlets), which registers as a harmless no-op model. Failed load
+		// result intentionally unchecked here, same as the old single-model call -- a model
+		// with GetTotalMeshletCount() == 0 already keeps ModelRenderNode inactive on its own.
+		ModelAsset cowAsset;
+		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager, cowAsset);
+		modelRegistry.RegisterAsset(cowAsset, "Cow");
+		modelRegistry.RegisterAsset(BuildProceduralTreeAsset(), "Procedural Tree");
+		modelRegistry.RegisterAsset(BuildManifoldTestTree(), "Manifold Test Tree");
+		proceduralArchetypeIndices = RegisterProceduralArchetypes(modelRegistry, materialManager);
+		serviceLocator.Provide<ModelRegistry>(std::shared_ptr<ModelRegistry>(&modelRegistry, [](ModelRegistry*) {}));
+		serviceLocator.Provide<ModelInstanceManager>(
+			std::shared_ptr<ModelInstanceManager>(&modelInstanceManager, [](ModelInstanceManager*) {})
+		);
+
+		// Debug texture dump: click-a-button GPU->CPU copy + PNG export for world-state
+		// textures (TextureDumpWidget, "Debug" category). Pre-registered, fixed list -- add
+		// the next one as one more RegisterDumpable<K>() call. TerrainBiomeMainTexture/
+		// TerrainWeatherBiomeTexture are TerrainBiomeNode's stable resolved outputs; the A/B
+		// suffixed keys are its internal CA ping-pong state (either side is "real," neither is
+		// uniquely "current" from outside that node), exposed separately rather than guessed at.
+		textureDumpService.Init(device, graphicsQueue, graphicsQueueFamily, allocator, physicalRegistry);
+		textureDumpService.RegisterDumpable<TerrainBiomeMainTexture>("Biome Map");
+		textureDumpService.RegisterDumpable<TerrainWeatherBiomeTexture>("Weather/Cloud Coverage Map");
+		textureDumpService.RegisterDumpable<TerrainWeatherPingPongTexture>("Weather CA Ping-Pong State");
+		textureDumpService.RegisterDumpable<TerrainWeatherMapATexture>("Weather CA State (A)");
+		textureDumpService.RegisterDumpable<TerrainWeatherMapBTexture>("Weather CA State (B)");
+		textureDumpService.RegisterDumpable<TerrainBiomeMapATexture>("Biome CA State (A)");
+		textureDumpService.RegisterDumpable<TerrainBiomeMapBTexture>("Biome CA State (B)");
+		textureDumpService.RegisterDumpable<TerrainClipmapTexture>("Terrain Height/Normal (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainMinMaxTexture>("Terrain Min/Max (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainBiomeTexture>("Terrain Biome Index (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainShadowMap>("Terrain Shadow Map");
+		textureDumpService.RegisterDumpable<CloudShadowMap>("Cloud Shadow Map");
+		serviceLocator.Provide<TextureDumpService>(
+			std::shared_ptr<TextureDumpService>(&textureDumpService, [](TextureDumpService*) {})
+		);
+		serviceLocator.Provide<ProceduralArchetypeIndices>(
+			std::shared_ptr<ProceduralArchetypeIndices>(&proceduralArchetypeIndices, [](ProceduralArchetypeIndices*) {})
+		);
+
 		particleManager.Initialize();
 		serviceLocator.Provide<IParticleManager>(
 			std::shared_ptr<IParticleManager>(&particleManager, [](IParticleManager*) {})
 		);
 		serviceLocator.Provide<ParticleManager>(
 			std::shared_ptr<ParticleManager>(&particleManager, [](ParticleManager*) {})
+		);
+
+		atmosphereManager.Initialize();
+		serviceLocator.Provide<AtmosphereManager>(
+			std::shared_ptr<AtmosphereManager>(&atmosphereManager, [](AtmosphereManager*) {})
+		);
+
+		volumetricLightingManager.Initialize();
+		serviceLocator.Provide<VolumetricLightingManager>(
+			std::shared_ptr<VolumetricLightingManager>(&volumetricLightingManager, [](VolumetricLightingManager*) {})
+		);
+
+		cloudLightingManager.Initialize();
+		serviceLocator.Provide<CloudLightingManager>(
+			std::shared_ptr<CloudLightingManager>(&cloudLightingManager, [](CloudLightingManager*) {})
 		);
 
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
@@ -548,6 +615,9 @@ namespace brassica {
 		lightManager.LoadState(configManager);
 		terrainManager.LoadState(configManager);
 		particleManager.LoadState(configManager);
+		atmosphereManager.LoadState(configManager);
+		volumetricLightingManager.LoadState(configManager);
+		cloudLightingManager.LoadState(configManager);
 		terrainAS.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
@@ -1203,6 +1273,36 @@ namespace brassica {
 			.familyIndex = transferQueueFamily
 		};
 
+		// S0 data-gathering only (design plan's restructure, "zippy-seeking-hanrahan"): the real
+		// numbers S7a's set-0-storage spike needs (ring-slice alignment) and S8's queue
+		// introspection needs (how many queues of each type the device can actually give us),
+		// logged once at startup so they're on hand without re-querying by hand on whatever
+		// machine ends up running those stages. Not read by anything yet.
+		{
+			const auto queueFamilyProps = chosenGPU.getQueueFamilyProperties();
+			for (std::size_t i = 0; i < queueFamilyProps.size(); ++i) {
+				const auto& props = queueFamilyProps[i];
+				spdlog::info(
+					"Queue family {}: count={} flags={} timestampValidBits={}",
+					i,
+					props.queueCount,
+					vk::to_string(props.queueFlags),
+					props.timestampValidBits
+				);
+			}
+
+			const vk::PhysicalDeviceLimits& limits = chosenGPU.getProperties().limits;
+			spdlog::info(
+				"Device limits: minUniformBufferOffsetAlignment={} minStorageBufferOffsetAlignment={} "
+				"nonCoherentAtomSize={}",
+				limits.minUniformBufferOffsetAlignment,
+				limits.minStorageBufferOffsetAlignment,
+				limits.nonCoherentAtomSize
+			);
+
+			spdlog::info("std::thread::hardware_concurrency() = {}", std::thread::hardware_concurrency());
+		}
+
 		// Initialize VMA
 		VmaAllocatorCreateInfo allocatorInfo{};
 		allocatorInfo.physicalDevice = chosenGPU;
@@ -1305,7 +1405,7 @@ namespace brassica {
 				.moonRadiance = glm::vec3(0.1f, 0.12f, 0.16f),
 				.time = 0.0f,
 				.worldScale = 1.0f,
-				.multiScatScale = 1.0f,
+				.multiScatScale = atmosphereManager.GetMultiScatScale(),
 				.cloudShadowIntensity = 0.5f,
 				.skyExposure = lightManager.GetSkyExposure(),
 				.registry = &registry,
@@ -1319,8 +1419,11 @@ namespace brassica {
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 			frameGraph.Register<graph::Import<LightsBuffer>>();
-			materialManager.RegisterBufferNode(frameGraph);
+			frameGraph.Register<graph::Import<ClusteredLighting>>();
+			materialManager.RegisterBufferNode(frameGraph, physicalRegistry.Catalog());
 			foliageManager.RegisterTableNode(frameGraph);
+			modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+			modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 			nodeRegistry.RegisterAllInto(frameGraph);
 			vk::Extent2D        extent = GetSwapchainExtent();
 			graph::FrameContext ctx{
@@ -1493,6 +1596,16 @@ namespace brassica {
 		lightManager.Update(deltaTime, camera.position);
 		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
+		// Sync UI-tunable settings into the live push-constant struct before anything below
+		// reads it (the AtmosphereUBO upload and this frame's NodeFrameParams.atmosphere, used
+		// by the 3 LUT nodes' regen-on-change throttle). Previously `atmosphere` was just
+		// default-constructed once in Engine.hpp with no runtime surface at all. `atmosphere`/
+		// AtmosphereUBO is now the common settings UBO, not atmosphere-only -- cloud and
+		// volumetric settings land in the same struct/buffer instead of per-node push constants.
+		atmosphereManager.ApplyTo(atmosphere);
+		cloudLightingManager.ApplyTo(atmosphere);
+		volumetricLightingManager.ApplyTo(atmosphere);
+
 		FrameDetails frameDetails{
 			.deltaTime = deltaTime,
 			.totalTime = currentTime,
@@ -1527,6 +1640,8 @@ namespace brassica {
 		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
 		ubo.previousViewProjMatrix = previousViewProjMatrix;
 		ubo.time = static_cast<float>(currentTime);
+		// From the double, not from the already-narrowed ubo.time -- see FrameUBO.hpp's comment.
+		ubo.timeMs = static_cast<std::uint32_t>(currentTime * 1000.0);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
 		ubo.nearPlane = camera.nearPlane;
@@ -1541,6 +1656,13 @@ namespace brassica {
 		}
 
 		LightingUBO lightingUbo = lightManager.GetLightingUBO();
+		// LightManager has no knowledge of LightningManager (a separate Engine-owned system,
+		// updated above), so it always returns a zeroed lightningColor -- overwrite it here
+		// with the real global pulse/color instead of adding a cross-system dependency to
+		// LightManager's own API. Previously always zero: shaders/lighting.glsl's
+		// uLightningColor was wired up on the shader side with nothing upstream ever writing
+		// it, so cloud_render.frag's lightning glow term never fired.
+		lightingUbo.lightningColor = glm::vec4(lightningManager.GetGlobalColor(), lightningManager.GetGlobalPulse());
 		if (lightingUboMapped[activeFrame]) {
 			std::memcpy(lightingUboMapped[activeFrame], &lightingUbo, sizeof(LightingUBO));
 			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));
@@ -1590,6 +1712,19 @@ namespace brassica {
 		physicalRegistry.RegisterImportedBuffer<LightsBuffer>(
 			lightsSSBOBuffers[activeFrame],
 			graph::StorageBufferDesc(sizeof(LightsSSBOData)),
+			true
+		);
+
+		// ClusteredLighting (frame set binding 3, shaders/lighting.glsl's uClusters) -- S0 fix,
+		// design plan's restructure: this used to be a Create()'d transient graph buffer with
+		// its own Desc() while the real data lived here, in clusterGridBuffers[], imported
+		// separately into set 0 -- the graph's buffer barriers named the wrong VkBuffer
+		// entirely, a phantom resource. Same pattern as AutoExposureBuffer/LightsBuffer above:
+		// imported right after InitFrameSet's binding setup covers it, and
+		// ClusterLightAssignmentNode's Setup() now does a real Modify<>() against it.
+		physicalRegistry.RegisterImportedBuffer<ClusteredLighting>(
+			clusterGridBuffers[activeFrame],
+			graph::StorageBufferDesc(TOTAL_CLUSTERS * sizeof(ClusterGPU)),
 			true
 		);
 
@@ -1659,8 +1794,9 @@ namespace brassica {
 			.moonDir = moonDir,
 			.moonRadiance = moonRadiance,
 			.time = ubo.time,
+			.timeMs = ubo.timeMs,
 			.worldScale = 1.0f,
-			.multiScatScale = 1.0f,
+			.multiScatScale = atmosphereManager.GetMultiScatScale(),
 			.cloudShadowIntensity = 0.5f,
 			.skyExposure = lightManager.GetSkyExposure(),
 			.registry = &registry,
@@ -1683,8 +1819,12 @@ namespace brassica {
 		// --print-render-graph path below) and produced exactly ValidateRuntime's "no node or
 		// import produces these resource keys" error on real hardware.
 		frameGraph.Register<graph::Import<LightsBuffer>>();
-		materialManager.RegisterBufferNode(frameGraph);
+		frameGraph.Register<graph::Import<ClusteredLighting>>();
+		materialManager.RegisterBufferNode(frameGraph, physicalRegistry.Catalog());
 		foliageManager.RegisterTableNode(frameGraph);
+		modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+		modelInstanceManager.SetCurrentTimeMs(ubo.timeMs);
+		modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
@@ -1925,7 +2065,7 @@ namespace brassica {
 			return;
 		}
 
-		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -1968,6 +2108,12 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 7: LightningStrikePool
+		bindings[7]
+			.setBinding(7)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
@@ -1975,12 +2121,55 @@ namespace brassica {
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 4 * FRAME_OVERLAP}
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 5 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
 		poolInfo.setMaxSets(FRAME_OVERLAP);
 		frameDescriptorPool = device.createDescriptorPool(poolInfo);
+
+		// LightningStrikePool: one persistent allocation, not per-FRAME_OVERLAP-slot like
+		// everything else here -- see the member comment in Engine.hpp. Zeroed once so
+		// ringCounter starts at 0 and every slot's lifetime starts at 0 (nothing renders until a
+		// real climate_ca.comp trigger claims a slot).
+		{
+			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = sizeof(LightningStrikePoolLayout);
+			bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			const auto concurrentFamilies = physicalRegistry.ConcurrentFamilies();
+			if (concurrentFamilies.size() > 1) {
+				bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+				bufferInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(concurrentFamilies.size());
+				bufferInfo.pQueueFamilyIndices = concurrentFamilies.data();
+			}
+			VmaAllocationCreateInfo allocCreateInfo{};
+			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+				VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			VkBuffer          rawBuffer = VK_NULL_HANDLE;
+			VmaAllocationInfo allocResultInfo{};
+			if (vmaCreateBuffer(
+					allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &lightningStrikePoolAllocation, &allocResultInfo
+				) != VK_SUCCESS) {
+				spdlog::critical("Failed to create LightningStrikePool buffer with VMA");
+				throw std::runtime_error("Failed to create LightningStrikePool buffer with VMA");
+			}
+			lightningStrikePoolBuffer = rawBuffer;
+			if (allocResultInfo.pMappedData) {
+				std::memset(allocResultInfo.pMappedData, 0, sizeof(LightningStrikePoolLayout));
+			}
+			// One-time: this handle never changes, same as TerrainReadbackStaging's own
+			// RegisterImportedBuffer call (also outside the per-frame DrawFrame loop).
+			physicalRegistry.RegisterImportedBuffer<LightningStrikePool>(
+				lightningStrikePoolBuffer,
+				graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Buffer,
+					.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer),
+					.byteSize = sizeof(LightningStrikePoolLayout),
+				},
+				false
+			);
+		}
 
 		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, frameSetLayout);
 		vk::DescriptorSetAllocateInfo        allocInfo{};
@@ -2091,7 +2280,7 @@ namespace brassica {
 			if (cdlGradingMapped[i]) {
 				std::memcpy(cdlGradingMapped[i], &s_cdlGradingLayers, sizeof(CdlGradingLayersHost));
 			}
-			std::array<vk::DescriptorBufferInfo, 7> bufferDescs{};
+			std::array<vk::DescriptorBufferInfo, 8> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
@@ -2099,8 +2288,13 @@ namespace brassica {
 			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
 			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
 			bufferDescs[6].setBuffer(cdlGradingBuffers[i]).setOffset(0).setRange(sizeof(CdlGradingLayersHost));
+			// Same single buffer for every i -- see lightningStrikePoolBuffer's member comment.
+			bufferDescs[7]
+				.setBuffer(lightningStrikePoolBuffer)
+				.setOffset(0)
+				.setRange(sizeof(LightningStrikePoolLayout));
 
-			std::array<vk::WriteDescriptorSet, 7> writes{};
+			std::array<vk::WriteDescriptorSet, 8> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -2136,6 +2330,11 @@ namespace brassica {
 				.setDstBinding(6)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[6]);
+			writes[7]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(7)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setBufferInfo(bufferDescs[7]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -2184,6 +2383,11 @@ namespace brassica {
 				clusterGridBuffers[i] = nullptr;
 				clusterGridAllocations[i] = nullptr;
 			}
+		}
+		if (lightningStrikePoolBuffer && lightningStrikePoolAllocation) {
+			vmaDestroyBuffer(allocator, lightningStrikePoolBuffer, lightningStrikePoolAllocation);
+			lightningStrikePoolBuffer = nullptr;
+			lightningStrikePoolAllocation = nullptr;
 		}
 		if (frameDescriptorPool) {
 			device.destroyDescriptorPool(frameDescriptorPool);
@@ -2238,11 +2442,22 @@ namespace brassica {
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 6: bindless storage buffers (no single canonical GLSL declaration -- each
 		// consumer aliases its own struct at this binding, same idiom as uImagesRGBA32F's
-		// image2D/image2DArray/image3D aliases at binding 3)
+		// image2D/image2DArray/image3D aliases at binding 3). AssignAndWriteBindlessBufferIndex
+		// (PhysicalRegistry.hpp) auto-registers *every* eStorageBuffer-usage buffer here the
+		// moment it's provisioned, regardless of whether anything actually reads its index --
+		// confirmed on real hardware that 20+ distinct keys are live today (entity, material,
+		// clustered lighting, 5x foliage archetype/instance, 5x gltf geometry, the full
+		// Model*/decor buffer set, 7x particle buffers now that the cluster's reactivated), and
+		// BindlessArena's own index 0 is never handed out (see its own comment), so 16 slots
+		// only ever gave 15 usable ones -- confirmed overflowing on real hardware as a
+		// "vkUpdateDescriptorSets ... oversteps the bounds of this binding" validation error
+		// (same fix landed independently on both the main-unified and model-work branches once
+		// each side's own buffer growth pushed the same pre-existing 16-slot cap over). 64 gives
+		// real headroom beyond today's count.
 		bindings[6]
 			.setBinding(6)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-			.setDescriptorCount(16)
+			.setDescriptorCount(64)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		std::array<vk::DescriptorBindingFlags, 7> bindingFlags{
@@ -2271,7 +2486,7 @@ namespace brassica {
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 64}, // matches binding 6's descriptorCount above
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);

@@ -134,7 +134,9 @@ void main() {
 			params.weatherBiomeIndex,
 			params.gtaoIndex,
 			inUV,
-			params.aoDirectInfluence
+			params.aoDirectInfluence,
+			params.minMaxIndex,
+			params.gridParams
 		).color;
 
 		if (uLights[0].intensity > 0.0) {

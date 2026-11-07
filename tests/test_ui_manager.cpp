@@ -2,9 +2,9 @@
 #include "doctest/doctest.h"
 
 #include "ConfigManager.hpp"
-#include "lighting/LightManager.hpp"
+#include "passes/lighting/LightManager.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/ITerrainManager.hpp"
+#include "passes/terrain/ITerrainManager.hpp"
 #include "EngineConstants.hpp"
 #include "types/CameraData.hpp"
 #include "types/TonemapPushConstants.hpp"

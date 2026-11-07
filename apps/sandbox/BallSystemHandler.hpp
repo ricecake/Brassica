@@ -5,7 +5,7 @@
 
 #include "Engine.hpp"
 #include "SystemHandler.hpp"
-#include "terrain/TerrainManager.hpp"
+#include "passes/terrain/TerrainManager.hpp"
 #include "types/EntityRenderComponent.hpp"
 #include "types/FrameDetails.hpp"
 #include "types/TransformComponent.hpp"

@@ -2,7 +2,7 @@
 
 #include "ConfigManager.hpp"
 #include "imgui.h"
-#include "particle/IParticleManager.hpp"
+#include "passes/particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
 
 namespace brassica::ui {

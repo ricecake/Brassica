@@ -25,6 +25,9 @@ layout(std140, set = 0, binding = 0) uniform FrameUBO {
 	uint  uGlobalSeed;
 	uint  uFrameRandom;
 	mat4  uPreviousViewProjMatrix;
+	// Milliseconds since engine startup -- see FrameUBO.hpp's own comment on why model-instance
+	// clip/startTime comparisons use this instead of uTime.
+	uint  uTimeMs;
 };
 
 // Bindless resource catalog in Set 1 (bindings 0..4). One descriptor set instance -- never
@@ -125,5 +128,11 @@ layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
 // depends on the caller having actually registered whatever it indexes.
 #define SAMPLE_3D_LINEAR(idx, uvw)                                                                                    \
 	texture(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw)
+
+// Explicit-LOD variant of SAMPLE_3D_LINEAR -- for callers picking a mip by hand (e.g.
+// distance-based LOD selection) rather than relying on implicit screen-space derivatives, which
+// aren't meaningful for a raymarch loop's per-step world-space sample position.
+#define SAMPLE_3D_LINEAR_LOD(idx, uvw, lod)                                                                           \
+	textureLod(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw, lod)
 
 #endif // BRASSICA_BINDLESS_GLSL

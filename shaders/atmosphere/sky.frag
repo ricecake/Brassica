@@ -8,13 +8,13 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform SkyPushConstants {
-	vec4 sunDirAndAureole;      // xyz = sunDir, w = sunAureole
+	vec4 sunDirAndAureole;      // xyz = sunDir, w = unused (aureole strength is u_sunAureoleStrength now)
 	vec4 moonDirAndCirrus;     // xyz = moonDir, w = cirrus
 	vec4 sunRadianceAndSkyExp; // xyz = sunRadiance, w = skyExposure
 	float worldScale;
 	uint  skyViewIndex;
 	uint  transmittanceIndex;
-	float padding;
+	uint  weatherBiomeIndex;
 } push;
 
 const float solar_flare_speed = 0.25;
@@ -88,7 +88,18 @@ void main() {
 	// 2. Sun Disc with Aureole
 	vec3  sunDir = normalize(push.sunDirAndAureole.xyz);
 	vec3  sunRadiance = push.sunRadianceAndSkyExp.xyz;
-	float sunAureoleStrength = push.sunDirAndAureole.w;
+	float sunAureoleStrength = u_sunAureoleStrength;
+
+	// Local humidity (weather map's moisture channel, sampled at the camera's position --
+	// there's no ray-hit world position here, unlike boidish's combined sky+terrain shader,
+	// since this node only draws where DeferredNode left no opaque surface) couples into the
+	// aureole below the same way boidish's sky.frag does.
+	float localHumidity = 0.0;
+	if (push.weatherBiomeIndex > 0u && push.weatherBiomeIndex != 0xFFFFu) {
+		float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+		vec2  weatherUV = fract((uCameraPosition.xz / worldExtent) + 0.5);
+		localHumidity = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV).b;
+	}
 
 	vec3 sunUp = vec3(0, 1, 0);
 	vec3 sunRight = normalize(cross(sunUp, sunDir));
@@ -108,7 +119,15 @@ void main() {
 	float distToSun = sqrt(max(0.0, distSq));
 
 	float sunAngularRadius = 0.02; // ~1 degree
-	float aureole = exp(-distToSun * 40.0) * sunAureoleStrength * 3.5;
+
+	// Humidity-driven sun aureole (Mie scattering approximation) -- boidish's formula verbatim,
+	// using fbm_astral (helpers/astral.glsl, already shared with cirrus.frag's cloud drift) for
+	// the turbulent-haze shaping noise.
+	float aureoleNoise = pow((fbm_astral(vec3(rayLocalX * 3.0, rayLocalY * 3.0, uTime * 0.01)) * 0.5) + 1.5, 3.0) / (1.0 + distSq);
+	float hazeHumidity = localHumidity * aureoleNoise;
+	float aureoleScale = 1.1 + smoothstep(0.0, 1.0, hazeHumidity * sunAureoleStrength);
+	float aureole =
+		exp(-distToSun * (45.0 / aureoleScale)) * sunAureoleStrength * 3.5 * (1.3 + 1.75 * hazeHumidity);
 
 	float sunMask = 1.0 - smoothstep(
 		(sunAngularRadius - 0.001) * (sunAngularRadius - 0.001),

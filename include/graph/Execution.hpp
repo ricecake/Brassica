@@ -22,6 +22,12 @@
 
 namespace brassica::graph {
 
+	// Forward-declared only (ResourceCatalog.hpp, which is Vulkan-free too but sits above this
+	// seam) -- ResourceRealization::ensureCatalog below only ever stores a pointer to it, never
+	// dereferences it itself. Keeps this header from gaining a real dependency on
+	// ResourceCatalog.hpp just to carry the auto-registration hook (design plan's S2).
+	class ResourceCatalog;
+
 	enum class ExecutionDomain : std::uint8_t { Graphics, Compute, Transfer, Host };
 
 	// Bit for a GPU queue's slot in a resource's queue-touch mask (PhysicalTexture/Buffer/
@@ -148,9 +154,8 @@ namespace brassica::graph {
 	// own Recipe::realizations -- NodeContext is defined before Recipe, so this type needs to be
 	// complete by the time NodeContext's inline method bodies reference it.
 	struct ResourceRealization {
-		ResourceId   key = nullptr;
-		AccessKind   access = AccessKind::Read;
-		ResourceDesc desc{};
+		ResourceId key = nullptr;
+		AccessKind access = AccessKind::Read;
 
 		// Used only when this realization becomes a color attachment with loadOp=eClear (see
 		// DynamicRenderingWrapper::Begin, PhysicalExecutionBackend.hpp). Defaults to opaque
@@ -187,6 +192,19 @@ namespace brassica::graph {
 		// Requires<A>(), which couples activity to a specific *node*; this couples it to whether
 		// a specific *key* actually has live data flowing into this read.
 		bool required = false;
+
+		// Set unconditionally by SetupBuilder::Record<K> (SetupBuilder.hpp), which requires
+		// HistoryTarget<K> to satisfy CatalogKey (S2b tightened this from a conditional opt-in to
+		// a hard requirement -- see Record<K>'s own comment) -- &EnsureCatalogEntry<
+		// HistoryTarget<K>> (ResourceCatalog.hpp), a thin template instantiation that just does
+		// catalog.Get<K>(). This is what lets Create/Read/Modify<K>() alone register K's catalog
+		// entry, with no separate manual Catalog().Get<K>() call anywhere needing to run first --
+		// PhysicalResourceRegistry::Provision calls this for every realization of every recipe,
+		// including inactive ones, before doing anything else, so registration never depends on a
+		// node's Init actually running or its Setup() being active this frame. Still a nullable
+		// function pointer (not a reference) only because a hand-built Recipe/ResourceRealization
+		// outside SetupBuilder (a test fixture) could in principle leave it unset.
+		void (*ensureCatalog)(ResourceCatalog&) = nullptr;
 	};
 
 	// Opaque per-resource bindless-index lookup *and* CPU-write entry point. Implemented by

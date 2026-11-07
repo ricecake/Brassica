@@ -1,7 +1,7 @@
 #include "ui/FoliageWidget.hpp"
 
 #include "ConfigManager.hpp"
-#include "foliage/IFoliageManager.hpp"
+#include "passes/foliage/IFoliageManager.hpp"
 #include "imgui.h"
 #include "ServiceLocator.hpp"
 

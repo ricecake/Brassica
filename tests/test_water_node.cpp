@@ -7,7 +7,7 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "passes/WaterNode.hpp"
+#include "passes/water/nodes/WaterNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -27,27 +27,19 @@ namespace {
 		vk::Extent2D extent;
 		vk::Format   swapchainFormat;
 
-		void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Create<GBufferPosition>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
-			r.Create<GBufferMaterial>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm));
-			r.Create<GBufferAlbedo>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Srgb));
-			r.Create<GBufferNormal>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
-			r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
-			r.Create<HdrColor>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
-			// Sampled-only, unlike the real TerrainMinMaxDesc (TerrainManager.hpp), which also
-			// requests eStorage for terrain_gen.comp's writer -- this fixture only needs
-			// WaterNode's read side, and this bindless set (below) declares no storage-image
-			// binding to write that second descriptor into.
-			r.Create<TerrainMinMaxTexture>().Desc(graph::ResourceDesc{
-				.kind = graph::ResourceDesc::Kind::Image2D,
-				.width = 4,
-				.height = 4,
-				.layers = 2,
-				.formatCode = static_cast<std::uint32_t>(vk::Format::eR32G32Sfloat),
-				.usageMask = static_cast<std::uint32_t>(vk::ImageUsageFlagBits::eSampled),
-			});
-			r.Create<SkyViewLUT>().Desc(graph::ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR16G16B16A16Sfloat));
+			r.Create<GBufferPosition>();
+			r.Create<GBufferMaterial>();
+			r.Create<GBufferAlbedo>();
+			r.Create<GBufferNormal>();
+			r.Create<GBufferDepth>();
+			r.Create<HdrColor>();
+			// GBuffer*/HdrColor/SkyViewLUT/TerrainMinMaxTexture are all catalog-converted -- no
+			// .Desc() needed, the catalog's own Desc() always wins regardless of what a node's
+			// realization carries.
+			r.Create<TerrainMinMaxTexture>();
+			r.Create<SkyViewLUT>();
 		}
 
 		void Execute(graph::NodeContext&) {}

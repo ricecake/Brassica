@@ -1,0 +1,62 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Ages every strike-pool slot and writes its reserved uLights[] entry -- same idiom as
+// shaders/particle_behavior.comp's firefly lights (LIGHTS_BUFFER_WRITABLE, a static reserved
+// slot range, unconditional zero then conditional overwrite). Dispatched once per frame with
+// LIGHTNING_MAX_STRIKES threads, before the graphics phase, so shaders/lightning.task's
+// per-frame read of lifetime/polyline-plotting sees already-aged state.
+#define LIGHTS_BUFFER_WRITABLE
+#define LIGHTNING_STRIKE_POOL_WRITABLE
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "lighting.glsl"
+#include "atmosphere/common.glsl"
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform LightningAgePushConstants {
+	float deltaTime;
+} push;
+
+void main() {
+	uint slot = gl_GlobalInvocationID.x;
+	if (slot >= LIGHTNING_MAX_STRIKES) {
+		return;
+	}
+
+	uStrikes[slot].lifetime -= push.deltaTime;
+	float lifetime = uStrikes[slot].lifetime;
+	float maxLifetime = max(uStrikes[slot].maxLifetime, 0.0001);
+
+	uint lightSlot = LIGHTNING_LIGHT_SLOT_BASE + slot;
+	// Unconditional zero first -- a dead slot's light goes dark the instant lifetime expires,
+	// regardless of what the conditional branch below last wrote.
+	uLights[lightSlot].intensity = 0.0;
+
+	if (lifetime > 0.0) {
+		// Forces the clustered-lighting pass to consider this whole reserved range active
+		// regardless of the CPU's own uLightCount -- same reasoning as the firefly path.
+		atomicMax(uLightCount, LIGHTNING_LIGHT_SLOT_BASE + LIGHTNING_MAX_STRIKES);
+
+		// Flicker envelope -- same formula LightningManager::Update() already uses on the CPU
+		// path (src/lighting/LightningManager.cpp), moved here since this GPU path now owns the
+		// strike's whole lifecycle instead.
+		float normalizedAge = 1.0 - clamp(lifetime / maxLifetime, 0.0, 1.0);
+		float flicker = max(0.0, sin(normalizedAge * PI) * (0.8 + 0.2 * sin(lifetime * 50.0)));
+
+		vec3 midPoint = mix(uStrikes[slot].originAndSeed.xyz, uStrikes[slot].endPos.xyz, 0.5);
+
+		uLights[lightSlot].position = midPoint;
+		uLights[lightSlot].intensity = u_lightningFlashIntensity * 50.0 * flicker;
+		uLights[lightSlot].color = vec3(0.8, 0.85, 1.0);
+		uLights[lightSlot].type = LIGHT_TYPE_FLASH;
+		uLights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
+		uLights[lightSlot].innerCutoff = 0.0;
+		uLights[lightSlot].outerCutoff = 8.0;
+		uLights[lightSlot].flags = 0;
+		uLights[lightSlot]._pad0 = 0.0;
+		uLights[lightSlot]._pad1 = 0.0;
+	}
+}

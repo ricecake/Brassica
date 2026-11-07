@@ -3,8 +3,9 @@
 
 #include "graph/Graph.hpp"
 #include "graph/SetupBuilder.hpp"
-#include "passes/ResourceKeys.hpp"
-#include "passes/TerrainBiomeNode.hpp"
+#include "passes/biome/resources.hpp"
+#include "resources/core.hpp"
+#include "passes/biome/nodes/TerrainBiomeNode.hpp"
 #include "render/NodeLifecycle.hpp"
 
 using namespace brassica;
@@ -22,9 +23,10 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 
 	CHECK(builder.Active() == true);
 	CHECK(builder.Domain() == graph::ExecutionDomain::Compute);
-	// 7 ReadWrite texture realizations plus one Read<LightsBuffer>() (shaders/climate_ca.comp
-	// reads uLights[0].direction via clustered_lighting.glsl).
-	CHECK(builder.Realizations().size() == 8);
+	// 7 ReadWrite texture realizations, one Read<LightsBuffer>() (shaders/climate_ca.comp reads
+	// uLights[0].direction via clustered_lighting.glsl), and one Modify<LightningStrikePool>()
+	// (climate_ca.comp claims a ring-buffer slot to trigger a new lightning strike).
+	CHECK(builder.Realizations().size() == 9);
 
 	bool foundWeatherBiome = false;
 	bool foundPingPong = false;

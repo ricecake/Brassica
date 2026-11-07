@@ -140,6 +140,16 @@ set(FASTNOISE2_TESTS OFF CACHE BOOL "" FORCE)
 set(FASTNOISE2_UTILITY OFF CACHE BOOL "" FORCE)
 set(FASTNOISE2_STRICT_FP OFF CACHE BOOL "Disable strict floating point calculations for maximum performance" FORCE)
 
+# SPIRV-Reflect: only the static library (the shader-push-constant validation plan's S4) --
+# skip its own CLI executable/examples/test suite, which the default options build unasked.
+# S0 spike (deleted after capturing the answer, see tests/ history if needed): reflecting
+# gtao.comp's real compiled SPIR-V against GTAOPushConstants recovered the exact push-block
+# size, member count, member names, AND every member offset, byte for byte -- this project's
+# shaderc settings (SetGenerateDebugInfo(), optimization_level_performance) do NOT strip the
+# OpName/member-offset decorations S4's reflection check needs.
+set(SPIRV_REFLECT_EXECUTABLE OFF CACHE BOOL "" FORCE)
+set(SPIRV_REFLECT_STATIC_LIB ON CACHE BOOL "" FORCE)
+
 # Subdirectories
 add_subdirectory(external/glfw)
 add_subdirectory(external/efsw)
@@ -158,6 +168,18 @@ add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
 add_subdirectory(external/geometry-central)
 add_subdirectory(external/ozz-animation)
+add_subdirectory(external/SPIRV-Reflect)
+
+# Manifold (CSG/boolean mesh ops, for procedural tree/bush/rock generation -- Stage 5 of the
+# GPU-driven model-instance plan). Disable everything that would otherwise pull in extra
+# FetchContent'd dependencies (googletest, TBB, nanobind) -- BUILD_SHARED_LIBS is already forced
+# OFF above, so Manifold's own `option(BUILD_SHARED_LIBS ... ON)` is a no-op (CMake's option()
+# doesn't override an already-cached variable).
+set(MANIFOLD_TEST OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_CBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_PYBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_PAR OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/manifold)
 if(TARGET eigen)
     target_compile_definitions(eigen INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
 endif()
@@ -228,6 +250,7 @@ target_include_directories(brassica
         ${CMAKE_CURRENT_SOURCE_DIR}/external/geometry-central/include
         ${CMAKE_CURRENT_SOURCE_DIR}/external/ozz-animation/include
         external/eigen
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/manifold/include
 )
 
 target_link_libraries(brassica
@@ -253,6 +276,7 @@ target_link_libraries(brassica
         ozz_animation
         ozz_animation_offline
         ozz_geometry
+        manifold
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)

@@ -5,8 +5,8 @@
 #include "graph/Graph.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
-#include "passes/AtmosphereLUTNode.hpp"
-#include "passes/SkyBackgroundNode.hpp"
+#include "passes/atmosphere/nodes/AtmosphereLUTNode.hpp"
+#include "passes/atmosphere/nodes/SkyBackgroundNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 

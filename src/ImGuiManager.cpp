@@ -12,11 +12,13 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
-#include "lighting/ILightManager.hpp"
+#include "passes/lighting/ILightManager.hpp"
 #include "ui/AudioWidget.hpp"
 #include "ui/FoliageWidget.hpp"
 #include "ui/LightingWidget.hpp"
 #include "ui/ManagerSettingsWidget.hpp"
+#include "ui/ModelInstanceWidget.hpp"
+#include "ui/TextureDumpWidget.hpp"
 #include "ui/ParticleWidget.hpp"
 #include "ui/QuickSettingsWidget.hpp"
 #include <cstdio>
@@ -51,6 +53,8 @@ namespace brassica {
 		AddWidget(std::make_shared<ui::LightingWidget>());
 		AddWidget(std::make_shared<ui::FoliageWidget>());
 		AddWidget(std::make_shared<ui::ParticleWidget>());
+		AddWidget(std::make_shared<ui::ModelInstanceWidget>());
+		AddWidget(std::make_shared<ui::TextureDumpWidget>());
 	}
 
 	void ImGuiManager::InitVulkanAndGlfw(

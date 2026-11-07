@@ -10,7 +10,7 @@
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
-#include "passes/HiZDownsampleNode.hpp"
+#include "passes/scene/nodes/HiZDownsampleNode.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
 
@@ -49,9 +49,9 @@ struct FakeDepthWriterNode {
 		}
 	}
 
-	void Setup(graph::SetupBuilder& r, const graph::FrameContext& ctx) {
+	void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 		r.Domain(graph::ExecutionDomain::Transfer);
-		r.Create<GBufferDepth>().Desc(graph::DepthBufferDesc(ctx.width, ctx.height));
+		r.Create<GBufferDepth>();
 	}
 
 	void Execute(graph::NodeContext& ctx) {

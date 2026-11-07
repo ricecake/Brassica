@@ -1,0 +1,31 @@
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "bindless.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Box-filter mip generator for CloudDetailVolume -- a one-time, dirty-flag-gated bake (not a
+// per-frame cost), so this deliberately skips FFX SPD's single-dispatch-many-mips machinery
+// (HiZDownsampleNode/TerrainMinMaxDownsampleNode's approach) in favor of one dispatch per mip
+// level: each reads the previous mip via a trilinear-filtered textureLod against the full-mip-
+// chain SAMPLED view (already covers every mip) and writes the next mip via its own single-mip
+// STORAGE view. CloudVolumeDownsampleNode's Execute() inserts a barrier between dispatches.
+layout(push_constant) uniform CloudVolumeDownsamplePushConstants {
+	uint srcSampledIdx; // full-mip-chain SAMPLED index for CloudDetailVolume
+	uint dstStorageIdx; // STORAGE index for the mip level being written (srcMip + 1)
+	uint srcMip;        // mip level being read
+	uint dstDim;        // dst mip's voxel dimension (srcDim / 2)
+} push;
+
+void main() {
+	uvec3 vox = gl_GlobalInvocationID;
+	if (vox.x >= push.dstDim || vox.y >= push.dstDim || vox.z >= push.dstDim) {
+		return;
+	}
+
+	vec3 uvw = (vec3(vox) + 0.5) / float(push.dstDim);
+	float value = SAMPLE_3D_LINEAR_LOD(push.srcSampledIdx, uvw, float(push.srcMip)).r;
+
+	imageStore(uImages3DGenericWrite[nonuniformEXT(push.dstStorageIdx)], ivec3(vox), vec4(value, 0.0, 0.0, 1.0));
+}

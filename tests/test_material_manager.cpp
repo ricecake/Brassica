@@ -4,10 +4,11 @@
 #include <glm/glm.hpp>
 
 #include "graph/Graph.hpp"
-#include "render/MaterialManager.hpp"
+#include "graph/ResourceCatalog.hpp"
+#include "passes/material/MaterialManager.hpp"
 
 TEST_CASE("MaterialData - std430 Layout and Sentinel Values") {
-	CHECK(sizeof(brassica::MaterialData) == 128);
+	CHECK(sizeof(brassica::MaterialData) == 160);
 	CHECK(brassica::UNBOUND_TEXTURE_ID == 0xFFFFFFFFu);
 
 	brassica::MaterialData mat;
@@ -24,6 +25,9 @@ TEST_CASE("MaterialData - std430 Layout and Sentinel Values") {
 	CHECK(mat.palette[1] == glm::vec4(0.5f, 0.5f, 0.5f, 0.0f));
 	CHECK(mat.palette[2] == glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));
 	CHECK(mat.palette[3] == glm::vec4(0.0f, 0.33f, 0.67f, 0.0f));
+
+	CHECK(mat.baseColorFactor == glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	CHECK(mat.emissiveFactor == glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
 }
 
 TEST_CASE("MaterialManager - Material Registration, Retrieval, and Updates") {
@@ -79,13 +83,20 @@ TEST_CASE("MaterialManager - Persistence Across Simulated Frame Cycles") {
 	std::uint32_t id1 = mgr.RegisterMaterial(mat1);
 
 	// Simulate frame graph builds across multiple frames
+	brassica::graph::ResourceCatalog catalog;
 	for (int frame = 0; frame < 5; ++frame) {
 		brassica::graph::Graph frameGraph;
-		mgr.RegisterBufferNode(frameGraph);
+		mgr.RegisterBufferNode(frameGraph, catalog);
 
 		const auto& bufferNode = mgr.GetBufferNode();
 		REQUIRE(bufferNode.data.size() == mgr.GetMaterialCount());
 		CHECK(bufferNode.data[id1].textureIds.x == 42);
+
+		// RegisterBufferNode publishes the real byte size onto the catalog instance every call.
+		CHECK(
+			catalog.Get<brassica::MaterialBuffer>().byteSize ==
+			mgr.GetMaterialCount() * sizeof(brassica::MaterialData)
+		);
 	}
 
 	// Register another material later during frame execution
