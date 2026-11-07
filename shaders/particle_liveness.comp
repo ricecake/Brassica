@@ -118,7 +118,7 @@ void main() {
 	uParticles[idx].type = pType;
 
 	float distToCam = length(uParticles[idx].position.xyz - camPos);
-	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 300.0;
+	bool expired = uParticles[idx].lifetime <= 0.0 || distToCam > 3000.0;
 
 	if (expired) {
 		float totalLifetime = 8.0 + hash1(idx * 7u + uFrameIndex) * 8.0;
@@ -128,17 +128,17 @@ void main() {
 		uParticles[idx].lifetime = totalLifetime - skippedTime;
 
 		// Spawn at outer ridges of visibility (180m - 280m distance) / newly disoccluded outer boundary
-		float rDist = 180.0 + hash1(idx * 13u + uFrameIndex) * 100.0;
+		float rDist = 1000.0 + hash1(idx * 13u + uFrameIndex) * 100.0;
 		float rAngle = hash1(idx * 17u + uFrameIndex) * 6.2831853;
 		float rHeight = (hash1(idx * 23u + uFrameIndex) - 0.5) * 40.0;
 
 		vec3 spawnCenter = camPos + camFwd * rDist + (camRight * cos(rAngle) + camUp * sin(rAngle)) * (rDist * 0.6);
-		spawnCenter.y += rHeight;
+		spawnCenter.y = 15.0+(sampleTerrainClipmap(uPush.clipmapIndex, spawnCenter.xz, 0, terrainClipmapLevelFor(spawnCenter.xz, uPush.terrainTextureDim, uPush.terrainNumLevels))).x;
 
 		if (pType == 0u) { // Birds (Above water)
-			spawnCenter.y = max(spawnCenter.y, max(camPos.y + 2.0, uPush.waterLevel + 5.0));
+			spawnCenter.y = max(spawnCenter.y+50.0, uPush.waterLevel + 5.0);
 			vec3 flyDir = normalize(camFwd + camRight * (hash1(idx * 37u) - 0.5) + vec3(0.0, 0.1, 0.0));
-			uParticles[idx].velocity = vec4(flyDir * (10.0 + hash1(idx * 41u) * 6.0), 0.0);
+			uParticles[idx].velocity = vec4(flyDir * (50.0 + hash1(idx * 41u) * 6.0), 0.0);
 			uParticles[idx].color = vec4(0.8, 0.85, 0.9, 1.0);
 			uParticles[idx].misc = vec4(hash1(idx * 43u) * 6.28, 0.0, 0.0, 0.0);
 		} else if (pType == 1u) { // Fish (Underwater)
