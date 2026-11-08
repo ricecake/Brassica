@@ -1,0 +1,98 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+#include "helpers/culling.glsl"
+
+layout(push_constant) uniform GroundDebrisPushConstants {
+	uvec4 gridParams;        // x = tilesPerSide, y = totalTiles, z = reserved, w = textureDim
+	vec4  cameraPos;         // camera world position xyz, w = camera altitude above ground
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	float maxGroundDistance; // max camera altitude above ground to render
+	float tileSize;          // world size per tile
+	float heightOffset;      // height offset above terrain
+	float time;
+	uint  reserved0;
+	uint  reserved1;
+} push;
+
+struct DebrisTaskPayload {
+	uint tileIDs[32];
+};
+
+taskPayloadSharedEXT DebrisTaskPayload payload;
+
+shared uint g_visibleTileCount;
+
+void main() {
+	uint threadID = gl_LocalInvocationID.x;
+	if (threadID == 0) {
+		g_visibleTileCount = 0;
+	}
+	barrier();
+
+	// If camera altitude is too high above the ground, cull everything early
+	if (push.cameraPos.w > push.maxGroundDistance) {
+		if (threadID == 0) {
+			EmitMeshTasksEXT(0, 1, 1);
+		}
+		return;
+	}
+
+	uint tileID = gl_WorkGroupID.x * 32 + threadID;
+	bool visible = false;
+
+	if (tileID < push.gridParams.y) {
+		uint tilesPerSide = push.gridParams.x;
+		uint col = tileID % tilesPerSide;
+		uint row = tileID / tilesPerSide;
+
+		float halfExtent = float(tilesPerSide) * 0.5 * push.tileSize;
+		vec2  camSnap = floor(uCameraPosition.xz / push.tileSize) * push.tileSize;
+		vec2  tileOrigin = camSnap - vec2(halfExtent) + vec2(float(col), float(row)) * push.tileSize;
+		vec2  tileCenter = tileOrigin + vec2(push.tileSize * 0.5);
+
+		// Radial distance culling from camera in XZ plane
+		float distToCam = length(tileCenter - uCameraPosition.xz);
+		if (distToCam <= halfExtent + push.tileSize) {
+			float groundH = 0.0;
+			if (push.clipmapIndex > 0u && push.clipmapIndex != 0xFFFFFFFFu) {
+				groundH = sampleTerrainClipmap(push.clipmapIndex, tileCenter, 0u, push.gridParams.w).r;
+			}
+
+			float dropOff = terrainDropOff(tileCenter);
+			float effH = groundH - dropOff;
+
+			vec3 relMinB = vec3(
+				tileOrigin.x - uCameraPosition.x,
+				effH - 1.0 - uCameraPosition.y,
+				tileOrigin.y - uCameraPosition.z
+			);
+			vec3 relMaxB = vec3(
+				tileOrigin.x + push.tileSize - uCameraPosition.x,
+				effH + 2.0 - uCameraPosition.y,
+				tileOrigin.y + push.tileSize - uCameraPosition.z
+			);
+
+			mat4 viewRel = mat4(mat3(uViewMatrix));
+			mat4 viewProjRel = uProjMatrix * viewRel;
+
+			visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(5.0), -5.0);
+		}
+	}
+
+	if (visible) {
+		uint idx = atomicAdd(g_visibleTileCount, 1u);
+		payload.tileIDs[idx] = tileID;
+	}
+	barrier();
+
+	if (threadID == 0) {
+		EmitMeshTasksEXT(g_visibleTileCount, 1, 1);
+	}
+}

@@ -84,25 +84,36 @@ namespace {
   brassica::graph::Import<brassica::AutoExposureBuffer>
   brassica::graph::Import<brassica::ClusteredLighting>
   brassica::graph::Import<brassica::FoliageBiomeTableTexture>
+  brassica::graph::Import<brassica::GltfJointMatrixBuffer>
+  brassica::graph::Import<brassica::GltfMeshletBuffer>
+  brassica::graph::Import<brassica::GltfMeshletTriangleBuffer>
+  brassica::graph::Import<brassica::GltfMeshletVertexBuffer>
+  brassica::graph::Import<brassica::GltfVertexBuffer>
   brassica::graph::Import<brassica::LightsBuffer>
+  brassica::graph::Import<brassica::MaterialBuffer>
   brassica::graph::Import<brassica::Swapchain>
   brassica::graph::Import<brassica::TerrainTLAS>
-  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture>>
+  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture> >
 STAGE 1:
   brassica::CloudVolumeGenNode
-  brassica::ClusterLightAssignmentNode
   brassica::EntityPrepareNode
+  brassica::FoliageBakeNode
+  brassica::FoliageIndirectResetNode
   brassica::TerrainBiomeNode
   brassica::TerrainGenNode
   brassica::TransmittanceLUTNode
 STAGE 2:
-  brassica::CloudShadowGenNode
+  brassica::CloudVolumeDownsampleNode
+  brassica::LightningAgeNode
   brassica::MultiScatteringLUTNode
   brassica::TerrainMinMaxDownsampleNode
   brassica::TerrainReadbackNode
 STAGE 3:
+  brassica::CloudShadowGenNode
+  brassica::ClusterLightAssignmentNode
   brassica::SkyViewLUTNode
   brassica::TerrainNode
+  brassica::TerrainShadowNode
 STAGE 4:
   brassica::EntityNode
   brassica::SkyBackgroundNode
@@ -110,35 +121,47 @@ STAGE 4:
 STAGE 5:
   brassica::FoliageNode
 STAGE 6:
+  brassica::FoliageArchetypeRenderNode
+STAGE 7:
+  brassica::GltfRenderNode
+STAGE 8:
+  brassica::GroundDebrisNode
+STAGE 9:
+  brassica::CloudRenderNode
   brassica::GTAONode
   brassica::HiZDownsampleNode
-STAGE 7:
-  brassica::DeferredNode
-STAGE 8:
-  brassica::AtmosphereCompositeNode
-STAGE 9:
-  brassica::VolumetricRenderNode
 STAGE 10:
-  brassica::WaterNode
+  brassica::CloudTemporalNode
+  brassica::DeferredNode
 STAGE 11:
-  brassica::CirrusNode
+  brassica::LightningRenderNode
 STAGE 12:
-  brassica::CloudRenderNode
+  brassica::WaterNode
 STAGE 13:
-  brassica::TonemapComputeNode
+  brassica::CirrusNode
 STAGE 14:
-  brassica::TonemapNode
+  brassica::CloudCompositeNode
 STAGE 15:
+  brassica::VolumetricRenderNode
+STAGE 16:
+  brassica::TonemapComputeNode
+STAGE 17:
+  brassica::TonemapNode
+STAGE 18:
   brassica::ImGuiNode
 MULTI-WRITER KEYS:
   brassica::AutoExposureBuffer: brassica::graph::Import<brassica::AutoExposureBuffer>, brassica::TonemapComputeNode
+  brassica::CloudDetailVolume: brassica::CloudVolumeDownsampleNode, brassica::CloudVolumeGenNode
   brassica::ClusteredLighting: brassica::graph::Import<brassica::ClusteredLighting>, brassica::ClusterLightAssignmentNode
-  brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
-  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
-  brassica::GBufferMaterial: brassica::EntityNode, brassica::TerrainNode
-  brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
-  brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageNode, brassica::TerrainNode
-  brassica::HdrColor: brassica::AtmosphereCompositeNode, brassica::CirrusNode, brassica::CloudRenderNode, brassica::DeferredNode, brassica::VolumetricRenderNode, brassica::WaterNode
+  brassica::FoliageIndirectArgsBuffer: brassica::FoliageIndirectResetNode, brassica::FoliageNode
+  brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::GroundDebrisNode, brassica::TerrainNode
+  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::GroundDebrisNode, brassica::TerrainNode
+  brassica::GBufferMaterial: brassica::EntityNode, brassica::GltfRenderNode, brassica::GroundDebrisNode, brassica::TerrainNode
+  brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::GroundDebrisNode, brassica::TerrainNode
+  brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::GroundDebrisNode, brassica::TerrainNode
+  brassica::HdrColor: brassica::CirrusNode, brassica::CloudCompositeNode, brassica::DeferredNode, brassica::LightningRenderNode, brassica::VolumetricRenderNode, brassica::WaterNode
+  brassica::LightningStrikePool: brassica::TerrainBiomeNode, brassica::LightningAgeNode
+  brassica::LightsBuffer: brassica::graph::Import<brassica::LightsBuffer>, brassica::LightningAgeNode
   brassica::Swapchain: brassica::graph::Import<brassica::Swapchain>, brassica::ImGuiNode, brassica::TonemapNode
   brassica::TerrainMinMaxTexture: brassica::TerrainGenNode, brassica::TerrainMinMaxDownsampleNode
   brassica::TerrainTLAS: brassica::graph::Import<brassica::TerrainTLAS>, brassica::TerrainGenNode

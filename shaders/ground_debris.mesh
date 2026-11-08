@@ -1,0 +1,99 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+// 8x8 subdivisions per tile = 9x9 vertices = 81 vertices, 64 quads = 128 triangles
+layout(local_size_x = 9, local_size_y = 9, local_size_z = 1) in;
+layout(triangles, max_vertices = 81, max_primitives = 128) out;
+
+layout(push_constant) uniform GroundDebrisPushConstants {
+	uvec4 gridParams;        // x = tilesPerSide, y = totalTiles, z = reserved, w = textureDim
+	vec4  cameraPos;         // camera world position xyz, w = camera altitude above ground
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	float maxGroundDistance; // max camera altitude above ground to render
+	float tileSize;          // world size per tile
+	float heightOffset;      // height offset above terrain
+	float time;
+	uint  reserved0;
+	uint  reserved1;
+} push;
+
+struct DebrisTaskPayload {
+	uint tileIDs[32];
+};
+
+taskPayloadSharedEXT DebrisTaskPayload payload;
+
+layout(location = 0) out vec3 outWorldPos[];
+layout(location = 1) out vec3 outNormal[];
+layout(location = 2) out vec2 outUV[];
+layout(location = 3) out float outHeightFactor[];
+
+void main() {
+	uint taskIdx = gl_WorkGroupID.x;
+	uint tileID = payload.tileIDs[taskIdx];
+
+	SetMeshOutputsEXT(81, 128);
+
+	uint lx = gl_LocalInvocationID.x;
+	uint ly = gl_LocalInvocationID.y;
+	uint vertexIndex = ly * 9 + lx;
+
+	uint tilesPerSide = push.gridParams.x;
+	uint col = tileID % tilesPerSide;
+	uint row = tileID / tilesPerSide;
+
+	float halfExtent = float(tilesPerSide) * 0.5 * push.tileSize;
+	vec2  camSnap = floor(uCameraPosition.xz / push.tileSize) * push.tileSize;
+	vec2  tileOrigin = camSnap - vec2(halfExtent) + vec2(float(col), float(row)) * push.tileSize;
+
+	vec2 localFrac = vec2(float(lx), float(ly)) / 8.0;
+	vec2 vertexWorldXZ = tileOrigin + localFrac * push.tileSize;
+
+	vec4 clipSample = vec4(0.0);
+	if (push.clipmapIndex > 0u && push.clipmapIndex != 0xFFFFFFFFu) {
+		clipSample = sampleTerrainClipmap(push.clipmapIndex, vertexWorldXZ, 0u, push.gridParams.w);
+	}
+
+	float terrainH = clipSample.r;
+	vec3  terrainNorm = vec3(0.0, 1.0, 0.0);
+	if (length(clipSample.gba) > 0.1) {
+		terrainNorm = octahedralUVToDirection(clipSample.ba);
+	}
+
+	float dropOff = terrainDropOff(vertexWorldXZ);
+
+	// Float slightly above the terrain polygon (+heightOffset along surface normal)
+	float lift = max(0.015, push.heightOffset);
+	vec3 worldPos = vec3(vertexWorldXZ.x, terrainH - dropOff, vertexWorldXZ.y) + terrainNorm * lift;
+	vec3 relWorldPos = worldPos - uCameraPosition.xyz;
+
+	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
+	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+
+	outWorldPos[vertexIndex] = worldPos;
+	outNormal[vertexIndex] = terrainNorm;
+	outUV[vertexIndex] = vertexWorldXZ;
+	// Height factor to fade debris when camera climbs
+	float altitudeFraction = clamp(1.0 - (push.cameraPos.w / max(1.0, push.maxGroundDistance)), 0.0, 1.0);
+	outHeightFactor[vertexIndex] = altitudeFraction;
+
+	// Emit triangle indices for the 8x8 quad grid
+	if (lx < 8 && ly < 8) {
+		uint quadIndex = ly * 8 + lx;
+		uint v0 = ly * 9 + lx;
+		uint v1 = ly * 9 + (lx + 1);
+		uint v2 = (ly + 1) * 9 + lx;
+		uint v3 = (ly + 1) * 9 + (lx + 1);
+
+		gl_PrimitiveTriangleIndicesEXT[quadIndex * 2 + 0] = uvec3(v0, v2, v1);
+		gl_PrimitiveTriangleIndicesEXT[quadIndex * 2 + 1] = uvec3(v1, v2, v3);
+
+		gl_MeshPrimitivesEXT[quadIndex * 2 + 0].gl_CullPrimitiveEXT = false;
+		gl_MeshPrimitivesEXT[quadIndex * 2 + 1].gl_CullPrimitiveEXT = false;
+	}
+}
