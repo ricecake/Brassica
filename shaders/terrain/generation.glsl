@@ -497,15 +497,15 @@ float evaluate_terrain_analytical(
         erosionFadeTarget,
         7*erosion_strength,
         2*erosion_gully_weight,
-        15.0*erosion_detail,
+        erosion_detail,
         erosion_rounding,                                  // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
         vec4(1.25, 1.25, 5.8, 1.5),                        // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
         normalize(vec2(dot(vel, dP_dx), dot(vel, dP_dz))), // assumedSlope
-        30*erosion_scale,
-        5,                                                 // octaves
+        5*erosion_scale,
+        8,                                                 // octaves
         2.3,                                               // lacunarity
         0.52,                                              // gain
-        50.0,                                              // cellScale
+        10.0,                                              // cellScale
         0.5,                                               // normalization
         ridgeMapVal,
         substrateVal,
@@ -551,7 +551,7 @@ float evaluate_terrain_analytical(
                                smoothstep(0.01, 0.1, canyon_profile * canyon_mask)));
 
     // Plunge the water level 1000 units underground where there is no water presence
-    out_water_level = mix(config.min_height - 1000.0, remap(local_water_norm, 0.0, 1.0, config.min_height, config.max_height), has_water_mask);
+    out_water_level = mix(0.0, remap(local_water_norm, 0.0, 1.0, config.min_height, config.max_height), has_water_mask);
 
     return true_height;
 }

@@ -55,7 +55,7 @@ void main() {
 	vec3 B = normalize(cross(N, T));
 
 	mat3 warpNoiseGrad;
-	vec3 warpNoise = 0.0*10000*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
+	vec3 warpNoise = 1.0*500*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
 	OrganicPlateData mCellS = getOrganicPlate(((worldPos+warpNoise)).xz, 0.00625, 5.0);
 	OrganicPlateData mCellM = getOrganicPlate(((worldPos+warpNoise)).xz, 0.003125, 7.0);
 	OrganicPlateData mCellL = getOrganicPlate(((worldPos+warpNoise)).xz, 0.0015625, 11.0);
