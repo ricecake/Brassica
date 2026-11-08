@@ -383,9 +383,18 @@ float evaluate_terrain_analytical(
 
     // 5. Hydrology & Erosion (Rivers, Canyons, Lakes)
 
-    // RIVERS (Inverted zero-crossings warped by velocity)
+    // RIVERS (Downhill-aligned drainage channels)
+    // Calculate the uncarved topographic slope vector in the local tangent plane
+    vec3 grad_topo_geo = grad_base_h + raw_smin_shelf.yzw + grad_ridge;
+    vec2 topo_slope_2d = vec2(dot(grad_topo_geo, dP_dx), dot(grad_topo_geo, dP_dz));
+    float topo_slope_mag = length(topo_slope_2d);
+
+    // Warp river coordinates along the terrain downhill descent direction (-topo_slope_2d) to guide drainage channels
+    vec3 downhill_warp_3d = (dP_dx * topo_slope_2d.x + dP_dz * topo_slope_2d.y) / max(0.0001, topo_slope_mag);
+    float slope_influence = smoothstep(0.005, 0.08, topo_slope_mag);
+    vec3 P_river = P_geo * radius_scale * 2.0 + vel * warp_strength * 1.5 - downhill_warp_3d * (slope_influence * 0.4);
+
     vec3 grad_raw_river;
-    vec3 P_river = P_geo * radius_scale * 2.0 + vel * warp_strength * 1.5;
     float raw_river = dot_noise_fbm(P_river, 4, phase + 112.0, grad_raw_river);
     vec3 grad_river_warped = transpose(mat3(radius_scale * 2.0) + J_vel * warp_strength * 1.5) * grad_raw_river;
 
@@ -395,10 +404,24 @@ float evaluate_terrain_analytical(
     float d_river_profile = -6.0 * t_river * (1.0 - t_river) / river_width;
     vec3 grad_river_profile = d_river_profile * sign(raw_river) * grad_river_warped;
 
-    float river_mask = interior_mask; // Keep rivers out of the steepest fault lines
+    // Evaluate river channel alignment relative to the downhill slope direction
+    // grad_river_warped is normal to the channel; channel tangent is perpendicular to grad_river_2d.
+    vec2 river_grad_2d = vec2(dot(grad_river_warped, dP_dx), dot(grad_river_warped, dP_dz));
+    float river_grad_len = length(river_grad_2d);
+
+    // Cross-slope dot: when river_grad_2d is parallel to topo_slope_2d, the channel runs perpendicular to the slope!
+    float cross_slope = (topo_slope_mag > 0.001 && river_grad_len > 0.001)
+        ? abs(dot(river_grad_2d / river_grad_len, topo_slope_2d / topo_slope_mag))
+        : 0.0;
+
+    // Suppress river carving on slopes where the channel cuts perpendicular to the slope rather than descending
+    float flow_downhill_alignment = 1.0 - cross_slope;
+    float cross_slope_suppression = mix(1.0, smoothstep(0.15, 0.65, flow_downhill_alignment), slope_influence);
+
+    float river_mask = interior_mask * cross_slope_suppression; // Keep rivers out of fault lines and cross-slope hillsides
     float river_depth = 0.06;
     float river_carve = river_profile * river_mask * river_depth;
-    vec3 grad_river_carve = river_depth * (grad_river_profile * river_mask + river_profile * grad_interior_mask);
+    vec3 grad_river_carve = river_depth * (grad_river_profile * river_mask + river_profile * grad_interior_mask * cross_slope_suppression);
 
     // CANYONS (Inverted zero-crossings masked to high elevation)
     vec3 grad_raw_canyon;
@@ -423,25 +446,79 @@ float evaluate_terrain_analytical(
     float canyon_carve = canyon_profile * canyon_mask * canyon_depth;
     vec3 grad_canyon_carve = canyon_depth * (grad_canyon_profile * canyon_mask + canyon_profile * grad_canyon_mask);
 
-    // LAKE BASINS (Cellular-like structural flattening)
-    vec3 grad_basin_noise;
-    float basin_noise = dot_noise_fbm(P_geo * radius_scale * 1.2, 3, phase + 200.0, grad_basin_noise);
+    // LAKE BASINS (Contained inland depressions with flat equipotential water surfaces)
+    float sea_level_norm = (0.0 - config.min_height) / max(1.0, (config.max_height - config.min_height));
 
-    float t_basin = clamp((basin_noise - 0.65) / 0.25, 0.0, 1.0);
-    float basin_mask = t_basin * t_basin * (3.0 - 2.0 * t_basin);
-    float d_basin_mask = 6.0 * t_basin * (1.0 - t_basin) / 0.25;
-    vec3 grad_basin_mask = d_basin_mask * grad_basin_noise * radius_scale * 1.2;
+    // Evaluate 3D cellular Voronoi center to anchor each basin to a constant local coordinate and flat water table
+    vec3 P_basin_space = P_geo * radius_scale * 1.5;
+    vec3 i_basin = floor(P_basin_space);
+    vec3 f_basin = fract(P_basin_space);
+    vec3 best_center = vec3(0.0);
+    float min_dist = 100.0;
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                vec3 g = vec3(float(dx), float(dy), float(dz));
+                vec3 cell = i_basin + g;
+                vec3 p_seed = fract(sin(vec3(
+                    dot(cell + vec3(phase + 200.0), vec3(127.1, 311.7, 74.7)),
+                    dot(cell + vec3(phase + 200.0), vec3(269.5, 183.3, 246.1)),
+                    dot(cell + vec3(phase + 200.0), vec3(113.5, 271.9, 124.6))
+                )) * 43758.5453);
+                vec3 r = g + p_seed * 0.6 + 0.2 - f_basin;
+                float d = length(r);
+                if (d < min_dist) {
+                    min_dist = d;
+                    best_center = cell + p_seed * 0.6 + 0.2;
+                }
+            }
+        }
+    }
 
-    float lake_water_level = base_h - 0.02;
-    vec3 grad_lake_water_level = grad_base_h;
+    // Determine if this cell is an eligible inland lake basin (must be in continental interior above sea level)
+    vec3 P_c_geo = normalize(best_center);
+    float max_kd_center = -1e20;
+    for(int i = 0; i < plates.length(); i++) {
+        float d = dot(P_c_geo, plates[i].seed_dir);
+        max_kd_center = max(max_kd_center, plates[i].k * d);
+    }
+    float sum_w_center = 0.0; float sum_h_center = 0.0;
+    for(int i = 0; i < plates.length(); i++) {
+        float d = dot(P_c_geo, plates[i].seed_dir);
+        float w_center = exp(plates[i].k * d - max_kd_center);
+        sum_w_center += w_center;
+        sum_h_center += w_center * plates[i].height;
+    }
+    float center_base_h = sum_h_center / max(0.0001, sum_w_center);
+
+    float cell_hash = fract(sin(dot(best_center, vec3(12.9898, 78.233, 45.164)) + phase * 0.01) * 43758.5453);
+    bool is_lake_eligible = (center_base_h > sea_level_norm + 0.05) && (interior_mask > 0.45) && (cell_hash > 0.60);
+
+    float basin_mask = 0.0;
+    vec3 grad_basin_mask = vec3(0.0);
+    float lake_water_level = center_base_h - 0.015; // Equipotential flat water level for this basin
+    float lake_bed_level = lake_water_level - 0.035; // Depressed lake bed floor
+
+    float lake_radius = mix(0.20, 0.35, cell_hash);
+    float rim_radius = lake_radius * 1.5;
+
+    if (is_lake_eligible && min_dist < rim_radius) {
+        float t_basin = clamp((rim_radius - min_dist) / max(0.001, rim_radius - lake_radius * 0.6), 0.0, 1.0);
+        basin_mask = t_basin * t_basin * (3.0 - 2.0 * t_basin);
+        float d_basin_mask = -6.0 * t_basin * (1.0 - t_basin) / max(0.001, rim_radius - lake_radius * 0.6);
+
+        vec3 dir_from_center = (P_basin_space - best_center) / max(0.0001, min_dist);
+        vec3 grad_dist = dir_from_center * (radius_scale * 1.5);
+        grad_basin_mask = d_basin_mask * grad_dist;
+    }
 
     // 6. Final Composition
     float raw_final_h = base_h + raw_smin_shelf.x + ridge_h - river_carve - canyon_carve;
     vec3 raw_final_grad = grad_base_h + raw_smin_shelf.yzw + grad_ridge - grad_river_carve - grad_canyon_carve;
 
-    // Apply the lake basin flattening via mix
-    float final_h = mix(raw_final_h, lake_water_level, basin_mask);
-    vec3 final_grad_geo = mix(raw_final_grad, grad_lake_water_level, basin_mask) + (lake_water_level - raw_final_h) * grad_basin_mask;
+    // Flatten and carve the depression only within the bounded basin mask
+    float final_h = mix(raw_final_h, lake_bed_level, basin_mask);
+    vec3 final_grad_geo = mix(raw_final_grad, vec3(0.0), basin_mask) + (lake_bed_level - raw_final_h) * grad_basin_mask;
 
     // 7. Resolve Un-eroded Height and Normal
     float true_height = remap(final_h, 0.0, 1.0, config.min_height, config.max_height);
@@ -538,17 +615,29 @@ float evaluate_terrain_analytical(
     float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
     float canyon_water_h = raw_final_h + canyon_carve * 0.05; // Canyons have shallow streams at the bottom
 
-    float local_water_norm = max(
-        lake_water_level * smoothstep(0.1, 0.5, basin_mask),
-        max(
-            river_water_h * smoothstep(0.01, 0.2, river_profile * river_mask),
-            canyon_water_h * smoothstep(0.01, 0.1, canyon_profile * canyon_mask)
-        )
-    );
+    // Lake water presence: only within lake radius inside the depression, maintaining flat surface
+    float lake_water_mask = (is_lake_eligible && min_dist < lake_radius) ? 1.0 : 0.0;
 
-    float has_water_mask = max(smoothstep(0.1, 0.5, basin_mask),
-                           max(smoothstep(0.01, 0.2, river_profile * river_mask),
-                               smoothstep(0.01, 0.1, canyon_profile * canyon_mask)));
+    // Ocean water presence: anywhere terrain elevation is at or below global sea level (y = 0m)
+    float ocean_water_mask = (true_height <= 0.0) ? 1.0 : 0.0;
+
+    float river_water_mask = smoothstep(0.01, 0.2, river_profile * river_mask);
+    float canyon_water_mask = smoothstep(0.01, 0.1, canyon_profile * canyon_mask);
+
+    float local_water_norm = config.min_height;
+    if (lake_water_mask > 0.0) {
+        local_water_norm = lake_water_level;
+    } else if (river_water_mask > 0.0) {
+        local_water_norm = river_water_h;
+    } else if (canyon_water_mask > 0.0) {
+        local_water_norm = canyon_water_h;
+    } else if (ocean_water_mask > 0.0) {
+        local_water_norm = sea_level_norm;
+    }
+
+    float has_water_mask = max(lake_water_mask,
+                           max(ocean_water_mask,
+                           max(river_water_mask, canyon_water_mask)));
 
     // Plunge the water level 1000 units underground where there is no water presence
     out_water_level = mix(config.min_height - 1000.0, remap(local_water_norm, 0.0, 1.0, config.min_height, config.max_height), has_water_mask);

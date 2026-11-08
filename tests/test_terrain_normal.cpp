@@ -208,3 +208,171 @@ TEST_CASE("evaluate_terrain_normal's horizontal tilt matches the real height gra
 
 	CHECK(device.GetValidationErrorCount() == 0);
 }
+
+TEST_CASE("hydrology probe evaluates flat lake surfaces and sensible water levels") {
+	brassica::testing::MinimalDevice device;
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	const std::vector<std::array<float, 3>> testPoints = {
+		{0.0f, 0.0f, 0.0f},
+		{50000.0f, 0.0f, -30000.0f},
+		{-120000.0f, 0.0f, 80000.0f},
+		{200000.0f, 0.0f, 150000.0f},
+		{-350000.0f, 0.0f, -200000.0f},
+	};
+	const std::uint32_t numPoints = static_cast<std::uint32_t>(testPoints.size());
+
+	{
+		std::array<vk::DescriptorSetLayoutBinding, 2> bindings{};
+		for (std::uint32_t i = 0; i < 2; ++i) {
+			bindings[i]
+				.setBinding(i)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setDescriptorCount(1)
+				.setStageFlags(vk::ShaderStageFlagBits::eCompute);
+		}
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.setBindings(bindings);
+		vk::DescriptorSetLayout setLayout = vkDevice.createDescriptorSetLayout(layoutInfo);
+
+		vk::DescriptorPoolSize      poolSize{vk::DescriptorType::eStorageBuffer, 2};
+		vk::DescriptorPoolCreateInfo poolInfo{};
+		poolInfo.setPoolSizes(poolSize);
+		poolInfo.setMaxSets(1);
+		vk::DescriptorPool pool = vkDevice.createDescriptorPool(poolInfo);
+
+		vk::DescriptorSetAllocateInfo setAllocInfo{};
+		setAllocInfo.setDescriptorPool(pool);
+		setAllocInfo.setSetLayouts(setLayout);
+		vk::DescriptorSet set = vkDevice.allocateDescriptorSets(setAllocInfo).front();
+
+		auto makeBuffer = [&](VkDeviceSize size) {
+			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = size;
+			bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			VmaAllocationCreateInfo allocInfo{};
+			allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			VkBuffer          buffer = VK_NULL_HANDLE;
+			VmaAllocation     allocation = nullptr;
+			VmaAllocationInfo resultInfo{};
+			vmaCreateBuffer(device.GetAllocator(), &bufferInfo, &allocInfo, &buffer, &allocation, &resultInfo);
+			return std::tuple{buffer, allocation, resultInfo};
+		};
+
+		const VkDeviceSize bufSize = static_cast<VkDeviceSize>(numPoints) * sizeof(float) * 4;
+		auto [pointsBuffer, pointsAlloc, pointsInfo] = makeBuffer(bufSize);
+		auto [resultsBuffer, resultsAlloc, resultsInfo] = makeBuffer(bufSize);
+
+		REQUIRE(pointsInfo.pMappedData != nullptr);
+		auto* pointsData = static_cast<float*>(pointsInfo.pMappedData);
+		for (std::uint32_t i = 0; i < numPoints; ++i) {
+			pointsData[i * 4 + 0] = testPoints[i][0];
+			pointsData[i * 4 + 1] = testPoints[i][1];
+			pointsData[i * 4 + 2] = testPoints[i][2];
+			pointsData[i * 4 + 3] = 0.0f;
+		}
+
+		std::array<vk::DescriptorBufferInfo, 2> bufferInfos{
+			vk::DescriptorBufferInfo{pointsBuffer, 0, bufSize},
+			vk::DescriptorBufferInfo{resultsBuffer, 0, bufSize},
+		};
+		std::array<vk::WriteDescriptorSet, 2> writes{};
+		for (std::uint32_t i = 0; i < 2; ++i) {
+			writes[i]
+				.setDstSet(set)
+				.setDstBinding(i)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setBufferInfo(bufferInfos[i]);
+		}
+		vkDevice.updateDescriptorSets(writes, nullptr);
+
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
+		brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+
+		brassica::ComputeShader shader;
+		bool compiled = shader.CompileComputeFromFile(vkDevice, "shaders/hydrology_probe.comp");
+		brassica::Shader::ClearConstants();
+		REQUIRE(compiled);
+
+		vk::PushConstantRange pcRange{vk::ShaderStageFlagBits::eCompute, 0, sizeof(ProbePushConstants)};
+
+		brassica::render::PipelineLibrary pipelineLibrary(vkDevice, nullptr);
+		brassica::render::ResolvedPipeline resolved = pipelineLibrary.Resolve(
+			brassica::render::ComputePipelineRequest{
+				.shader = &shader,
+				.setLayouts = std::span(&setLayout, 1),
+				.pushConstantRanges = std::span(&pcRange, 1),
+			}
+		);
+		REQUIRE(static_cast<bool>(resolved.pipeline));
+
+		vk::CommandPool pool2 = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
+		);
+		vk::CommandBuffer cmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool2, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+
+		ProbePushConstants push{
+			.spatial_scale = 0.00001f,
+			.min_height = -500.0f,
+			.max_height = 2000.0f,
+			.ridge_weight = 0.14f,
+			.biome_bleed = 0.5f,
+			.phase = 0.0f,
+			.warp_strength = 0.75f,
+			.eps = 0.5f,
+		};
+
+		cmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		cmd.bindPipeline(vk::PipelineBindPoint::eCompute, resolved.pipeline);
+		cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, resolved.layout, 0, set, {});
+		cmd.pushConstants(resolved.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push), &push);
+		cmd.dispatch(numPoints, 1, 1);
+		cmd.end();
+
+		vk::SubmitInfo submitInfo{};
+		submitInfo.setCommandBuffers(cmd);
+		device.GetQueue().submit(submitInfo);
+		device.GetQueue().waitIdle();
+
+		auto* resultsData = static_cast<float*>(resultsInfo.pMappedData);
+		REQUIRE(resultsData != nullptr);
+
+		for (std::uint32_t i = 0; i < numPoints; ++i) {
+			float h = resultsData[i * 4 + 0];
+			float wLevel = resultsData[i * 4 + 1];
+			float dWdx = resultsData[i * 4 + 2];
+			float dWdz = resultsData[i * 4 + 3];
+
+			// When surface water is present (above the -1500m plunge threshold)
+			if (wLevel > -600.0f) {
+				// If in the ocean (h <= 0.0m), water level must be flat global sea level (0.0m)
+				if (h <= 0.0f) {
+					CHECK(std::abs(wLevel - 0.0f) < 0.1f);
+					CHECK(std::abs(dWdx) < 0.01f);
+					CHECK(std::abs(dWdz) < 0.01f);
+				}
+			}
+		}
+
+		vkDevice.destroyPipeline(resolved.pipeline);
+		vkDevice.destroyPipelineLayout(resolved.layout);
+		shader.Destroy(vkDevice);
+		vkDevice.destroyCommandPool(pool2);
+		vmaDestroyBuffer(device.GetAllocator(), pointsBuffer, pointsAlloc);
+		vmaDestroyBuffer(device.GetAllocator(), resultsBuffer, resultsAlloc);
+		vkDevice.destroyDescriptorPool(pool);
+		vkDevice.destroyDescriptorSetLayout(setLayout);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+}
