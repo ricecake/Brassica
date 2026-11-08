@@ -1,0 +1,54 @@
+#version 460
+
+// Test probe shader for lake and river hydrology properties
+#include "terrain/generation.glsl"
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer PointsBuffer {
+	vec4 points[]; // xyz = world-space p, w unused
+}
+pointsBuf;
+
+layout(std430, set = 0, binding = 1) writeonly buffer ResultsBuffer {
+	// x = height, y = water_level, z = dWaterLevel/dx, w = dWaterLevel/dz
+	vec4 results[];
+}
+resultsBuf;
+
+layout(push_constant) uniform PushConstants {
+	float spatial_scale;
+	float min_height;
+	float max_height;
+	float ridge_weight;
+	float biome_bleed;
+	float phase;
+	float warp_strength;
+	float eps;
+}
+push;
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+	vec3 p = pointsBuf.points[idx].xyz;
+
+	TerrainConfig cfg =
+		TerrainConfig(push.spatial_scale, push.min_height, push.max_height, push.ridge_weight, push.biome_bleed);
+
+	vec3 normal;
+	float waterLevel;
+	float h = evaluate_terrain_analytical(p, push.phase, push.warp_strength, cfg, normal, waterLevel);
+
+	vec3 normXp, normXm, normZp, normZm;
+	float waterXp, waterXm, waterZp, waterZm;
+	evaluate_terrain_analytical(p + vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, normXp, waterXp);
+	evaluate_terrain_analytical(p - vec3(push.eps, 0.0, 0.0), push.phase, push.warp_strength, cfg, normXm, waterXm);
+	evaluate_terrain_analytical(p + vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, normZp, waterZp);
+	evaluate_terrain_analytical(p - vec3(0.0, 0.0, push.eps), push.phase, push.warp_strength, cfg, normZm, waterZm);
+
+	float dWdx = (waterXp - waterXm) / (2.0 * push.eps);
+	float dWdz = (waterZp - waterZm) / (2.0 * push.eps);
+
+	resultsBuf.results[idx] = vec4(h, waterLevel, dWdx, dWdz);
+}
