@@ -4,7 +4,6 @@
 #include "spdlog/spdlog.h"
 
 #include "fmt/core.h"
-#include "tracy/Tracy.hpp"
 
 // 2. Math & ECS
 #include "entt/entt.hpp"
@@ -42,8 +41,6 @@
 namespace brassica {
 
 	void InitializeCore() {
-		ZoneScoped; // Tracy profiler macro to test Tracy linkage
-
 		// Test Logging (fmt & spdlog)
 		fmt::print("Bootstrapping Brassica Engine...\n");
 		spdlog::info("Logger linked and ready.");

@@ -1,6 +1,5 @@
 #include "BallSystemHandler.hpp"
 #include "Engine.hpp"
-#include "OzzCylinderSystemHandler.hpp"
 #include <brassica.hpp>
 
 int main(int argc, char** argv) {
@@ -10,7 +9,6 @@ int main(int argc, char** argv) {
 
 	brassica::Engine engine;
 	engine.AddSystemHandler<brassica::BallSystemHandler>();
-	engine.AddSystemHandler<brassica::OzzCylinderSystemHandler>();
 	engine.Init(options);
 	engine.Run();
 	engine.Cleanup();

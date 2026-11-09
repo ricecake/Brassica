@@ -265,12 +265,6 @@ namespace brassica {
 	}
 
 	void Engine::Cleanup() {
-		// Must run before any handler->DestroyNode below: OzzCylinderNode::Destroy destroys its own
-		// descriptor pool (set2Pool), and vkDestroyDescriptorPool requires every command buffer that
-		// referenced a set allocated from it to have finished executing -- there's no such guarantee
-		// yet at this point in a normal shutdown, only after the GPU is confirmed idle. EntityNode's
-		// own Destroy (shader modules only) never needed this, which is why this wait wasn't already
-		// here before OzzCylinderNode existed.
 		if (device) {
 			device.waitIdle();
 		}
