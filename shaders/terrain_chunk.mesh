@@ -4,9 +4,9 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_scalar_block_layout : require
 
-// 121 vertices (11x11), 200 triangles (10x10 * 2)
+// Half-chunk rendering: max 144 vertices (9x16), max 240 triangles (8x15 quads * 2)
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 121, max_primitives = 200) out;
+layout(triangles, max_vertices = 144, max_primitives = 240) out;
 
 #include "bindless.glsl"
 #include "common.glsl"
@@ -38,7 +38,7 @@ vec3 getTerrainMapColor(float h, vec3 normal) {
 }
 
 struct TerrainChunkVertex {
-	vec4 position; // xyz = position, w = height
+	vec4 position; // xyz = position (planar), w = height
 	vec4 normal;   // xyz = normal, w = biome
 	vec4 material; // x = waterLevel, y = ridgeMap, z = substrate, w = unused
 };
@@ -63,79 +63,102 @@ layout(location = 2) out vec4 outAlbedo[];
 layout(location = 3) out vec4 outMaterial[];
 layout(location = 4) out vec4 outMaterialWeights[];
 
+void processLocalVertex(uint localVIdx, uint globalVertIdx) {
+	VertexBufferRef vertBuf = VertexBufferRef(push.vertexBufferAddr);
+	TerrainChunkVertex v = vertBuf.vertices[globalVertIdx];
+
+	vec3 worldPos = v.position.xyz;
+	float height = v.position.w;
+	vec3 normal = v.normal.xyz;
+	float biome = v.normal.w;
+
+	float localWaterLevel = v.material.x;
+	float ridgeMap = v.material.y;
+	float substrate = v.material.z;
+
+	// Calculate spherical planetary curvature Y displacement in mesh shader
+	vec2 relFlatXZ = worldPos.xz - uCameraPosition.xz;
+	float dropOff = dot(relFlatXZ, relFlatXZ) / (2.0 * FAKE_PLANET_RADIUS);
+
+	vec3 curvedRelPos = vec3(relFlatXZ.x, (height - dropOff) - uCameraPosition.y, relFlatXZ.y);
+	vec3 viewPos = mat3(uViewMatrix) * curvedRelPos;
+	gl_MeshVerticesEXT[localVIdx].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+
+	outPosition[localVIdx] = curvedRelPos;
+	outNormal[localVIdx] = normal;
+
+	vec3 baseColor = getTerrainMapColor(height, normal);
+	float roughness = 0.75;
+	float metallic = 0.0;
+	float glint = 0.0;
+
+	float slopeFactor = smoothstep(0.80, 0.30, normal.y);
+	float rockWeight = max(slopeFactor * 0.85, smoothstep(0.2, 0.8, ridgeMap * 0.5));
+	vec3 regionalRockColor = getGeologicalRockColor(biome);
+	if (rockWeight > 0.0) {
+		baseColor = mix(baseColor, regionalRockColor, rockWeight);
+		roughness = mix(roughness, 0.85, rockWeight);
+	}
+
+	float sandWeight = 0.0;
+	if (normal.y > 0.4) {
+		float distToWater = abs(height - localWaterLevel);
+		if (distToWater < 6.0) {
+			float shoreFactor = (1.0 - smoothstep(0.0, 6.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
+			sandWeight = shoreFactor * 0.85;
+			baseColor = mix(baseColor, vec3(0.82, 0.75, 0.55), sandWeight);
+		}
+	}
+
+	float grassWeight = clamp(1.0 - max(rockWeight, sandWeight), 0.0, 1.0);
+	vec4 matWeights = vec4(grassWeight, rockWeight, sandWeight, 0.0);
+
+	outAlbedo[localVIdx] = vec4(baseColor, 1.0);
+	outMaterial[localVIdx] = vec4(metallic, roughness, glint, 0.0);
+	outMaterialWeights[localVIdx] = matWeights;
+}
+
 void main() {
 	uint taskIdx = gl_WorkGroupID.x;
-	uint physicalSlot = chunkPayload.physicalSlots[taskIdx];
-	uint virtualChunkId = chunkPayload.virtualChunkIds[taskIdx];
-	uint lod = chunkPayload.lodLevels[taskIdx];
+	uint packedSlot = chunkPayload.physicalSlots[taskIdx];
+	uint physicalSlot = packedSlot & 0x7FFFFFFFu;
+	uint halfIdx = packedSlot >> 31u; // 0 = top half (rows 0..8, 8 quad rows), 1 = bottom half (rows 7..15, 8 quad rows)
 
 	uint threadID = gl_LocalInvocationID.x;
 
-	SetMeshOutputsEXT(121, 200);
+	uint numVertRows = 9u; // 9 rows of 16 vertices = 144 vertices
+	uint numQuadRows = 8u; // 8 rows of 15 quads = 120 quads = 240 triangles
+	uint numVerts = numVertRows * 16u; // 144
+	uint numTris = numQuadRows * 15u * 2u; // 240
 
-	// Output vertices (121 vertices)
-	if (threadID < 121u) {
-		VertexBufferRef vertBuf = VertexBufferRef(push.vertexBufferAddr);
-		uint vertIdx = physicalSlot * 121u + threadID;
+	SetMeshOutputsEXT(numVerts, numTris);
 
-		TerrainChunkVertex v = vertBuf.vertices[vertIdx];
-		vec3 worldPos = v.position.xyz;
-		float height = v.position.w;
-		vec3 normal = v.normal.xyz;
-		float biome = v.normal.w;
+	uint startRow = (halfIdx == 0u) ? 0u : 7u;
 
-		float localWaterLevel = v.material.x;
-		float ridgeMap = v.material.y;
-		float substrate = v.material.z;
-
-		vec3 relPos = worldPos - uCameraPosition.xyz;
-		vec3 viewPos = mat3(uViewMatrix) * relPos;
-		gl_MeshVerticesEXT[threadID].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
-
-		outPosition[threadID] = relPos;
-		outNormal[threadID] = normal;
-
-		vec3 baseColor = getTerrainMapColor(height, normal);
-		float roughness = 0.75;
-		float metallic = 0.0;
-		float glint = 0.0;
-
-		float slopeFactor = smoothstep(0.80, 0.30, normal.y);
-		float rockWeight = max(slopeFactor * 0.85, smoothstep(0.2, 0.8, ridgeMap * 0.5));
-		vec3 regionalRockColor = getGeologicalRockColor(biome);
-		if (rockWeight > 0.0) {
-			baseColor = mix(baseColor, regionalRockColor, rockWeight);
-			roughness = mix(roughness, 0.85, rockWeight);
-		}
-
-		float sandWeight = 0.0;
-		if (normal.y > 0.4) {
-			float distToWater = abs(height - localWaterLevel);
-			if (distToWater < 6.0) {
-				float shoreFactor = (1.0 - smoothstep(0.0, 6.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
-				sandWeight = shoreFactor * 0.85;
-				baseColor = mix(baseColor, vec3(0.82, 0.75, 0.55), sandWeight);
-			}
-		}
-
-		float grassWeight = clamp(1.0 - max(rockWeight, sandWeight), 0.0, 1.0);
-		vec4 matWeights = vec4(grassWeight, rockWeight, sandWeight, 0.0);
-
-		outAlbedo[threadID] = vec4(baseColor, 1.0);
-		outMaterial[threadID] = vec4(metallic, roughness, glint, 0.0);
-		outMaterialWeights[threadID] = matWeights;
+	// Output 144 vertices using 128 threads
+	if (threadID < numVerts) {
+		uint localRow = threadID / 16u;
+		uint col = threadID % 16u;
+		uint globalVertIdx = physicalSlot * 256u + (startRow + localRow) * 16u + col;
+		processLocalVertex(threadID, globalVertIdx);
+	}
+	if (threadID + 128u < numVerts) {
+		uint vIdx = threadID + 128u;
+		uint localRow = vIdx / 16u;
+		uint col = vIdx % 16u;
+		uint globalVertIdx = physicalSlot * 256u + (startRow + localRow) * 16u + col;
+		processLocalVertex(vIdx, globalVertIdx);
 	}
 
-	// Output 200 triangle primitives (100 quads * 2)
-	// Each thread < 100 outputs 2 triangles for quad (lx, ly)
-	if (threadID < 100u) {
-		uint lx = threadID % 10u;
-		uint ly = threadID / 10u;
+	// Output 240 triangles (120 quads * 2) across 128 threads
+	if (threadID < 120u) {
+		uint localQuadRow = threadID / 15u;
+		uint localQuadCol = threadID % 15u;
 
-		uint v0 = ly * 11u + lx;
-		uint v1 = ly * 11u + (lx + 1u);
-		uint v2 = (ly + 1u) * 11u + lx;
-		uint v3 = (ly + 1u) * 11u + (lx + 1u);
+		uint v0 = localQuadRow * 16u + localQuadCol;
+		uint v1 = localQuadRow * 16u + (localQuadCol + 1u);
+		uint v2 = (localQuadRow + 1u) * 16u + localQuadCol;
+		uint v3 = (localQuadRow + 1u) * 16u + (localQuadCol + 1u);
 
 		uint prim0 = threadID * 2u;
 		uint prim1 = threadID * 2u + 1u;

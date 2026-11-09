@@ -42,7 +42,9 @@ void main() {
 	}
 	barrier();
 
-	uint virtualChunkId = gl_WorkGroupID.x * 32 + threadID;
+	uint virtualChunkId = gl_WorkGroupID.x * 16 + (threadID / 2);
+	uint halfIdx = threadID % 2; // 0 = top half (rows 0..7), 1 = bottom half (rows 8..14)
+
 	bool visible = false;
 	uint physicalSlot = 0xFFFFFFFFu;
 	uint lod = 0;
@@ -102,7 +104,7 @@ void main() {
 	if (visible) {
 		uint writeIdx = atomicAdd(chunkEmitCount, 1u);
 		if (writeIdx < 32u) {
-			chunkPayload.physicalSlots[writeIdx] = physicalSlot;
+			chunkPayload.physicalSlots[writeIdx] = (physicalSlot & 0x7FFFFFFFu) | (halfIdx << 31u);
 			chunkPayload.virtualChunkIds[writeIdx] = virtualChunkId;
 			chunkPayload.lodLevels[writeIdx] = lod;
 		}

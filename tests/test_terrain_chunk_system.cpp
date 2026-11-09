@@ -18,13 +18,13 @@ TEST_CASE("Terrain Chunk System Buffer Descriptors and Constants") {
 	constexpr std::uint32_t maxVirtual = constants::Class::Terrain::ChunkManager::MaxVirtualChunks;
 	constexpr std::uint32_t maxAlloc = constants::Class::Terrain::ChunkManager::MaxAllocatedChunks;
 
-	CHECK(dim == 11);
-	CHECK(vertsPerChunk == 121);
-	CHECK(quadsPerChunk == 100);
-	CHECK(trisPerChunk == 200);
-	CHECK(indicesPerChunk == 600);
-	CHECK(maxVirtual == 2048);
-	CHECK(maxAlloc == 1024);
+	CHECK(dim == 16);
+	CHECK(vertsPerChunk == 256);
+	CHECK(quadsPerChunk == 225);
+	CHECK(trisPerChunk == 450);
+	CHECK(indicesPerChunk == 1350);
+	CHECK(maxVirtual == 3072);
+	CHECK(maxAlloc == 2048);
 
 	graph::FrameContext ctx{.width = 1280, .height = 720};
 

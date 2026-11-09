@@ -678,7 +678,8 @@ namespace brassica {
 			if (!resolved.pipeline) return;
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			std::uint32_t taskGroupCount = (constants::Class::Terrain::ChunkManager::MaxVirtualChunks + 31u) / 32u;
+			// Each chunk is rendered via 2 mesh half-workgroups, so total task items = MaxVirtualChunks * 2
+			std::uint32_t taskGroupCount = (constants::Class::Terrain::ChunkManager::MaxVirtualChunks * 2u + 31u) / 32u;
 			if (dls && dls->vkCmdDrawMeshTasksEXT) {
 				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, *dls);
 			}

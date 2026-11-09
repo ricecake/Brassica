@@ -9,11 +9,11 @@
 #include "terrain.glsl"
 #include "terrain/generation.glsl"
 
-// Workgroup size 11x11 = 121 threads (one thread per vertex in a chunk)
-layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
+// Workgroup size 16x16 = 256 threads (one thread per vertex in a 16x16 chunk)
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 struct TerrainChunkVertex {
-	vec4 position; // xyz = position, w = height
+	vec4 position; // xyz = position (planar, uncurved), w = height
 	vec4 normal;   // xyz = normal, w = biome
 	vec4 material; // x = waterLevel, y = ridgeMap, z = substrate, w = unused
 };
@@ -46,7 +46,7 @@ layout(push_constant) uniform TerrainChunkGeneratePush {
 	uvec2 padding;
 	uvec4 gridParams; // x = numLODs, y = chunksPerRow, z = totalChunks, w = maxAllocatedChunks
 	float baseChunkSize;
-	uint  chunkDimension; // 11
+	uint  chunkDimension; // 16
 } push;
 
 void main() {
@@ -73,7 +73,7 @@ void main() {
 
 	uint lx = gl_LocalInvocationID.x;
 	uint ly = gl_LocalInvocationID.y;
-	uint dim = (push.chunkDimension > 0u) ? push.chunkDimension : 11u;
+	uint dim = (push.chunkDimension > 0u) ? push.chunkDimension : 16u;
 	uint vertIdxInChunk = ly * dim + lx;
 
 	uint chunksPerRow = push.gridParams.y;
@@ -101,10 +101,8 @@ void main() {
 
 	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
 
-	// Spherical planetary curvature drop-off
-	vec2 relFlatXZ = worldXZ - uCameraPosition.xz;
-	float dropOff = dot(relFlatXZ, relFlatXZ) / (2.0 * FAKE_PLANET_RADIUS);
-	vec3 worldPos = vec3(worldXZ.x, h - dropOff, worldXZ.y);
+	// Planar, uncurved world position stored in buffer; planetary curvature Y displacement is deferred to the mesh shader
+	vec3 worldPos = vec3(worldXZ.x, h, worldXZ.y);
 
 	VertexBufferRef vertBuf = VertexBufferRef(push.vertexBufferAddr);
 	uint totalVertIdx = physicalSlot * (dim * dim) + vertIdxInChunk;
