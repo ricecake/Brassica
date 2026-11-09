@@ -48,6 +48,7 @@
 #include "passes/terrain/nodes/TerrainNode.hpp"
 #include "passes/terrain/nodes/TerrainReadbackNode.hpp"
 #include "passes/terrain/nodes/TerrainShadowNode.hpp"
+#include "passes/terrain/nodes/GroundDebrisNode.hpp"
 #include "passes/postprocess/nodes/TonemapNode.hpp"
 #include "passes/volumetrics/nodes/VolumetricFroxelGenNode.hpp"
 #include "passes/volumetrics/nodes/VolumetricRenderNode.hpp"
