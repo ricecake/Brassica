@@ -49,15 +49,23 @@ void main() {
 
 	float distToCam = length(chunkCenter - uCameraPosition.xz);
 
-	// Outer distance LOD boundary check: chunk is needed within outer radius
+	// Outer distance LOD boundary check: chunk is needed within outer grid radius
 	float outerRadius = (float(chunksPerRow) * 0.5) * chunkSize;
-	bool needed = distToCam <= outerRadius * 1.1;
+	bool needed = distToCam <= outerRadius * 1.05;
 
-	// Inner radius culling for higher LODs
+	// Exact square AABB inner LOD culling: if completely covered by LOD (lod - 1), this chunk is NOT needed
 	if (needed && lod > 0u) {
 		float prevChunkSize = baseChunkSize * getLODScale(float(lod - 1u));
-		float innerRadius = (float(chunksPerRow) * 0.5 - 1.0) * prevChunkSize;
-		if (distToCam < innerRadius) {
+		float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod - 1u));
+		vec2  prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
+		float prevExtent = float(chunksPerRow) * 0.5 * prevChunkSize;
+
+		bool insideInnerX = (chunkMinXZ.x >= prevCameraSnap.x - prevExtent) &&
+		                    (chunkMinXZ.x + chunkSize <= prevCameraSnap.x + prevExtent);
+		bool insideInnerZ = (chunkMinXZ.y >= prevCameraSnap.y - prevExtent) &&
+		                    (chunkMinXZ.y + chunkSize <= prevCameraSnap.y + prevExtent);
+
+		if (insideInnerX && insideInnerZ) {
 			needed = false;
 		}
 	}

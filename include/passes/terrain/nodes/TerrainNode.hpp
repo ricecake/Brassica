@@ -18,6 +18,8 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "ServiceLocator.hpp"
+#include "passes/terrain/ITerrainManager.hpp"
 #include "passes/terrain/TerrainAccelerationStructure.hpp"
 
 namespace brassica {
@@ -118,12 +120,16 @@ namespace brassica {
 		// BiomeTexture/WeatherBiomeTexture>() are all safe now (the last one restored in S4 --
 		// catalog-converted since batch 5, just never re-added then).
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
-			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Create<GBufferPosition>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
-			r.Create<GBufferNormal>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
-			r.Create<GBufferAlbedo>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
-			r.Create<GBufferMaterial>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
-			r.Create<GBufferDepth>();
+			bool useChunkSystem = false;
+			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+				useChunkSystem = ServiceLocator::Instance().Get<ITerrainManager>()->GetState().useChunkSystem;
+			}
+			r.Domain(graph::ExecutionDomain::Graphics).Active(!useChunkSystem);
+			r.Modify<GBufferPosition>().AnyOrder();
+			r.Modify<GBufferNormal>().AnyOrder();
+			r.Modify<GBufferAlbedo>().AnyOrder();
+			r.Modify<GBufferMaterial>().AnyOrder();
+			r.Modify<GBufferDepth>().AnyOrder();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
@@ -131,6 +137,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+				if (ServiceLocator::Instance().Get<ITerrainManager>()->GetState().useChunkSystem) {
+					return; // Chunk system active; skip texture-based terrain rasterization
+				}
+			}
+
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();

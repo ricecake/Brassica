@@ -92,6 +92,24 @@ void main() {
 				}
 			}
 
+			// Inner LOD culling: prevent coarse LOD chunks from rendering over finer LOD chunks
+			if (visible && lod > 0u) {
+				uint chunksPerRow = push.gridParams.y;
+				float prevChunkSize = baseChunkSize * getLODScale(float(lod - 1u));
+				float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod - 1u));
+				vec2  prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
+				float prevExtent = float(chunksPerRow) * 0.5 * prevChunkSize;
+
+				bool insideInnerX = (chunkMinXZ.x >= prevCameraSnap.x - prevExtent) &&
+				                    (chunkMinXZ.x + chunkSize <= prevCameraSnap.x + prevExtent);
+				bool insideInnerZ = (chunkMinXZ.y >= prevCameraSnap.y - prevExtent) &&
+				                    (chunkMinXZ.y + chunkSize <= prevCameraSnap.y + prevExtent);
+
+				if (insideInnerX && insideInnerZ) {
+					visible = false;
+				}
+			}
+
 			// HiZ occlusion culling if available
 			if (visible && push.hizIndex > 0u && lod >= 2u) {
 				if (isAABBOccludedByHiZ(relMinB, relMaxB, viewProjRel, push.hizIndex)) {

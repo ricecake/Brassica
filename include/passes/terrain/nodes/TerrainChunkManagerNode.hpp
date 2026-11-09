@@ -11,8 +11,10 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
+#include "ServiceLocator.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
+#include "passes/terrain/ITerrainManager.hpp"
 #include "passes/terrain/resources.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -22,7 +24,15 @@
 
 namespace brassica {
 
+
 	namespace terrain_chunk_detail {
+		inline bool IsChunkSystemEnabled() {
+			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+				return ServiceLocator::Instance().Get<ITerrainManager>()->GetState().useChunkSystem;
+			}
+			return true;
+		}
+
 		inline glm::uvec2 SplitDeviceAddress(vk::DeviceAddress addr) {
 			return glm::uvec2(
 				static_cast<std::uint32_t>(addr & 0xFFFFFFFFu),
@@ -184,6 +194,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+				if (!ServiceLocator::Instance().Get<ITerrainManager>()->GetState().useChunkSystem) {
+					return;
+				}
+			}
+
 			if (initialized && !forceRegeneration) {
 				return;
 			}
@@ -253,6 +269,8 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (!terrain_chunk_detail::IsChunkSystemEnabled()) return;
+
 			const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources);
 			if (!physReg) return;
 
@@ -316,6 +334,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (!terrain_chunk_detail::IsChunkSystemEnabled()) return;
 			const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources);
 			if (!physReg) return;
 
@@ -387,6 +406,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (!terrain_chunk_detail::IsChunkSystemEnabled()) return;
 			const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources);
 			if (!physReg) return;
 
@@ -472,6 +492,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (!terrain_chunk_detail::IsChunkSystemEnabled()) return;
 			const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources);
 			if (!physReg) return;
 
@@ -543,6 +564,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (!terrain_chunk_detail::IsChunkSystemEnabled()) return;
 			const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources);
 			if (!physReg) return;
 
@@ -642,6 +664,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (!terrain_chunk_detail::IsChunkSystemEnabled()) return;
 			const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources);
 			if (!physReg) return;
 

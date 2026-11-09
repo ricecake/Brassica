@@ -8,6 +8,7 @@ namespace brassica {
 	struct TerrainManagerState {
 		uint32_t numLODs{constants::Class::Terrain::DefaultMaxLODs};
 		float    baseTexelSize{constants::Class::Terrain::BaseTexelSize};
+		bool     useChunkSystem{true};
 
 		auto GetReflection() const {
 			return std::make_tuple(
@@ -19,7 +20,8 @@ namespace brassica {
 					0.01f,
 					10.0f,
 					UIHint::Slider
-				)
+				),
+				MakeField("useChunkSystem", "Use Chunk System", &TerrainManagerState::useChunkSystem, UIHint::Checkbox)
 			);
 		}
 	};
