@@ -46,16 +46,34 @@ void main() {
 		particleColor *= pulse;
 	}
 
-	if (shapeAlpha < 0.02) {
+	// Smooth radial edge fade near the quad perimeter (p in [-0.5, 0.5]) to ensure
+	// alpha smoothly drops to zero before the quad boundary, eliminating square edge artifacts.
+	float edgeFade = smoothstep(0.5, 0.42, length(p));
+	shapeAlpha *= edgeFade;
+
+	if (shapeAlpha < 0.005) {
 		discard;
 	}
 
-	float alpha = IN.color.a * shapeAlpha;
+	float alpha = clamp(IN.color.a * shapeAlpha, 0.0, 1.0);
+	if (alpha < 0.005) {
+		discard;
+	}
 
 	// McGuire Weighted Order-Independent Translucency / Blending (WOITB) weight
+	// Evaluates McGuire & Bavoil (2013) Eq. 10 weight function over camera distance z:
 	float z = max(0.1, length(IN.worldPos - uCameraPosition.xyz));
-	float weight = clamp(10.0 / (1e-5 + pow(z / 150.0, 3.0)), 0.1, 1.0);
+	float weight = clamp(10.0 / (1e-5 + pow(z / 5.0, 2.0) + pow(z / 200.0, 6.0)), 0.01, 3000.0);
 
-	float finalAlpha = clamp(alpha * weight, 0.0, 1.0);
-	outColor = vec4(particleColor, finalAlpha);
+	// Weighted color accumulation (Channel 1 / RGB)
+	vec3 accumColor = particleColor * alpha * weight;
+
+	// Revealage factor for dual-channel WOITB (transmittance 1.0 - alpha) stored
+	// in the available free channel (Alpha channel of HdrColor RGBA16F)
+	float revealage = clamp(1.0 - alpha, 0.0, 1.0);
+
+	// Dual-channel WOITB output:
+	// RGB: Premultiplied depth-weighted color accumulation
+	// A: Revealage (transmittance)
+	outColor = vec4(accumColor, revealage);
 }
