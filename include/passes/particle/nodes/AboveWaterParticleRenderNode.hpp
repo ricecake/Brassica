@@ -35,7 +35,7 @@ namespace brassica {
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
-			.depthWrite = true,
+			.depthWrite = false,
 			.enableBlend = true,
 			.enableShadingRate = false,
 		};
