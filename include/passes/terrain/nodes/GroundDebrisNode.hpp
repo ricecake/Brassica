@@ -34,8 +34,8 @@ namespace brassica {
 		float         tileSize{4.0f};                 // world size per tile
 		float         heightOffset{0.04f};            // height offset slightly above terrain
 		float         time{0.0f};
-		std::uint32_t reserved0{0};
-		std::uint32_t reserved1{0};
+		std::uint32_t biomeIndex{0};
+		std::uint32_t weatherBiomeIndex{0};
 	};
 
 	static_assert(sizeof(GroundDebrisPushConstants) == 64, "GroundDebrisPushConstants size must be 64 bytes");
@@ -110,11 +110,15 @@ namespace brassica {
 			r.Modify<GBufferDepth>().AnyOrder();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
+			r.Read<TerrainBiomeTexture>();
+			r.Read<TerrainWeatherBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
+			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
+			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{

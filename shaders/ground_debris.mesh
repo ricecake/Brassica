@@ -4,6 +4,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "helpers/wind.glsl"
 
 // 8x8 subdivisions per tile = 9x9 vertices = 81 vertices, 64 quads = 128 triangles
 layout(local_size_x = 9, local_size_y = 9, local_size_z = 1) in;
@@ -18,8 +19,8 @@ layout(push_constant) uniform GroundDebrisPushConstants {
 	float tileSize;          // world size per tile
 	float heightOffset;      // height offset above terrain
 	float time;
-	uint  reserved0;
-	uint  reserved1;
+	uint  biomeIndex;
+	uint  weatherBiomeIndex;
 } push;
 
 struct DebrisTaskPayload {
@@ -67,16 +68,39 @@ void main() {
 
 	float dropOff = terrainDropOff(vertexWorldXZ);
 
-	// Float slightly above the terrain polygon (+heightOffset along surface normal)
-	float lift = max(0.015, push.heightOffset);
-	vec3 worldPos = vec3(vertexWorldXZ.x, terrainH - dropOff, vertexWorldXZ.y) + terrainNorm * lift;
+	// Mild terrain offset to give some slight spatial feel to the debris:
+	// micro-undulations and curvature across the debris mesh
+	float spatialMound = dot_noise_fbm(vec3(vertexWorldXZ * 1.5, 0.3), 2.0, 0.0) * 0.025;
+	float lift = max(0.015, push.heightOffset) + spatialMound;
+
+	// Wind ripple using cheap phasor noise for leaves and lightweight debris
+	float lat = clamp(vertexWorldXZ.y / (FAKE_PLANET_RADIUS * 1.5707963), -1.0, 1.0);
+	vec2 prevailingWind = getPrevailingWind(lat);
+	vec2 windDir = length(prevailingWind) > 1e-4 ? normalize(prevailingWind) : vec2(1.0, 0.0);
+
+	// High frequency ripple flutter along wind vector
+	float windRipple = phasimpleNoise(vertexWorldXZ * 4.0, windDir, push.time * 3.5);
+	// Secondary flutter cross-wind
+	float crossRipple = polyWave(dot(vertexWorldXZ, vec2(-windDir.y, windDir.x)) * 6.0 + push.time * 5.0) * 0.5 + 0.5;
+	float leafFlutter = (windRipple * 0.6 + crossRipple * 0.4 - 0.5) * 0.012;
+
+	vec3 displacedNormal = terrainNorm;
+	// Perturb vertex position slightly along surface normal and in wind direction
+	vec3 worldPos = vec3(vertexWorldXZ.x, terrainH - dropOff, vertexWorldXZ.y) +
+	                terrainNorm * (lift + leafFlutter) +
+	                vec3(windDir.x, 0.0, windDir.y) * (leafFlutter * 0.5);
+
+	// Perturb normal slightly with wind ripple gradient approximation
+	displacedNormal.xz += vec2(windDir.x, windDir.y) * (windRipple * 0.15 - 0.075);
+	displacedNormal = normalize(displacedNormal);
+
 	vec3 relWorldPos = worldPos - uCameraPosition.xyz;
 
 	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
 
 	outWorldPos[vertexIndex] = worldPos;
-	outNormal[vertexIndex] = terrainNorm;
+	outNormal[vertexIndex] = displacedNormal;
 	outUV[vertexIndex] = vertexWorldXZ;
 	// Height factor to fade debris when camera climbs
 	float altitudeFraction = clamp(1.0 - (push.cameraPos.w / max(1.0, push.maxGroundDistance)), 0.0, 1.0);

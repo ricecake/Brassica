@@ -17,8 +17,8 @@ layout(push_constant) uniform GroundDebrisPushConstants {
 	float tileSize;          // world size per tile
 	float heightOffset;      // height offset above terrain
 	float time;
-	uint  reserved0;
-	uint  reserved1;
+	uint  biomeIndex;
+	uint  weatherBiomeIndex;
 } push;
 
 struct DebrisTaskPayload {

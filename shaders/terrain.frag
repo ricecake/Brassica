@@ -2,6 +2,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "helpers/wind.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 
 layout(location = 0) in vec3 inPosition;
@@ -55,7 +56,7 @@ void main() {
 	vec3 B = normalize(cross(N, T));
 
 	mat3 warpNoiseGrad;
-	vec3 warpNoise = 1.0*500*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
+	vec3 warpNoise = 1.0*1*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
 	vec3 warpCurl = get_curl(warpNoiseGrad);
 	// OrganicPlateData mCellS = getOrganicPlate(((worldPos+warpNoise)).xz, 0.00625, 5.0);
 	// OrganicPlateData mCellM = getOrganicPlate(((worldPos+warpNoise)).xz, 0.003125, 7.0);
@@ -71,27 +72,54 @@ void main() {
 	// vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + (mCellM.barycentric-vec3(1.0/3.0));
 	// vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + (mCellS.barycentric-vec3(1.0/3.0));
 
-	vec3 noisePosL = warpNoise+ worldPos*0.01;
-	vec3 noisePosM = warpNoise+ worldPos*0.1;
-	vec3 noisePosS = warpNoise+ worldPos;
+	// 2. Wind Alignment & Terrain Exposure to Wind
+	// Surface prevailing wind vector from latitude:
+	float lat = clamp(worldPos.z / (FAKE_PLANET_RADIUS * 1.5707963), -1.0, 1.0);
+	vec2 pWind = getPrevailingWind(lat);
+	vec3 windDir3D = vec3(pWind.x, 0.0, pWind.y);
+	float windLen = length(windDir3D);
+	if (windLen > 1e-4) {
+		windDir3D /= windLen;
+	} else {
+		windDir3D = vec3(1.0, 0.0, 0.0);
+	}
+
+	// Tangent plane wind vector projection for wave alignment
+	vec3 windTangent = normalize(windDir3D - N * dot(windDir3D, N));
+	if (length(windTangent) < 1e-4) {
+		windTangent = T;
+	}
+
+	// Surface exposure to wind:
+	// Wind blowing against the slope: N dot (-windDir3D) > 0 is the exposed windward face.
+	// Leeward / back sides of hills face away from incoming wind (N dot (-windDir3D) < 0).
+	// Exposure factor slows phase speed down to 0.25x on the back side of hills.
+	float slopeExposure = dot(N, -windDir3D);
+	float windExposure = mix(0.25, 1.35, smoothstep(-0.6, 0.6, slopeExposure));
+
+	// Phase time scales with surface wind exposure:
+	float exposedTime = uTime * windExposure;
+
+	vec3 noisePosL = warpNoise + worldPos * 0.01;
+	vec3 noisePosM = warpNoise + worldPos * 0.1;
+	vec3 noisePosS = warpNoise + worldPos;
+
+	// Align phasor spatial frequency F and advection velocity W with windTangent
+	vec3 windWaveF_L = normalize(windTangent + warpCurl * 0.2);
+	vec3 windWaveF_M = normalize(windTangent + warpCurl * 0.4);
+	vec3 windWaveF_S = normalize(windTangent + warpCurl * 0.6);
 
 	vec3 macroGrad3D;
-	// float macroVal = abs(0.5+0.5*dot_noise_fbm(noisePosL, 2, 0.0, macroGrad3D));
-	// float macroVal = (phasimpleNoise(noisePosS.xz, B.xz + warpCurl.xz, 0.25*uTime));
-	vec2 macroValPhase = (phasorNoise3D(noisePosL,  1.0, warpCurl, warpNoiseGrad*T, 0.68, 0.15*uTime));
-	float macroVal = macroValPhase.x / length(macroValPhase);
+	vec2 macroValPhase = phasorNoise3DGrad(noisePosL, 1.0, windWaveF_L, windTangent, 0.68, 0.01 * exposedTime, macroGrad3D);
+	float macroVal = macroValPhase.x / max(length(macroValPhase), 0.0001);
 
 	vec3 mediumGrad3D;
-	// float mediumVal = abs(0.5+0.5*dot_noise_fbm(noisePosM, 3, 37.0, mediumGrad3D));
-	// float mediumVal = (phasimpleNoise(noisePosS.xz, B.xz + warpCurl.xz, 0.5*uTime));
-	vec2 mediumValPhase = (phasorNoise3D(noisePosM,  1.0, warpCurl, warpNoiseGrad*B, 0.68, 0.15*uTime));
-	float mediumVal = mediumValPhase.x / length(mediumValPhase);
+	vec2 mediumValPhase = phasorNoise3DGrad(noisePosM, 1.0, windWaveF_M, windTangent, 0.68, 0.025 * exposedTime, mediumGrad3D);
+	float mediumVal = mediumValPhase.x / max(length(mediumValPhase), 0.0001);
 
 	vec3 microGrad3D;
-	// float microVal = abs(0.5+0.5*dot_noise_fbm(noisePosS, 4, 83.0, microGrad3D));
-	// float microVal = (phasimpleNoise(noisePosS.xz, B.xz + warpCurl.xz, uTime));
-	vec2 microValPhase = (phasorNoise3D(noisePosS,  1.0, warpCurl, warpNoiseGrad*N, 0.68, 0.15*uTime));
-	float microVal = microValPhase.x / length(microValPhase);
+	vec2 microValPhase = phasorNoise3DGrad(noisePosS, 1.0, windWaveF_S, windTangent, 0.68, 0.05 * exposedTime, microGrad3D);
+	float microVal = microValPhase.x / max(length(microValPhase), 0.0001);
 
 /*
 	vec3 scaled_pos = noisePos;//vec3(noisePos.xz * 0.022, noisePos.y * 0.011);
@@ -125,7 +153,7 @@ void main() {
 	// Near transition (~15m to ~120m): Micro fades out, Medium sustains, Macro fades in.
 	// Sum of active noise weight is preserved to maintain consistent surface complexity.
 	// -------------------------------------------------------------------------
-	vec4 fadeRanges = vec4(250.0, 1000.0, 25000.0, 250000.0);
+	vec4 fadeRanges = vec4(250.0, 500.0, 1000.0, 5000.0);
 	float nearBlend = smoothstep(fadeRanges[0], fadeRanges[1], effDist);
 	float farBlend = smoothstep(fadeRanges[1], fadeRanges[2], effDist);
 	float horizonFade = smoothstep(fadeRanges[2], fadeRanges[3], effDist);
@@ -193,9 +221,21 @@ void main() {
 	// 1. Climate biome color blending: enhance greenness in moist regions
 	if (grassW > 0.01) {
 		vec3 lushGreen = mix(paletteColor, vec3(0.12, 0.48, 0.10), smoothstep(0.35, 0.75, moisture) * 0.5);
+
+		// Wind gust response on grass:
+		// When grass bends under wind gusts, blades reflect light differently, exposing lighter
+		// undersides and shifting roughness (specular sheen) dynamically along the wave phase.
+		float grassWindWave = microVal * 0.6 + mediumVal * 0.4;
+		// Lightness brightening (+15% to -10%) as grass leans into/away from wind
+		float grassLightness = 1.0 + 0.18 * grassWindWave * windExposure;
+		// Roughness reduction on bent grass creates moving specular highlights across fields
+		float grassRoughnessMod = -0.15 * max(0.0, grassWindWave) * windExposure;
+
+		lushGreen *= grassLightness;
+
 		finalAlbedo = mix(finalAlbedo, lushGreen, grassW * 0.70);
-		roughness = mix(roughness, clamp(wb.roughness + 0.08 * (mediumVal * wMediumColor + microVal * wMicroColor), 0.35, 0.95), grassW * 0.5);
-		perturbedGradSum += (macroGrad * wMacroNorm + mediumGrad * wMediumNorm) * (0.12 * grassW);
+		roughness = mix(roughness, clamp(wb.roughness + grassRoughnessMod + 0.08 * (mediumVal * wMediumColor + microVal * wMicroColor), 0.25, 0.95), grassW * 0.5);
+		perturbedGradSum += (macroGrad * wMacroNorm + mediumGrad * wMediumNorm + microGrad * wMicroNorm) * (0.18 * grassW);
 	}
 
 	// 2. Patches of green moss / damp vegetation on wet cliff ledges and crevices

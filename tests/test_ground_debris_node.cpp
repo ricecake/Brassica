@@ -3,10 +3,10 @@
 
 #include <memory>
 #include "graph/Execution.hpp"
-#include "passes/GroundDebrisNode.hpp"
-#include "passes/ResourceKeys.hpp"
+#include "passes/terrain/nodes/GroundDebrisNode.hpp"
+#include "passes/terrain/resources.hpp"
 #include "ServiceLocator.hpp"
-#include "terrain/TerrainManager.hpp"
+#include "passes/terrain/TerrainManager.hpp"
 
 TEST_CASE("GroundDebrisNode push constants and state") {
 	brassica::GroundDebrisNode node;

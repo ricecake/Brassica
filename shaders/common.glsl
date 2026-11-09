@@ -912,6 +912,19 @@ vec4 hash43(vec3 p) {
 //     return t * t * (3.0 - 2.0 * t) * 2.0 - 1.0;
 // }
 
+// Differentiable polynomial oscillator returning value and derivative d(polyWave)/d(phase)
+float polyWaveDeriv(float phase, out float dWave) {
+    phase = fract(phase);
+    float t = abs(fract(phase + 0.5) * 2.0 - 1.0);
+    float s = (fract(phase + 0.5) < 0.5) ? -2.0 : 2.0; // derivative of |...| wrt phase
+    // t = |2 * fract(phase + 0.5) - 1|
+    // poly = (t^2 * (3 - 2t)) * 2 - 1 = 6*t^2 - 4*t^3 - 1
+    // d(poly)/dt = 12*t - 12*t^2 = 12 * t * (1 - t)
+    // d(poly)/d(phase) = 12 * t * (1 - t) * s
+    dWave = 12.0 * t * (1.0 - t) * s;
+    return (t * t * (3.0 - 2.0 * t)) * 2.0 - 1.0;
+}
+
 // Internal kernel evaluator
 vec2 evalPhasorKernel3D(vec3 cell, vec3 d, float mask, vec3 F, vec3 W, float phaseJitter, float time) {
     vec4 h = hash43(cell);
@@ -922,16 +935,52 @@ vec2 evalPhasorKernel3D(vec3 cell, vec3 d, float mask, vec3 F, vec3 W, float pha
 
     // 3D Simplex boundary is 0.6
     float distSq = dot(kernelPos, kernelPos);
-    float A = max(0.0, 0.6 - distSq);
-    if (A <= 0.0) return vec2(0.0);
+    float tA = max(0.0, 0.6 - distSq);
+    if (tA <= 0.0) return vec2(0.0);
 
     // Apply C2 falloff and inject the external mask
-    A = A * A * A * A * mask;
+    float A = tA * tA * tA * tA * mask;
 
     float phi0 = h.w;
     float phi = dot(F, kernelPos) + phi0 + phaseJitter - (dot(F, W) * time);
 
     return A * vec2(polyWave(phi), polyWave(phi - 0.25));
+}
+
+// Internal kernel evaluator with analytical gradient
+vec2 evalPhasorKernel3DGrad(vec3 cell, vec3 d, float mask, vec3 F, vec3 W, float phaseJitter, float time, out vec3 kernelGrad) {
+    vec4 h = hash43(cell);
+
+    // Jitter kernel center. Bound to 0.4 to stay within the 0.6 simplex radius
+    vec3 jitter = (h.xyz - 0.5) * 0.4;
+    vec3 kernelPos = d - jitter;
+
+    // 3D Simplex boundary is 0.6
+    float distSq = dot(kernelPos, kernelPos);
+    float tA = max(0.0, 0.6 - distSq);
+    if (tA <= 0.0) {
+        kernelGrad = vec3(0.0);
+        return vec2(0.0);
+    }
+
+    // A = tA^4 * mask where tA = (0.6 - distSq)
+    // dA/d(kernelPos) = 4 * tA^3 * (-2 * kernelPos) * mask = -8 * kernelPos * tA^3 * mask
+    float tA3 = tA * tA * tA;
+    float A = tA * tA3 * mask;
+    vec3 gradA = -8.0 * kernelPos * tA3 * mask;
+
+    float phi0 = h.w;
+    float phi = dot(F, kernelPos) + phi0 + phaseJitter - (dot(F, W) * time);
+
+    // For real part (polyWave(phi)):
+    float dWave;
+    float wave = polyWaveDeriv(phi, dWave);
+
+    // grad(A * wave) = gradA * wave + A * dWave * grad(phi)
+    // Since phi = dot(F, kernelPos) + ..., grad(phi) = F
+    kernelGrad = gradA * wave + (A * dWave) * F;
+
+    return A * vec2(wave, polyWave(phi - 0.25));
 }
 
 // Main 3D entry point
@@ -962,6 +1011,52 @@ vec2 phasorNoise3D(vec3 p, float mask, vec3 F, vec3 W, float phaseJitter, float 
     Z += evalPhasorKernel3D(cell + i1, p1, mask, F, W, phaseJitter, time);
     Z += evalPhasorKernel3D(cell + i2, p2, mask, F, W, phaseJitter, time);
     Z += evalPhasorKernel3D(cell + 1.0, p3, mask, F, W, phaseJitter, time);
+
+    return Z;
+}
+
+// 3D Simplex Phasor Noise with Analytical Gradient
+vec2 phasorNoise3DGrad(vec3 p, float mask, vec3 F, vec3 W, float phaseJitter, float time, out vec3 grad) {
+    const float F3 = 1.0 / 3.0;
+    const float G3 = 1.0 / 6.0;
+
+    // 1. Simplex Skewing
+    vec3 skew = p + dot(p, vec3(F3));
+    vec3 cell = floor(skew);
+    vec3 internal_pos = skew - cell;
+
+    // 2. Simplex Routing
+    vec3 g = step(internal_pos.yzx, internal_pos.xyz);
+    vec3 l = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+
+    // Unskew
+    vec3 p0 = p - cell + dot(cell, vec3(G3));
+    vec3 p1 = p0 - i1 + vec3(G3);
+    vec3 p2 = p0 - i2 + vec3(G3 * 2.0);
+    vec3 p3 = p0 - 1.0 + vec3(G3 * 3.0);
+
+    // 3. Summation and Gradient Accumulation
+    vec2 Z = vec2(0.0);
+    grad = vec3(0.0);
+
+    vec3 g0, g1, g2, g3;
+    Z += evalPhasorKernel3DGrad(cell, p0, mask, F, W, phaseJitter, time, g0);
+    Z += evalPhasorKernel3DGrad(cell + i1, p1, mask, F, W, phaseJitter, time, g1);
+    Z += evalPhasorKernel3DGrad(cell + i2, p2, mask, F, W, phaseJitter, time, g2);
+    Z += evalPhasorKernel3DGrad(cell + 1.0, p3, mask, F, W, phaseJitter, time, g3);
+
+    grad = g0 + g1 + g2 + g3;
+
+    // The normalized value is V = Z.x / |Z|.
+    // dV/dp = d(Z.x / length(Z)) = grad / |Z| - Z.x * (Z.x * grad) / |Z|^3
+    float lenZ = length(Z);
+    if (lenZ > 0.0001) {
+        grad = (grad - (Z.x / (lenZ * lenZ)) * grad) / lenZ;
+    } else {
+        grad = vec3(0.0);
+    }
 
     return Z;
 }

@@ -1,16 +1,87 @@
 #version 460
 #include "bindless.glsl"
 #include "common.glsl"
+#include "terrain.glsl"
+#include "helpers/wind.glsl"
 
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
 layout(location = 3) in float inHeightFactor;
 
+layout(push_constant) uniform GroundDebrisPushConstants {
+	uvec4 gridParams;        // x = tilesPerSide, y = totalTiles, z = reserved, w = textureDim
+	vec4  cameraPos;         // camera world position xyz, w = camera altitude above ground
+	uint  clipmapIndex;
+	uint  minMaxIndex;
+	float maxGroundDistance; // max camera altitude above ground to render
+	float tileSize;          // world size per tile
+	float heightOffset;      // height offset above terrain
+	float time;
+	uint  biomeIndex;
+	uint  weatherBiomeIndex;
+} push;
+
 layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outMaterial;
+
+// Helper to evaluate a seashell / bivalve shell near water shorelines
+float evaluateShellShape(vec2 uv, vec2 cellID, out float shellRidge, out float shellTint) {
+	vec2 h1 = hash(cellID * 29.41 + vec2(7.3, 1.8));
+	vec2 h2 = hash(cellID * 61.17 + vec2(3.5, 8.2));
+	vec2 h3 = hash(cellID * 83.29 + vec2(4.1, 9.6));
+
+	shellTint = h1.y;
+
+	// Center jitter in cell
+	vec2 center = (h1 - 0.5) * 0.7;
+	vec2 diff = uv - center;
+
+	// Orientation
+	float angle = h2.x * 6.2831853;
+	float s = sin(angle);
+	float c = cos(angle);
+	mat2  rot = mat2(c, -s, s, c);
+	vec2  localP = rot * diff;
+
+	// Fan-shaped seashell: wider top, tapering hinge base
+	float r = length(localP);
+	float theta = atan(localP.y, localP.x);
+	float fan = mix(0.12, 0.24, h2.y) * (0.8 + 0.3 * cos(theta));
+
+	// Concentric and radial growth ridges
+	shellRidge = sin(r * 45.0 + h3.x * 6.28) * 0.5 + 0.5;
+	float radialRidges = cos(theta * 7.0) * 0.5 + 0.5;
+	shellRidge = mix(shellRidge, radialRidges, 0.4);
+
+	return r / max(0.01, fan);
+}
+
+// Helper to evaluate small pebbles / stones in sandy / rocky terrain
+float evaluatePebbleShape(vec2 uv, vec2 cellID, out float stoneRoundness) {
+	vec2 h1 = hash(cellID * 37.19 + vec2(4.8, 6.2));
+	vec2 h2 = hash(cellID * 71.53 + vec2(2.1, 5.7));
+
+	vec2 center = (h1 - 0.5) * 0.75;
+	vec2 diff = uv - center;
+
+	float angle = h2.x * 6.2831853;
+	float s = sin(angle);
+	float c = cos(angle);
+	mat2  rot = mat2(c, -s, s, c);
+	vec2  localP = rot * diff;
+
+	// Ellipsoidal pebble with irregular facets
+	float aspect = mix(0.65, 0.95, h2.y);
+	vec2 scaled = localP / vec2(1.0, aspect);
+	float d = length(scaled);
+
+	float radius = mix(0.08, 0.20, h1.y);
+	stoneRoundness = h2.y;
+	return d / max(0.01, radius);
+}
 
 // Helper to evaluate a stick / twig segment in a 2D tile cell with chaotic spatial jitter and orientation
 float evaluateStickSegment(vec2 uv, vec2 cellID, out float stickWidth) {
@@ -152,8 +223,85 @@ void main() {
 	float brushDist = length(brushFrac - brushCenter);
 	bool  isBrush = (hBrush.x > 0.62) && (brushDist < mix(0.12, 0.32, hBrush.y));
 
-	// If neither stick, leaf, nor brush, this spot is transparent ground
-	if (!isStick && !isLeaf && !isBrush) {
+	// 4. Sample biome data to determine environment conditions (water proximity, sand/rock substrate)
+	float waterLevel = 0.0;
+	float substrateSand = 0.0;
+	float moisture = 0.5;
+	if (push.biomeIndex > 0u && push.biomeIndex != 0xFFFFFFFFu) {
+		vec4 biomeData = sampleTerrainBiome(push.biomeIndex, p, 0u, push.gridParams.w);
+		waterLevel = biomeData.g;
+		substrateSand = biomeData.a; // substrate map (sand/gravel vs soil)
+	}
+	if (push.weatherBiomeIndex > 0u && push.weatherBiomeIndex != 0xFFFFFFFFu) {
+		vec4 weatherData = sampleTerrainWeatherBiome(push.weatherBiomeIndex, inWorldPos);
+		moisture = weatherData.b;
+	}
+
+	// Height above water level: shoreline proximity
+	float heightAboveWater = inWorldPos.y - waterLevel;
+	bool nearWater = (heightAboveWater >= -0.2 && heightAboveWater <= 4.0);
+	bool isSandy = (substrateSand > 0.45) || (nearWater && heightAboveWater <= 2.5);
+
+	// 5. Seashells evaluation near water shorelines
+	float shellScale = 6.0;
+	vec2  shellGrid = (warpedP + vec2(64.1, 19.4)) * shellScale;
+	vec2  shellCell = floor(shellGrid);
+	vec2  shellFrac = fract(shellGrid) - 0.5;
+	float minShellDist = 100.0;
+	float chosenRidge = 0.0;
+	float chosenTint = 0.0;
+
+	if (nearWater) {
+		for (int dy = -1; dy <= 1; ++dy) {
+			for (int dx = -1; dx <= 1; ++dx) {
+				vec2 neighbor = vec2(float(dx), float(dy));
+				vec2 cID = shellCell + neighbor;
+				float ridge, tint;
+				float d = evaluateShellShape(shellFrac - neighbor, cID, ridge, tint);
+				if (d < minShellDist) {
+					minShellDist = d;
+					chosenRidge = ridge;
+					chosenTint = tint;
+				}
+			}
+		}
+	}
+	bool isShell = nearWater && (minShellDist < 1.0);
+	float shellEdge = smoothstep(1.0, 0.82, minShellDist);
+
+	// 6. Small Pebbles / Rocks in sandy / beach / gravel areas
+	float pebbleScale = 5.2;
+	vec2  pebbleGrid = (warpedP + vec2(88.3, 47.9)) * pebbleScale;
+	vec2  pebbleCell = floor(pebbleGrid);
+	vec2  pebbleFrac = fract(pebbleGrid) - 0.5;
+	float minPebbleDist = 100.0;
+	float stoneRoundness = 0.5;
+
+	if (isSandy) {
+		for (int dy = -1; dy <= 1; ++dy) {
+			for (int dx = -1; dx <= 1; ++dx) {
+				vec2 neighbor = vec2(float(dx), float(dy));
+				vec2 cID = pebbleCell + neighbor;
+				float roundness;
+				float d = evaluatePebbleShape(pebbleFrac - neighbor, cID, roundness);
+				if (d < minPebbleDist) {
+					minPebbleDist = d;
+					stoneRoundness = roundness;
+				}
+			}
+		}
+	}
+	bool isPebble = isSandy && (minPebbleDist < 1.0);
+	float pebbleEdge = smoothstep(1.0, 0.75, minPebbleDist);
+
+	// In sandy / water areas, prioritize shells and pebbles; reduce dense forest leaves
+	if (nearWater || isSandy) {
+		isLeaf = isLeaf && (!isShell && !isPebble);
+		isStick = isStick && (!isShell && !isPebble);
+	}
+
+	// If neither stick, leaf, brush, shell, nor pebble, this spot is transparent ground
+	if (!isStick && !isLeaf && !isBrush && !isShell && !isPebble) {
 		discard;
 	}
 
@@ -163,7 +311,30 @@ void main() {
 	float metallic = 0.0;
 	vec3  perturbedNormal = inNormal;
 
-	if (isStick) {
+	if (isShell) {
+		// Seashell coloration: pearlescent ivory, peach, soft rose-pink, cream with fine growth ridges
+		vec3 shellWhite = vec3(0.92, 0.88, 0.82);
+		vec3 shellPeach = vec3(0.95, 0.81, 0.71);
+		vec3 shellRose  = vec3(0.88, 0.75, 0.74);
+		vec3 shellColor = mix(shellWhite, mix(shellPeach, shellRose, chosenTint), 0.5);
+		shellColor = mix(shellColor * 0.82, shellColor * 1.12, chosenRidge);
+		albedo = shellColor * shellEdge;
+		roughness = 0.35; // smooth seashell finish
+		metallic = 0.05;
+	} else if (isPebble) {
+		// Small pebble / rock coloration: granite, quartzite, slate, ochre sandstone
+		vec3 stoneDark  = vec3(0.32, 0.30, 0.28);
+		vec3 stoneLight = vec3(0.55, 0.52, 0.48);
+		vec3 sandStone  = vec3(0.62, 0.53, 0.38);
+		vec3 stoneBase = mix(stoneDark, stoneLight, stoneRoundness);
+		if (substrateSand > 0.6) {
+			stoneBase = mix(stoneBase, sandStone, 0.6);
+		}
+		// Fine mineral grain
+		float mineralGrain = fract(sin(dot(p, vec2(93.1, 417.3))) * 43758.5453);
+		albedo = mix(stoneBase * 0.9, stoneBase * 1.1, mineralGrain) * pebbleEdge;
+		roughness = 0.82;
+	} else if (isStick) {
 		// Wood / Bark tones: rich brown with subtle bark striations
 		vec3 barkDark = vec3(0.18, 0.11, 0.06);
 		vec3 barkLight = vec3(0.32, 0.22, 0.13);
