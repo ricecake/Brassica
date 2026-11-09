@@ -13,9 +13,6 @@
 [submodule "external/meshoptimizer"]
 	path = external/meshoptimizer
 	url = https://github.com/zeux/meshoptimizer
-[submodule "external/FrameGraph"]
-	path = external/FrameGraph
-	url = https://github.com/skaarj1989/FrameGraph
 [submodule "external/imgui_entt_entity_editor"]
 	path = external/imgui_entt_entity_editor
 	url = https://github.com/Green-Sky/imgui_entt_entity_editor
@@ -34,9 +31,6 @@
 [submodule "external/vk-bootstrap"]
 	path = external/vk-bootstrap
 	url = https://github.com/charles-lunarg/vk-bootstrap
-[submodule "external/tracy"]
-	path = external/tracy
-	url = https://github.com/wolfpld/tracy
 [submodule "external/ImGuizmo"]
 	path = external/ImGuizmo
 	url = https://github.com/CedricGuillemet/ImGuizmo
@@ -64,9 +58,6 @@
 [submodule "external/efsw"]
 	path = external/efsw
 	url = https://github.com/SpartanJ/efsw
-[submodule "external/FastNoise2"]
-	path = external/FastNoise2
-	url = https://github.com/Auburn/FastNoise2.git
 [submodule "external/boidish"]
 	path = external/boidish
 	url = https://github.com/ricecake/boidsish.git
@@ -80,9 +71,6 @@
 [submodule "external/geometry-central"]
 	path = external/geometry-central
 	url = https://github.com/nmwsharp/geometry-central.git
-[submodule "external/ozz-animation"]
-	path = external/ozz-animation
-	url = https://github.com/guillaumeblanc/ozz-animation.git
 [submodule "external/eigen"]
 	path = external/eigen
 	url = https://gitlab.com/libeigen/eigen.git

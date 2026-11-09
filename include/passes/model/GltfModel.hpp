@@ -88,15 +88,6 @@ namespace brassica {
 		std::vector<GltfAnimationChannel> channels;
 	};
 
-	// Stage 1 of the GLTF/GLB pipeline (static mesh loading + GPU-driven rendering): parses a
-	// single glTF/GLB asset via fastgltf, decodes every triangle-list primitive's accessors into
-	// a flat GltfVertex array, and builds EXT_mesh_shader-ready meshlets via
-	// meshopt_buildMeshlets. Stage 2 (materials + textures) added image decoding and material
-	// parsing, still CPU-only. Stage 3 (skeleton + animation) added the node hierarchy, one skin's
-	// joints/inverse-bind matrices, and every animation clip -- still CPU-only, no ozz (dropped
-	// per the agreed plan); EvaluatePose() is this stage's own minimal keyframe sampler (LERP
-	// translation/scale, NLERP rotation, no blending between clips). Deliberately narrow scope:
-	// one asset, at most one skin, no multi-instance support.
 	class GltfModel {
 	public:
 		// Clears any previously loaded data first, so a failed reload can't leave a stale mix of

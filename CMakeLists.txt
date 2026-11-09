@@ -38,12 +38,12 @@ if(CCACHE_PROGRAM)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
 endif()
 
-# Profiling Option (Forwards to Tracy)
-option(ENABLE_PROFILING "Enable Tracy Profiling" OFF)
-if(ENABLE_PROFILING)
-    set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
-    add_compile_definitions(PROFILING_ENABLED)
-endif()
+# # Profiling Option (Forwards to Tracy)
+# option(ENABLE_PROFILING "Enable Tracy Profiling" OFF)
+# if(ENABLE_PROFILING)
+#     set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+#     add_compile_definitions(PROFILING_ENABLED)
+# endif()
 
 option(BRASSICA_BUILD_SHARED "Build brassica as a shared library" OFF)
 if(BRASSICA_BUILD_SHARED)
@@ -104,13 +104,6 @@ if(NOT TARGET Eigen3::Eigen AND EIGEN3_INCLUDE_DIR)
 endif()
 
 # 3. Submodule Configurations
-set(ozz_build_tools OFF CACHE BOOL "" FORCE)
-set(ozz_build_fbx OFF CACHE BOOL "" FORCE)
-set(ozz_build_gltf OFF CACHE BOOL "" FORCE)
-set(ozz_build_samples OFF CACHE BOOL "" FORCE)
-set(ozz_build_howtos OFF CACHE BOOL "" FORCE)
-set(ozz_build_tests OFF CACHE BOOL "" FORCE)
-set(ozz_build_msvc_rt_dll ON CACHE BOOL "" FORCE)
 set(GC_ALWAYS_DOWNLOAD_EIGEN OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "Disable submodule tests" FORCE)
 
@@ -126,7 +119,7 @@ set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 
-# Shaderc & FastGLTF & efsw & FastNoise2
+# Shaderc & FastGLTF & efsw
 set(SHADERC_SKIP_TESTS ON CACHE BOOL "" FORCE)
 set(SHADERC_SKIP_EXAMPLES ON CACHE BOOL "" FORCE)
 set(FG_BUILD_TEST OFF CACHE BOOL "" FORCE)
@@ -135,10 +128,6 @@ set(BUILD_TEST_APP OFF CACHE BOOL "" FORCE)
 set(EFSW_INSTALL OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(FASTNOISE2_TOOLS OFF CACHE BOOL "" FORCE)
-set(FASTNOISE2_TESTS OFF CACHE BOOL "" FORCE)
-set(FASTNOISE2_UTILITY OFF CACHE BOOL "" FORCE)
-set(FASTNOISE2_STRICT_FP OFF CACHE BOOL "Disable strict floating point calculations for maximum performance" FORCE)
 
 # SPIRV-Reflect: only the static library (the shader-push-constant validation plan's S4) --
 # skip its own CLI executable/examples/test suite, which the default options build unasked.
@@ -161,13 +150,11 @@ add_subdirectory(external/JoltPhysics/Build)
 add_subdirectory(external/vk-bootstrap)
 add_subdirectory(external/shaderc)
 add_subdirectory(external/meshoptimizer)
-add_subdirectory(external/tracy)
+# add_subdirectory(external/tracy)
 add_subdirectory(external/VulkanMemoryAllocator)
 add_subdirectory(external/doctest)
-add_subdirectory(external/FastNoise2)
 add_subdirectory(external/argparse)
 add_subdirectory(external/geometry-central)
-add_subdirectory(external/ozz-animation)
 add_subdirectory(external/SPIRV-Reflect)
 if(TARGET eigen)
     target_compile_definitions(eigen INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
@@ -237,7 +224,6 @@ target_include_directories(brassica
         external/miniaudio
         external/imgui_entt_entity_editor
         ${CMAKE_CURRENT_SOURCE_DIR}/external/geometry-central/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/ozz-animation/include
         external/eigen
 )
 
@@ -254,16 +240,12 @@ target_link_libraries(brassica
         vk-bootstrap
         shaderc_shared
         meshoptimizer
-        TracyClient
+        # TracyClient
         Threads::Threads
         VulkanMemoryAllocator
         efsw-static
-        FastNoise
         argparse
         geometry-central
-        ozz_animation
-        ozz_animation_offline
-        ozz_geometry
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)
