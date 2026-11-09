@@ -16,9 +16,10 @@ layout(scalar, buffer_reference) buffer ChunkLODRef {
 
 layout(push_constant) uniform TerrainChunkLodPush {
 	uvec2 chunkLodBufferAddr;
-	uvec2 padding;
-	uvec4 gridParams; // x = numLODs (8), y = chunksPerRow (16), z = totalChunks (2048), w = maxAllocatedChunks (1024)
+	uvec2 pad0;
+	uvec4 gridParams; // x = numLODs (12), y = chunksPerRow (16), z = totalChunks (3072), w = maxAllocatedChunks (4096)
 	float baseChunkSize;
+	uint  pad1[3];
 } push;
 
 void main() {
@@ -44,13 +45,9 @@ void main() {
 	vec2  cameraSnap = floor(uCameraPosition.xz / chunkSize) * chunkSize;
 
 	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
-	vec2 chunkCenter = chunkMinXZ + vec2(chunkSize * 0.5);
 
-	float distToCam = length(chunkCenter - uCameraPosition.xz);
-
-	// Outer distance LOD boundary check: chunk is needed within outer grid radius
-	float outerRadius = (float(chunksPerRow) * 0.5) * chunkSize;
-	bool needed = distToCam <= outerRadius * 1.15;
+	// In concentric square clipmap rings, every chunk in the ring is needed unless covered by an inner LOD
+	bool needed = true;
 
 	// Exact square AABB inner LOD culling: if completely covered by LOD (lod - 1), this chunk is NOT needed
 	if (needed && lod > 0u) {

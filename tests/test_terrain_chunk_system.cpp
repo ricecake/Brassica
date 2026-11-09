@@ -24,7 +24,7 @@ TEST_CASE("Terrain Chunk System Buffer Descriptors and Constants") {
 	CHECK(trisPerChunk == 450);
 	CHECK(indicesPerChunk == 1350);
 	CHECK(maxVirtual == 3072);
-	CHECK(maxAlloc == 2048);
+	CHECK(maxAlloc == 4096);
 
 	graph::FrameContext ctx{.width = 1280, .height = 720};
 

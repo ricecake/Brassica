@@ -196,7 +196,7 @@ namespace brassica {
 					constexpr std::uint32_t ChunksPerRow = 16;
 					constexpr std::uint32_t NumLODs = 12;
 					constexpr std::uint32_t MaxVirtualChunks = NumLODs * ChunksPerRow * ChunksPerRow; // 3072
-					constexpr std::uint32_t MaxAllocatedChunks = 2048;
+					constexpr std::uint32_t MaxAllocatedChunks = 4096;
 				} // namespace ChunkManager
 			} // namespace Terrain
 

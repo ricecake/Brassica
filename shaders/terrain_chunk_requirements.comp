@@ -35,9 +35,10 @@ layout(push_constant) uniform TerrainChunkReqPush {
 	uvec2 chunkLodBufferAddr;
 	uvec2 pageTableBufferAddr;
 	uvec2 requirementsBufferAddr;
-	uvec2 padding;
-	uvec4 gridParams; // x = numLODs (8), y = chunksPerRow (16), z = totalChunks (2048), w = maxAllocatedChunks (1024)
+	uvec2 pad0;
+	uvec4 gridParams; // x = numLODs (12), y = chunksPerRow (16), z = totalChunks (3072), w = maxAllocatedChunks (4096)
 	float baseChunkSize;
+	uint  pad1[3];
 } push;
 
 void main() {

@@ -60,44 +60,23 @@ void main() {
 			float chunkSize = baseChunkSize * getLODScale(float(lod));
 
 			vec2 chunkMinXZ = vec2(float(entry.coordX) * chunkSize, float(entry.coordZ) * chunkSize);
-			vec3 relMinB = vec3(chunkMinXZ.x - uCameraPosition.x, -500.0 - uCameraPosition.y, chunkMinXZ.y - uCameraPosition.z);
-			vec3 relMaxB = relMinB + vec3(chunkSize, 2500.0, chunkSize);
-
-			if (push.minMaxIndex > 0u) {
-				vec2 centerXZ = chunkMinXZ + vec2(chunkSize * 0.5);
-				vec2 minMax = sampleTerrainMinMaxMip(push.minMaxIndex, centerXZ, lod, 0, 1088);
-				relMinB.y = minMax.x - 100.0 - uCameraPosition.y;
-				relMaxB.y = minMax.y + 100.0 - uCameraPosition.y;
-			}
-
-			vec2 maxRel = max(abs(relMinB.xz), abs(relMaxB.xz));
+			vec2 maxRel = max(abs(chunkMinXZ - uCameraPosition.xz), abs(chunkMinXZ + vec2(chunkSize) - uCameraPosition.xz));
 			float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
-			relMinB.y -= maxDropOff;
+
+			vec3 relMinB = vec3(chunkMinXZ.x - uCameraPosition.x, -2000.0 - uCameraPosition.y - maxDropOff, chunkMinXZ.y - uCameraPosition.z);
+			vec3 relMaxB = vec3(chunkMinXZ.x + chunkSize - uCameraPosition.x, 4000.0 - uCameraPosition.y, chunkMinXZ.y + chunkSize - uCameraPosition.z);
 
 			mat4 viewRel = mat4(mat3(uViewMatrix));
 			mat4 viewProjRel = uProjMatrix * viewRel;
 
-			// Frustum culling
-			visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(100.0, 300.0, 100.0), -200.0);
-
-			// Horizon culling
-			if (visible && lod > 1u) {
-				vec2  closestXZ = clamp(vec2(0.0), relMinB.xz, relMaxB.xz);
-				float tileDist = length(closestXZ);
-				float camAltitude = uCameraPosition.y - push.waterLevel;
-				float tileMaxYAboveRef = (relMaxB.y + uCameraPosition.y) - push.waterLevel;
-				float slack = chunkSize * 4.0 + 500.0;
-				if (isBeyondHorizon(tileDist, tileMaxYAboveRef, camAltitude, slack)) {
-					visible = false;
-				}
-			}
+			// Generous frustum culling
+			visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(chunkSize * 2.0, 1000.0, chunkSize * 2.0), -500.0);
 
 			// Inner LOD culling: prevent coarse LOD chunks from rendering over finer LOD chunks
 			if (visible && lod > 0u) {
 				uint chunksPerRow = push.gridParams.y;
 				float prevChunkSize = baseChunkSize * getLODScale(float(lod - 1u));
-				float prevTexelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod - 1u));
-				vec2  prevCameraSnap = floor(uCameraPosition.xz / prevTexelSize) * prevTexelSize;
+				vec2  prevCameraSnap = floor(uCameraPosition.xz / prevChunkSize) * prevChunkSize;
 				float prevExtent = float(chunksPerRow) * 0.5 * prevChunkSize;
 
 				bool insideInnerX = (chunkMinXZ.x >= prevCameraSnap.x - prevExtent) &&
@@ -110,12 +89,14 @@ void main() {
 				}
 			}
 
-			// HiZ occlusion culling if available
-			if (visible && push.hizIndex > 0u && lod >= 2u) {
+			// HiZ occlusion culling (disabled by default to avoid false rejection)
+			#if 0
+			if (visible && push.hizIndex > 0u && lod >= 3u) {
 				if (isAABBOccludedByHiZ(relMinB, relMaxB, viewProjRel, push.hizIndex)) {
 					visible = false;
 				}
 			}
+			#endif
 		}
 	}
 

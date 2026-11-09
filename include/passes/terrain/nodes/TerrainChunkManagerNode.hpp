@@ -65,9 +65,9 @@ namespace brassica {
 		std::uint32_t maxAllocatedChunks{constants::Class::Terrain::ChunkManager::MaxAllocatedChunks};
 	};
 
-	struct TerrainChunkLodPush {
+	struct alignas(16) TerrainChunkLodPush {
 		glm::uvec2   chunkLodBufferAddr{0};
-		glm::uvec2   padding{0};
+		glm::uvec2   pad0{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -75,13 +75,14 @@ namespace brassica {
 			constants::Class::Terrain::ChunkManager::MaxAllocatedChunks
 		};
 		float         baseChunkSize{64.0f};
+		std::uint32_t pad1[3]{0, 0, 0};
 	};
 
-	struct TerrainChunkEvictPush {
+	struct alignas(16) TerrainChunkEvictPush {
 		glm::uvec2   chunkLodBufferAddr{0};
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   indirectionBufferAddr{0};
-		glm::uvec2   padding{0};
+		glm::uvec2   pad0{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -91,13 +92,14 @@ namespace brassica {
 		float         baseChunkSize{64.0f};
 		std::uint32_t maxVirtualChunks{constants::Class::Terrain::ChunkManager::MaxVirtualChunks};
 		std::uint32_t maxAllocatedChunks{constants::Class::Terrain::ChunkManager::MaxAllocatedChunks};
+		std::uint32_t pad1{0};
 	};
 
-	struct TerrainChunkRequirementsPush {
+	struct alignas(16) TerrainChunkRequirementsPush {
 		glm::uvec2   chunkLodBufferAddr{0};
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   requirementsBufferAddr{0};
-		glm::uvec2   padding{0};
+		glm::uvec2   pad0{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -105,13 +107,14 @@ namespace brassica {
 			constants::Class::Terrain::ChunkManager::MaxAllocatedChunks
 		};
 		float         baseChunkSize{64.0f};
+		std::uint32_t pad1[3]{0, 0, 0};
 	};
 
-	struct TerrainChunkAllocPush {
+	struct alignas(16) TerrainChunkAllocPush {
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   indirectionBufferAddr{0};
 		glm::uvec2   requirementsBufferAddr{0};
-		glm::uvec2   padding{0};
+		glm::uvec2   pad0{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -121,13 +124,14 @@ namespace brassica {
 		float         baseChunkSize{64.0f};
 		std::uint32_t maxVirtualChunks{constants::Class::Terrain::ChunkManager::MaxVirtualChunks};
 		std::uint32_t maxAllocatedChunks{constants::Class::Terrain::ChunkManager::MaxAllocatedChunks};
+		std::uint32_t pad1{0};
 	};
 
-	struct TerrainChunkGeneratePush {
+	struct alignas(16) TerrainChunkGeneratePush {
 		glm::uvec2   vertexBufferAddr{0};
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   requirementsBufferAddr{0};
-		glm::uvec2   padding{0};
+		glm::uvec2   pad0{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -136,6 +140,7 @@ namespace brassica {
 		};
 		float         baseChunkSize{64.0f};
 		std::uint32_t chunkDimension{constants::Class::Terrain::ChunkManager::ChunkDimension};
+		std::uint32_t pad1[2]{0, 0};
 	};
 
 	struct TerrainChunkRenderPushConstants {
@@ -230,7 +235,11 @@ namespace brassica {
 			if (!resolved.pipeline) return;
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			std::uint32_t groupCount = (constants::Class::Terrain::ChunkManager::MaxVirtualChunks + 63u) / 64u;
+			std::uint32_t maxEntries = std::max(
+				constants::Class::Terrain::ChunkManager::MaxVirtualChunks,
+				constants::Class::Terrain::ChunkManager::MaxAllocatedChunks
+			);
+			std::uint32_t groupCount = (maxEntries + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 
 			initialized = true;
@@ -295,7 +304,11 @@ namespace brassica {
 			if (!resolved.pipeline) return;
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			std::uint32_t groupCount = (constants::Class::Terrain::ChunkManager::MaxVirtualChunks + 63u) / 64u;
+			std::uint32_t maxEntries = std::max(
+				constants::Class::Terrain::ChunkManager::MaxVirtualChunks,
+				constants::Class::Terrain::ChunkManager::MaxAllocatedChunks
+			);
+			std::uint32_t groupCount = (maxEntries + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
@@ -367,7 +380,11 @@ namespace brassica {
 			if (!resolved.pipeline) return;
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			std::uint32_t groupCount = (constants::Class::Terrain::ChunkManager::MaxVirtualChunks + 63u) / 64u;
+			std::uint32_t maxEntries = std::max(
+				constants::Class::Terrain::ChunkManager::MaxVirtualChunks,
+				constants::Class::Terrain::ChunkManager::MaxAllocatedChunks
+			);
+			std::uint32_t groupCount = (maxEntries + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
@@ -453,7 +470,11 @@ namespace brassica {
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, reqShader, push);
 			if (!resolved.pipeline) return;
 
-			std::uint32_t groupCount = (constants::Class::Terrain::ChunkManager::MaxVirtualChunks + 63u) / 64u;
+			std::uint32_t maxEntries = std::max(
+				constants::Class::Terrain::ChunkManager::MaxVirtualChunks,
+				constants::Class::Terrain::ChunkManager::MaxAllocatedChunks
+			);
+			std::uint32_t groupCount = (maxEntries + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
@@ -525,7 +546,11 @@ namespace brassica {
 			if (!resolved.pipeline) return;
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
-			std::uint32_t groupCount = (constants::Class::Terrain::ChunkManager::MaxVirtualChunks + 63u) / 64u;
+			std::uint32_t maxEntries = std::max(
+				constants::Class::Terrain::ChunkManager::MaxVirtualChunks,
+				constants::Class::Terrain::ChunkManager::MaxAllocatedChunks
+			);
+			std::uint32_t groupCount = (maxEntries + 63u) / 64u;
 			vkCmd.dispatch(groupCount, 1, 1);
 		}
 	};
