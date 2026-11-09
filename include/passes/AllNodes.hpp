@@ -43,6 +43,7 @@
 #include "passes/particle/nodes/UnderwaterParticleRenderNode.hpp"
 #include "passes/atmosphere/nodes/SkyBackgroundNode.hpp"
 #include "passes/biome/nodes/TerrainBiomeNode.hpp"
+#include "passes/terrain/nodes/TerrainChunkManagerNode.hpp"
 #include "passes/terrain/nodes/TerrainGenNode.hpp"
 #include "passes/terrain/nodes/TerrainMinMaxDownsampleNode.hpp"
 #include "passes/terrain/nodes/TerrainNode.hpp"

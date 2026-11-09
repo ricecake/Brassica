@@ -186,6 +186,18 @@ namespace brassica {
 				constexpr int   MeshletCountPerLOD = MeshletsPerRow * MeshletsPerRow;               // 256
 				constexpr int   TotalMeshlets = DefaultMaxLODs * MeshletCountPerLOD;               // 3584
 				constexpr float PathCorridorWidth = 0.15f;
+
+				namespace ChunkManager {
+					constexpr std::uint32_t ChunkDimension = 11;
+					constexpr std::uint32_t VerticesPerChunk = ChunkDimension * ChunkDimension; // 121
+					constexpr std::uint32_t QuadsPerChunk = (ChunkDimension - 1) * (ChunkDimension - 1); // 100
+					constexpr std::uint32_t TrianglesPerChunk = QuadsPerChunk * 2; // 200
+					constexpr std::uint32_t IndicesPerChunk = TrianglesPerChunk * 3; // 600
+					constexpr std::uint32_t ChunksPerRow = 16;
+					constexpr std::uint32_t NumLODs = 8;
+					constexpr std::uint32_t MaxVirtualChunks = NumLODs * ChunksPerRow * ChunksPerRow; // 2048
+					constexpr std::uint32_t MaxAllocatedChunks = 1024;
+				} // namespace ChunkManager
 			} // namespace Terrain
 
 			namespace AsyncTerrain {

@@ -39,6 +39,9 @@
 // IParticleManager::IsEnabled(). Landed independently of the cloud/model-work additions just
 // above (two lineages untangled onto the same branch); resynced to the real current count, same
 // precedent as the 27 -> 32 entry above.
+// 43 -> 50: Added TerrainChunkResetNode, TerrainChunkLODNode, TerrainChunkRequirementsNode,
+// TerrainChunkAllocNode, TerrainChunkGenerateNode, TerrainChunkEvictNode, and TerrainChunkRenderNode
+// for terrain chunk page table and indirection buffer management.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 43);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 50);
 }

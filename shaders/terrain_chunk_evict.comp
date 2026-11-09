@@ -1,0 +1,109 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct TerrainPageTableEntry {
+	uint physicalSlot; // 0xFFFFFFFF if unallocated
+	int  coordX;       // grid cell X
+	int  coordZ;       // grid cell Z
+	uint lod;
+};
+
+layout(scalar, buffer_reference) buffer PageTableRef {
+	TerrainPageTableEntry entries[];
+};
+
+layout(scalar, buffer_reference) buffer IndirectionRef {
+	uint activeChunkCount;
+	uint freeStackCount;
+	uint allocCounter;
+	uint padding0;
+	// VkDrawMeshTasksIndirectCommandEXT
+	uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+	uint padding1;
+	uint data[]; // freeStack: data[0..maxAllocated-1], activeChunks: data[maxAllocated..2*maxAllocated-1]
+};
+
+layout(scalar, buffer_reference) buffer ChunkLODRef {
+	uint targetLOD[];
+};
+
+layout(push_constant) uniform TerrainChunkEvictPush {
+	uvec2 chunkLodBufferAddr;
+	uvec2 pageTableBufferAddr;
+	uvec2 indirectionBufferAddr;
+	uvec4 gridParams; // x = numLODs (8), y = chunksPerRow (16), z = totalChunks (2048), w = maxAllocatedChunks (1024)
+	float baseChunkSize;
+	uint  maxVirtualChunks;
+	uint  maxAllocatedChunks;
+} push;
+
+void main() {
+	uint gId = gl_GlobalInvocationID.x;
+	if (gId >= push.maxVirtualChunks || gId >= push.gridParams.z) {
+		return;
+	}
+
+	PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
+	TerrainPageTableEntry entry = pt.entries[gId];
+	uint currentSlot = entry.physicalSlot;
+
+	if (currentSlot == 0xFFFFFFFFu || currentSlot >= push.maxAllocatedChunks) {
+		return; // Not currently allocated
+	}
+
+	uint lod = entry.lod;
+	float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
+	float chunkSize = baseChunkSize * getLODScale(float(lod));
+	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod));
+	vec2  cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
+
+	uint chunksPerRow = push.gridParams.y;
+	uint chunksPerLOD = chunksPerRow * chunksPerRow;
+	uint rem = gId % chunksPerLOD;
+	uint row = rem / chunksPerRow;
+	uint col = rem % chunksPerRow;
+
+	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
+	int currCoordX = int(floor(chunkMinXZ.x / chunkSize));
+	int currCoordZ = int(floor(chunkMinXZ.y / chunkSize));
+
+	// A chunk is stale if:
+	// 1) The camera moved and this slot now corresponds to different world coordinates:
+	bool coordMismatch = (entry.coordX != currCoordX) || (entry.coordZ != currCoordZ);
+
+	// 2) Or if LOD evaluation deemed it no longer needed:
+	ChunkLODRef lodBuf = ChunkLODRef(push.chunkLodBufferAddr);
+	bool notNeeded = (lodBuf.targetLOD[gId] == 0xFFFFFFFFu);
+
+	if (coordMismatch || notNeeded) {
+		// Invalidate page table entry
+		pt.entries[gId].physicalSlot = 0xFFFFFFFFu;
+		pt.entries[gId].coordX = 0x7FFFFFFF;
+		pt.entries[gId].coordZ = 0x7FFFFFFF;
+		pt.entries[gId].lod = 0xFFFFFFFFu;
+
+		// Recycle slot back to indirection free stack
+		IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+		while (true) {
+			uint count = indir.freeStackCount;
+			if (count >= push.maxAllocatedChunks) {
+				break; // Stack full
+			}
+			if (atomicCompSwap(indir.freeStackCount, count, count + 1u) == count) {
+				indir.data[count] = currentSlot;
+				break;
+			}
+		}
+	}
+}
