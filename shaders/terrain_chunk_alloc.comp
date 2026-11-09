@@ -75,12 +75,11 @@ void main() {
 
 	float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
 	float chunkSize = baseChunkSize * getLODScale(float(lod));
-	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod));
-	vec2  cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
+	vec2  cameraSnap = floor(uCameraPosition.xz / chunkSize) * chunkSize;
 
 	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
-	int currCoordX = int(floor(chunkMinXZ.x / chunkSize));
-	int currCoordZ = int(floor(chunkMinXZ.y / chunkSize));
+	int currCoordX = int(round(chunkMinXZ.x / chunkSize));
+	int currCoordZ = int(round(chunkMinXZ.y / chunkSize));
 
 	PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
 	IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);

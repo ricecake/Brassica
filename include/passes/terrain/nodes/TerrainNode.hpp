@@ -120,16 +120,12 @@ namespace brassica {
 		// BiomeTexture/WeatherBiomeTexture>() are all safe now (the last one restored in S4 --
 		// catalog-converted since batch 5, just never re-added then).
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
-			bool useChunkSystem = false;
-			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
-				useChunkSystem = ServiceLocator::Instance().Get<ITerrainManager>()->GetState().useChunkSystem;
-			}
-			r.Domain(graph::ExecutionDomain::Graphics).Active(!useChunkSystem);
-			r.Modify<GBufferPosition>().AnyOrder();
-			r.Modify<GBufferNormal>().AnyOrder();
-			r.Modify<GBufferAlbedo>().AnyOrder();
-			r.Modify<GBufferMaterial>().AnyOrder();
-			r.Modify<GBufferDepth>().AnyOrder();
+			r.Domain(graph::ExecutionDomain::Graphics);
+			r.Create<GBufferPosition>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferNormal>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferAlbedo>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferMaterial>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferDepth>();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();

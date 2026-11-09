@@ -66,8 +66,7 @@ void main() {
 	uint lod = entry.lod;
 	float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
 	float chunkSize = baseChunkSize * getLODScale(float(lod));
-	float texelSize = (uCameraPosition.w > 0.0 ? uCameraPosition.w : 0.5) * getLODScale(float(lod));
-	vec2  cameraSnap = floor(uCameraPosition.xz / texelSize) * texelSize;
+	vec2  cameraSnap = floor(uCameraPosition.xz / chunkSize) * chunkSize;
 
 	uint chunksPerRow = push.gridParams.y;
 	uint chunksPerLOD = chunksPerRow * chunksPerRow;
@@ -76,8 +75,8 @@ void main() {
 	uint col = rem % chunksPerRow;
 
 	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
-	int currCoordX = int(floor(chunkMinXZ.x / chunkSize));
-	int currCoordZ = int(floor(chunkMinXZ.y / chunkSize));
+	int currCoordX = int(round(chunkMinXZ.x / chunkSize));
+	int currCoordZ = int(round(chunkMinXZ.y / chunkSize));
 
 	// A chunk is stale if:
 	// 1) The camera moved and this slot now corresponds to different world coordinates:
