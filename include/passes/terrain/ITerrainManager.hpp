@@ -30,13 +30,18 @@ namespace brassica {
 	public:
 		using State = TerrainManagerState;
 
+		bool useChunkSystem{true};
+
 		~ITerrainManager() override = default;
 
 		std::string GetManagerName() const override { return "TerrainManager"; }
 
-		State GetState() const override { return State{}; }
+		State GetState() const override { return State{constants::Class::Terrain::DefaultMaxLODs, constants::Class::Terrain::BaseTexelSize, useChunkSystem}; }
 
-		void SetState(const State& state) override { (void)state; }
+		void SetState(const State& state) override { useChunkSystem = state.useChunkSystem; }
+
+		[[nodiscard]] virtual bool UseChunkSystem() const { return useChunkSystem; }
+		virtual void SetUseChunkSystem(bool enable) { useChunkSystem = enable; }
 
 		virtual void Regenerate() = 0;
 	};

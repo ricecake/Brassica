@@ -138,7 +138,7 @@ namespace brassica {
 
 		void Execute(graph::NodeContext& ctx) {
 			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
-				if (ServiceLocator::Instance().Get<ITerrainManager>()->GetState().useChunkSystem) {
+				if (ServiceLocator::Instance().Get<ITerrainManager>()->UseChunkSystem()) {
 					return; // Chunk system active; skip texture-based terrain rasterization
 				}
 			}

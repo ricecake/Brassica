@@ -70,8 +70,8 @@ namespace brassica {
 			useChunkSystem = state.useChunkSystem;
 		}
 
-		[[nodiscard]] bool UseChunkSystem() const { return useChunkSystem; }
-		void SetUseChunkSystem(bool enable) { useChunkSystem = enable; }
+		[[nodiscard]] bool UseChunkSystem() const override { return useChunkSystem; }
+		void SetUseChunkSystem(bool enable) override { useChunkSystem = enable; }
 
 		// concurrentFamilies: forwarded straight to the readback staging buffer's VkBufferCreateInfo
 		// (TerrainManager.cpp) -- this buffer is out-of-registry (TerrainReadbackStaging is only

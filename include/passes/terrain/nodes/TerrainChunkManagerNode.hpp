@@ -28,7 +28,7 @@ namespace brassica {
 	namespace terrain_chunk_detail {
 		inline bool IsChunkSystemEnabled() {
 			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
-				return ServiceLocator::Instance().Get<ITerrainManager>()->GetState().useChunkSystem;
+				return ServiceLocator::Instance().Get<ITerrainManager>()->UseChunkSystem();
 			}
 			return true;
 		}
@@ -625,7 +625,7 @@ namespace brassica {
 			dls = services.dispatchLoader;
 			if (!taskShader.CompileTaskFromFile(services.device, "shaders/terrain_chunk.task") ||
 			    !meshShader.CompileMeshFromFile(services.device, "shaders/terrain_chunk.mesh") ||
-			    !fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag")) {
+			    !fragShader.CompileFragmentFromFile(services.device, "shaders/terrain_chunk.frag")) {
 				spdlog::critical("TerrainChunkRenderNode shader compilation failed.");
 				throw std::runtime_error("TerrainChunkRenderNode shader compilation failed.");
 			}
@@ -661,6 +661,7 @@ namespace brassica {
 			r.Read<TerrainChunkVertexBuffer>();
 			r.Read<graph::History<HiZTexture>>();
 			r.After<TerrainChunkGenerateNode>();
+			r.After<TerrainNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
