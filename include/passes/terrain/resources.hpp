@@ -7,6 +7,7 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "graph/PhysicalResource.hpp"
 #include "resources/ResourceTypes.hpp"
 
 namespace brassica {
@@ -70,6 +71,86 @@ namespace brassica {
 		static constexpr vk::Format    kFormat = vk::Format::eR32G32B32A32Sfloat;
 		static constexpr vk::ImageUsageFlags kUsage = vk::ImageUsageFlagBits::eStorage |
 			vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+	};
+
+	// GPU Chunk vertex representation: position (xyz) + height (w), normal (xyz) + biome (w), and material/substrate attributes
+	struct TerrainChunkVertexGPU {
+		glm::vec4 position; // xyz = position, w = height
+		glm::vec4 normal;   // xyz = normal, w = biome
+		glm::vec4 material; // x = waterLevel, y = ridgeMap, z = substrate, w = unused
+	};
+
+	static_assert(sizeof(TerrainChunkVertexGPU) == 48, "TerrainChunkVertexGPU size must be 48 bytes");
+
+	// Terrain Page Table entry: physicalSlot (4B), coordX (4B), coordZ (4B), lod (4B) = 16 bytes
+	struct TerrainPageTableEntryGPU {
+		std::uint32_t physicalSlot{0xFFFFFFFFu};
+		std::int32_t  coordX{0x7FFFFFFF};
+		std::int32_t  coordZ{0x7FFFFFFF};
+		std::uint32_t lod{0xFFFFFFFFu};
+	};
+	static_assert(sizeof(TerrainPageTableEntryGPU) == 16, "TerrainPageTableEntryGPU size must be 16 bytes");
+
+	// Terrain Page Table buffer: maps virtual chunk IDs (maxVirtualChunks) to physical slot indices and coordinates
+	struct TerrainPageTableBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(
+				static_cast<std::uint64_t>(constants::Class::Terrain::ChunkManager::MaxVirtualChunks) * sizeof(TerrainPageTableEntryGPU)
+			);
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Terrain Chunk LOD Buffer: holds target LOD evaluation per virtual chunk slot
+	struct TerrainChunkLodBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			graph::ResourceDesc desc = graph::StorageBufferDesc(
+				static_cast<std::uint64_t>(constants::Class::Terrain::ChunkManager::MaxVirtualChunks) * sizeof(std::uint32_t)
+			);
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Terrain Indirection Buffer: tracks allocation counters, free slot stack, and active chunk instances
+	struct TerrainIndirectionBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			const std::uint64_t byteSize = 64 +
+				static_cast<std::uint64_t>(constants::Class::Terrain::ChunkManager::MaxAllocatedChunks) * sizeof(std::uint32_t) * 2;
+			graph::ResourceDesc desc = graph::StorageBufferDesc(byteSize);
+			desc.usageMask |= static_cast<std::uint32_t>(
+				vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferSrc
+			);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Terrain Chunk Requirements Buffer: stores requested chunks and target LOD identified by LOD selection pass
+	struct TerrainChunkRequirementsBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			const std::uint64_t byteSize = 16 +
+				static_cast<std::uint64_t>(constants::Class::Terrain::ChunkManager::MaxVirtualChunks) * sizeof(std::uint32_t);
+			graph::ResourceDesc desc = graph::StorageBufferDesc(byteSize);
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+			desc.persistent = true;
+			return desc;
+		}
+	};
+
+	// Terrain Chunk Vertex Buffer: holds vertices for all allocated physical chunk slots
+	struct TerrainChunkVertexBuffer {
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext&) const {
+			const std::uint64_t byteSize = static_cast<std::uint64_t>(constants::Class::Terrain::ChunkManager::MaxAllocatedChunks) *
+				constants::Class::Terrain::ChunkManager::VerticesPerChunk * sizeof(TerrainChunkVertexGPU);
+			graph::ResourceDesc desc = graph::StorageBufferDesc(byteSize);
+			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
+			desc.persistent = true;
+			return desc;
+		}
 	};
 
 } // namespace brassica

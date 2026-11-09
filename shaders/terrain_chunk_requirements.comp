@@ -1,0 +1,70 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(scalar, buffer_reference) buffer RequirementsRef {
+	uint requestCount;
+	uint paddingReq[3];
+	uint requests[];
+};
+
+struct TerrainPageTableEntry {
+	uint physicalSlot; // 0xFFFFFFFF if unallocated
+	int  coordX;       // grid cell X
+	int  coordZ;       // grid cell Z
+	uint lod;
+};
+
+layout(scalar, buffer_reference) buffer PageTableRef {
+	TerrainPageTableEntry entries[];
+};
+
+layout(scalar, buffer_reference) buffer ChunkLODRef {
+	uint targetLOD[];
+};
+
+layout(push_constant) uniform TerrainChunkReqPush {
+	uvec2 chunkLodBufferAddr;
+	uvec2 pageTableBufferAddr;
+	uvec2 requirementsBufferAddr;
+	uvec2 padding;
+	uvec4 gridParams; // x = numLODs (8), y = chunksPerRow (16), z = totalChunks (2048), w = maxAllocatedChunks (1024)
+	float baseChunkSize;
+} push;
+
+void main() {
+	uint gId = gl_GlobalInvocationID.x;
+
+	uint totalChunks = push.gridParams.z;
+	if (gId >= totalChunks) {
+		return;
+	}
+
+	ChunkLODRef lodBuf = ChunkLODRef(push.chunkLodBufferAddr);
+	uint targetLOD = lodBuf.targetLOD[gId];
+
+	if (targetLOD == 0xFFFFFFFFu) {
+		return; // Not needed
+	}
+
+	PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
+	TerrainPageTableEntry entry = pt.entries[gId];
+
+	// Since eviction already ran and evicted stale/mismatched coordinates,
+	// any entry that still needs allocation has physicalSlot == 0xFFFFFFFFu.
+	if (entry.physicalSlot == 0xFFFFFFFFu) {
+		RequirementsRef req = RequirementsRef(push.requirementsBufferAddr);
+		uint reqIdx = atomicAdd(req.requestCount, 1u);
+		if (reqIdx < totalChunks) {
+			req.requests[reqIdx] = (gId & 0x00FFFFFFu) | (targetLOD << 24u);
+		}
+	}
+}

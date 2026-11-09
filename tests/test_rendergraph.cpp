@@ -104,7 +104,7 @@ namespace {
   brassica::graph::Import<brassica::MaterialBuffer>
   brassica::graph::Import<brassica::Swapchain>
   brassica::graph::Import<brassica::TerrainTLAS>
-  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture>>
+  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture> >
 STAGE 1:
   brassica::ParticleTypeBufferNode
 STAGE 2:
@@ -113,23 +113,29 @@ STAGE 2:
   brassica::FoliageBakeNode
   brassica::FoliageIndirectResetNode
   brassica::ParticleResetNode
+  brassica::TerrainChunkResetNode
   brassica::TerrainGenNode
   brassica::TransmittanceLUTNode
 STAGE 3:
   brassica::CloudVolumeDownsampleNode
   brassica::MultiScatteringLUTNode
+  brassica::TerrainChunkLODNode
   brassica::TerrainMinMaxDownsampleNode
   brassica::TerrainReadbackNode
 STAGE 4:
   brassica::ParticleLivenessNode
   brassica::SkyViewLUTNode
+  brassica::TerrainChunkEvictNode
   brassica::TerrainShadowNode
 STAGE 5:
   brassica::ParticleGridBuildNode
+  brassica::TerrainChunkRequirementsNode
 STAGE 6:
   brassica::ParticleBehaviorNode
+  brassica::TerrainChunkAllocNode
 STAGE 7:
   brassica::TerrainBiomeNode
+  brassica::TerrainChunkGenerateNode
 STAGE 8:
   brassica::CloudShadowGenNode
   brassica::LightningAgeNode
@@ -146,31 +152,33 @@ STAGE 11:
 STAGE 12:
   brassica::GltfRenderNode
 STAGE 13:
+  brassica::TerrainChunkRenderNode
+STAGE 14:
   brassica::CloudRenderNode
   brassica::GTAONode
-STAGE 14:
+STAGE 15:
   brassica::CloudTemporalNode
   brassica::DeferredNode
-STAGE 15:
-  brassica::UnderwaterParticleRenderNode
 STAGE 16:
-  brassica::LightningRenderNode
+  brassica::UnderwaterParticleRenderNode
 STAGE 17:
-  brassica::WaterNode
+  brassica::LightningRenderNode
 STAGE 18:
-  brassica::AboveWaterParticleRenderNode
+  brassica::WaterNode
 STAGE 19:
+  brassica::AboveWaterParticleRenderNode
+STAGE 20:
   brassica::CirrusNode
   brassica::HiZDownsampleNode
-STAGE 20:
-  brassica::CloudCompositeNode
 STAGE 21:
-  brassica::VolumetricRenderNode
+  brassica::CloudCompositeNode
 STAGE 22:
-  brassica::TonemapComputeNode
+  brassica::VolumetricRenderNode
 STAGE 23:
-  brassica::TonemapNode
+  brassica::TonemapComputeNode
 STAGE 24:
+  brassica::TonemapNode
+STAGE 25:
   brassica::ImGuiNode
 MULTI-WRITER KEYS:
   brassica::AboveWaterParticleIndirectBuffer: brassica::ParticleLivenessNode, brassica::ParticleResetNode
@@ -178,18 +186,23 @@ MULTI-WRITER KEYS:
   brassica::CloudDetailVolume: brassica::CloudVolumeDownsampleNode, brassica::CloudVolumeGenNode
   brassica::ClusteredLighting: brassica::graph::Import<brassica::ClusteredLighting>, brassica::ClusterLightAssignmentNode
   brassica::FoliageIndirectArgsBuffer: brassica::FoliageIndirectResetNode, brassica::FoliageNode
-  brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainNode
-  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::TerrainNode
-  brassica::GBufferMaterial: brassica::EntityNode, brassica::GltfRenderNode, brassica::TerrainNode
-  brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainNode
-  brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainNode
+  brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainChunkRenderNode, brassica::TerrainNode
+  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::TerrainChunkRenderNode, brassica::TerrainNode
+  brassica::GBufferMaterial: brassica::EntityNode, brassica::GltfRenderNode, brassica::TerrainChunkRenderNode, brassica::TerrainNode
+  brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainChunkRenderNode, brassica::TerrainNode
+  brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainChunkRenderNode, brassica::TerrainNode
   brassica::HdrColor: brassica::CirrusNode, brassica::CloudCompositeNode, brassica::DeferredNode, brassica::LightningRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::VolumetricRenderNode, brassica::WaterNode
   brassica::LightningStrikePool: brassica::TerrainBiomeNode, brassica::LightningAgeNode
   brassica::LightsBuffer: brassica::graph::Import<brassica::LightsBuffer>, brassica::LightningAgeNode, brassica::ParticleBehaviorNode
   brassica::ParticleBuffer: brassica::ParticleBehaviorNode, brassica::ParticleLivenessNode
   brassica::ParticleGridHeadsBuffer: brassica::ParticleGridBuildNode, brassica::ParticleResetNode
   brassica::Swapchain: brassica::graph::Import<brassica::Swapchain>, brassica::ImGuiNode, brassica::TonemapNode
+  brassica::TerrainChunkLodBuffer: brassica::TerrainChunkResetNode, brassica::TerrainChunkLODNode
+  brassica::TerrainChunkRequirementsBuffer: brassica::TerrainChunkResetNode, brassica::TerrainChunkRequirementsNode
+  brassica::TerrainChunkVertexBuffer: brassica::TerrainChunkResetNode, brassica::TerrainChunkGenerateNode
+  brassica::TerrainIndirectionBuffer: brassica::TerrainChunkResetNode, brassica::TerrainChunkEvictNode, brassica::TerrainChunkAllocNode
   brassica::TerrainMinMaxTexture: brassica::TerrainGenNode, brassica::TerrainMinMaxDownsampleNode
+  brassica::TerrainPageTableBuffer: brassica::TerrainChunkResetNode, brassica::TerrainChunkEvictNode, brassica::TerrainChunkAllocNode
   brassica::TerrainTLAS: brassica::graph::Import<brassica::TerrainTLAS>, brassica::TerrainGenNode
   brassica::UnderwaterParticleIndirectBuffer: brassica::ParticleLivenessNode, brassica::ParticleResetNode
 )FIXTURE";

@@ -1,0 +1,113 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+#include "terrain/generation.glsl"
+
+// Workgroup size 16x16 = 256 threads (one thread per vertex in a 16x16 chunk)
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+struct TerrainChunkVertex {
+	vec4 position; // xyz = position (planar, uncurved), w = height
+	vec4 normal;   // xyz = normal, w = biome
+	vec4 material; // x = waterLevel, y = ridgeMap, z = substrate, w = unused
+};
+
+layout(scalar, buffer_reference) buffer VertexBufferRef {
+	TerrainChunkVertex vertices[];
+};
+
+layout(scalar, buffer_reference) buffer RequirementsRef {
+	uint requestCount;
+	uint paddingReq[3];
+	uint requests[];
+};
+
+struct TerrainPageTableEntry {
+	uint physicalSlot; // 0xFFFFFFFF if unallocated
+	int  coordX;       // grid cell X
+	int  coordZ;       // grid cell Z
+	uint lod;
+};
+
+layout(scalar, buffer_reference) buffer PageTableRef {
+	TerrainPageTableEntry entries[];
+};
+
+layout(push_constant) uniform TerrainChunkGeneratePush {
+	uvec2 vertexBufferAddr;
+	uvec2 pageTableBufferAddr;
+	uvec2 requirementsBufferAddr;
+	uvec2 padding;
+	uvec4 gridParams; // x = numLODs, y = chunksPerRow, z = totalChunks, w = maxAllocatedChunks
+	float baseChunkSize;
+	uint  chunkDimension; // 16
+} push;
+
+void main() {
+	uint reqIdx = gl_WorkGroupID.x;
+	RequirementsRef req = RequirementsRef(push.requirementsBufferAddr);
+
+	if (reqIdx >= req.requestCount) {
+		return;
+	}
+
+	uint packedReq = req.requests[reqIdx];
+	uint virtualChunkId = packedReq & 0x00FFFFFFu;
+	if (virtualChunkId >= push.gridParams.z) {
+		return;
+	}
+
+	PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
+	TerrainPageTableEntry entry = pt.entries[virtualChunkId];
+	uint physicalSlot = entry.physicalSlot;
+
+	if (physicalSlot == 0xFFFFFFFFu || physicalSlot >= push.gridParams.w) {
+		return; // Not allocated or invalid slot
+	}
+
+	uint lx = gl_LocalInvocationID.x;
+	uint ly = gl_LocalInvocationID.y;
+	uint dim = (push.chunkDimension > 0u) ? push.chunkDimension : 16u;
+	uint vertIdxInChunk = ly * dim + lx;
+
+	uint chunksPerRow = push.gridParams.y;
+	uint chunksPerLOD = chunksPerRow * chunksPerRow;
+	uint lod = virtualChunkId / chunksPerLOD;
+
+	float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
+	float chunkSize = baseChunkSize * getLODScale(float(lod));
+
+	// Reconstruct chunk min XZ from stored grid coordinates
+	vec2 chunkMinXZ = vec2(float(entry.coordX) * chunkSize, float(entry.coordZ) * chunkSize);
+	vec2 vertLocalXZ = vec2(float(lx) / float(dim - 1u), float(ly) / float(dim - 1u)) * chunkSize;
+	vec2 worldXZ = chunkMinXZ + vertLocalXZ;
+
+	// Evaluate analytical terrain generation
+	TerrainConfig con = TerrainConfig(0.00001, -500.0, 2000.0, 0.14, 0.5);
+	vec3 p = vec3(worldXZ.x, 0.0, worldXZ.y);
+
+	float h = 0.0;
+	float biome = 0.0;
+	float waterLevel = 0.0;
+	float ridgeMap = 0.0;
+	float substrate = 0.0;
+	vec3 normal = vec3(0.0, 1.0, 0.0);
+
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
+
+	// Planar, uncurved world position stored in buffer; planetary curvature Y displacement is deferred to the mesh shader
+	vec3 worldPos = vec3(worldXZ.x, h, worldXZ.y);
+
+	VertexBufferRef vertBuf = VertexBufferRef(push.vertexBufferAddr);
+	uint totalVertIdx = physicalSlot * (dim * dim) + vertIdxInChunk;
+
+	vertBuf.vertices[totalVertIdx].position = vec4(worldPos, h);
+	vertBuf.vertices[totalVertIdx].normal = vec4(normal, clamp(biome, 0.0, 1.0));
+	vertBuf.vertices[totalVertIdx].material = vec4(waterLevel, ridgeMap, substrate, 0.0);
+}

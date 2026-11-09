@@ -18,6 +18,8 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
+#include "ServiceLocator.hpp"
+#include "passes/terrain/ITerrainManager.hpp"
 #include "passes/terrain/TerrainAccelerationStructure.hpp"
 
 namespace brassica {
@@ -131,6 +133,12 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
+				if (ServiceLocator::Instance().Get<ITerrainManager>()->UseChunkSystem()) {
+					return; // Chunk system active; skip texture-based terrain rasterization
+				}
+			}
+
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();

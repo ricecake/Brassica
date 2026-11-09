@@ -1,0 +1,105 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct TerrainPageTableEntry {
+	uint physicalSlot; // 0xFFFFFFFF if unallocated
+	int  coordX;       // grid cell X
+	int  coordZ;       // grid cell Z
+	uint lod;
+};
+
+layout(scalar, buffer_reference) buffer PageTableRef {
+	TerrainPageTableEntry entries[];
+};
+
+layout(scalar, buffer_reference) buffer IndirectionRef {
+	uint activeChunkCount;
+	uint freeStackCount;
+	uint allocCounter;
+	uint padding0;
+	// VkDrawMeshTasksIndirectCommandEXT
+	uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+	uint padding1;
+	uint data[]; // freeStack: data[0..maxAllocated-1], activeChunks: data[maxAllocated..2*maxAllocated-1]
+};
+
+layout(scalar, buffer_reference) buffer RequirementsRef {
+	uint requestCount;
+	uint paddingReq[3];
+	uint requests[];
+};
+
+layout(push_constant) uniform TerrainChunkAllocPush {
+	uvec2 pageTableBufferAddr;
+	uvec2 indirectionBufferAddr;
+	uvec2 requirementsBufferAddr;
+	uvec2 padding;
+	uvec4 gridParams; // x = numLODs (8), y = chunksPerRow (16), z = totalChunks (2048), w = maxAllocatedChunks (1024)
+	float baseChunkSize;
+	uint  maxVirtualChunks;
+	uint  maxAllocatedChunks;
+} push;
+
+void main() {
+	uint gId = gl_GlobalInvocationID.x;
+	RequirementsRef req = RequirementsRef(push.requirementsBufferAddr);
+
+	if (gId >= req.requestCount) {
+		return;
+	}
+
+	uint packedReq = req.requests[gId];
+	uint virtualChunkId = packedReq & 0x00FFFFFFu;
+
+	if (virtualChunkId >= push.maxVirtualChunks) {
+		return;
+	}
+
+	uint chunksPerRow = push.gridParams.y;
+	uint chunksPerLOD = chunksPerRow * chunksPerRow;
+	uint lod = virtualChunkId / chunksPerLOD;
+	uint rem = virtualChunkId % chunksPerLOD;
+	uint row = rem / chunksPerRow;
+	uint col = rem % chunksPerRow;
+
+	float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
+	float chunkSize = baseChunkSize * getLODScale(float(lod));
+	vec2  cameraSnap = floor(uCameraPosition.xz / chunkSize) * chunkSize;
+
+	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
+	int currCoordX = int(round(chunkMinXZ.x / chunkSize));
+	int currCoordZ = int(round(chunkMinXZ.y / chunkSize));
+
+	PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
+	IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+
+	// Atomically pop a slot from the free stack
+	while (true) {
+		uint count = indir.freeStackCount;
+		if (count == 0u || count > push.maxAllocatedChunks) {
+			break; // Free stack empty
+		}
+		if (atomicCompSwap(indir.freeStackCount, count, count - 1u) == count) {
+			uint freeSlotIdx = count - 1u;
+			uint allocatedSlot = indir.data[freeSlotIdx];
+
+			// Write physical slot and grid coordinate key into page table entry
+			pt.entries[virtualChunkId].physicalSlot = allocatedSlot;
+			pt.entries[virtualChunkId].coordX = currCoordX;
+			pt.entries[virtualChunkId].coordZ = currCoordZ;
+			pt.entries[virtualChunkId].lod = lod;
+			break;
+		}
+	}
+}

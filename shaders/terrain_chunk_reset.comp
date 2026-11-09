@@ -1,0 +1,85 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct TerrainPageTableEntry {
+	uint physicalSlot; // 0xFFFFFFFF if unallocated
+	int  coordX;       // grid cell X
+	int  coordZ;       // grid cell Z
+	uint lod;
+};
+
+layout(scalar, buffer_reference) buffer PageTableRef {
+	TerrainPageTableEntry entries[];
+};
+
+layout(scalar, buffer_reference) buffer IndirectionRef {
+	uint activeChunkCount;
+	uint freeStackCount;
+	uint allocCounter;
+	uint padding0;
+	// VkDrawMeshTasksIndirectCommandEXT
+	uint groupCountX;
+	uint groupCountY;
+	uint groupCountZ;
+	uint padding1;
+	uint data[]; // freeStack: data[0..maxAllocated-1], activeChunks: data[maxAllocated..2*maxAllocated-1]
+};
+
+layout(scalar, buffer_reference) buffer RequirementsRef {
+	uint requestCount;
+	uint paddingReq[3];
+	uint requests[];
+};
+
+layout(push_constant) uniform TerrainChunkResetPush {
+	uvec2 pageTableBufferAddr;
+	uvec2 indirectionBufferAddr;
+	uvec2 requirementsBufferAddr;
+	uint  maxVirtualChunks;
+	uint  maxAllocatedChunks;
+} push;
+
+void main() {
+	uint gId = gl_GlobalInvocationID.x;
+
+	if (gId == 0) {
+		IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+		indir.activeChunkCount = 0;
+		indir.freeStackCount = push.maxAllocatedChunks;
+		indir.allocCounter = 0;
+		indir.padding0 = 0;
+
+		indir.groupCountX = 0;
+		indir.groupCountY = 1;
+		indir.groupCountZ = 1;
+		indir.padding1 = 0;
+
+		if (push.requirementsBufferAddr != uvec2(0)) {
+			RequirementsRef req = RequirementsRef(push.requirementsBufferAddr);
+			req.requestCount = 0;
+			req.paddingReq[0] = 0;
+			req.paddingReq[1] = 0;
+			req.paddingReq[2] = 0;
+		}
+	}
+
+	if (gId < push.maxAllocatedChunks) {
+		IndirectionRef indir = IndirectionRef(push.indirectionBufferAddr);
+		indir.data[gId] = gId; // freeStack entries initialized with valid slot indices
+	}
+
+	if (gId < push.maxVirtualChunks) {
+		PageTableRef pt = PageTableRef(push.pageTableBufferAddr);
+		pt.entries[gId].physicalSlot = 0xFFFFFFFFu;
+		pt.entries[gId].coordX = 0x7FFFFFFF;
+		pt.entries[gId].coordZ = 0x7FFFFFFF;
+		pt.entries[gId].lod = 0xFFFFFFFFu;
+	}
+}

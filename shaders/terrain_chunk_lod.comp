@@ -1,0 +1,73 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "terrain.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(scalar, buffer_reference) buffer ChunkLODRef {
+	uint targetLOD[];
+};
+
+layout(push_constant) uniform TerrainChunkLodPush {
+	uvec2 chunkLodBufferAddr;
+	uvec2 padding;
+	uvec4 gridParams; // x = numLODs (8), y = chunksPerRow (16), z = totalChunks (2048), w = maxAllocatedChunks (1024)
+	float baseChunkSize;
+} push;
+
+void main() {
+	uint gId = gl_GlobalInvocationID.x;
+	uint totalChunks = push.gridParams.z;
+	if (gId >= totalChunks) {
+		return;
+	}
+
+	uint chunksPerRow = push.gridParams.y;
+	uint chunksPerLOD = chunksPerRow * chunksPerRow;
+	uint lod = gId / chunksPerLOD;
+	if (lod >= push.gridParams.x) {
+		return;
+	}
+
+	uint rem = gId % chunksPerLOD;
+	uint row = rem / chunksPerRow;
+	uint col = rem % chunksPerRow;
+
+	float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
+	float chunkSize = baseChunkSize * getLODScale(float(lod));
+	vec2  cameraSnap = floor(uCameraPosition.xz / chunkSize) * chunkSize;
+
+	vec2 chunkMinXZ = cameraSnap + (vec2(float(col), float(row)) - float(chunksPerRow) * 0.5) * chunkSize;
+	vec2 chunkCenter = chunkMinXZ + vec2(chunkSize * 0.5);
+
+	float distToCam = length(chunkCenter - uCameraPosition.xz);
+
+	// Outer distance LOD boundary check: chunk is needed within outer grid radius
+	float outerRadius = (float(chunksPerRow) * 0.5) * chunkSize;
+	bool needed = distToCam <= outerRadius * 1.15;
+
+	// Exact square AABB inner LOD culling: if completely covered by LOD (lod - 1), this chunk is NOT needed
+	if (needed && lod > 0u) {
+		float prevChunkSize = baseChunkSize * getLODScale(float(lod - 1u));
+		vec2  prevCameraSnap = floor(uCameraPosition.xz / prevChunkSize) * prevChunkSize;
+		float prevExtent = float(chunksPerRow) * 0.5 * prevChunkSize;
+
+		bool insideInnerX = (chunkMinXZ.x >= prevCameraSnap.x - prevExtent) &&
+		                    (chunkMinXZ.x + chunkSize <= prevCameraSnap.x + prevExtent);
+		bool insideInnerZ = (chunkMinXZ.y >= prevCameraSnap.y - prevExtent) &&
+		                    (chunkMinXZ.y + chunkSize <= prevCameraSnap.y + prevExtent);
+
+		if (insideInnerX && insideInnerZ) {
+			needed = false;
+		}
+	}
+
+	ChunkLODRef lodBuf = ChunkLODRef(push.chunkLodBufferAddr);
+	lodBuf.targetLOD[gId] = needed ? lod : 0xFFFFFFFFu;
+}

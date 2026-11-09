@@ -62,12 +62,16 @@ namespace brassica {
 			m_initialized = false;
 		}
 
-		State GetState() const override { return State{numLODs, baseTexelSize}; }
+		State GetState() const override { return State{numLODs, baseTexelSize, useChunkSystem}; }
 
 		void SetState(const State& state) override {
 			numLODs = state.numLODs;
 			baseTexelSize = state.baseTexelSize;
+			useChunkSystem = state.useChunkSystem;
 		}
+
+		[[nodiscard]] bool UseChunkSystem() const override { return useChunkSystem; }
+		void SetUseChunkSystem(bool enable) override { useChunkSystem = enable; }
 
 		// concurrentFamilies: forwarded straight to the readback staging buffer's VkBufferCreateInfo
 		// (TerrainManager.cpp) -- this buffer is out-of-registry (TerrainReadbackStaging is only
