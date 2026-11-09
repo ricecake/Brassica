@@ -56,6 +56,7 @@ namespace brassica {
 
 	struct TerrainChunkLodPush {
 		glm::uvec2   chunkLodBufferAddr{0};
+		glm::uvec2   padding{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -69,6 +70,7 @@ namespace brassica {
 		glm::uvec2   chunkLodBufferAddr{0};
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   indirectionBufferAddr{0};
+		glm::uvec2   padding{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -84,6 +86,7 @@ namespace brassica {
 		glm::uvec2   chunkLodBufferAddr{0};
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   requirementsBufferAddr{0};
+		glm::uvec2   padding{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -97,6 +100,7 @@ namespace brassica {
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   indirectionBufferAddr{0};
 		glm::uvec2   requirementsBufferAddr{0};
+		glm::uvec2   padding{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,
@@ -112,6 +116,7 @@ namespace brassica {
 		glm::uvec2   vertexBufferAddr{0};
 		glm::uvec2   pageTableBufferAddr{0};
 		glm::uvec2   requirementsBufferAddr{0};
+		glm::uvec2   padding{0};
 		glm::uvec4   gridParams{
 			constants::Class::Terrain::ChunkManager::NumLODs,
 			constants::Class::Terrain::ChunkManager::ChunksPerRow,

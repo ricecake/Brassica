@@ -16,6 +16,7 @@ layout(scalar, buffer_reference) buffer ChunkLODRef {
 
 layout(push_constant) uniform TerrainChunkLodPush {
 	uvec2 chunkLodBufferAddr;
+	uvec2 padding;
 	uvec4 gridParams; // x = numLODs (8), y = chunksPerRow (16), z = totalChunks (2048), w = maxAllocatedChunks (1024)
 	float baseChunkSize;
 } push;

@@ -43,6 +43,7 @@ layout(push_constant) uniform TerrainChunkGeneratePush {
 	uvec2 vertexBufferAddr;
 	uvec2 pageTableBufferAddr;
 	uvec2 requirementsBufferAddr;
+	uvec2 padding;
 	uvec4 gridParams; // x = numLODs, y = chunksPerRow, z = totalChunks, w = maxAllocatedChunks
 	float baseChunkSize;
 	uint  chunkDimension; // 11
