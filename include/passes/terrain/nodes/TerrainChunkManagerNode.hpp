@@ -24,6 +24,7 @@
 
 namespace brassica {
 
+	struct TerrainNode;
 
 	namespace terrain_chunk_detail {
 		inline bool IsChunkSystemEnabled() {

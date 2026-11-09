@@ -21,7 +21,7 @@ namespace brassica {
 					10.0f,
 					UIHint::Slider
 				),
-				MakeField("useChunkSystem", "Use Chunk System", &TerrainManagerState::useChunkSystem, UIHint::Checkbox)
+				MakeField("useChunkSystem", "Use Chunk System", &TerrainManagerState::useChunkSystem)
 			);
 		}
 	};
