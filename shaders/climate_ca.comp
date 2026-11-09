@@ -73,8 +73,22 @@ void main() {
 
 	// 2. POSITIONAL WIND VECTOR -- shared helpers/wind.glsl model, so the CA's own advection and
 	// the visual flow derived from it below agree instead of each inventing its own circulation.
-	vec2  prevailingWind = getPrevailingWind(lat);
-	ivec2 windDir = getDiscretizedWindOffset(prevailingWind, vec3(pos.x, 0.0, pos.y), uTime);
+// 2. POSITIONAL WIND VECTOR
+	vec2 prevailingWind = getPrevailingWind(lat);
+
+	// Create a slow-moving, large-scale noise vector to act as high/low pressure systems
+	vec2 stormOffset = vec2(uTime * 0.002, uTime * 0.001);
+	float pNoiseX = dot_noise_fbm(vec3(pos.x, pos.y, 0.0) * 0.004 + vec3(stormOffset, 0.0), 2, 0.0);
+	float pNoiseY = dot_noise_fbm(vec3(pos.x + 500.0, pos.y - 500.0, 0.0) * 0.004 + vec3(stormOffset, 0.0), 2, 0.0);
+	vec2 pressureDeflection = vec2(pNoiseX * 2.0 - 1.0, pNoiseY * 2.0 - 1.0);
+
+	// Blend prevailing wind with the pressure systems (adjust 0.6 / 0.4 mix to tune the "swirliness")
+	vec2 dynamicWind = prevailingWind * 0.6 + pressureDeflection * 0.4;
+
+	// Keep the original wind magnitude to preserve your advection pacing
+	dynamicWind = normalize(dynamicWind) * max(length(prevailingWind), 0.1);
+
+	ivec2 windDir = getDiscretizedWindOffset(dynamicWind, vec3(pos.x, 0.0, pos.y), uTime);
 
 	// 3. ADVECTION, GROUND WATER LEVEL & CONDENSATION
 	ivec2 upwindPos = pos - windDir;
@@ -95,14 +109,26 @@ void main() {
 
 	float elevationDelta = me1.elevation - upwind1Data.r;
 
+	float upwindLat = (float(wrappedUpwind.y) / float(dim)) * 2.0 - 1.0;
+	// Calculate the temperature of the air blowing into this cell
+	float upwindTempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(upwindLat)) - (upwind1Data.r * LAPSE_RATE);
+
+	// Frontal Lift: Positive if cold air is moving into warm air (a cold front)
+	// Cold air acts like a wedge, lifting warm, moist air and forcing condensation
+	float frontalLift = max(0.0, tempC - upwindTempC);
+
 	// Aerosol CCN effect increases condensation / rain likelihood for a given air moisture
 	float ccnBoost = 1.0 + clamp(me2.aerosol, 0.0, 2.0) * 1.5;
 
-	float rain = 0.0;
+float rain = 0.0;
 	if (elevationDelta > 0.0) {
+		// Orographic (terrain) lift
 		rain = min(incomingAir, pow(elevationDelta, 1.2) * CONDENSATION_RATE * ccnBoost);
+	} else if (frontalLift > 1.5) {
+		// Frontal lift: Sharp temp drop squeezes moisture out into a storm band
+		rain = min(incomingAir, frontalLift * 0.04 * ccnBoost);
 	} else if (incomingAir > 0.6) {
-		// Convective condensation from high humidity & aerosol
+		// Convective (ambient humidity) condensation
 		rain = (incomingAir - 0.6) * 0.15 * ccnBoost;
 	}
 
@@ -234,7 +260,9 @@ void main() {
 	// -------------------------------------------------------------
 
 	// 1. Calculate the stable macro-climate coverage probability
-	float baseCoverage = clamp(next1.airMoisture * 0.8 + rain * 2.0, 0.0, 1.0);
+	float frontCoverageBoost = smoothstep(1.0, 3.5, frontalLift) * 0.4;
+	float baseCoverage = clamp(next1.airMoisture * 0.8 + rain * 2.0 + frontCoverageBoost, 0.0, 1.0);
+	// Boost macro-climate cloud coverage heavily along active weather fronts
 
 	// 2. Flowing coordinates, using the same prevailingWind computed above for the CA's own
 	// advection -- previously recomputed an entire second hadley/ferrel/polar blend here that
@@ -262,9 +290,15 @@ void main() {
 		texturedNoise
 	);
 
-	float weatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0);
+	// Base weather type dictated by general temperature
+	float baseWeatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0);
+
+	// Override weather type to intense/convective if caught in an active cold front that is raining
+	float activeFrontIntensity = smoothstep(1.5, 4.0, frontalLift) * (rain > 0.01 ? 1.0 : 0.0);
+
+	float weatherType = mix(baseWeatherType, 1.0, activeFrontIntensity);
 	float moistureContent = clamp(next1.groundwater, 0.0, 1.0);
-	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC), 0.0, 1.0);
+	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC) + activeFrontIntensity * 0.5, 0.0, 1.0);
 
 	// Lightning trigger (shaders/lighting.glsl's LightningStrikePool). Cloud-to-cloud strikes
 	// only for v1: both endpoints stay within the cloud shell (5000-20000m, matching
