@@ -56,27 +56,42 @@ void main() {
 
 	mat3 warpNoiseGrad;
 	vec3 warpNoise = 1.0*500*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
-	OrganicPlateData mCellS = getOrganicPlate(((worldPos+warpNoise)).xz, 0.00625, 5.0);
-	OrganicPlateData mCellM = getOrganicPlate(((worldPos+warpNoise)).xz, 0.003125, 7.0);
-	OrganicPlateData mCellL = getOrganicPlate(((worldPos+warpNoise)).xz, 0.0015625, 11.0);
+	vec3 warpCurl = get_curl(warpNoiseGrad);
+	// OrganicPlateData mCellS = getOrganicPlate(((worldPos+warpNoise)).xz, 0.00625, 5.0);
+	// OrganicPlateData mCellM = getOrganicPlate(((worldPos+warpNoise)).xz, 0.003125, 7.0);
+	// OrganicPlateData mCellL = getOrganicPlate(((worldPos+warpNoise)).xz, 0.0015625, 11.0);
 
 	// vec3 noisePos = clamp(mCell.barycentric, 0.0, 1.0);
-	vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + ((2.0*mCellL.barycentric)-1.0);
-	vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + ((2.0*mCellM.barycentric)-1.0);
-	vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + ((2.0*mCellS.barycentric)-1.0);
+	// vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + ((2.0*mCellL.barycentric)-1.0);
+	// vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + ((2.0*mCellM.barycentric)-1.0);
+	// vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + ((2.0*mCellS.barycentric)-1.0);
+	// PUT THIS IN THE debris shader for tree cannopy
 
 	// vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + (mCellL.barycentric-vec3(1.0/3.0));
 	// vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + (mCellM.barycentric-vec3(1.0/3.0));
 	// vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + (mCellS.barycentric-vec3(1.0/3.0));
 
+	vec3 noisePosL = warpNoise+ worldPos*0.01;
+	vec3 noisePosM = warpNoise+ worldPos*0.1;
+	vec3 noisePosS = warpNoise+ worldPos;
+
 	vec3 macroGrad3D;
-	float macroVal = abs(0.5+0.5*dot_noise_fbm(noisePosL, 2, 0.0, macroGrad3D));
+	// float macroVal = abs(0.5+0.5*dot_noise_fbm(noisePosL, 2, 0.0, macroGrad3D));
+	// float macroVal = (phasimpleNoise(noisePosS.xz, B.xz + warpCurl.xz, 0.25*uTime));
+	vec2 macroValPhase = (phasorNoise3D(noisePosL,  1.0, warpCurl, warpNoiseGrad*T, 0.68, 0.15*uTime));
+	float macroVal = macroValPhase.x / length(macroValPhase);
 
 	vec3 mediumGrad3D;
-	float mediumVal = abs(0.5+0.5*dot_noise_fbm(noisePosM, 3, 37.0, mediumGrad3D));
+	// float mediumVal = abs(0.5+0.5*dot_noise_fbm(noisePosM, 3, 37.0, mediumGrad3D));
+	// float mediumVal = (phasimpleNoise(noisePosS.xz, B.xz + warpCurl.xz, 0.5*uTime));
+	vec2 mediumValPhase = (phasorNoise3D(noisePosM,  1.0, warpCurl, warpNoiseGrad*B, 0.68, 0.15*uTime));
+	float mediumVal = mediumValPhase.x / length(mediumValPhase);
 
 	vec3 microGrad3D;
-	float microVal = abs(0.5+0.5*dot_noise_fbm(noisePosS, 4, 83.0, microGrad3D));
+	// float microVal = abs(0.5+0.5*dot_noise_fbm(noisePosS, 4, 83.0, microGrad3D));
+	// float microVal = (phasimpleNoise(noisePosS.xz, B.xz + warpCurl.xz, uTime));
+	vec2 microValPhase = (phasorNoise3D(noisePosS,  1.0, warpCurl, warpNoiseGrad*N, 0.68, 0.15*uTime));
+	float microVal = microValPhase.x / length(microValPhase);
 
 /*
 	vec3 scaled_pos = noisePos;//vec3(noisePos.xz * 0.022, noisePos.y * 0.011);
