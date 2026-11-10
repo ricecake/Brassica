@@ -137,7 +137,7 @@ namespace brassica {
 				push,
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT |
 					vk::ShaderStageFlagBits::eFragment,
-				vk::Format::eD32Sfloat
+				vk::Format::eD32SfloatS8Uint
 			);
 			if (!resolved.pipeline) {
 				return;

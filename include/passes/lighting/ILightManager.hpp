@@ -171,7 +171,7 @@ namespace brassica {
 		virtual int                 GetShadowCastingLightCount() const = 0;
 
 		virtual LightingUBO    GetLightingUBO() const = 0;
-		virtual LightsSSBOData GetLightsSSBOData() const = 0;
+		virtual CpuLightsSSBOData GetCpuLightsSSBOData() const = 0;
 	};
 
 } // namespace brassica

@@ -47,6 +47,12 @@ namespace brassica {
 		DownsamplePushConstants    downPush{};
 		BloomUpsamplePushConstants upPush{};
 		LtmFusePushConstants       fusePush{};
+		// Real per-frame delta time, set via SetFrameParams -- downPush.deltaTime used to stay at
+		// its hardcoded 60fps-assumption default (BloomPushConstants.hpp's DownsamplePushConstants
+		// never had this set anywhere), making the auto-exposure EMA adaptation speed/
+		// speedUp/speedDown rates framerate-dependent. Stored as its own member since
+		// `downPush = s_bloomDownsamplePush;` at the top of Execute() would otherwise clobber it.
+		float frameDeltaTime{1.0f / 60.0f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -56,10 +62,9 @@ namespace brassica {
 			if (services.shaderWatcher) {
 				RegisterShaders(*services.shaderWatcher);
 			}
-
-			s_exposureData.layers[1].targetLuminance = 0.5f;
-
 		}
+
+		void SetFrameParams(const render::NodeFrameParams& p) { frameDeltaTime = p.deltaTime; }
 
 		void RegisterShaders(ShaderWatcher& watcher) {
 			watcher.RegisterShader(&downsampleShader);
@@ -115,6 +120,7 @@ namespace brassica {
 
 			// Compute Downsample Pass
 			downPush = s_bloomDownsamplePush;
+			downPush.deltaTime = frameDeltaTime;
 			downPush.srcResolution = glm::vec2(ctx.width, ctx.height);
 			downPush.hdrColorIndex = ctx.Index<HdrColor>();
 			downPush.depthIndex = ctx.Index<GBufferDepth>();

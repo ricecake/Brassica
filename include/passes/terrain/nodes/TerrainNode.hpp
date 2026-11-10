@@ -12,6 +12,7 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
+#include "passes/scene/resources.hpp"
 #include "resources.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -59,17 +60,19 @@ namespace brassica {
 	// ResolveCached makes re-resolving the same request every frame a cache hit.
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
 		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
-		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
-		// VRS-ignoring behavior -- the old hand-rolled pipeline never chained the VRS pNext at
-		// all, so this is a deliberately pixel-identical port; flipping it to honor the mesh
-		// shader's own per-primitive gl_PrimitiveShadingRateEXT writes is a separate,
+		// eLess, eBack culling), plus attachment-only VRS (ShadingRateComputeNode) -- Terrain's
+		// LOD shading is exactly the per-pixel-expensive work VRS exists to coarsen, per its own
+		// design comment. This is the attachment-image story only (combinerOps[1] in
+		// PipelineLibrary.cpp); honoring the mesh shader's own per-primitive
+		// gl_PrimitiveShadingRateEXT writes (combinerOps[0], gated behind the still-disabled
+		// primitiveFragmentShadingRateMeshShader feature, Engine.cpp) is a separate,
 		// separately-validated follow-up.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eBack,
 			.depthTest = true,
 			.depthWrite = true,
 			.depthCompareOp = vk::CompareOp::eLess,
-			.enableShadingRate = false,
+			.enableShadingRate = true,
 		};
 
 		render::PipelineLibrary*      pipelineLibrary = nullptr;
@@ -128,6 +131,9 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.ReadPrevious<ShadingRateMap>().ShadingRateTexelSize(
+				{s_shadingRateTileWidth, s_shadingRateTileHeight}
+			);
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -152,7 +158,7 @@ namespace brassica {
 				push,
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT |
 					vk::ShaderStageFlagBits::eFragment,
-				vk::Format::eD32Sfloat
+				vk::Format::eD32SfloatS8Uint
 			);
 			if (!resolved.pipeline) {
 				return;

@@ -20,6 +20,12 @@
 // 34 -> 43: Particle cluster reactivated
 // 43 -> 45: Resynced with auto-registered nodes (including TonemapComputeNode / TonemapNode).
 // 45 -> 46: Added GroundDebrisNode for camera proximity terrain debris mesh rendering.
+// Added since 46: GpuLightsResetNode (CPU/GPU light buffer split -- zeroes GpuLightsBuffer each
+// frame so atomic-claimed dynamic light slots, e.g. fireflies, start from a known state) and
+// ShadingRateComputeNode (attachment-only variable rate shading -- derives this frame's per-tile
+// shading rate from last frame's ShadingRateMap/HiZTexture). Resynced to the real current count
+// after rebasing onto main (2026-11-10) rather than chase the exact arithmetic across both
+// branches' independent histories -- same precedent as the 27 -> 32 "Drift" entry above.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
 	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 46);
 }

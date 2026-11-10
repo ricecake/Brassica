@@ -20,6 +20,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  cpuLightsIndex;
+	uint  gpuLightsIndex;
 } params;
 
 void main() {
@@ -147,7 +149,8 @@ void main() {
 	// their existing defaults, unrelated to this fix.
 	vec3 shineColor = isAboveWater
 		? evaluateClusteredLightContributionPBR(
-			absWaterPos, waveNormal, waterMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams
+			absWaterPos, waveNormal, waterMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams,
+			params.cpuLightsIndex, params.gpuLightsIndex
 		  ).color
 		: vec3(0.0);
 
@@ -197,7 +200,8 @@ void main() {
 	vec3 foamBaseColor = vec3(0.92, 0.96, 1.0);
 	Material foamMaterial = Material(foamBaseColor, 0.85, 0.0, 1.0, 0.0, 0.0);
 	vec3 litFoam = evaluateClusteredLightContributionPBR(
-		absWaterPos, waveNormal, foamMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams
+		absWaterPos, waveNormal, foamMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams,
+		params.cpuLightsIndex, params.gpuLightsIndex
 	).color;
 	vec3 foamColor = max(litFoam, uAmbientLight.rgb * foamBaseColor);
 

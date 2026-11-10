@@ -4,7 +4,11 @@
 
 #include <glm/glm.hpp>
 
+#include "graph/Graph.hpp"
+#include "graph/Node.hpp"
 #include "passes/lighting/ILightManager.hpp"
+#include "passes/RenderPhases.hpp"
+#include "resources/core.hpp"
 
 namespace brassica {
 
@@ -116,10 +120,29 @@ namespace brassica {
 		std::vector<Light*> GetShadowCastingLights() override;
 		int                 GetShadowCastingLightCount() const override;
 
-		LightingUBO    GetLightingUBO() const override;
-		LightsSSBOData GetLightsSSBOData() const override;
+		LightingUBO       GetLightingUBO() const override;
+		CpuLightsSSBOData GetCpuLightsSSBOData() const override;
+
+		// Registers this frame's CPU-lights upload node into the graph, mirroring
+		// MaterialManager::RegisterBufferNode exactly -- SyncBufferNode only calls SetData()
+		// (which is what actually marks the node dirty) when something about the lights
+		// genuinely changed since the last call, so an idle frame with the cycle paused and no
+		// lights added/removed/mutated uploads nothing at all.
+		void RegisterBufferNode(graph::Graph& frameGraph);
 
 	private:
+		void SyncBufferNode();
+
+		graph::PredefinedBufferNode<CpuLightsBuffer, CpuLightsSSBOData, SubPhase::Prepare> m_bufferNode;
+		CpuLightsSSBOData                                                                 _cpuLightsCache{};
+
+		// Set by AddLight/RemoveLight/the non-const GetLight (a caller holding that pointer may
+		// mutate the light directly) and by Update() whenever the day/night cycle is enabled
+		// (sun/moon direction is recomputed from cycle time + camera position every such call,
+		// so treating that as "changed" is the safe default -- see RegisterBufferNode's comment
+		// for why an exact dirty/clean distinction isn't attempted beyond this).
+		bool _lightsDirty = true;
+
 		std::vector<Light> _lights{
 			Light::CreateDirectional(
 				constants::Class::Lighting::DefaultSunAzimuth,

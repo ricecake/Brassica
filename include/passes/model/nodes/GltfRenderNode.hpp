@@ -6,10 +6,12 @@
 #include <glm/glm.hpp>
 #include "spdlog/spdlog.h"
 
+#include "constants.h"
 #include "graph/Execution.hpp"
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/model/GltfModelManager.hpp"
+#include "passes/scene/resources.hpp"
 #include "resources.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -66,7 +68,7 @@ namespace brassica {
 			.depthTest = true,
 			.depthWrite = true,
 			.depthCompareOp = vk::CompareOp::eLess,
-			.enableShadingRate = false,
+			.enableShadingRate = true,
 		};
 
 		render::PipelineLibrary*               pipelineLibrary = nullptr;
@@ -143,6 +145,9 @@ namespace brassica {
 			// Same bare-Read reasoning: MaterialManager's own PredefinedBufferNode is MaterialBuffer's
 			// sole producer.
 			r.Read<MaterialBuffer>();
+			r.ReadPrevious<ShadingRateMap>().ShadingRateTexelSize(
+				{s_shadingRateTileWidth, s_shadingRateTileHeight}
+			);
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -198,7 +203,7 @@ namespace brassica {
 				colorFormats,
 				push,
 				vk::ShaderStageFlagBits::eMeshEXT,
-				vk::Format::eD32Sfloat
+				vk::Format::eD32SfloatS8Uint
 			);
 			if (!resolved.pipeline) {
 				return;

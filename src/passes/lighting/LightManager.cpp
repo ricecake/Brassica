@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <map>
+#include <span>
 
 #include "EngineConstants.hpp"
 #include <glm/gtc/constants.hpp>
@@ -63,6 +64,7 @@ namespace brassica {
 			l.id = _nextLightId++;
 		}
 		_lights.push_back(l);
+		_lightsDirty = true;
 		return l.id;
 	}
 
@@ -72,6 +74,7 @@ namespace brassica {
 		for (auto it = _lights.begin(); it != _lights.end(); ++it) {
 			if (it->id == id) {
 				_lights.erase(it);
+				_lightsDirty = true;
 				return;
 			}
 		}
@@ -81,8 +84,13 @@ namespace brassica {
 		if (id == -1)
 			return nullptr;
 		for (auto& light : _lights) {
-			if (light.id == id)
+			if (light.id == id) {
+				// Non-const: the caller may mutate the light directly through this pointer, with
+				// no further call through LightManager's own API to observe -- see
+				// _lightsDirty's own comment for why this errs toward "assume changed."
+				_lightsDirty = true;
 				return &light;
+			}
 		}
 		return nullptr;
 	}
@@ -111,6 +119,12 @@ namespace brassica {
 
 	void LightManager::Update(float deltaTime, const glm::vec3& cameraPosition) {
 		if (_cycle.enabled) {
+			// Sun/moon direction gets recomputed from cycle time + camera position below
+			// regardless of _cycle.paused (camera movement alone can change it) -- see
+			// _lightsDirty's own comment (LightManager.hpp) for why this errs toward "assume
+			// changed" rather than diffing the recomputed values against last frame's.
+			_lightsDirty = true;
+
 			if (!_cycle.paused) {
 				_cycle.time += deltaTime * _cycle.speed;
 				if (_cycle.time >= 24.0f)
@@ -334,7 +348,7 @@ namespace brassica {
 
 	LightingUBO LightManager::GetLightingUBO() const {
 		LightingUBO ubo{};
-		ubo.numLights = static_cast<uint32_t>(std::min(_lights.size(), static_cast<size_t>(MAX_LIGHTS)));
+		ubo.numLights = static_cast<uint32_t>(std::min(_lights.size(), static_cast<size_t>(MAX_CPU_LIGHTS)));
 		ubo.dayTime = _cycle.time;
 		ubo.nightFactor = _cycle.nightFactor;
 		ubo.worldScale = 1.0f;
@@ -350,14 +364,30 @@ namespace brassica {
 		return ubo;
 	}
 
-	LightsSSBOData LightManager::GetLightsSSBOData() const {
-		LightsSSBOData ssbo{};
-		uint32_t       count = static_cast<uint32_t>(std::min(_lights.size(), static_cast<size_t>(MAX_LIGHTS)));
+	CpuLightsSSBOData LightManager::GetCpuLightsSSBOData() const {
+		CpuLightsSSBOData ssbo{};
+		uint32_t          count = static_cast<uint32_t>(std::min(_lights.size(), static_cast<size_t>(MAX_CPU_LIGHTS)));
 		ssbo.count = count;
 		for (uint32_t i = 0; i < count; ++i) {
 			ssbo.lights[i] = _lights[i].ToGPU();
 		}
 		return ssbo;
+	}
+
+	void LightManager::SyncBufferNode() {
+		if (!_lightsDirty) {
+			return;
+		}
+		m_bufferNode.SetData(std::span<const CpuLightsSSBOData>(&_cpuLightsCache, 1));
+		_lightsDirty = false;
+	}
+
+	void LightManager::RegisterBufferNode(graph::Graph& frameGraph) {
+		if (_lightsDirty) {
+			_cpuLightsCache = GetCpuLightsSSBOData();
+		}
+		SyncBufferNode();
+		frameGraph.RegisterRef(m_bufferNode);
 	}
 
 } // namespace brassica

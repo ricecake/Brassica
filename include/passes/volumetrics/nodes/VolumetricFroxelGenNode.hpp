@@ -14,6 +14,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -119,9 +120,10 @@ namespace brassica {
 			r.Read<TerrainWeatherBiomeTexture>();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
-			// shaders/volumetric_froxel_gen.comp loops uLights[] directly (min(uLightCount, 32u))
-			// for point/spot lighting, not just through SkyViewLUT/CloudShadowMap.
-			r.Read<LightsBuffer>();
+			// shaders/volumetric_froxel_gen.comp loops both light buffers directly for
+			// point/spot lighting, not just through SkyViewLUT/CloudShadowMap.
+			r.Read<CpuLightsBuffer>();
+			r.Read<GpuLightsBuffer>();
 			r.Read<TerrainShadowMap>();
 		}
 
@@ -146,6 +148,8 @@ namespace brassica {
 			std::uint32_t cloudShadowIndex = ctx.Index<CloudShadowMap>();
 			std::uint32_t weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			std::uint32_t shadowMapIndex = ctx.Index<TerrainShadowMap>();
+			std::uint32_t cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>();
+			std::uint32_t gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
 
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
@@ -155,6 +159,7 @@ namespace brassica {
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);
 			genPush.indices1.z = pack16(shadowMapIndex, gridTextureDim);
+			genPush.indices1.w = pack16(cpuLightsIndex, gpuLightsIndex);
 
 			render::ResolvedPipeline genResolved = render::BindCompute(ctx, *pipelineLibrary, genShader, genPush);
 			if (genResolved.pipeline) {

@@ -36,6 +36,7 @@ layout(push_constant) uniform CloudRaymarchPushConstants {
 	uint  outputWidth;
 	uint  outputHeight;
 	float deltaTime;
+	uint  gpuLightsIndex;
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
@@ -410,9 +411,10 @@ const ivec2 bayer_offsets[16] = ivec2[](
 			vec4  lightningPulseColor = vec4(0.0);
 			float lightningScaleInv = 1.0 / max(0.0001, u_lightningFlashIntensity * 50.0);
 			for (uint li = 0u; li < LIGHTNING_MAX_STRIKES; li++) {
-				float strikePulse = uLights[LIGHTNING_LIGHT_SLOT_BASE + li].intensity * lightningScaleInv;
+				Light strikeLight = uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[LIGHTNING_LIGHT_SLOT_BASE + li];
+				float strikePulse = strikeLight.intensity * lightningScaleInv;
 				if (strikePulse > lightningPulseColor.w) {
-					lightningPulseColor = vec4(uLights[LIGHTNING_LIGHT_SLOT_BASE + li].color, strikePulse);
+					lightningPulseColor = vec4(strikeLight.color, strikePulse);
 				}
 			}
 

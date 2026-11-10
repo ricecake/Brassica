@@ -324,7 +324,7 @@ namespace brassica {
 				colorFormats,
 				push,
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
-				vk::Format::eD32Sfloat
+				vk::Format::eD32SfloatS8Uint
 			);
 			if (!resolved.pipeline) {
 				return;

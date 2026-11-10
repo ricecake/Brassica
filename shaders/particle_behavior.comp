@@ -1,5 +1,5 @@
 #version 460 core
-#define LIGHTS_BUFFER_WRITABLE
+#define GPU_LIGHTS_BUFFER_WRITABLE
 #include "bindless.glsl"
 #include "common.glsl"
 #include "lighting.glsl"
@@ -55,6 +55,7 @@ layout(push_constant) uniform ParticleBehaviorPushConstants {
 	uint  terrainTextureDim;
 	uint  terrainNumLevels;
 	float waterLevel;
+	uint  gpuLightsIndex;
 } uPush;
 
 uint hashCell(ivec3 cell, uint gridSize) {
@@ -68,10 +69,6 @@ void main() {
 
 	if (idx >= uPush.maxParticles) {
 		return;
-	}
-
-	if (idx < 240u) {
-		uLights[16u + idx].intensity = 0.0;
 	}
 
 	Particle p = uParticles[idx];
@@ -136,21 +133,26 @@ void main() {
 		) * 0.8;
 		p.position.xyz += (p.velocity.xyz + turb) * uPush.deltaTime;
 
-		// Statically claim light slot (16u + idx) for the life of the particle
-		if (idx < 240u) {
-			atomicMax(uLightCount, 256u);
-			uint lightSlot = 16u + idx;
+		// Atomic-claimed light slot, decoupled from particle index entirely -- any firefly gets
+		// a light regardless of idx (the old scheme tied the slot to 16u+idx, so only particles
+		// with idx < 240 ever got one). GpuLightsResetNode already zeroed every slot and reset
+		// this counter earlier in the frame, so a stale claim from a firefly that existed last
+		// frame but not this one can't linger -- see GpuLightsResetNode's own comment for why
+		// that has to be a separate dispatch rather than a self-clear here.
+		uint lightSlot = atomicAdd(uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].dynamicClaimCounter, 1u);
+		if (lightSlot < MAX_GPU_LIGHTS_DYNAMIC) {
 			float pulse = max(0.0, sin(phase));
-			uLights[lightSlot].position = p.position.xyz;
-			uLights[lightSlot].intensity = (uPush.enableLights != 0u) ? (1.5 * pulse) : 0.0;
-			uLights[lightSlot].color = p.color.rgb * pulse * 2.0;
-			uLights[lightSlot].type = LIGHT_TYPE_POINT;
-			uLights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
-			uLights[lightSlot].innerCutoff = 0.0;
-			uLights[lightSlot].outerCutoff = 8.0;
-			uLights[lightSlot].flags = 0;
-			uLights[lightSlot]._pad0 = 0.0;
-			uLights[lightSlot]._pad1 = 0.0;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].position = p.position.xyz;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].intensity =
+				(uPush.enableLights != 0u) ? (1.5 * pulse) : 0.0;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].color = p.color.rgb * pulse * 2.0;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].type = LIGHT_TYPE_POINT;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].innerCutoff = 0.0;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].outerCutoff = 8.0;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot].flags = 0;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot]._pad0 = 0.0;
+			uGpuLightsBuffers[nonuniformEXT(uPush.gpuLightsIndex)].lights[lightSlot]._pad1 = 0.0;
 		}
 	}
 

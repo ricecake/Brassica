@@ -46,7 +46,7 @@ namespace brassica {
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
 			.depthWrite = false,
-			.enableBlend = true,
+			.blendMode = render::BlendMode::AlphaBlend,
 		};
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
@@ -85,7 +85,9 @@ namespace brassica {
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<LightningStrikePool>();
-			r.Read<GBufferDepth>();
+			// AsAttachment(): same fix as WaterNode's identical comment -- kPipelineState.
+			// depthTest=true needs a real depth attachment bound to test against.
+			r.Read<GBufferDepth>().AsAttachment();
 			r.Modify<HdrColor>();
 			r.After<LightningAgeNode>();
 			r.Before<CloudCompositeNode>();
@@ -104,7 +106,7 @@ namespace brassica {
                 colorFormats,
                 push,
                 vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
-                vk::Format::eD32Sfloat
+                vk::Format::eD32SfloatS8Uint
             );
 			if (!resolved.pipeline) {
 				return;

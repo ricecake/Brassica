@@ -85,6 +85,15 @@ layout(set = 1, binding = 3) writeonly uniform image3D uImages3DGenericWrite[];
 // pattern as the rest of this file.
 layout(set = 1, binding = 3, rg32f) coherent uniform image2D uImagesRG32FCoherent[];
 layout(set = 1, binding = 3, rg32f) coherent uniform image2DArray uImageArraysRG32FCoherent[];
+// A real, format-qualified uint-image alias of the same binding 3 catalog -- for ShadingRateMap
+// (R8_UINT, graph::ShadingRateAttachmentDesc) and any other integer storage image. GLSL's image
+// type for a uint-format binding is uimageND, not imageND -- the formatless writeonly aliases
+// above can't cover this regardless of format, since GLSL's sampled/image type (float vs. uint
+// vs. int) is part of the declaration, not inferred from the bound view at runtime. Not
+// `coherent`/writeonly: shading_rate.comp reads last frame's map and writes this frame's map as
+// two different physical images (History<ShadingRateMap>'s double-buffer), never round-tripping
+// through its own write within one dispatch, so neither property is needed here.
+layout(set = 1, binding = 3, r8ui) uniform uimage2D uImagesR8UI[];
 // Binding 5: a real 3D-volume sampled catalog, independently sized/counted from bindings 0/1
 // (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,
 // not a 2D-array pressed into service for a volume it was never shaped for.

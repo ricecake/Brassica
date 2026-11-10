@@ -360,7 +360,9 @@ namespace brassica {
 		// Vulkan Memory Allocator
 		VmaAllocator allocator{VK_NULL_HANDLE};
 
-		// Frame set (set 0): persistent engine-wide bindings for FrameUBO, LightingUBO, LightsBuffer, ClusterGridBuffer
+		// Frame set (set 0): persistent engine-wide bindings for FrameUBO, LightingUBO, ClusterGridBuffer
+		// (CpuLightsBuffer/GpuLightsBuffer moved to the bindless catalog, binding 6 -- see
+		// resources/core.hpp's comment on the split)
 		vk::DescriptorSetLayout frameSetLayout{nullptr};
 		vk::DescriptorPool      frameDescriptorPool{nullptr};
 
@@ -375,10 +377,6 @@ namespace brassica {
 		vk::Buffer    atmosphereUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation atmosphereUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*         atmosphereUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
-
-		vk::Buffer    lightsSSBOBuffers[FRAME_OVERLAP]{nullptr, nullptr};
-		VmaAllocation lightsSSBOAllocations[FRAME_OVERLAP]{nullptr, nullptr};
-		void*         lightsSSBOMapped[FRAME_OVERLAP]{nullptr, nullptr};
 
 		vk::Buffer    clusterGridBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation clusterGridAllocations[FRAME_OVERLAP]{nullptr, nullptr};

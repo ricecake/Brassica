@@ -46,19 +46,46 @@ struct Light {
 	float _pad1;
 };
 
-#ifdef LIGHTS_BUFFER_WRITABLE
-layout(std430, set = 0, binding = 2) buffer LightsBuffer {
-	uint  uLightCount;
-	uint  uLightPad[3];
-	Light uLights[];
-};
+// Split from the old single fixed-binding LightsBuffer into two bindless-indexed buffers (the
+// generic bindless storage-buffer catalog, binding 6 -- see material_system.glsl's identical
+// comment on this binding's "every caller declares its own typed alias" convention). Each
+// caller passes its own index (NodeContext::BufferIndex<CpuLightsBuffer/GpuLightsBuffer>(), a
+// push-constant field) and accesses uCpuLightsBuffers[nonuniformEXT(idx)]/uGpuLightsBuffers[
+// nonuniformEXT(idx)] instead of a plain global -- see include/resources/core.hpp's identical
+// comment for why the split exists.
+//
+// CpuLightsBuffer is always readonly from every shader's perspective -- only LightManager's own
+// host upload ever writes it.
+layout(std430, set = 1, binding = 6) readonly buffer CpuLightsBufferArray {
+	uint  count;
+	uint  pad[3];
+	Light lights[];
+}
+uCpuLightsBuffers[];
+
+#ifdef GPU_LIGHTS_BUFFER_WRITABLE
+layout(std430, set = 1, binding = 6) buffer GpuLightsBufferArray {
+	uint  count;
+	uint  dynamicClaimCounter;
+	uint  pad[2];
+	Light lights[];
+}
+uGpuLightsBuffers[];
 #else
-layout(std430, set = 0, binding = 2) readonly buffer LightsBuffer {
-	uint  uLightCount;
-	uint  uLightPad[3];
-	Light uLights[];
-};
+layout(std430, set = 1, binding = 6) readonly buffer GpuLightsBufferArray {
+	uint  count;
+	uint  dynamicClaimCounter;
+	uint  pad[2];
+	Light lights[];
+}
+uGpuLightsBuffers[];
 #endif
+
+// GLSL-side copies of include/constants.h's Lighting::MaxGpuLights/GpuLightDynamicCapacity --
+// GpuLightsResetNode (gpu_lights_reset.comp) sizes its clear dispatch from these; fireflies
+// (particle_behavior.comp) clamp their atomic claim to MAX_GPU_LIGHTS_DYNAMIC.
+#define MAX_GPU_LIGHTS 512u
+#define MAX_GPU_LIGHTS_DYNAMIC 480u
 
 // Number of concurrent GPU-authored lightning strikes -- matches
 // include/types/LightningStrike.hpp's kMaxLightningStrikes exactly (that header sizes the
@@ -66,10 +93,12 @@ layout(std430, set = 0, binding = 2) readonly buffer LightsBuffer {
 // every other *PushConstants mirror in this codebase).
 #define LIGHTNING_MAX_STRIKES 32
 
-// Reserved uLights[] slot range for lightning flash lights -- static per-slot assignment,
-// same idiom as particle_behavior.comp's firefly lights (16u + particleIdx): slots
-// LIGHTNING_LIGHT_SLOT_BASE..+LIGHTNING_MAX_STRIKES-1, written by shaders/lightning_age.comp.
-#define LIGHTNING_LIGHT_SLOT_BASE 256u
+// Reserved GpuLightsBuffer slot range for lightning flash lights -- static per-slot assignment,
+// written by shaders/lightning_age.comp. Matches include/constants.h's
+// Lighting::GpuLightDynamicCapacity: [0, LIGHTNING_LIGHT_SLOT_BASE) is fireflies' atomic-claimed
+// range (particle_behavior.comp), [LIGHTNING_LIGHT_SLOT_BASE, LIGHTNING_LIGHT_SLOT_BASE +
+// LIGHTNING_MAX_STRIKES) is this reserved range.
+#define LIGHTNING_LIGHT_SLOT_BASE 480u
 
 struct LightningStrikeSlot {
 	vec4  originAndSeed; // xyz = cloud-side origin world pos, w = PRNG seed
@@ -98,9 +127,14 @@ layout(std430, set = 0, binding = 7) readonly buffer LightningStrikePool {
 };
 #endif
 
+// Mirrors C++ ClusterGPU (Light.hpp) exactly, including its 320-byte alignas(16) padding --
+// cpuLightIndices/cpuCount are a small, separate list from lightIndices/count (GPU-sourced) --
+// see cluster_light_assignment.comp's own comment for why.
 struct Cluster {
 	uint count;
 	uint lightIndices[64];
+	uint cpuCount;
+	uint cpuLightIndices[8];
 	uint padding[3];
 };
 

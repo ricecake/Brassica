@@ -24,7 +24,7 @@ layout(push_constant) uniform ClimateCAPushConstants {
 	uint textureDim;            // Texture grid dimension (e.g. 2048)
 	uint cellOffset;            // Row offset for partial update
 	uint cellsPerUpdate;        // Number of rows in partial update
-	uint pad;
+	uint cpuLightsIndex;        // Bindless index into CpuLightsBuffer -- sun direction only
 } push;
 
 struct Cell1 {
@@ -67,7 +67,7 @@ void main() {
 
 	// 1. LATITUDE & TEMPERATURE
 	float lat = (float(pos.y) / float(dim)) * 2.0 - 1.0;
-	vec3 lightDir = normalize(-uLights[0].direction);
+	vec3 lightDir = normalize(-uCpuLightsBuffers[nonuniformEXT(push.cpuLightsIndex)].lights[0].direction);
 	float dayFactor = dot(lightDir, vec3(0, 1, 0));
 	float tempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(lat)) - (me1.elevation * LAPSE_RATE);
 

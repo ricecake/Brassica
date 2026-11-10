@@ -62,10 +62,13 @@ namespace brassica::graph {
 				continue;
 			}
 
-			if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite) {
-				// A Read realization is sampled through a descriptor, not attached -- see
-				// DynamicRenderingWrapper::Begin's identical check for why this must exclude it
-				// from color/depth just as much as from the real vk::RenderingAttachmentInfo list.
+			// A Read+AsAttachment realization of a Depth-role resource is attached too (read-only
+			// depth/stencil test, no write) -- see DynamicRenderingWrapper::Begin's identical
+			// check and ResourceRealization::asAttachment's comment. Every other plain Read is
+			// still sampled through a descriptor, not attached.
+			const bool isReadOnlyDepthAttachment =
+				role == AttachmentRole::Depth && r.access == AccessKind::Read && r.asAttachment;
+			if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite && !isReadOnlyDepthAttachment) {
 				continue;
 			}
 
@@ -107,6 +110,15 @@ namespace brassica::graph {
 			std::vector<vk::RenderingAttachmentInfo>          colorAttachments;
 			vk::RenderingAttachmentInfo                       depthAttachment{};
 			bool                                              hasDepth = false;
+			// Mirrors depthAttachment exactly (same view/layout/loadOp/storeOp) whenever the
+			// format has a stencil component -- pDepthAttachment alone does NOT implicitly
+			// attach the stencil aspect; per the Vulkan spec, if pStencilAttachment is left
+			// null, stencil test/write behave as if stencilTestEnable were false regardless of
+			// what the pipeline actually declares. Confirmed the hard way: a real-device test
+			// (test_physical_backend.cpp's StencilMode::Write/TestEqual case) silently passed
+			// *every* pixel, including ones the writer never touched, until this was added.
+			vk::RenderingAttachmentInfo                       stencilAttachment{};
+			bool                                              hasStencil = false;
 			vk::RenderingFragmentShadingRateAttachmentInfoKHR shadingRateAttachment{};
 
 			for (const auto& r : recipe.realizations) {
@@ -133,13 +145,20 @@ namespace brassica::graph {
 					continue;
 				}
 
-				if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite) {
-					// A Read realization is sampled through a descriptor, not attached. Attaching
-					// it here would ask dynamic rendering to write into a resource the barrier
-					// seam has (correctly) put in a read-only layout -- invalid. This mirrors the
-					// color branch below, which always required Write/ReadWrite; the depth
-					// branch used to attach on any access, including Read, which the hardcoded
-					// eDepthStencilAttachmentOptimal below masked until tracked-layout replaced it.
+				// A Read+AsAttachment realization of a Depth-role resource is attached too --
+				// read-only depth/stencil test, never cleared, never stored back. See
+				// ResourceRealization::asAttachment's comment and DeriveAttachments' identical
+				// check above.
+				const bool isReadOnlyDepthAttachment =
+					role == AttachmentRole::Depth && r.access == AccessKind::Read && r.asAttachment;
+				if (r.access != AccessKind::Write && r.access != AccessKind::ReadWrite && !isReadOnlyDepthAttachment) {
+					// A plain Read realization is sampled through a descriptor, not attached.
+					// Attaching it here would ask dynamic rendering to write into a resource the
+					// barrier seam has (correctly) put in a read-only layout -- invalid. This
+					// mirrors the color branch below, which always required Write/ReadWrite; the
+					// depth branch used to attach on any access, including Read, which the
+					// hardcoded eDepthStencilAttachmentOptimal below masked until tracked-layout
+					// replaced it.
 					continue;
 				}
 
@@ -147,8 +166,12 @@ namespace brassica::graph {
 				// this access isn't a plain Write (a Write means "I'm about to produce all of
 				// it," so discarding is correct and cheaper). A ReadWrite realization on a
 				// never-written resource still has nothing to load, which is why this checks
-				// HasDefinedContents() explicitly rather than trusting AccessKind alone.
-				const bool preserveExisting = tex->HasDefinedContents() && r.access != AccessKind::Write;
+				// HasDefinedContents() explicitly rather than trusting AccessKind alone. A
+				// read-only depth attachment is a degenerate case of the same rule: it never
+				// produces anything, so it always wants eLoad (this pass's whole point is
+				// testing against contents some earlier node already produced).
+				const bool preserveExisting =
+					isReadOnlyDepthAttachment || (tex->HasDefinedContents() && r.access != AccessKind::Write);
 				const auto loadOp = preserveExisting ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eClear;
 
 				// imageLayout comes from tracked state, not a hardcoded constant: by the time
@@ -160,9 +183,20 @@ namespace brassica::graph {
 					depthAttachment.imageView = tex->GetView();
 					depthAttachment.imageLayout = tex->GetCurrentLayout();
 					depthAttachment.loadOp = loadOp;
-					depthAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+					// eNone, not eStore, for a read-only attachment: nothing was written, so
+					// there is nothing to store back -- a store here would be a lie about what
+					// this pass actually did, and VUID-vkCmdEndRendering-...-07006-adjacent
+					// validation starts caring about this once eDepthStencilReadOnlyOptimal is
+					// involved.
+					depthAttachment.storeOp =
+						isReadOnlyDepthAttachment ? vk::AttachmentStoreOp::eNone : vk::AttachmentStoreOp::eStore;
 					depthAttachment.clearValue = vk::ClearDepthStencilValue{1.0f, 0};
 					hasDepth = true;
+
+					if (HasStencilComponent(format)) {
+						stencilAttachment = depthAttachment;
+						hasStencil = true;
+					}
 				} else {
 					vk::RenderingAttachmentInfo colorAtt{};
 					colorAtt.imageView = tex->GetView();
@@ -191,6 +225,7 @@ namespace brassica::graph {
 				static_cast<std::uint32_t>(colorAttachments.size()),
 				colorAttachments.empty() ? nullptr : colorAttachments.data(),
 				hasDepth ? &depthAttachment : nullptr,
+				hasStencil ? &stencilAttachment : nullptr,
 			};
 			if (derived.hasShadingRate) {
 				renderingInfo.pNext = &shadingRateAttachment;
@@ -239,7 +274,8 @@ namespace brassica::graph {
 		PhysicalTexture&  tex,
 		AccessKind        access,
 		ExecutionDomain   domain,
-		ResourceId        key = nullptr
+		ResourceId        key = nullptr,
+		bool              asAttachment = false
 	) {
 		const auto& desc = tex.GetDesc();
 
@@ -307,7 +343,13 @@ namespace brassica::graph {
 		// (this stage's own, synthesized right after this function returns) starts from a state
 		// it actually agrees with.
 		const ResourceState postClear =
-			DeriveImageState(access, domain, desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{}, format);
+			DeriveImageState(
+				access,
+				domain,
+				desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{},
+				format,
+				asAttachment
+			);
 
 		vk::ImageMemoryBarrier2 toFinal{};
 		toFinal.setSrcStageMask(vk::PipelineStageFlagBits2::eAllTransfer);
@@ -507,7 +549,7 @@ namespace brassica::graph {
 					continue;
 				}
 
-				ClearImageToZero(cmd, *tex, r.access, recipe.domain, r.key);
+				ClearImageToZero(cmd, *tex, r.access, recipe.domain, r.key, r.asAttachment);
 			}
 		}
 	}
@@ -590,7 +632,7 @@ namespace brassica::graph {
 			if ((tex->GetDesc().persistent || isPersistentLifetime) && tex->HasDefinedContents()) {
 				continue;
 			}
-			ClearImageToZero(cmd, *tex, realization->access, recipe.domain, key);
+			ClearImageToZero(cmd, *tex, realization->access, recipe.domain, key, realization->asAttachment);
 		}
 	}
 
@@ -698,6 +740,7 @@ namespace brassica::graph {
 								.access = r.access,
 								.srcDomain = recipe.domain,
 								.dstDomain = recipe.domain,
+								.asAttachment = r.asAttachment,
 							}
 						);
 					}

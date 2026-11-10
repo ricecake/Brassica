@@ -8,7 +8,9 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "constants.h"
 #include "graph/Execution.hpp"
+#include "graph/PhysicalResource.hpp"
 
 namespace brassica {
 
@@ -48,6 +50,37 @@ namespace brassica {
 
 		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
 			return HiZTextureDesc(ctx.width, ctx.height);
+		}
+	};
+
+	// Real device-negotiated VRS tile size, clamped into the device's reported
+	// min/maxFragmentShadingRateAttachmentTexelSize range by Engine::InitVulkan after querying
+	// VkPhysicalDeviceFragmentShadingRatePropertiesKHR -- constants::Class::ShadingRate::
+	// TileWidth/TileHeight (16x16) is only the compile-time default these start at. Confirmed via
+	// real-device validation that logging a mismatch and then using the wrong size anyway still
+	// fails: a GPU reporting an 8x8-only range (min == max == 8, seen on real hardware) rejects a
+	// 16x16 attachment outright at vkCmdBeginRendering, so every consumer of the tile size --
+	// ShadingRateMap's own Desc(), ShadingRateComputeNode's dispatch grid, and every
+	// ReadPrevious<ShadingRateMap>().ShadingRateTexelSize() call -- has to read these, not the
+	// bare constants, for VRS to work on a device whose supported size differs from the default.
+	inline std::uint32_t s_shadingRateTileWidth = constants::Class::ShadingRate::TileWidth;
+	inline std::uint32_t s_shadingRateTileHeight = constants::Class::ShadingRate::TileHeight;
+
+	// One tile (s_shadingRateTileWidth/s_shadingRateTileHeight) per texel, holding a
+	// VK_KHR_fragment_shading_rate-encoded rate byte (ShadingRateComputeNode/shading_rate.comp
+	// writes it, DynamicRenderingWrapper::Begin -- PhysicalExecutionBackend.hpp -- binds it as an
+	// attachment automatically for any Graphics node that does ReadPrevious<ShadingRateMap>()).
+	// History lifetime, same ping-ponged double-buffer HiZTexture above already uses: this
+	// frame's compute pass reads last frame's map (the dither-refresh schedule's own input) while
+	// writing this frame's.
+	struct ShadingRateMap {
+		static constexpr graph::Lifetime kLifetime = graph::Lifetime::History;
+
+		[[nodiscard]] graph::ResourceDesc Desc(const graph::FrameContext& ctx) const {
+			return graph::ShadingRateAttachmentDesc(
+				(ctx.width + s_shadingRateTileWidth - 1) / s_shadingRateTileWidth,
+				(ctx.height + s_shadingRateTileHeight - 1) / s_shadingRateTileHeight
+			);
 		}
 	};
 

@@ -14,7 +14,9 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/lighting/ILightManager.hpp"
 #include "passes/RenderPhases.hpp"
+#include "passes/scene/resources.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -50,11 +52,14 @@ namespace brassica {
 		std::uint32_t debugVisualizeGTAO{0};
 		std::uint32_t cloudShadowIndex{0};
 		std::uint32_t shadowMapIndex{0};
+		std::uint32_t cpuLightsIndex{0};
+		std::uint32_t gpuLightsIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
+			.enableShadingRate = true,
 		};
 
 		render::PipelineLibrary* pipelineLibrary = nullptr;
@@ -124,7 +129,8 @@ namespace brassica {
 			r.Read<GBufferMaterial>();
 			r.Read<GBufferDepth>();
 			r.Read<ClusteredLighting>();
-			r.Read<LightsBuffer>();
+			r.Read<CpuLightsBuffer>();
+			r.Read<GpuLightsBuffer>();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
@@ -135,6 +141,13 @@ namespace brassica {
 			r.Read<AtmosphereRadiance>();
 			r.Read<TerrainTLAS>();
 			r.Read<TerrainShadowMap>();
+			// Attachment-only VRS (ShadingRateComputeNode) -- a reasonable candidate per its own
+			// design comment (Deferred's ray-query shadows are exactly the per-pixel-expensive
+			// work VRS exists to coarsen). TileWidth/TileHeight match ShadingRateComputeNode's own
+			// output tile size (also AccessHandle's default -- explicit here per the design plan).
+			r.ReadPrevious<ShadingRateMap>().ShadingRateTexelSize(
+				{s_shadingRateTileWidth, s_shadingRateTileHeight}
+			);
 			r.Create<HdrColor>();
 		}
 
@@ -154,6 +167,8 @@ namespace brassica {
 			push.gtaoIndex = enableGTAO ? ctx.Index<GTAOTexture>() : 0u;
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
 			push.shadowMapIndex = ctx.Index<TerrainShadowMap>();
+			push.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>();
+			push.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

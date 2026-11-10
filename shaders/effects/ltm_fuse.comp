@@ -37,11 +37,11 @@ void main() {
 		vec3 w = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.wgtTextureIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, float(i - 1)).rgb;
 
 		// Contrast weight (Laplacian magnitude)
-		vec3 c = pow(max(abs(laplacian), vec3(0.0001)), vec3(layers[0].ltmWeightContrast));
+		vec3 c = pow(max(abs(laplacian), vec3(0.0001)), vec3(layers[0].data.ltmWeightContrast));
 		w *= c;
 
-		if (layers[0].ltmBoostLocalContrast > 0.0) {
-			w *= (abs(laplacian) * layers[0].ltmBoostLocalContrast + 1.0);
+		if (layers[0].data.ltmBoostLocalContrast > 0.0) {
+			w *= (abs(laplacian) * layers[0].data.ltmBoostLocalContrast + 1.0);
 		}
 
 		float wSum = w.x + w.y + w.z;

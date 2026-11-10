@@ -19,6 +19,7 @@
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "ServiceLocator.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
@@ -40,6 +41,7 @@ namespace brassica {
 		std::uint32_t terrainTextureDim{1024};
 		std::uint32_t terrainNumLevels{8};
 		float         waterLevel{0.0f};
+		std::uint32_t gpuLightsIndex{0};
 	};
 
 	// S4: no kPhase -- every key here except ParticleBuffer has a sole Create<> upstream
@@ -121,13 +123,11 @@ namespace brassica {
 			r.Read<ParticleGridNextBuffer>();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
-			// Firefly particles write real dynamic lights into uLights/uLightCount on top of the
-			// CPU's own per-frame write (shaders/particle_behavior.comp's LIGHTS_BUFFER_WRITABLE
-			// path, set 0 binding 2) -- genuinely ReadWrite: it reads the CPU-seeded uLightCount
-			// via atomicMax, and zeroes its own claimed slots' intensity unconditionally before
-			// conditionally overwriting them. Replaces the manual After<ParticleBehaviorNode>()
-			// relation ClusterLightAssignmentNode used to need for this.
-			r.Modify<LightsBuffer>();
+			// Firefly particles atomic-claim a slot in GpuLightsBuffer and write real dynamic
+			// lights into it (shaders/particle_behavior.comp's GPU_LIGHTS_BUFFER_WRITABLE path,
+			// bindless binding 6) -- Modify<>(), not Create<>(): GpuLightsResetNode is the sole
+			// Create<>(), ordered ahead of this via the normal Create-before-accessor rule.
+			r.Modify<GpuLightsBuffer>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -161,6 +161,7 @@ namespace brassica {
 				.terrainTextureDim = terrainTextureDim,
 				.terrainNumLevels = terrainNumLevels,
 				.waterLevel = waterLevel,
+				.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>(),
 			};
 
 			std::array<vk::DescriptorSetLayout, 1> extraLayouts{descriptorSet.layout};

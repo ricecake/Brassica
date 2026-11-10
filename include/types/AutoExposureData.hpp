@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include <glm/glm.hpp>
@@ -95,12 +97,90 @@ namespace brassica {
 		"LayerDataHost size must be a multiple of 16 bytes -- see comment above"
 	);
 
-	struct ExposureDataHost {
-		LayerDataHost layers[2];
-		std::uint32_t workgroupCounter{0};
+	// One depth-ranged auto-exposure/tonemap layer. Mirrors cdl_grading.glsl's CdlEntry/
+	// CdlEntryHost pattern exactly (targetDepth/falloffWidth/falloffRate/priority/enabled/isMain)
+	// -- std430 buffer layout, so field order/types here must match autoexposure.glsl's
+	// ExposureLayer field-for-field. isMain entries always apply at full weight; every other
+	// entry blends in based on how close its targetDepth is to the pixel's linearized depth,
+	// falling off over falloffWidth at falloffRate -- same weight function CdlEntry already uses.
+	//
+	// isSky is a second hard override, alongside isMain: weight is 1.0 for a background pixel
+	// (depth sentinel, nothing rendered -- the same `rawDepth >= 1.0` test the old hardcoded
+	// Scene/Sky split used) and 0.0 otherwise, completely bypassing the depth-falloff math above.
+	// targetDepth/falloffWidth/falloffRate don't apply to an isSky layer for the same reason they
+	// don't apply to isMain -- the old split's weight was never a smooth function of depth, it was
+	// a hard binary, and that's the behavior isSky restores. See s_exposureData's default below.
+	struct ExposureLayerHost {
+		LayerDataHost data{};
+		float         targetDepth{0.0f};
+		float         falloffWidth{1.0f};
+		float         falloffRate{1.0f};
+		std::int32_t  priority{0};
+		std::int32_t  enabled{1};
+		std::int32_t  isMain{0};
+		std::int32_t  isSky{0};
+		// std430 rounds an array-of-structs element stride up to a multiple of 16 -- LayerDataHost
+		// is already a multiple of 16 (its own static_assert above), and the 7 trailing scalars
+		// here (28 bytes) need 4 more to reach the next 16-byte boundary. See the static_assert
+		// below for what breaks if this drifts (same spirv-dis-confirmed failure mode as
+		// LayerDataHost's own padding comment).
+		float _pad0{0.0f};
 	};
 
-	inline ExposureDataHost s_exposureData{};
+	static_assert(
+		sizeof(ExposureLayerHost) % 16 == 0,
+		"ExposureLayerHost size must be a multiple of 16 bytes -- see comment above"
+	);
+
+	constexpr std::size_t kMaxExposureLayers = 8;
+
+	struct ExposureDataHost {
+		std::array<ExposureLayerHost, kMaxExposureLayers> layers{};
+		std::int32_t                                      numLayers{1};
+		std::uint32_t                                      workgroupCounter{0};
+
+		// layers[0] is always the isMain entry (see s_exposureData below); depth-ranged layers
+		// only ever live in layers[1..numLayers-1] -- same convention and the same AddEntry/
+		// RemoveEntry shape as CdlGradingLayersHost (CdlGradingData.hpp).
+		bool AddLayer() {
+			if (static_cast<std::size_t>(numLayers) >= kMaxExposureLayers) {
+				return false;
+			}
+			layers[static_cast<std::size_t>(numLayers)] = ExposureLayerHost{};
+			++numLayers;
+			return true;
+		}
+
+		void RemoveLayer(std::size_t index) {
+			if (index == 0 || index >= static_cast<std::size_t>(numLayers)) {
+				return;
+			}
+			for (std::size_t i = index; i + 1 < static_cast<std::size_t>(numLayers); ++i) {
+				layers[i] = layers[i + 1];
+			}
+			--numLayers;
+		}
+	};
+
+	// Defaults to two layers: an isMain layer covering the whole screen (this is what makes a
+	// cloud in front of dim terrain no longer inherit the terrain's dim exposure -- a cloud
+	// against open sky resolves through the isSky layer below instead, not this one), plus an
+	// isSky layer restoring the old hardcoded Sky layer's own dedicated exposure/tonemap/white-
+	// balance tuning for background pixels -- confirmed by real-device visual check that dropping
+	// the Sky split entirely (the original single-layer default) lost something real: the sky
+	// itself inheriting the scene's exposure looked wrong, even though the motivating cloud/
+	// terrain bug was fixed. targetLuminance=0.5 (vs. LayerDataHost's own 0.25 default) matches
+	// the sky's old hardcoded brightness target exactly (TonemapComputeNode::Init used to set this
+	// by hand every Init() call; now it's just this layer's own default, editable at runtime like
+	// any other). Both layers stay fully removable/editable via RemoveLayer()/the Lighting
+	// widget -- this is a default, not a hardcoded special case.
+	inline ExposureDataHost s_exposureData{
+		.layers = {
+			ExposureLayerHost{.isMain = 1},
+			ExposureLayerHost{.data = {.targetLuminance = 0.5f}, .isSky = 1},
+		},
+		.numLayers = 2,
+	};
 
 	// Copies only the fields QuickSettingsWidget's ImGui sliders expose (see LayerDataHost's
 	// field groups above) from src (s_exposureData, host-side) into dst (the mapped GPU buffer),

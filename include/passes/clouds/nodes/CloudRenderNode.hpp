@@ -12,6 +12,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -37,6 +38,7 @@ namespace brassica {
 		std::uint32_t outputWidth{0};
 		std::uint32_t outputHeight{0};
 		float         deltaTime{0.016f};
+		std::uint32_t gpuLightsIndex{0};
 	};
 
 	// Raymarches CloudDetailVolume into CloudColor/CloudTransmittance (the visible result) and
@@ -86,6 +88,7 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.Read<GpuLightsBuffer>();
 			r.Create<CloudColor>();
 			r.Create<CloudTransmittance>();
 			r.Create<CloudDepth>();
@@ -106,6 +109,7 @@ namespace brassica {
 			push.velocityStorageIdx = ctx.StorageIndex<CloudVelocity>();
 			push.outputWidth = width;
 			push.outputHeight = height;
+			push.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
 
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, raymarchShader, push);
 			if (!resolved.pipeline) {

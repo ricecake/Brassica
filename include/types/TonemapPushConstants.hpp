@@ -28,6 +28,12 @@ namespace brassica {
 		float exposure{1.0f};
 
 		float contrast{1.0f};
+		// saturation/cdlSaturation/cdlSlope/cdlOffset/cdlPower below are no longer read by
+		// tonemap.frag: they fed the old isSky==1 flat-CDL/saturation branch, which
+		// CdlGradingLayers (CdlGradingData.hpp) now applies uniformly to every pixel instead.
+		// Kept as inert padding rather than removed outright -- same reasoning as the `exposure`
+		// field's own comment below (deleting a scalar here shifts every field after it in C++
+		// with no compensating padding, while GLSL silently reinserts it).
 		float saturation{1.0f};
 		float temperature{0.0f};
 		float tint{0.0f};
@@ -60,8 +66,8 @@ namespace brassica {
 
 		// Same reasoning as bloomEnabled just above -- appended after it, another trailing
 		// scalar with nothing after it needing bigger alignment. Count of enabled entries in
-		// CdlGradingLayers (cdl_grading.glsl, frameSet binding 6) to iterate for scene (isSky == 0)
-		// depth-based grading.
+		// CdlGradingLayers (cdl_grading.glsl, frameSet binding 6) to iterate for depth-based
+		// grading, applied uniformly to every pixel regardless of which exposure layer is active.
 		std::int32_t numCdlEntries{1};
 	};
 

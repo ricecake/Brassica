@@ -55,8 +55,17 @@ namespace {
 	// descriptors: binding 0 (sampled 2D) is what PhysicalRegistry writes GBufferPosition/
 	// GBufferAlbedo/GBufferNormal's indices into, binding 2 (samplers) needs a real sampler
 	// written at BRASSICA_SAMPLER_NEAREST_CLAMP's index (0) since the shader indexes it
-	// unconditionally. No array/storage/AS bindings -- WaterNode never touches them. Mirrors
-	// test_physical_backend.cpp's own CreateBindlessTestSet, trimmed to what this node needs.
+	// unconditionally. Mirrors test_physical_backend.cpp's own CreateBindlessTestSet, trimmed to
+	// what this node needs.
+	//
+	// KNOWN GAP (flagged, not fixed here): water.frag now also reads CpuLightsBuffer/
+	// GpuLightsBuffer through binding 6's storage-buffer array (evaluateClusteredLightContributionPBR),
+	// which this fixture does not yet provide -- this test already SIGSEGVs on this Mac before
+	// reaching that code (MoltenVK lacks mesh shaders, the same pre-existing failure
+	// test_water_node has always had), so there's no local way to prove a binding-6 fixture
+	// addition is correct. Needs real-hardware wiring (a binding-6 storage-buffer-array entry
+	// plus real CpuLightsBuffer/GpuLightsBuffer content) before this test is meaningful again
+	// on a machine where mesh shaders actually work.
 	struct WaterBindlessSet {
 		vk::DescriptorSetLayout frameLayout{};
 		vk::DescriptorPool      framePool{};

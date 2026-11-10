@@ -352,7 +352,8 @@ TEST_CASE("Unified VolumetricRenderNode executes cleanly in render graph with no
 		graph.Register<graph::Import<TerrainWeatherBiomeTexture>>();
 		graph.Register<graph::Import<TerrainClipmapTexture>>();
 		graph.Register<graph::Import<TerrainMinMaxTexture>>();
-		graph.Register<graph::Import<LightsBuffer>>();
+		graph.Register<graph::Import<CpuLightsBuffer>>();
+		graph.Register<graph::Import<GpuLightsBuffer>>();
 		graph.Register<graph::Import<TerrainShadowMap>>();
 		graph.RegisterRef(transNode);
 		graph.RegisterRef(multiNode);

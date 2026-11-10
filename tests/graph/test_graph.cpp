@@ -691,7 +691,9 @@ TEST_CASE("ToDot exports phase clusters and labels") {
 TEST_CASE("Lighting structs alignment and size layout") {
 	CHECK(sizeof(brassica::LightingUBO) == 1360);
 	CHECK(sizeof(brassica::LightGPU) == 64);
-	CHECK(sizeof(brassica::ClusterGPU) == 272);
+	// 272 -> 320 when ClusterGPU split lightIndices into separate CPU (8-slot) and GPU (64-slot)
+	// lists (passes/lighting/Light.hpp), part of the CPU/GPU light buffer split.
+	CHECK(sizeof(brassica::ClusterGPU) == 320);
 	CHECK(brassica::TOTAL_CLUSTERS == 3457);
 }
 
@@ -726,7 +728,7 @@ TEST_CASE("LightManager day/night cycle and behaviors") {
 	CHECK(ubo.numLights == 3);
 	CHECK(ubo.dayTime >= 0.0f);
 
-	brassica::LightsSSBOData ssbo = mgr.GetLightsSSBOData();
+	brassica::CpuLightsSSBOData ssbo = mgr.GetCpuLightsSSBOData();
 	CHECK(ssbo.count == 3);
 	CHECK(ssbo.lights[2].type == brassica::POINT_LIGHT);
 

@@ -33,7 +33,8 @@ namespace brassica::graph {
 		PhysicalResourceRegistry& registry,
 		ResourceId                 resource,
 		AccessKind                  access,
-		ExecutionDomain             domain
+		ExecutionDomain             domain,
+		bool                        asAttachment = false
 	) {
 		if (access == AccessKind::Write || access == AccessKind::ReadWrite) {
 			return true;
@@ -46,7 +47,8 @@ namespace brassica::graph {
 			access,
 			domain,
 			tex->GetDesc().usageMask ? vk::ImageUsageFlags(tex->GetDesc().usageMask) : vk::ImageUsageFlags{},
-			static_cast<vk::Format>(tex->GetDesc().formatCode)
+			static_cast<vk::Format>(tex->GetDesc().formatCode),
+			asAttachment
 		);
 		return tex->GetCurrentLayout() != derived.layout;
 	}
@@ -698,6 +700,7 @@ namespace brassica::graph {
 							.access = r.access,
 							.srcDomain = recipes[nodeIndex].domain,
 							.dstDomain = recipes[nodeIndex].domain,
+							.asAttachment = r.asAttachment,
 						}
 					);
 				}
@@ -714,7 +717,7 @@ namespace brassica::graph {
 			// invisible under ForceDomain, where they always happened to be the same value.
 			for (const auto& mb : acquireBatch.Items()) {
 				const ResourceId resolved = registry.ResolveId(mb.resource);
-				const bool       writeish = IsWriteOrLayoutChangeAccess(registry, mb.resource, mb.access, mb.dstDomain);
+				const bool       writeish = IsWriteOrLayoutChangeAccess(registry, mb.resource, mb.access, mb.dstDomain, mb.asAttachment);
 				for (ExecutionDomain other : m_hazards.QueuesToWaitOn(resolved, queue, writeish)) {
 					CutAndWait(queue, other);
 				}
@@ -726,7 +729,7 @@ namespace brassica::graph {
 			const std::uint32_t segmentIndex = Lane(queue).OpenSegmentIndex();
 			for (const auto& mb : acquireBatch.Items()) {
 				const ResourceId resolved = registry.ResolveId(mb.resource);
-				const bool       writeish = IsWriteOrLayoutChangeAccess(registry, mb.resource, mb.access, mb.dstDomain);
+				const bool       writeish = IsWriteOrLayoutChangeAccess(registry, mb.resource, mb.access, mb.dstDomain, mb.asAttachment);
 				m_hazards.RecordTouch(resolved, queue, writeish, segmentIndex);
 			}
 

@@ -28,6 +28,8 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  debugVisualizeGTAO;
 	uint  cloudShadowIndex;
 	uint  shadowMapIndex;
+	uint  cpuLightsIndex;
+	uint  gpuLightsIndex;
 }
 
 params;
@@ -136,10 +138,13 @@ void main() {
 			inUV,
 			params.aoDirectInfluence,
 			params.minMaxIndex,
-			params.gridParams
+			params.gridParams,
+			params.cpuLightsIndex,
+			params.gpuLightsIndex
 		).color;
 
-		if (uLights[0].intensity > 0.0) {
+		Light sunLight = uCpuLightsBuffers[nonuniformEXT(params.cpuLightsIndex)].lights[0];
+		if (sunLight.intensity > 0.0) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 				params.minMaxIndex,
 				params.gridParams.w,
@@ -147,7 +152,7 @@ void main() {
 				0.0
 			);
 
-			vec3 lightDir = normalize(-uLights[0].direction);
+			vec3 lightDir = normalize(-sunLight.direction);
 
 			// Sample smooth geometric terrain clipmap normal for coherent origin biasing and light angle evaluation
 			vec3 geoNorm = norm;
@@ -191,7 +196,7 @@ void main() {
 				shadowMask *= cloudShadowData.a;
 			}
 
-			float shadowStrength = 0.5*clamp(uLights[0].intensity, 0.0, 1.0);
+			float shadowStrength = 0.5*clamp(sunLight.intensity, 0.0, 1.0);
 			hdrColor *= mix(1.0, shadowMask, shadowStrength);
 		}
 	}

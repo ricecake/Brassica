@@ -23,7 +23,7 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 
 	CHECK(builder.Active() == true);
 	CHECK(builder.Domain() == graph::ExecutionDomain::Compute);
-	// 7 ReadWrite texture realizations, one Read<LightsBuffer>() (shaders/climate_ca.comp reads
+	// 7 ReadWrite texture realizations, one Read<CpuLightsBuffer>() (shaders/climate_ca.comp reads
 	// uLights[0].direction via clustered_lighting.glsl), and one Modify<LightningStrikePool>()
 	// (climate_ca.comp claims a ring-buffer slot to trigger a new lightning strike).
 	CHECK(builder.Realizations().size() == 9);
@@ -35,11 +35,11 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	bool foundBiome = false;
 	bool foundBiomeMapA = false;
 	bool foundBiomeMapB = false;
-	bool foundLightsBuffer = false;
+	bool foundCpuLightsBuffer = false;
 
 	for (const auto& real : builder.Realizations()) {
-		if (real.key == graph::IdOf<LightsBuffer>()) {
-			foundLightsBuffer = true;
+		if (real.key == graph::IdOf<CpuLightsBuffer>()) {
+			foundCpuLightsBuffer = true;
 			CHECK(real.access == graph::AccessKind::Read);
 			continue;
 		}
@@ -74,7 +74,7 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 	CHECK(foundBiome);
 	CHECK(foundBiomeMapA);
 	CHECK(foundBiomeMapB);
-	CHECK(foundLightsBuffer);
+	CHECK(foundCpuLightsBuffer);
 
 	// Dims now come from each key's own catalog Desc() (ResourceKeys.hpp), not the realization --
 	// a builder node's realization carries an empty desc by design (see SetupBuilder.hpp).

@@ -77,6 +77,15 @@ namespace brassica::graph {
 				return *this;
 			}
 
+			// Binds this Read as a real read-only depth/stencil attachment (depth/stencil test
+			// against it) instead of a sampled descriptor -- see
+			// ResourceRealization::asAttachment's own comment. Only meaningful on a Read of a
+			// Depth-role resource.
+			AccessHandle& AsAttachment() {
+				m_builder.m_realizations[m_index].asAttachment = true;
+				return *this;
+			}
+
 		private:
 			SetupBuilder& m_builder;
 			std::size_t   m_index;

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "constants.h"
 #include "graph/ResourceKey.hpp"
 
 #ifdef MemoryBarrier
@@ -157,6 +158,18 @@ namespace brassica::graph {
 		ResourceId key = nullptr;
 		AccessKind access = AccessKind::Read;
 
+		// Set via AccessHandle::AsAttachment() on a Read access to a Depth-role resource --
+		// without this, DynamicRenderingWrapper::Begin (PhysicalExecutionBackend.hpp) treats any
+		// plain Read as sampled-only and never attaches it, which silently breaks a pass that
+		// means to depth/stencil-test against it (depthTest=true with nothing bound to test
+		// against is not an error, just a no-op test -- this is exactly the bug WaterNode/
+		// LightningRenderNode shipped with). A Read+AsAttachment realization binds as a
+		// read-only depth/stencil attachment instead: loadOp=eLoad (this pass didn't produce the
+		// contents), storeOp=eNone, layout eDepthStencilReadOnlyOptimal -- see DeriveImageState's
+		// matching branch (ResourceState.hpp). Meaningless on anything but a Depth-role Read;
+		// unused bit on every other realization.
+		bool asAttachment = false;
+
 		// Used only when this realization becomes a color attachment with loadOp=eClear (see
 		// DynamicRenderingWrapper::Begin, PhysicalExecutionBackend.hpp). Defaults to opaque
 		// black, matching what every current color target except the G-buffer wants. The
@@ -170,10 +183,14 @@ namespace brassica::graph {
 		// Used only when this realization's AttachmentRole (ResourceState.hpp) is ShadingRate --
 		// VkRenderingFragmentShadingRateAttachmentInfoKHR::shadingRateAttachmentTexelSize, which
 		// has no principled default this layer could pick on its own (it's a per-device minimum,
-		// see ShadingRateAttachmentDesc's comment, PhysicalResource.hpp). 16x16 matches the most
-		// common reported minimum; a node targeting a device with a different minimum must set
-		// this explicitly.
-		std::array<std::uint32_t, 2> shadingRateTexelSize{16, 16};
+		// see ShadingRateAttachmentDesc's comment, PhysicalResource.hpp). Defaults to
+		// constants::Class::ShadingRate::TileWidth/TileHeight, the same tile size
+		// ShadingRateComputeNode writes -- matches the most common reported device minimum; a
+		// node targeting a device with a different minimum must set this explicitly.
+		std::array<std::uint32_t, 2> shadingRateTexelSize{
+			constants::Class::ShadingRate::TileWidth,
+			constants::Class::ShadingRate::TileHeight
+		};
 
 		// Set via AccessHandle::AnyOrder() -- the author is asserting that a conflicting write
 		// against this exact key from another AnyOrder() access needs no relation, because the
@@ -473,6 +490,13 @@ namespace brassica::graph {
 		std::uint32_t   newLayout = 0;
 		ExecutionDomain srcDomain = ExecutionDomain::Graphics;
 		ExecutionDomain dstDomain = ExecutionDomain::Graphics;
+
+		// Carried from ResourceRealization::asAttachment so DeriveImageState's call sites (see
+		// its own asAttachment parameter) can derive a read-only depth/stencil attachment layout
+		// instead of a sampled one -- see ResourceRealization::asAttachment's comment for why
+		// this distinction exists.
+		bool asAttachment = false;
+
 		// No srcQueueFamily/dstQueueFamily (removed, design plan's S4): under
 		// VK_SHARING_MODE_CONCURRENT (what every multi-queue-touched resource now uses,
 		// PhysicalResource.hpp), a barrier's queue family fields must both be
@@ -515,6 +539,13 @@ namespace brassica::graph {
 			if (it->access != b.access) {
 				it->access = AccessKind::ReadWrite;
 			}
+			// OR, not overwrite: the edge-derived entry (Graph::SynthesizeBarrier) and the
+			// self-entry (PhysicalExecutionBackend/MultiQueueExecutionBackend's per-realization
+			// loop) for the same (resource, srcDomain, dstDomain) key land in this same merge --
+			// only the self-entry carries the real per-realization asAttachment bit, so whichever
+			// of the two is added first must not have its true value clobbered by the other's
+			// default-false.
+			it->asAttachment = it->asAttachment || b.asAttachment;
 		}
 
 		[[nodiscard]] std::span<const MemoryBarrier> Items() const { return m_items; }

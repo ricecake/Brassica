@@ -145,8 +145,13 @@ namespace brassica::graph {
 	// (AccessKind, usage-bit) combination this codebase's consumers actually exercise, with a
 	// defensive non-zero fallback for the rest -- a zero return here is exactly Bug 1
 	// (BarrierTranslator casting an all-zero MemoryBarrier into an invalid newLayout=eUndefined).
-	inline ResourceState
-	DeriveImageState(AccessKind access, ExecutionDomain domain, vk::ImageUsageFlags usage, vk::Format format) {
+	inline ResourceState DeriveImageState(
+		AccessKind          access,
+		ExecutionDomain     domain,
+		vk::ImageUsageFlags usage,
+		vk::Format          format,
+		bool                asAttachment = false
+	) {
 		// Mirrors detail::BuildImageCreateInfo's default (PhysicalResource.hpp) so derivation and
 		// creation can never disagree about what an unset usage mask means.
 		if (!usage) {
@@ -242,7 +247,25 @@ namespace brassica::graph {
 			return ResourceState{vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eAllCommands, acc};
 		}
 
-		// Read. Checked before Storage/Sampled deliberately: a shading-rate map is also built
+		// Read, as a real depth/stencil *attachment* (depth/stencil test against it, no write) --
+		// set via AccessHandle::AsAttachment(), see ResourceRealization::asAttachment's comment.
+		// Checked first among the Read branches for the same reason as the write-side Depth
+		// branch above: GBufferDepth's usage also carries eSampled (every current depth-format
+		// resource does, for the many plain-sampled readers), so without this explicit check an
+		// AsAttachment Read would silently fall through to the generic eSampled branch below and
+		// get the wrong layout (eShaderReadOnlyOptimal, invalid as a depth/stencil attachment
+		// during rendering) -- exactly the bug this mechanism exists to fix (WaterNode/
+		// LightningRenderNode depth-testing with nothing actually bound).
+		if (asAttachment && IsDepthFormat(format) && (usage & vk::ImageUsageFlagBits::eDepthStencilAttachment) &&
+		    domain == ExecutionDomain::Graphics) {
+			return ResourceState{
+				vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+				vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+				vk::AccessFlagBits2::eDepthStencilAttachmentRead,
+			};
+		}
+
+		// Checked before Storage/Sampled deliberately: a shading-rate map is also built
 		// with eStorage set (a compute shader writes it via imageStore), so the usage bit alone
 		// can't disambiguate -- AttachmentRoleFor already checks this bit first for exactly that
 		// reason (see its comment). Graphics-only for the same reason as the depth-write branch

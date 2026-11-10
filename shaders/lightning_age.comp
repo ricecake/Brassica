@@ -6,7 +6,7 @@
 // slot range, unconditional zero then conditional overwrite). Dispatched once per frame with
 // LIGHTNING_MAX_STRIKES threads, before the graphics phase, so shaders/lightning.task's
 // per-frame read of lifetime/polyline-plotting sees already-aged state.
-#define LIGHTS_BUFFER_WRITABLE
+#define GPU_LIGHTS_BUFFER_WRITABLE
 #define LIGHTNING_STRIKE_POOL_WRITABLE
 
 #include "bindless.glsl"
@@ -18,6 +18,7 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform LightningAgePushConstants {
 	float deltaTime;
+	uint  gpuLightsIndex;
 } push;
 
 void main() {
@@ -32,14 +33,12 @@ void main() {
 
 	uint lightSlot = LIGHTNING_LIGHT_SLOT_BASE + slot;
 	// Unconditional zero first -- a dead slot's light goes dark the instant lifetime expires,
-	// regardless of what the conditional branch below last wrote.
-	uLights[lightSlot].intensity = 0.0;
+	// regardless of what the conditional branch below last wrote. GpuLightsResetNode already
+	// zeroed this slot once earlier in the frame; this is about *this strike's* lifecycle, not
+	// the per-frame reset, so it stays unconditional here too (same as before the split).
+	uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].intensity = 0.0;
 
 	if (lifetime > 0.0) {
-		// Forces the clustered-lighting pass to consider this whole reserved range active
-		// regardless of the CPU's own uLightCount -- same reasoning as the firefly path.
-		atomicMax(uLightCount, LIGHTNING_LIGHT_SLOT_BASE + LIGHTNING_MAX_STRIKES);
-
 		// Flicker envelope -- same formula LightningManager::Update() already uses on the CPU
 		// path (src/lighting/LightningManager.cpp), moved here since this GPU path now owns the
 		// strike's whole lifecycle instead.
@@ -48,15 +47,16 @@ void main() {
 
 		vec3 midPoint = mix(uStrikes[slot].originAndSeed.xyz, uStrikes[slot].endPos.xyz, 0.5);
 
-		uLights[lightSlot].position = midPoint;
-		uLights[lightSlot].intensity = u_lightningFlashIntensity * 50.0 * flicker;
-		uLights[lightSlot].color = vec3(0.8, 0.85, 1.0);
-		uLights[lightSlot].type = LIGHT_TYPE_FLASH;
-		uLights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
-		uLights[lightSlot].innerCutoff = 0.0;
-		uLights[lightSlot].outerCutoff = 8.0;
-		uLights[lightSlot].flags = 0;
-		uLights[lightSlot]._pad0 = 0.0;
-		uLights[lightSlot]._pad1 = 0.0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].position = midPoint;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].intensity =
+			u_lightningFlashIntensity * 50.0 * flicker;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].color = vec3(0.8, 0.85, 1.0);
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].type = LIGHT_TYPE_FLASH;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].innerCutoff = 0.0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].outerCutoff = 8.0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].flags = 0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot]._pad0 = 0.0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot]._pad1 = 0.0;
 	}
 }

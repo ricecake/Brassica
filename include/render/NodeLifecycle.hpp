@@ -59,6 +59,11 @@ namespace brassica::render {
 		glm::vec3       moonDir{0.0f, -1.0f, 0.0f};
 		glm::vec3       moonRadiance{0.1f, 0.12f, 0.16f};
 		float           time{0.0f};
+		// Real per-frame delta time (Engine::DrawFrame's own clamped deltaTime local) -- most
+		// nodes assume a fixed 60fps step instead of reading this (see e.g. LightningAgeNode.hpp's
+		// comment), but TonemapComputeNode's auto-exposure EMA adaptation genuinely needs it to
+		// stay framerate-independent.
+		float           deltaTime{1.0f / 60.0f};
 		float           worldScale{1.0f};
 		float           multiScatScale{1.0f};
 		float           cloudShadowIntensity{0.5f};

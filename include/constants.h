@@ -87,7 +87,14 @@ namespace brassica {
 
 		namespace Class {
 			namespace Lighting {
-				constexpr std::uint32_t MaxLights = 1024;
+				// Split from the old single MaxLights=1024 (CPU-and-GPU-mixed buffer) -- CPU
+				// lights are host-authored and rare (sun, moon, whatever a game script adds);
+				// GPU lights are compute-claimed (fireflies) or compute-written (lightning), and
+				// GpuLightDynamicCapacity reserves the top of that range for lightning's own
+				// static per-strike slots (LIGHTNING_MAX_STRIKES=32, shaders/lighting.glsl).
+				constexpr std::uint32_t MaxCpuLights = 64;
+				constexpr std::uint32_t MaxGpuLights = 512;
+				constexpr std::uint32_t GpuLightDynamicCapacity = 480;
 				constexpr std::uint32_t TotalClusters = 16 * 9 * 24 + 1; // 3457 clusters
 
 				// Sun Defaults

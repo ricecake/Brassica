@@ -587,7 +587,8 @@ namespace brassica::graph {
 																  effectiveForLayoutCheck.usageMask
 																	  ? vk::ImageUsageFlags(effectiveForLayoutCheck.usageMask)
 																	  : vk::ImageUsageFlags{},
-																  static_cast<vk::Format>(effectiveForLayoutCheck.formatCode)
+																  static_cast<vk::Format>(effectiveForLayoutCheck.formatCode),
+																  r.asAttachment
 						)
 																  .layout;
 
@@ -986,7 +987,12 @@ namespace brassica::graph {
 												   static_cast<vk::Format>(desc.formatCode)
 				)
 												   .layout;
-				WriteSampledImageDescriptor(index, tex.GetView(), layout, sampledKind);
+				// GetSampledView(), not GetView(): for a combined depth-stencil format, the real
+				// view spans both aspects (legal for an attachment, illegal for a sampled
+				// descriptor) -- GetSampledView() returns the depth-only view PhysicalTexture::
+				// CreateView built specifically for this case, or the one real view for every
+				// other format.
+				WriteSampledImageDescriptor(index, tex.GetSampledView(), layout, sampledKind);
 			}
 			if (usage & vk::ImageUsageFlagBits::eStorage) {
 				if (tex.HasPerMipStorage()) {

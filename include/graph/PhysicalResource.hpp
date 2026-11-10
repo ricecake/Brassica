@@ -168,6 +168,7 @@ namespace brassica::graph {
 			m_allocator(o.m_allocator),
 			m_image(o.m_image),
 			m_view(o.m_view),
+			m_sampledView(o.m_sampledView),
 			m_allocation(o.m_allocation),
 			m_desc(o.m_desc),
 			m_ownership(o.m_ownership),
@@ -181,6 +182,7 @@ namespace brassica::graph {
 			m_mipStorageIndices(std::move(o.m_mipStorageIndices)) {
 			o.m_image = nullptr;
 			o.m_view = nullptr;
+			o.m_sampledView = nullptr;
 			o.m_allocation = nullptr;
 			o.m_currentLayout = vk::ImageLayout::eUndefined;
 			o.m_lastStage = {};
@@ -199,6 +201,7 @@ namespace brassica::graph {
 				m_allocator = o.m_allocator;
 				m_image = o.m_image;
 				m_view = o.m_view;
+				m_sampledView = o.m_sampledView;
 				m_allocation = o.m_allocation;
 				m_desc = o.m_desc;
 				m_ownership = o.m_ownership;
@@ -229,6 +232,14 @@ namespace brassica::graph {
 		[[nodiscard]] vk::Image GetImage() const { return m_image; }
 
 		[[nodiscard]] vk::ImageView GetView() const { return m_view; }
+
+		// A sampled descriptor must have exactly one aspect (VUID-VkDescriptorImageInfo-imageView
+		// -01976-adjacent) -- for a combined depth-stencil format, m_view (built with both
+		// aspects, for the attachment-binding path) is illegal there. CreateView builds a
+		// depth-only m_sampledView specifically for this case; every other format's m_sampledView
+		// stays unset and this just falls back to the one real view, so a non-depth-stencil
+		// texture pays nothing extra.
+		[[nodiscard]] vk::ImageView GetSampledView() const { return m_sampledView ? m_sampledView : m_view; }
 
 		[[nodiscard]] const ResourceDesc& GetDesc() const { return m_desc; }
 
@@ -375,11 +386,28 @@ namespace brassica::graph {
 			};
 			m_view = m_device.createImageView(viewInfo);
 
+			const auto usage = m_desc.usageMask ? vk::ImageUsageFlags(m_desc.usageMask) : vk::ImageUsageFlags{};
+
+			// A sampled descriptor must have exactly one aspect -- m_view above spans both
+			// depth and stencil for a combined format, which is only legal for the
+			// attachment-binding path (DynamicRenderingWrapper::Begin). GetSampledView() is what
+			// every bindless sampled-descriptor registration actually reads (PhysicalRegistry.hpp).
+			if (HasStencilComponent(format) && (usage & vk::ImageUsageFlagBits::eSampled)) {
+				vk::ImageViewCreateInfo depthOnlyViewInfo{
+					{},
+					m_image,
+					viewType,
+					format,
+					vk::ComponentMapping{},
+					vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, mips, 0, layers),
+				};
+				m_sampledView = m_device.createImageView(depthOnlyViewInfo);
+			}
+
 			// A storage-image descriptor requires levelCount == 1 (VUID-VkWriteDescriptorSet-
 			// descriptorType-04152) -- m_view above, spanning every mip, is only legal for the
 			// *sampled* descriptor. A resource with real per-mip storage usage (the terrain
 			// min/max chain's SPD writes) additionally needs one single-mip view per level.
-			const auto usage = m_desc.usageMask ? vk::ImageUsageFlags(m_desc.usageMask) : vk::ImageUsageFlags{};
 			if (mips > 1 && (usage & vk::ImageUsageFlagBits::eStorage)) {
 				m_mipViews.reserve(mips);
 				for (std::uint32_t mip = 0; mip < mips; ++mip) {
@@ -404,6 +432,10 @@ namespace brassica::graph {
 				m_device.destroyImageView(m_view);
 				m_view = nullptr;
 			}
+			if (m_sampledView) {
+				m_device.destroyImageView(m_sampledView);
+				m_sampledView = nullptr;
+			}
 			for (vk::ImageView& mipView : m_mipViews) {
 				if (mipView) {
 					m_device.destroyImageView(mipView);
@@ -426,6 +458,10 @@ namespace brassica::graph {
 		VmaAllocator  m_allocator = nullptr;
 		vk::Image     m_image{};
 		vk::ImageView m_view{};
+		// Only non-null for a combined depth-stencil format with eSampled usage -- see
+		// GetSampledView()'s comment. Built by CreateView, destroyed by Cleanup, carried (not
+		// re-derived) through move -- same treatment as m_view.
+		vk::ImageView m_sampledView{};
 		VmaAllocation m_allocation = nullptr;
 		ResourceDesc  m_desc{};
 		Ownership     m_ownership = Ownership::Imported;
