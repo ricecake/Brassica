@@ -59,12 +59,21 @@ void main() {
 			float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
 			float chunkSize = baseChunkSize * getLODScale(float(lod));
 
-			vec2 chunkMinXZ = vec2(float(entry.coordX) * chunkSize, float(entry.coordZ) * chunkSize);
-			vec2 maxRel = max(abs(chunkMinXZ - uCameraPosition.xz), abs(chunkMinXZ + vec2(chunkSize) - uCameraPosition.xz));
-			float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
+			vec3 camPos3D, camUp, camEast, camNorth;
+			cameraTopocentricBasis(uCameraPosition.xyz, camPos3D, camUp, camEast, camNorth);
 
-			vec3 relMinB = vec3(chunkMinXZ.x - uCameraPosition.x, -2000.0 - uCameraPosition.y - maxDropOff, chunkMinXZ.y - uCameraPosition.z);
-			vec3 relMaxB = vec3(chunkMinXZ.x + chunkSize - uCameraPosition.x, 4000.0 - uCameraPosition.y, chunkMinXZ.y + chunkSize - uCameraPosition.z);
+			vec2 chunkMinXZ = vec2(float(entry.coordX) * chunkSize, float(entry.coordZ) * chunkSize);
+			vec3 p0 = spherifiedChunkPos(chunkMinXZ, -2000.0);
+			vec3 p1 = spherifiedChunkPos(chunkMinXZ + vec2(chunkSize), 4000.0);
+
+			vec3 d0 = p0 - camPos3D;
+			vec3 d1 = p1 - camPos3D;
+
+			vec3 r0 = vec3(dot(d0, camEast), dot(d0, camUp), -dot(d0, camNorth));
+			vec3 r1 = vec3(dot(d1, camEast), dot(d1, camUp), -dot(d1, camNorth));
+
+			vec3 relMinB = min(r0, r1);
+			vec3 relMaxB = max(r0, r1);
 
 			mat4 viewRel = mat4(mat3(uViewMatrix));
 			mat4 viewProjRel = uProjMatrix * viewRel;

@@ -76,23 +76,25 @@ void processLocalVertex(uint localVIdx, uint globalVertIdx) {
 	float ridgeMap = v.material.y;
 	float substrate = v.material.z;
 
-	// Calculate spherical planetary curvature Y displacement in mesh shader
-	vec2 relFlatXZ = worldPos.xz - uCameraPosition.xz;
-	float dropOff = dot(relFlatXZ, relFlatXZ) / (2.0 * FAKE_PLANET_RADIUS);
+	vec3 camPos3D, camUp, camEast, camNorth;
+	cameraTopocentricBasis(uCameraPosition.xyz, camPos3D, camUp, camEast, camNorth);
 
-	vec3 curvedRelPos = vec3(relFlatXZ.x, (height - dropOff) - uCameraPosition.y, relFlatXZ.y);
-	vec3 viewPos = mat3(uViewMatrix) * curvedRelPos;
+	vec3 relPos, relNorm;
+	transformToCameraTopocentric(worldPos, normal, camPos3D, camUp, camEast, camNorth, relPos, relNorm);
+	relNorm = normalize(relNorm);
+
+	vec3 viewPos = mat3(uViewMatrix) * relPos;
 	gl_MeshVerticesEXT[localVIdx].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
 
-	outPosition[localVIdx] = curvedRelPos;
-	outNormal[localVIdx] = normal;
+	outPosition[localVIdx] = relPos;
+	outNormal[localVIdx] = relNorm;
 
-	vec3 baseColor = getTerrainMapColor(height, normal);
+	vec3 baseColor = getTerrainMapColor(height, relNorm);
 	float roughness = 0.75;
 	float metallic = 0.0;
 	float glint = 0.0;
 
-	float slopeFactor = smoothstep(0.80, 0.30, normal.y);
+	float slopeFactor = smoothstep(0.80, 0.30, relNorm.y);
 	float rockWeight = max(slopeFactor * 0.85, smoothstep(0.2, 0.8, ridgeMap * 0.5));
 	vec3 regionalRockColor = getGeologicalRockColor(biome);
 	if (rockWeight > 0.0) {
@@ -101,10 +103,10 @@ void processLocalVertex(uint localVIdx, uint globalVertIdx) {
 	}
 
 	float sandWeight = 0.0;
-	if (normal.y > 0.4) {
+	if (relNorm.y > 0.4) {
 		float distToWater = abs(height - localWaterLevel);
 		if (distToWater < 6.0) {
-			float shoreFactor = (1.0 - smoothstep(0.0, 6.0, distToWater)) * smoothstep(0.4, 0.8, normal.y);
+			float shoreFactor = (1.0 - smoothstep(0.0, 6.0, distToWater)) * smoothstep(0.4, 0.8, relNorm.y);
 			sandWeight = shoreFactor * 0.85;
 			baseColor = mix(baseColor, vec3(0.82, 0.75, 0.55), sandWeight);
 		}

@@ -46,7 +46,6 @@
 #include "passes/terrain/nodes/TerrainChunkManagerNode.hpp"
 #include "passes/terrain/nodes/TerrainGenNode.hpp"
 #include "passes/terrain/nodes/TerrainMinMaxDownsampleNode.hpp"
-#include "passes/terrain/nodes/TerrainNode.hpp"
 #include "passes/terrain/nodes/TerrainReadbackNode.hpp"
 #include "passes/terrain/nodes/TerrainShadowNode.hpp"
 #include "passes/postprocess/nodes/TonemapNode.hpp"
