@@ -27,6 +27,9 @@ namespace brassica {
 		std::uint32_t hdrColorIndex{0};
 		std::uint32_t cloudColorIndex{0};
 		std::uint32_t cloudTransmittanceIndex{0};
+		std::uint32_t gPositionIndex{0};
+		std::uint32_t gAlbedoIndex{0};
+		std::uint32_t cloudMomentsIndex{0};
 	};
 
 	// Blends CloudTemporalNode's (Stage B) accumulated output into HdrColor -- not
@@ -77,6 +80,9 @@ namespace brassica {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<CloudAccumulatedColor>();
 			r.Read<CloudAccumulatedTransmittance>();
+			r.Read<CloudMoments>();
+			r.Read<GBufferPosition>();
+			r.Read<GBufferAlbedo>();
 			r.Modify<HdrColor>();
 			r.After<CirrusNode>();
 		}
@@ -85,6 +91,9 @@ namespace brassica {
 			push.hdrColorIndex = ctx.Index<HdrColor>();
 			push.cloudColorIndex = ctx.Index<CloudAccumulatedColor>();
 			push.cloudTransmittanceIndex = ctx.Index<CloudAccumulatedTransmittance>();
+			push.gPositionIndex = ctx.Index<GBufferPosition>();
+			push.gAlbedoIndex = ctx.Index<GBufferAlbedo>();
+			push.cloudMomentsIndex = ctx.Index<CloudMoments>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

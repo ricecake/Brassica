@@ -29,7 +29,6 @@ namespace brassica {
 		std::uint32_t skyViewIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t cloudShadowIndex{0};
-		std::uint32_t clipmapIndex{0};
 		std::uint32_t volumeIndex{0}; // sampled bindless index for CloudDetailVolume
 		std::uint32_t colorStorageIdx{0};
 		std::uint32_t transmittanceStorageIdx{0};
@@ -87,7 +86,6 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
-			r.Read<TerrainClipmapTexture>();
 			r.Create<CloudColor>();
 			r.Create<CloudTransmittance>();
 			r.Create<CloudDepth>();
@@ -102,7 +100,6 @@ namespace brassica {
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
-			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.colorStorageIdx = ctx.StorageIndex<CloudColor>();
 			push.transmittanceStorageIdx = ctx.StorageIndex<CloudTransmittance>();
 			push.depthStorageIdx = ctx.StorageIndex<CloudDepth>();

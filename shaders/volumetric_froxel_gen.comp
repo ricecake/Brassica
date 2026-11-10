@@ -67,7 +67,6 @@ void main() {
 	uint ext1  = unpackLow16(push.indices0.z);
 	uint ext2  = unpackHigh16(push.indices0.z);
 	uint skyViewIndex    = unpackHigh16(push.indices0.w);
-	uint clipmapIndex      = unpackLow16(push.indices1.x);
 	uint minMaxIndex       = unpackHigh16(push.indices1.x);
 	uint cloudShadowIndex  = unpackLow16(push.indices1.y);
 	uint weatherBiomeIndex = unpackHigh16(push.indices1.y);
@@ -213,7 +212,7 @@ void main() {
 			float cloudTransmittance = 1.0;
 
 			if (cloudShadowIndex > 0u && cloudShadowIndex != 0xFFFFu && push.sunDir.y > 0.001) {
-				cloudShadowData = sampleCloudShadow(cloudShadowIndex, clipmapIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
+				cloudShadowData = sampleCloudShadow(cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
 				// Emphasize cloud shadow contrast
 				cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.8);
 				shadowTerm *= cloudTransmittance;

@@ -28,18 +28,17 @@ namespace brassica {
 		alignas(16) glm::uvec4 volumeIndices{0};
 		alignas(16) glm::vec4 cameraPos{0.0f};
 		std::uint32_t weatherBiomeIndex{0};
-		std::uint32_t clipmapIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t shadowMapStorageIdx{0};
 	};
 
-	// Evaluates top-down atmospheric and cloud extinction across 5 altitude layers:
-	// Layer 0: Top of cloud layer (20,000m)
-	// Layer 1: Middle of cloud layer (12,500m)
-	// Layer 2: Bottom of cloud layer (5,000m)
-	// Layer 3: Middle of sub-cloud volume (2,500m)
-	// Layer 4: Ground level / totals (0m)
-	// Stores max extinction, average extinction, optical depth, and transmittance.
+	// Evaluates top-down atmospheric and cloud extinction, storing 5 layers per texel along the
+	// sun ray from where it enters the cloud shell down to the real terrain/floor intersection
+	// (found by traceTerrainOcclusion, not a fixed altitude):
+	// Layer 0: Metadata (cloud entry height, terrain intersection height)
+	// Layer 1-3: 25%/50%/75% of the way from cloud entry to the terrain intersection
+	// Layer 4: The terrain intersection itself (totals for the full ray)
+	// Each layer stores max extinction, average extinction, optical depth, and transmittance.
 	struct CloudShadowGenNode: render::NodeRegistrar<CloudShadowGenNode> {
 		render::PipelineLibrary*    pipelineLibrary = nullptr;
 		ComputeShader               genShader;
@@ -75,14 +74,12 @@ namespace brassica {
 			r.Create<CloudShadowMap>();
 			r.Read<CloudDetailVolume>();
 			r.Read<TerrainWeatherBiomeTexture>();
-			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			push.volumeIndices.x = ctx.Index<CloudDetailVolume>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
-			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.shadowMapStorageIdx = ctx.StorageIndex<CloudShadowMap>();
 			push.cameraPos = glm::vec4(cameraPos, 320000.0f);

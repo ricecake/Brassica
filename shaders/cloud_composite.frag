@@ -14,11 +14,29 @@ layout(push_constant) uniform CloudCompositePushConstants {
 	uint hdrColorIndex;
 	uint cloudColorIndex;
 	uint cloudTransmittanceIndex;
+	uint gPositionIndex;
+	uint gAlbedoIndex;
+	uint cloudMomentsIndex;
 } push;
 
 void main() {
 	vec3 currentRadiance = SAMPLE_NEAREST(push.hdrColorIndex, inUV).rgb;
 	vec3 cloudRgb = SAMPLE_NEAREST(push.cloudColorIndex, inUV).rgb;
 	vec3 cloudTransmittance = SAMPLE_NEAREST(push.cloudTransmittanceIndex, inUV).rgb;
+
+	// Full-resolution safety net: cloud_temporal.comp operates on a coarse, 4x4-block-granularity
+	// grid, so a thin or dithered foreground object's exact silhouette pixel can still end up
+	// reusing a neighboring sample's accumulated cloud. CloudMoments.w holds the accumulated
+	// cloud's own representative depth (1e9 if there's no visible cloud there) -- if this exact
+	// pixel has a real surface strictly nearer than that, the surface occludes it and the cloud
+	// must not show here, regardless of what the coarser upstream grid decided.
+	vec4  albedo = SAMPLE_NEAREST(push.gAlbedoIndex, inUV);
+	vec3  relPos = SAMPLE_NEAREST(push.gPositionIndex, inUV).rgb;
+	float cloudDepth = SAMPLE_NEAREST(push.cloudMomentsIndex, inUV).w;
+	if (albedo.a >= 0.01 && length(relPos) < cloudDepth) {
+		cloudTransmittance = vec3(1.0);
+		cloudRgb = vec3(0.0);
+	}
+
 	outColor = vec4(currentRadiance * cloudTransmittance + cloudRgb, 1.0);
 }

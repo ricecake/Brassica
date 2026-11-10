@@ -82,6 +82,17 @@ void main() {
 	float pNoiseY = dot_noise_fbm(vec3(pos.x + 500.0, pos.y - 500.0, 0.0) * 0.004 + vec3(stormOffset, 0.0), 2, 0.0);
 	vec2 pressureDeflection = vec2(pNoiseX * 2.0 - 1.0, pNoiseY * 2.0 - 1.0);
 
+	// A third sample at the same storm-scale frequency/drift as the two above, but a different
+	// spatial offset so it isn't correlated with wind direction -- used below as a large-scale,
+	// slowly-moving bias on cloud coverage (low pressure -> more coverage, high pressure ->
+	// less), so whole regions can swing toward genuinely clear or overcast instead of coverage
+	// only ever varying pixel-to-pixel within a fairly narrow band. dot_noise_fbm's output is
+	// already roughly zero-mean (unlike pNoiseX/Y above, this is used directly, not remapped as
+	// if it were [0,1]). Visual coverage derivation only -- never read back into the CA's own
+	// physical state (airMoisture/rain/etc.), so it has no knock-on effect on biomes or
+	// vegetation.
+	float pressureAnomaly = dot_noise_fbm(vec3(pos.x + 1000.0, pos.y + 1000.0, 0.0) * 0.004 + vec3(stormOffset, 0.0), 2, 0.0);
+
 	// Blend prevailing wind with the pressure systems (adjust 0.6 / 0.4 mix to tune the "swirliness")
 	vec2 dynamicWind = prevailingWind * 0.6 + pressureDeflection * 0.4;
 
@@ -261,7 +272,16 @@ float rain = 0.0;
 
 	// 1. Calculate the stable macro-climate coverage probability
 	float frontCoverageBoost = smoothstep(1.0, 3.5, frontalLift) * 0.4;
-	float baseCoverage = clamp(next1.airMoisture * 0.8 + rain * 2.0 + frontCoverageBoost, 0.0, 1.0);
+	// pressureAnomaly (computed above, alongside the wind deflection noise) biases this
+	// regionally and over time -- without it, baseCoverage is driven almost entirely by
+	// airMoisture/rain, which rarely swing far enough to produce a genuinely clear or overcast
+	// sky; this is what lets a passing high- or low-pressure system actually do that.
+	const float kPressureCoverageInfluence = 0.5;
+	float baseCoverage = clamp(
+		next1.airMoisture * 0.8 + rain * 2.0 + frontCoverageBoost + pressureAnomaly * kPressureCoverageInfluence,
+		0.0,
+		1.0
+	);
 	// Boost macro-climate cloud coverage heavily along active weather fronts
 
 	// 2. Flowing coordinates, using the same prevailingWind computed above for the CA's own
@@ -281,7 +301,15 @@ float rain = 0.0;
 	// Thresholding noise against a coverage-dependent cutoff with a soft margin graduates the
 	// edge instead; the detail noise perturbs the cutoff itself for a wispier, less uniform
 	// boundary rather than a perfectly smooth one.
-	const float kCoverageSoftness = 1.0;
+	//
+	// kCoverageSoftness was 1.0 -- close to double texturedNoise's actual standard deviation
+	// (measured ~0.6 via a CPU replica of this exact fbm, for both cloudNoise+detailNoise*0.3's
+	// real octave/domain-warp structure, not guessed). At that width the smoothstep's input
+	// range nearly spans the noise's whole plausible range for almost any baseCoverage, so
+	// cloudCoverage almost never actually saturates to 0 or 1 -- it just graduates, which read as
+	// a sky that's always "partly cloudy" and never genuinely clear or overcast. Narrowed to
+	// roughly that measured sigma so the noise's own spread can carry a cell past either edge.
+	const float kCoverageSoftness = 0.6;
 	float coverageThreshold = mix(1.0, -1.0, baseCoverage);
 	float texturedNoise = cloudNoise + detailNoise * 0.3;
 	float cloudCoverage = smoothstep(

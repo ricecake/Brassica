@@ -151,14 +151,87 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 	float curDepth = SAMPLE_NEAREST(push.depthIndex, freshUV).r;
 	vec2  curVelocity = SAMPLE_NEAREST(push.velocityIndex, freshUV).rg;
 
+	// cloud_raymarch.comp writes this negative sentinel when a real surface blocks the entire
+	// cloud shell along this ray (foliage/decor/terrain below the cloud base) -- distinct from
+	// the ordinary ">1e8, no cloud found" sky default. See its own comment for why conflating
+	// the two caused jagged, cloud-shape-independent artifacts at foreground silhouettes.
+	bool freshOccluded = curDepth < 0.0;
+
+	// 3b. Weighted 3x3-of-blocks estimate of this frame's color/transmittance (also reused below
+	// as the variance-clip statistics -- one loop, not two), skipping occluded neighbors
+	// entirely. A non-foreground (sky) thread has no bilateral search of its own (FIX 1 below
+	// only runs for foreground), so its single nearest fresh sample is just whatever this
+	// pixel's fixed 4x4 stagger offset happens to land on -- which, right at a foreground
+	// silhouette, can be a neighboring block's confirmed-occluded sample that has nothing to do
+	// with this pixel's own (actually open) sky. Averaging across the surrounding fresh grid
+	// instead replaces the old single-nearest-sample "4x4 blocks" look with something closer to
+	// a true bilinear reconstruction. Foreground threads keep their own bilateral-search-matched
+	// sample untouched below -- this substitution is specifically for the sky case.
+	vec3  m1 = vec3(0.0);
+	vec3  m2 = vec3(0.0);
+	vec3  t_m1 = vec3(0.0);
+	vec3  t_m2 = vec3(0.0);
+	float weightSum = 0.0;
+	float weights[3] = float[](0.25, 0.5, 0.25);
+
+	for (int dy = -1; dy <= 1; dy++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
+			ivec2 neighborFreshCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
+			vec2 sampleUV = (vec2(neighborFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
+
+			float neighborDepth = SAMPLE_NEAREST(push.depthIndex, sampleUV).r;
+			if (neighborDepth < 0.0) {
+				continue; // confirmed occluded -- not representative of this pixel's own sky
+			}
+
+			vec3 c = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
+			vec3 t = SAMPLE_NEAREST(push.transmittanceIndex, sampleUV).rgb;
+			vec3 ycocg = RGBToYCoCg(c);
+
+			float w = weights[abs(dx)] * weights[abs(dy)];
+			m1 += ycocg * w;
+			m2 += ycocg * ycocg * w;
+			t_m1 += t * w;
+			t_m2 += t * t * w;
+			weightSum += w;
+		}
+	}
+
+	// All 9 neighbors occluded (e.g. deep under a dense canopy) -- fall back to this thread's own
+	// raw fresh sample (already fetched above) as a degenerate single-sample "average" rather
+	// than dividing by zero.
+	if (weightSum > 0.0001) {
+		m1 /= weightSum;
+		m2 /= weightSum;
+		t_m1 /= weightSum;
+		t_m2 /= weightSum;
+	} else {
+		m1 = RGBToYCoCg(curColor);
+		m2 = m1 * m1;
+		t_m1 = curTransmittance;
+		t_m2 = t_m1 * t_m1;
+	}
+
+	if (!isForeground) {
+		curColor = YCoCgToRGB(m1);
+		curTransmittance = t_m1;
+	}
+
 	// 4. Dilated Parallax Search
 	// ONLY used to find a motion vector for the sky so it smoothly follows the cloud edge.
 	// We NEVER overwrite curColor or curTransmittance here!
-	float reprojDepth = curDepth;
+	//
+	// freshOccluded is normalized to the ordinary sky depth here so it can never leak into the
+	// reprojection math below as if -1 were a real world-space distance -- it falls through to
+	// the exact same "entire neighborhood is sky" handling (FIX-2-adjacent borrow, below) a
+	// genuine sky sample would get, which is the correct fallback: there's no cloud motion to
+	// find for a confirmed-occluded sample either way.
+	float reprojDepth = freshOccluded ? 1e9 : curDepth;
 	vec2 reprojVelocity = curVelocity;
 	vec2 reprojFreshUV = freshUV;
 
-	if (curDepth > 1e8) {
+	if (reprojDepth > 1e8) {
 		float closestCloudDepth = 1e9;
 		for (int dy = -1; dy <= 1; dy++) {
 			for (int dx = -1; dx <= 1; dx++) {
@@ -205,9 +278,12 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 	}
 
 	// FIX 2: Treat empty sky as VALID history so fuzzy edges can accumulate!
-	// ONLY invalidate if a tree is in the way or we went off screen.
+	// ONLY invalidate if a tree is in the way or we went off screen. Also invalidate on
+	// freshOccluded: a foreground thread whose bilateral-matched fresh sample turned out to be
+	// surface-occluded has a definite answer (no cloud, full stop) -- same "just use this
+	// frame's value directly" treatment as the disocclusion case, not blended with history.
 	bool validHistory = inBounds;
-	if (isForeground && curDepth > 1e8) {
+	if (isForeground && (curDepth > 1e8 || freshOccluded)) {
 		validHistory = false;
 	}
 
@@ -236,36 +312,9 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 	float historyLength = min(8.0, histMoments.z + 1.0);
 	float alpha = 1.0 / historyLength;
 
-	vec3 m1 = vec3(0.0);
-	vec3 m2 = vec3(0.0);
-	vec3 t_m1 = vec3(0.0);
-	vec3 t_m2 = vec3(0.0);
-	float weightSum = 0.0;
-	float weights[3] = float[](0.25, 0.5, 0.25);
-
-	for (int dy = -1; dy <= 1; dy++) {
-		for (int dx = -1; dx <= 1; dx++) {
-			ivec2 neighborBlock = blockOrigin + ivec2(dx * 4, dy * 4);
-			ivec2 neighborFreshCoord = clamp(neighborBlock + offset, ivec2(0), ivec2(push.outputWidth, push.outputHeight) - 1);
-			vec2 sampleUV = (vec2(neighborFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
-
-			vec3 c = SAMPLE_NEAREST(push.colorIndex, sampleUV).rgb;
-			vec3 t = SAMPLE_NEAREST(push.transmittanceIndex, sampleUV).rgb;
-			vec3 ycocg = RGBToYCoCg(c);
-
-			float w = weights[abs(dx)] * weights[abs(dy)];
-			m1 += ycocg * w;
-			m2 += ycocg * ycocg * w;
-			t_m1 += t * w;
-			t_m2 += t * t * w;
-			weightSum += w;
-		}
-	}
-	m1 /= weightSum;
-	m2 /= weightSum;
-	t_m1 /= weightSum;
-	t_m2 /= weightSum;
-
+	// m1/m2/t_m1/t_m2 (the occlusion-excluding weighted stats) were already computed in step 3b
+	// above, reused here unchanged -- a solid occluder's confirmed "no cloud" samples shouldn't
+	// skew the variance-clip bounds either, same reasoning as the sky substitution.
 	vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
 	vec3 t_sigma = sqrt(max(vec3(0.0), t_m2 - t_m1 * t_m1));
 
