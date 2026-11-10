@@ -76,8 +76,14 @@ void processLocalVertex(uint localVIdx, uint globalVertIdx) {
 	float ridgeMap = v.material.y;
 	float substrate = v.material.z;
 
-	vec3 camPos3D, camUp, camEast, camNorth;
-	cameraTopocentricBasis(uCameraPosition.xyz, camPos3D, camUp, camEast, camNorth);
+	vec3 camSphereDir = worldXZToSphereDir(uCameraPosition.xz);
+	uint camFace;
+	vec2 camUV;
+	sphereNormalToCubeFace(camSphereDir, camFace, camUV);
+	vec3 camUp = cubeFaceToSphereNormal(camFace, camUV);
+	vec3 camPos3D = camUp * (FAKE_PLANET_RADIUS + uCameraPosition.y);
+	vec3 camEast, camNorth;
+	getSphereTopocentricFrame(camUp, camUp, camEast, camNorth);
 
 	vec3 relPos, relNorm;
 	transformToCameraTopocentric(worldPos, normal, camPos3D, camUp, camEast, camNorth, relPos, relNorm);

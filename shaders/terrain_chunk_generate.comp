@@ -105,7 +105,9 @@ void main() {
 	// Compute real 3D spherical position based on spherified cube
 	vec3 sphereDir = worldXZToSphereDir(worldXZ);
 	uint face;
-	vec3 sphereNorm = projectToSpherifiedCube(sphereDir, face);
+	vec2 faceUV;
+	sphereNormalToCubeFace(sphereDir, face, faceUV);
+	vec3 sphereNorm = cubeFaceToSphereNormal(face, faceUV);
 	vec3 worldPos = sphereNorm * (FAKE_PLANET_RADIUS + h);
 
 	// Transform local terrain normal into 3D world normal on the sphere

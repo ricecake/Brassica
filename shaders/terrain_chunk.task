@@ -59,12 +59,29 @@ void main() {
 			float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
 			float chunkSize = baseChunkSize * getLODScale(float(lod));
 
-			vec3 camPos3D, camUp, camEast, camNorth;
-			cameraTopocentricBasis(uCameraPosition.xyz, camPos3D, camUp, camEast, camNorth);
+			vec3 camSphereDir = worldXZToSphereDir(uCameraPosition.xz);
+			uint camFace;
+			vec2 camUV;
+			sphereNormalToCubeFace(camSphereDir, camFace, camUV);
+			vec3 camUp = cubeFaceToSphereNormal(camFace, camUV);
+			vec3 camPos3D = camUp * (FAKE_PLANET_RADIUS + uCameraPosition.y);
+			vec3 camEast, camNorth;
+			getSphereTopocentricFrame(camUp, camUp, camEast, camNorth);
 
 			vec2 chunkMinXZ = vec2(float(entry.coordX) * chunkSize, float(entry.coordZ) * chunkSize);
-			vec3 p0 = spherifiedChunkPos(chunkMinXZ, -2000.0);
-			vec3 p1 = spherifiedChunkPos(chunkMinXZ + vec2(chunkSize), 4000.0);
+			vec2 c0 = chunkMinXZ;
+			vec2 c1 = chunkMinXZ + vec2(chunkSize);
+
+			vec3 d0_dir = worldXZToSphereDir(c0);
+			vec3 d1_dir = worldXZToSphereDir(c1);
+
+			uint f0, f1;
+			vec2 uv0, uv1;
+			sphereNormalToCubeFace(d0_dir, f0, uv0);
+			sphereNormalToCubeFace(d1_dir, f1, uv1);
+
+			vec3 p0 = spherifiedChunkVertexPos(f0, uv0, -2000.0);
+			vec3 p1 = spherifiedChunkVertexPos(f1, uv1, 4000.0);
 
 			vec3 d0 = p0 - camPos3D;
 			vec3 d1 = p1 - camPos3D;
