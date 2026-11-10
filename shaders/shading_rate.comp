@@ -1,0 +1,96 @@
+#version 460
+#include "bindless.glsl"
+#include "helpers/hash.glsl"
+#include "helpers/distribution.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform ShadingRatePushConstants {
+	uint prevShadingRateIndex; // bindless STORAGE index, History<ShadingRateMap>
+	uint outShadingRateIndex;  // bindless STORAGE index, ShadingRateMap (this frame)
+	uint prevHiZIndex;        // bindless SAMPLED index, History<HiZTexture>
+	uint frameCounter;
+	uint tileWidth;
+	uint tileHeight;
+} push;
+
+// VK_KHR_fragment_shading_rate attachment texel encoding: value = (log2(width) << 2) | log2(height)
+// -- see the Vulkan spec's "Fragment Shading Rate Attachment" section. Only the three rates this
+// node ever produces are named; a device reporting a non-power-of-two-friendly min/max texel size
+// would need a richer rate set, out of scope here (Engine.cpp logs a warning if the fixed 16x16
+// tile size falls outside the device's reported range).
+const uint RATE_1X1 = 0u;  // (0 << 2) | 0
+const uint RATE_2X2 = 5u;  // (1 << 2) | 1
+const uint RATE_4X4 = 10u; // (2 << 2) | 2
+
+uint CoarserRate(uint rate) {
+	if (rate == RATE_1X1) {
+		return RATE_2X2;
+	}
+	return RATE_4X4;
+}
+
+uint FinerRate(uint rate) {
+	if (rate == RATE_4X4) {
+		return RATE_2X2;
+	}
+	return RATE_1X1;
+}
+
+void main() {
+	ivec2 tileCoord = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 outSize = imageSize(uImagesR8UI[nonuniformEXT(push.outShadingRateIndex)]);
+	if (tileCoord.x >= outSize.x || tileCoord.y >= outSize.y) {
+		return;
+	}
+
+	uint prevRate = imageLoad(uImagesR8UI[nonuniformEXT(push.prevShadingRateIndex)], tileCoord).r;
+
+	// Bayer-dithered 1/16 "measurement" schedule: the 8x8 Bayer matrix's 64 distinct values group
+	// into 16 phases of 4 tiles each (spatially well-dispersed by construction, the same guarantee
+	// the matrix already provides at any other threshold), and this frame's phase is picked by
+	// frameCounter -- every tile is forced to full rate exactly once every 16 frames, which is
+	// what guarantees a tile can never get stuck coarse forever (see below).
+	uint ditherIndex = uint(getBayer8x8Dither(tileCoord) * 64.0 + 0.5);
+	uint phase = ditherIndex / 4u;
+	bool isMeasurementTile = (phase == (push.frameCounter % 16u));
+
+	uint newRate;
+	if (isMeasurementTile) {
+		newRate = RATE_1X1;
+	} else if (prevRate == RATE_1X1) {
+		// A genuine full-rate measurement is available from last frame (either this was last
+		// frame's measurement tile, or it already relaxed down to 1x1 below) -- the only point at
+		// which coarsening is legal, and only ever based on a true full-rate sample, never on data
+		// gathered while already coarse. This is what prevents the feedback loop: a tile that's
+		// currently coarse can't see fine detail, so it must never be the one deciding to stay
+		// coarse.
+		//
+		// Heuristic: HiZTexture's (min, max) depth spread across this tile's footprint, sampled
+		// at the mip whose texel matches the tile size exactly (log2(tileWidth), tileWidth/Height
+		// are always equal and a power of two -- constants::Class::ShadingRate). A large spread
+		// means a depth discontinuity (e.g. a silhouette edge) crosses this tile, where per-pixel
+		// shading can legitimately differ a lot -- keep it fine. A small spread means a flat,
+		// coherent surface -- safe to coarsen. This is deliberately simpler than the napkin
+		// reference heuristic it's based on (which also taps GBufferNormal): GBufferNormal has no
+		// History-lifetime double-buffer today, so "last frame's normals" isn't a resource this
+		// node can safely read -- a reasonable starting point, not a hard requirement, easy to
+		// extend once/if that changes.
+		vec2  tileUV = (vec2(tileCoord) + 0.5) / vec2(outSize);
+		float hizMip = log2(float(push.tileWidth));
+		vec2  minMaxDepth = textureLod(
+			sampler2D(uTextures2D[nonuniformEXT(push.prevHiZIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+			tileUV,
+			hizMip
+		).rg;
+		float depthSpread = minMaxDepth.g - minMaxDepth.r;
+		bool  hasFineDetail = depthSpread > 0.01;
+		newRate = hasFineDetail ? RATE_1X1 : CoarserRate(prevRate);
+	} else {
+		// Already coarser than 1x1 and not this frame's measurement tile -- relax one step finer,
+		// never coarsen further without a fresh full-rate measurement.
+		newRate = FinerRate(prevRate);
+	}
+
+	imageStore(uImagesR8UI[nonuniformEXT(push.outShadingRateIndex)], tileCoord, uvec4(newRate, 0u, 0u, 0u));
+}
