@@ -140,6 +140,7 @@ STAGE 8:
   brassica::CloudShadowGenNode
   brassica::LightningAgeNode
   brassica::SkyBackgroundNode
+  brassica::TerrainChunkASNode
   brassica::TerrainNode
 STAGE 9:
   brassica::ClusterLightAssignmentNode
@@ -203,7 +204,7 @@ MULTI-WRITER KEYS:
   brassica::TerrainIndirectionBuffer: brassica::TerrainChunkResetNode, brassica::TerrainChunkEvictNode, brassica::TerrainChunkAllocNode
   brassica::TerrainMinMaxTexture: brassica::TerrainGenNode, brassica::TerrainMinMaxDownsampleNode
   brassica::TerrainPageTableBuffer: brassica::TerrainChunkResetNode, brassica::TerrainChunkEvictNode, brassica::TerrainChunkAllocNode
-  brassica::TerrainTLAS: brassica::graph::Import<brassica::TerrainTLAS>, brassica::TerrainGenNode
+  brassica::TerrainTLAS: brassica::graph::Import<brassica::TerrainTLAS>, brassica::TerrainChunkASNode
   brassica::UnderwaterParticleIndirectBuffer: brassica::ParticleLivenessNode, brassica::ParticleResetNode
 )FIXTURE";
 
