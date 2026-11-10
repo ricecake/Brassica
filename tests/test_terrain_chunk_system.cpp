@@ -69,6 +69,7 @@ TEST_CASE("Terrain Chunk Pipeline Passes Register and Schedule Acyclically") {
 	TerrainChunkGenerateNode     genNode;
 	TerrainChunkEvictNode        evictNode;
 	TerrainChunkRenderNode       renderNode;
+	TerrainChunkASNode           asNode;
 
 	graph::Graph g;
 	g.RegisterRef(resetNode);
@@ -78,6 +79,7 @@ TEST_CASE("Terrain Chunk Pipeline Passes Register and Schedule Acyclically") {
 	g.RegisterRef(genNode);
 	g.RegisterRef(evictNode);
 	g.RegisterRef(renderNode);
+	g.RegisterRef(asNode);
 
 	// GBuffer attachments and HiZ history read by renderNode
 	g.Register<graph::Import<GBufferPosition>>();
@@ -86,6 +88,7 @@ TEST_CASE("Terrain Chunk Pipeline Passes Register and Schedule Acyclically") {
 	g.Register<graph::Import<GBufferMaterial>>();
 	g.Register<graph::Import<GBufferDepth>>();
 	g.Register<graph::Import<graph::History<HiZTexture>>>();
+	g.Register<graph::Import<TerrainTLAS>>();
 
 	graph::FrameContext ctx{.width = 1280, .height = 720};
 	g.Setup(ctx);
@@ -112,6 +115,7 @@ TEST_CASE("Terrain Chunk Pipeline Passes Register and Schedule Acyclically") {
 	std::optional<std::size_t> genStage = stageOf(4);
 	std::optional<std::size_t> evictStage = stageOf(5);
 	std::optional<std::size_t> renderStage = stageOf(6);
+	std::optional<std::size_t> asStage = stageOf(7);
 
 	REQUIRE(resetStage.has_value());
 	REQUIRE(lodStage.has_value());
@@ -120,13 +124,30 @@ TEST_CASE("Terrain Chunk Pipeline Passes Register and Schedule Acyclically") {
 	REQUIRE(genStage.has_value());
 	REQUIRE(evictStage.has_value());
 	REQUIRE(renderStage.has_value());
+	REQUIRE(asStage.has_value());
 
 	// Verify sequential dependency order across passes:
-	// Reset -> LOD -> Evict -> Requirements -> Alloc -> Generate -> Render
+	// Reset -> LOD -> Evict -> Requirements -> Alloc -> Generate -> Render / AS
 	CHECK(*lodStage >= *resetStage);
 	CHECK(*evictStage >= *lodStage);
 	CHECK(*reqStage >= *evictStage);
 	CHECK(*allocStage >= *reqStage);
 	CHECK(*genStage >= *allocStage);
 	CHECK(*renderStage >= *genStage);
+	CHECK(*asStage >= *genStage);
+}
+
+TEST_CASE("Chunk-Based Acceleration Structure Geometry Parameters") {
+	constexpr std::uint32_t vertsPerChunk = constants::Class::Terrain::ChunkManager::VerticesPerChunk;
+	constexpr std::uint32_t trisPerChunk = constants::Class::Terrain::ChunkManager::TrianglesPerChunk;
+	constexpr std::uint32_t indicesPerChunk = constants::Class::Terrain::ChunkManager::IndicesPerChunk;
+	constexpr std::size_t vertexStride = sizeof(TerrainChunkVertexGPU);
+
+	CHECK(vertsPerChunk == 256);
+	CHECK(trisPerChunk == 450);
+	CHECK(indicesPerChunk == 1350);
+	CHECK(vertexStride == 48);
+
+	// Verify that vertex stride matches 3 vec4s (position, normal, material attributes)
+	CHECK(vertexStride == sizeof(glm::vec4) * 3);
 }

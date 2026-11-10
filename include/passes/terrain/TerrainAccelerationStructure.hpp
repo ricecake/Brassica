@@ -91,18 +91,26 @@ namespace brassica {
 			}
 		}
 
+		[[deprecated("Use BuildOrUpdateFromChunks instead")]]
 		void BuildOrUpdate(
-			vk::CommandBuffer        cmd,
-			const glm::vec3&         cameraPos,
-			float                    baseTexelSize,
-			uint32_t                 numLODs,
-			render::PipelineLibrary* pipelineLibrary,
-			ComputeShader*           aabbShader,
-			vk::DescriptorSet        frameSet,
-			vk::DescriptorSet        globalSet,
-			vk::DescriptorSetLayout  frameSetLayout,
-			vk::DescriptorSetLayout  globalSetLayout,
-			const glm::uvec4&        gridParams
+			vk::CommandBuffer        cmd = nullptr,
+			const glm::vec3&         cameraPos = glm::vec3(0.0f),
+			float                    baseTexelSize = 0.5f,
+			uint32_t                 numLODs = 0,
+			render::PipelineLibrary* pipelineLibrary = nullptr,
+			ComputeShader*           aabbShader = nullptr,
+			vk::DescriptorSet        frameSet = nullptr,
+			vk::DescriptorSet        globalSet = nullptr,
+			vk::DescriptorSetLayout  frameSetLayout = nullptr,
+			vk::DescriptorSetLayout  globalSetLayout = nullptr,
+			const glm::uvec4&        gridParams = glm::uvec4(0)
+		);
+
+		void BuildOrUpdateFromChunks(
+			vk::CommandBuffer cmd,
+			vk::DeviceAddress vertexBufferAddr,
+			const std::vector<uint32_t>& newPhysicalSlots,
+			const std::vector<uint32_t>& activePhysicalSlots
 		);
 
 		void DestroyAccelerationStructures();
@@ -118,18 +126,33 @@ namespace brassica {
 			vk::DeviceAddress deviceAddress{0};
 		};
 
+		struct ChunkBlasEntry {
+			BufferResource               storage;
+			vk::AccelerationStructureKHR blas{nullptr};
+			vk::DeviceAddress            address{0};
+			bool                         built{false};
+		};
+
 		vk::Device                 device{nullptr};
 		VmaAllocator               allocator{VK_NULL_HANDLE};
 		DispatchLoaderDynamic      dls;
 		std::vector<std::uint32_t> m_concurrentFamilies;
 
 		BufferResource               aabbBuffer;
+		BufferResource               chunkIndexBuffer;
 		BufferResource               blasBuffer;
 		vk::AccelerationStructureKHR blas{nullptr};
+
+		// Per-chunk BLAS tracking for allocated physical slots (up to MaxAllocatedChunks)
+		std::vector<ChunkBlasEntry>  m_chunkBlasEntries;
+		vk::DeviceSize               m_chunkBlasSize{0};
+		vk::DeviceSize               m_chunkScratchSize{0};
+
 		BufferResource               instanceBuffer;
 		BufferResource               tlasBuffer;
 		vk::AccelerationStructureKHR tlas{nullptr};
 		BufferResource               scratchBuffer;
+		std::vector<uint32_t>        m_lastActiveSlots;
 		glm::vec3                    lastASCameraPos{1e9f, 1e9f, 1e9f};
 		bool                         m_enabled{true};
 	};

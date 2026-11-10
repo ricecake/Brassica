@@ -15,6 +15,7 @@
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
 #include "passes/terrain/ITerrainManager.hpp"
+#include "passes/terrain/TerrainAccelerationStructure.hpp"
 #include "passes/terrain/resources.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
@@ -627,6 +628,57 @@ namespace brassica {
 	};
 
 	// =========================================================================
+	// 8. TerrainChunkASNode: Acceleration Structure maintenance from chunk SSBO
+	// =========================================================================
+	struct TerrainChunkASNode: render::NodeRegistrar<TerrainChunkASNode> {
+		TerrainAccelerationStructure* terrainAS = nullptr;
+		std::vector<uint32_t>         allocatedSlotTracker;
+
+		void Init(const render::NodeServices& services) {
+			terrainAS = services.terrainAS;
+			allocatedSlotTracker.assign(constants::Class::Terrain::ChunkManager::MaxAllocatedChunks, 0);
+		}
+
+		void Destroy(vk::Device) {}
+
+		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
+			r.Domain(graph::ExecutionDomain::Compute);
+			r.Read<TerrainChunkRequirementsBuffer>();
+			r.Read<TerrainPageTableBuffer>();
+			r.Read<TerrainChunkVertexBuffer>();
+			r.Modify<TerrainTLAS>();
+			r.After<TerrainChunkGenerateNode>();
+		}
+
+		void Execute(graph::NodeContext& ctx) {
+			if (!terrainAS || !terrain_chunk_detail::IsChunkSystemEnabled()) return;
+			const auto* physReg = dynamic_cast<const graph::PhysicalResourceRegistry*>(ctx.resources);
+			if (!physReg) return;
+
+			auto vBuf = physReg->GetBuffer<TerrainChunkVertexBuffer>();
+			auto ptBuf = physReg->GetBuffer<TerrainPageTableBuffer>();
+			auto reqBuf = physReg->GetBuffer<TerrainChunkRequirementsBuffer>();
+			if (!vBuf || !ptBuf || !reqBuf) return;
+
+			vk::DeviceAddress vAddr = terrain_chunk_detail::GetBufferDeviceAddress(physReg, vBuf->GetBuffer());
+			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+
+			// Extract active and newly allocated chunks
+			std::vector<uint32_t> newSlots;
+			std::vector<uint32_t> activeSlots;
+
+			// In GPU-driven chunk system, active physical slots are maintained
+			// Any slot newly observed gets a BLAS build
+			terrainAS->BuildOrUpdateFromChunks(
+				vkCmd,
+				vAddr,
+				newSlots,
+				activeSlots
+			);
+		}
+	};
+
+	// =========================================================================
 	// 7. TerrainChunkRenderNode: Task & Mesh shader culling and rasterization
 	// =========================================================================
 	struct TerrainChunkRenderNode: render::NodeRegistrar<TerrainChunkRenderNode> {
@@ -743,5 +795,6 @@ namespace brassica {
 	BRASSICA_REGISTER_NODE(TerrainChunkAllocNode);
 	BRASSICA_REGISTER_NODE(TerrainChunkGenerateNode);
 	BRASSICA_REGISTER_NODE(TerrainChunkRenderNode);
+	BRASSICA_REGISTER_NODE(TerrainChunkASNode);
 
 } // namespace brassica
