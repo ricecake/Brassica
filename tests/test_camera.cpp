@@ -518,3 +518,73 @@ TEST_CASE("Ephemeris Model and Light Directions") {
 	CHECK(sunLight->elevation == doctest::Approx(90.0f).epsilon(0.05));
 	CHECK(sunLight->direction.y == doctest::Approx(-1.0f).epsilon(0.01));
 }
+
+TEST_CASE("Spherified Cube Coordinate System and 6-Face Mapping") {
+	// Equal-area spherified cube projection implementation in C++
+	auto cubeFaceToCubePoint = [](uint32_t face, glm::vec2 uv) {
+		glm::vec3 c;
+		if (face == 0u) {        // +X
+			c = glm::vec3(1.0f, uv.y, uv.x);
+		} else if (face == 1u) { // -X
+			c = glm::vec3(-1.0f, uv.y, -uv.x);
+		} else if (face == 2u) { // +Y (North pole)
+			c = glm::vec3(uv.x, 1.0f, uv.y);
+		} else if (face == 3u) { // -Y (South pole)
+			c = glm::vec3(uv.x, -1.0f, -uv.y);
+		} else if (face == 4u) { // +Z (Prime meridian)
+			c = glm::vec3(uv.x, uv.y, 1.0f);
+		} else {                 // -Z
+			c = glm::vec3(-uv.x, uv.y, -1.0f);
+		}
+		return c;
+	};
+
+	auto spherifyCubePoint = [](glm::vec3 c) {
+		float x2 = c.x * c.x;
+		float y2 = c.y * c.y;
+		float z2 = c.z * c.z;
+
+		float sx = c.x * std::sqrt(std::max(0.0f, 1.0f - y2 * 0.5f - z2 * 0.5f + (y2 * z2) / 3.0f));
+		float sy = c.y * std::sqrt(std::max(0.0f, 1.0f - z2 * 0.5f - x2 * 0.5f + (z2 * x2) / 3.0f));
+		float sz = c.z * std::sqrt(std::max(0.0f, 1.0f - x2 * 0.5f - y2 * 0.5f + (x2 * y2) / 3.0f));
+
+		return glm::normalize(glm::vec3(sx, sy, sz));
+	};
+
+	// 1. Check face centers map to cardinal unit sphere axes
+	glm::vec3 center0 = spherifyCubePoint(cubeFaceToCubePoint(0u, glm::vec2(0.0f))); // +X
+	CHECK(center0.x == doctest::Approx(1.0f));
+	CHECK(center0.y == doctest::Approx(0.0f));
+	CHECK(center0.z == doctest::Approx(0.0f));
+
+	glm::vec3 center2 = spherifyCubePoint(cubeFaceToCubePoint(2u, glm::vec2(0.0f))); // +Y (North Pole)
+	CHECK(center2.x == doctest::Approx(0.0f));
+	CHECK(center2.y == doctest::Approx(1.0f));
+	CHECK(center2.z == doctest::Approx(0.0f));
+
+	glm::vec3 center4 = spherifyCubePoint(cubeFaceToCubePoint(4u, glm::vec2(0.0f))); // +Z (Prime Meridian)
+	CHECK(center4.x == doctest::Approx(0.0f));
+	CHECK(center4.y == doctest::Approx(0.0f));
+	CHECK(center4.z == doctest::Approx(1.0f));
+
+	// 2. Check seamless edge continuity:
+	// Face +Z at right edge (u=1, v=0) connects to Face +X at front edge (u=1, v=0)
+	glm::vec3 edgeZ = spherifyCubePoint(cubeFaceToCubePoint(4u, glm::vec2(1.0f, 0.0f)));
+	glm::vec3 edgeX = spherifyCubePoint(cubeFaceToCubePoint(0u, glm::vec2(1.0f, 0.0f)));
+	CHECK(edgeZ.x == doctest::Approx(edgeX.x));
+	CHECK(edgeZ.y == doctest::Approx(edgeX.y));
+	CHECK(edgeZ.z == doctest::Approx(edgeX.z));
+
+	// Face +Z at top edge (u=0, v=1) connects to Face +Y at front edge (u=0, v=1)
+	glm::vec3 edgeZTop = spherifyCubePoint(cubeFaceToCubePoint(4u, glm::vec2(0.0f, 1.0f)));
+	glm::vec3 edgeYFront = spherifyCubePoint(cubeFaceToCubePoint(2u, glm::vec2(0.0f, 1.0f)));
+	CHECK(edgeZTop.x == doctest::Approx(edgeYFront.x));
+	CHECK(edgeZTop.y == doctest::Approx(edgeYFront.y));
+	CHECK(edgeZTop.z == doctest::Approx(edgeYFront.z));
+
+	// 3. Real 3D radial positions and altitude
+	constexpr float R = brassica::FAKE_PLANET_RADIUS;
+	float alt = 50.0f;
+	glm::vec3 surfacePoint = edgeZ * (R + alt);
+	CHECK(glm::length(surfacePoint) == doctest::Approx(R + alt));
+}

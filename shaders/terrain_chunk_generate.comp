@@ -102,13 +102,24 @@ void main() {
 
 	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
 
-	// Planar, uncurved world position stored in buffer; planetary curvature Y displacement is deferred to the mesh shader
-	vec3 worldPos = vec3(worldXZ.x, h, worldXZ.y);
+	// Compute real 3D spherical position based on spherified cube
+	vec3 sphereDir = worldXZToSphereDir(worldXZ);
+	uint face;
+	vec2 faceUV;
+	sphereNormalToCubeFace(sphereDir, face, faceUV);
+	vec3 sphereNorm = cubeFaceToSphereNormal(face, faceUV);
+	vec3 worldPos = sphereNorm * (FAKE_PLANET_RADIUS + h);
+
+	// Transform local terrain normal into 3D world normal on the sphere
+	vec3 localUp = sphereNorm;
+	vec3 localEast = (length(localUp.xz) > 1e-5) ? normalize(vec3(localUp.z, 0.0, -localUp.x)) : vec3(1.0, 0.0, 0.0);
+	vec3 localNorth = cross(localUp, localEast);
+	vec3 normal3D = normalize(normal.x * localEast + normal.y * localUp + normal.z * localNorth);
 
 	VertexBufferRef vertBuf = VertexBufferRef(push.vertexBufferAddr);
 	uint totalVertIdx = physicalSlot * (dim * dim) + vertIdxInChunk;
 
 	vertBuf.vertices[totalVertIdx].position = vec4(worldPos, h);
-	vertBuf.vertices[totalVertIdx].normal = vec4(normal, clamp(biome, 0.0, 1.0));
+	vertBuf.vertices[totalVertIdx].normal = vec4(normal3D, clamp(biome, 0.0, 1.0));
 	vertBuf.vertices[totalVertIdx].material = vec4(waterLevel, ridgeMap, substrate, 0.0);
 }

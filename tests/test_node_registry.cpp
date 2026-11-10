@@ -42,6 +42,7 @@
 // 43 -> 50: Added TerrainChunkResetNode, TerrainChunkLODNode, TerrainChunkRequirementsNode,
 // TerrainChunkAllocNode, TerrainChunkGenerateNode, TerrainChunkEvictNode, and TerrainChunkRenderNode
 // for terrain chunk page table and indirection buffer management.
+// 50 -> 49: Removed TerrainNode (heightmap clipmap rasterization) in favor of the chunk/buffer-based system.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 50);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 49);
 }

@@ -5,6 +5,7 @@
 #include "helpers/culling.glsl"
 #include "helpers/octahedral.glsl"
 #include "helpers/whittaker.glsl"
+#include "helpers/spherified_cube.glsl"
 #include "terrain_dirty.glsl"
 
 // Toroidal UV mapping helper for terrain clipmap textures

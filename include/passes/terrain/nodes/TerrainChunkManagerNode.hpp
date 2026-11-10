@@ -24,8 +24,6 @@
 
 namespace brassica {
 
-	struct TerrainNode;
-
 	namespace terrain_chunk_detail {
 		inline bool IsChunkSystemEnabled() {
 			if (ServiceLocator::Instance().Has<ITerrainManager>()) {
@@ -678,16 +676,15 @@ namespace brassica {
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
-			r.Modify<GBufferPosition>().AnyOrder();
-			r.Modify<GBufferNormal>().AnyOrder();
-			r.Modify<GBufferAlbedo>().AnyOrder();
-			r.Modify<GBufferMaterial>().AnyOrder();
-			r.Modify<GBufferDepth>().AnyOrder();
+			r.Create<GBufferPosition>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferNormal>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferAlbedo>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferMaterial>().Clear({0.0f, 0.0f, 0.0f, 0.0f});
+			r.Create<GBufferDepth>();
 			r.Read<TerrainPageTableBuffer>();
 			r.Read<TerrainChunkVertexBuffer>();
 			r.Read<graph::History<HiZTexture>>();
 			r.After<TerrainChunkGenerateNode>();
-			r.After<TerrainNode>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {

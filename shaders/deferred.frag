@@ -32,64 +32,6 @@ layout(push_constant) uniform DeferredPushConstants {
 
 params;
 
-// Calculate the LOD level based on the sample's Chebyshev distance
-uint calculateRayLOD(vec2 sampleXZ) {
-	vec2  dists = abs(sampleXZ - uCameraPosition.xz);
-	float maxDist = max(dists.x, dists.y);
-
-	float baseRadius = 272.0;
-
-	if (maxDist < baseRadius) {
-		return 0;
-	}
-
-	float lodFloat = ceil(log2(maxDist / baseRadius));
-	return uint(clamp(lodFloat, 0.0, 7.0));
-}
-
-// Update the intersection function to use dynamic LODs
-bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToShaded, out float hitT) {
-	float stepSize = clamp(camDistToShaded * 0.01, 1.0, 5.0);
-	int   numSteps = int(clamp(200.0 / stepSize, 25.0, 50.0));
-
-	float rayLength = 500.0;
-	for (int i = 1; i <= numSteps; ++i) {
-		float t = (float(i) / float(numSteps)) * rayLength;
-		vec3  samplePos = rayOrigin + rayDir * t;
-
-		uint stepLod = calculateRayLOD(samplePos.xz);
-
-		vec2  flatXZ = samplePos.xz - uCameraPosition.xz;
-		float dropOff = dot(flatXZ, flatXZ) / (2.0 * FAKE_PLANET_RADIUS);
-
-		if (params.minMaxIndex > 0u) {
-			vec2 minMax = sampleTerrainMinMax(
-				params.minMaxIndex,
-				samplePos.xz,
-				stepLod,
-				params.gridParams.w
-			);
-			if (samplePos.y > minMax.y - dropOff + 1.0) {
-				continue;
-			}
-		}
-
-		vec4 texSample = sampleTerrainClipmap(
-			params.clipmapIndex,
-			samplePos.xz,
-			stepLod,
-			params.gridParams.w
-		);
-		float terrainHeight = texSample.r - dropOff;
-
-		if (samplePos.y <= terrainHeight) {
-			hitT = t;
-			return true;
-		}
-	}
-	hitT = 0.0;
-	return false;
-}
 
 void main() {
 	vec4  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
