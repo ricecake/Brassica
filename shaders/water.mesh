@@ -3,7 +3,6 @@
 
 #include "bindless.glsl"
 #include "common.glsl"
-#include "lygia/generative/gerstnerWave.glsl"
 #include "terrain.glsl"
 
 layout(local_size_x = 11, local_size_y = 11, local_size_z = 1) in;
@@ -37,29 +36,87 @@ float getWaterRingScale(float ring) {
 	return pow(2.0, ring);
 }
 
-vec3 calculateGerstnerOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, out vec3 normal) {
-	vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, uv, uint(ringLevel), params.gridParams.w);
+// Samples underlying terrain height from TerrainMinMaxTexture
+float getTerrainBedHeight(vec2 worldXZ, uint ringLevel) {
+	if (params.minMaxIndex == 0u || params.minMaxIndex == 0xFFFFFFFFu) {
+		return params.waterLevel - 50.0;
+	}
+	uint sampleLOD = min(ringLevel, params.gridParams.x - 1u);
+	vec2 minMax = sampleTerrainMinMax(params.minMaxIndex, worldXZ, sampleLOD, params.gridParams.w);
+	return minMax.x;
+}
 
-	vec3 inWorldPos = vec3(uv.x, 0.0, uv.y) * mix(vec3(10, 1.0, 10), vec3(1, 1.0, 1), 1.0-smoothstep(-100.0, 0.0, minMax.x) );
-	mat3 grad;
-	// vec3 amplitude = mix(vec3(1, 0.75, 1), vec3(1, 10.0, 1), 1.0-smoothstep(-200.0, 0.0, minMax.x) )* (1.0 - smoothstep(3000.0, 20000.0, distToCam));
-	vec3 amplitude = mix(vec3(0.25, 1.0, 0.25), vec3(1,20,1), 1.0-smoothstep(-200.0, 0.0, minMax.x));
-	float frequency = 0.01;
-
-	vec3 sinGrad = amplitude * cross_noise_fbm((inWorldPos) * frequency + abs(dot_noise(inWorldPos * 0.0025, time * 0.5)), 2, time * 0.5, grad) * (1.0 - smoothstep(10.0, 100.0, distToCam));
-
-	vec3 dX = grad[0] * amplitude * frequency;
-	vec3 dZ = grad[2] * amplitude * frequency;
-
-	vec3 tangentX = vec3(1.0, 0.0, 0.0) + dX;
-	vec3 tangentZ = vec3(0.0, 0.0, 1.0) + dZ;
-
-	normal = normalize(cross(tangentZ, tangentX));
+// Calculates water wave displacement and analytical normal using phasor noise aligned with terrain height gradient
+vec3 calculatePhasorOffsetAndNormal(vec2 uv, float time, float distToCam, float ringLevel, float vertexSpacing, out vec3 normal) {
+	// If too far or ringLevel high, fade out wave deformation
 	if (ringLevel >= 8.0) {
+		normal = vec3(0.0, 1.0, 0.0);
 		return vec3(0.0);
 	}
 
-	return sinGrad;
+	// 1. Sample underlying terrain height gradient
+	float eps = max(2.0, vertexSpacing);
+	float hC  = getTerrainBedHeight(uv, uint(ringLevel));
+	float hE  = getTerrainBedHeight(uv + vec2(eps, 0.0), uint(ringLevel));
+	float hW  = getTerrainBedHeight(uv - vec2(eps, 0.0), uint(ringLevel));
+	float hN  = getTerrainBedHeight(uv + vec2(0.0, eps), uint(ringLevel));
+	float hS  = getTerrainBedHeight(uv - vec2(0.0, eps), uint(ringLevel));
+
+	vec2 terrainGrad = vec2((hE - hW) / (2.0 * eps), (hN - hS) / (2.0 * eps));
+	float gradLen = length(terrainGrad);
+
+	// Wave alignment: waves tend to refract and align with depth contours, traveling up the slope / towards shore
+	vec2 waveDir;
+	if (gradLen > 0.005) {
+		// Normal wave vector points in direction of increasing height (towards shore)
+		waveDir = terrainGrad / gradLen;
+	} else {
+		// Default prevailing current/wave direction
+		waveDir = vec2(0.7071, 0.7071);
+	}
+
+	vec3 waveDir3D = vec3(waveDir.x, 0.0, waveDir.y);
+	vec3 waveF_3D  = waveDir3D;
+
+	// Water depth at this vertex
+	float waterDepth = max(0.0, params.waterLevel - hC);
+	float shallowFactor = 1.0 - smoothstep(0.0, 30.0, waterDepth);
+
+	// 2. Vertex spacing frequency and scale bounds (Nyquist limit: wavelength lambda >= 2.5 * vertexSpacing)
+	float minWavelength = max(2.5 * vertexSpacing, 4.0);
+	float maxFreq = (2.0 * PI) / minWavelength;
+
+	// Base wave frequencies bounded by maxFreq
+	float baseFreq = clamp(0.08, 0.001, maxFreq);
+	float speed = mix(1.2, 0.6, shallowFactor); // Waves slow down in shallower water
+
+	// Amplitude scaled to vertex spacing to avoid steep slope fold-overs
+	float maxAmp = min(vertexSpacing * 0.35, 1.8);
+	float amp = mix(0.3, maxAmp, clamp(waterDepth / 15.0, 0.0, 1.0));
+	amp *= (1.0 - smoothstep(2000.0, 8000.0, distToCam));
+
+	if (amp <= 0.001) {
+		normal = vec3(0.0, 1.0, 0.0);
+		return vec3(0.0);
+	}
+
+	// 3. Phasor noise evaluation with analytical gradient
+	vec3 p = vec3(uv.x, 0.0, uv.y) * baseFreq;
+	vec3 phasorGrad;
+	vec2 phase = phasorNoise3DGrad(p, 1.0, waveF_3D, waveDir3D, 0.45, time * speed, phasorGrad);
+
+	// Wave height from phase.x normalized
+	float phaseNorm = max(length(phase), 0.001);
+	float waveH = (phase.x / phaseNorm) * amp;
+
+	// Convert phasor spatial gradient to world space gradient dH/dx and dH/dz
+	// Chain rule: d(phase)/dx = phasorGrad.x * baseFreq
+	vec2 dH_dxz = (phasorGrad.xz * (baseFreq * amp / phaseNorm));
+
+	// Surface normal from height gradient
+	normal = normalize(vec3(-dH_dxz.x, 1.0, -dH_dxz.y));
+
+	return vec3(0.0, waveH, 0.0);
 }
 
 void main() {
@@ -116,8 +173,9 @@ void main() {
 
 	vec2 worldXZ = uCameraPosition.xz + relMorphedXZ;
 
+	float vertexSpacing = meshletSize / 10.0;
 	vec3 waveNormal;
-	vec3 waveOffset = calculateGerstnerOffsetAndNormal(worldXZ, uTime, length(relMorphedXZ), float(ringLevel), waveNormal);
+	vec3 waveOffset = calculatePhasorOffsetAndNormal(worldXZ, uTime, length(relMorphedXZ), float(ringLevel), vertexSpacing, waveNormal);
 
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);

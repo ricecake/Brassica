@@ -129,7 +129,8 @@ void main() {
 	float camAltKM = uCameraPosition.y / 1000.0;
 	float waterLevelKM = u_waterLevel / 1000.0;
 	if (camAltKM < waterLevelKM) {
-		vec3 waterExtCoeff = vec3(0.45, 0.08, 0.03); // Red attenuated fastest
+		// Use AtmosphereUBO water extinction (kWaterExtinction is per km)
+		vec3 waterExtCoeff = kWaterExtinction * u_waterScale;
 		float distKM = rayDist / 1000.0;
 		vec3 waterTrans = exp(-waterExtCoeff * distKM);
 		fogTransmittance *= waterTrans;
