@@ -113,8 +113,10 @@ vec3 calculatePhasorOffsetAndNormal(vec2 uv, float time, float distToCam, float 
 	// Chain rule: d(phase)/dx = phasorGrad.x * baseFreq
 	vec2 dH_dxz = (phasorGrad.xz * (baseFreq * amp / phaseNorm));
 
-	// Surface normal from height gradient
-	normal = normalize(vec3(-dH_dxz.x, 1.0, -dH_dxz.y));
+	// Surface normal from height gradient, clamped to avoid inverted/backward facing normals
+	vec3 n = vec3(-dH_dxz.x, 1.0, -dH_dxz.y);
+	n.y = max(0.2, n.y);
+	normal = normalize(n);
 
 	return vec3(0.0, waveH, 0.0);
 }

@@ -58,12 +58,14 @@ vec4 sampleFroxelCascade(int c, vec3 relPos, float dither, out vec3 outTransmitt
 
 	float rayLen = length(relPos);
 	float zNorm = froxelDistToNorm(rayLen, maxDist, 3.5);
-	zNorm = clamp(zNorm + dither, 0.0, 1.0);
+	// Half-texel offset maps [0..1] range to voxel centers [0.5/64 .. 63.5/64] for smooth trilinear interpolation
+	float zTex = (zNorm * 63.0 + 0.5) / 64.0;
+	zTex = clamp(zTex + dither, 0.0, 1.0);
 
 	vec3 uv3d = vec3(
 		clamp(viewX / frustumWidthAtZ + 0.5, 0.0, 1.0),
 		clamp(0.5 - viewY / frustumHeightAtZ, 0.0, 1.0),
-		clamp(zNorm, 0.0, 1.0)
+		zTex
 	);
 
 	vec4 scatSample = textureLod(sampler3D(uTextures3D[nonuniformEXT(scatIdx)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv3d, 0.0);
@@ -129,10 +131,9 @@ void main() {
 	float camAltKM = uCameraPosition.y / 1000.0;
 	float waterLevelKM = u_waterLevel / 1000.0;
 	if (camAltKM < waterLevelKM) {
-		// Use AtmosphereUBO water extinction (kWaterExtinction is per km)
-		vec3 waterExtCoeff = kWaterExtinction * u_waterScale;
-		float distKM = rayDist / 1000.0;
-		vec3 waterTrans = exp(-waterExtCoeff * distKM);
+		// Submerged extinction calibrated so nearby scene doesn't collapse into total black
+		vec3 waterExtCoeff = vec3(0.060, 0.020, 0.008) * u_waterScale;
+		vec3 waterTrans = exp(-waterExtCoeff * rayDist);
 		fogTransmittance *= waterTrans;
 		fogScattering *= waterTrans;
 	}

@@ -205,17 +205,17 @@ void main() {
 			float waterSunAttenuation = 1.0;
 
 			if (waterFactor > 0.0) {
-				// Base water coefficients per metre (kWaterScattering and kWaterExtinction are per km in AtmosphereUBO)
-				vec3 wScatBase = (kWaterScattering / 1000.0) * u_waterScale;
-				vec3 wExtBase  = (kWaterExtinction / 1000.0) * u_waterScale;
+				// Base water coefficients per metre: calibrated for stable in-scatter / visibility balance
+				vec3 wScatBase = vec3(0.015, 0.035, 0.045) * u_waterScale;
+				vec3 wExtBase  = vec3(0.060, 0.020, 0.008) * u_waterScale;
 
 				// Fine uniform particle cloud: subtle low-frequency variation without turbulent air noise
-				float fineParticleMod = 0.9 + 0.1 * dot_noise(worldPos * 0.04, 0.05 * uTime);
+				float fineParticleMod = 0.95 + 0.05 * dot_noise(worldPos * 0.04, 0.05 * uTime);
 				vec3 waterScat = wScatBase * fineParticleMod;
 				vec3 waterExt  = wExtBase * fineParticleMod;
 
-				// Water phase function: strong forward scattering (for sharp godrays) mixed with uniform diffuse backscattering
-				float waterAnisotropyG = 0.91; // Fine suspended particulate forward scattering (Petzold / Fournier-Forand)
+				// Water phase function: strong forward scattering (for pointed godrays) mixed with uniform diffuse backscattering
+				float waterAnisotropyG = 0.88; // Fine suspended particulate forward scattering
 				effectiveG = mix(effectiveG, waterAnisotropyG, waterFactor);
 
 				// Water column sun attenuation down from water surface
@@ -224,8 +224,8 @@ void main() {
 					waterSunAttenuation = exp(-wExtBase.g * pathThroughWater);
 				}
 
-				// Pointedly emphasize godrays underwater: high forward peak
-				directSunScatteringBoost = mix(directSunScatteringBoost, 3.5, waterFactor);
+				// Pointedly emphasize godrays underwater: forward scattering shafts
+				directSunScatteringBoost = mix(directSunScatteringBoost, 2.5, waterFactor);
 
 				totalScatCoeff = mix(totalScatCoeff, waterScat, waterFactor);
 				totalExtCoeff  = mix(totalExtCoeff, waterExt, waterFactor);

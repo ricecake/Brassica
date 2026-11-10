@@ -173,8 +173,12 @@ void main() {
 		vec3 skyColor = sampleSkyView(params.skyViewIndex, skyReflectDir);
 
 		if (reflectDir.y < 0.0) {
-			vec3 ambientGround = getSpatialAmbientSH(absWaterPos, waveNormal);
-			skyColor = mix(skyColor, ambientGround, clamp(-reflectDir.y * 2.0, 0.0, 1.0));
+			// Instead of collapsing into a near-zero black void, blend smoothly with shallow horizon sky and ambient water
+			vec3 horizonReflect = normalize(vec3(reflectDir.x, 0.05, reflectDir.z));
+			vec3 horizonSky = sampleSkyView(params.skyViewIndex, horizonReflect);
+			vec3 ambientGround = max(getSpatialAmbientSH(absWaterPos, waveNormal), baseTint * 0.25);
+			vec3 downwardReflection = mix(horizonSky, ambientGround, 0.5);
+			skyColor = mix(skyColor, downwardReflection, clamp(-reflectDir.y * 2.0, 0.0, 1.0));
 		}
 
 		surfaceReflectionColor = skyColor;
