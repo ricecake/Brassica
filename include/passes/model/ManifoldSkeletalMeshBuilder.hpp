@@ -51,6 +51,10 @@ namespace brassica {
 		// bark-brown tree. Empty (the default) means "use the asset-level default," byte-
 		// identical to every joint built before this field existed.
 		std::optional<std::uint32_t> materialIndex;
+
+		// If populated, overrides the rigid CSG OriginalID tracking for this shape's vertices.
+		// The vertices will be soft-skinned (inverse-distance weighted) to these joint indices.
+		std::vector<std::uint32_t> blendJoints;
 	};
 
 	// Shared Manifold-CSG-to-skinned-ModelAsset pipeline, extracted from Stage 5.0's

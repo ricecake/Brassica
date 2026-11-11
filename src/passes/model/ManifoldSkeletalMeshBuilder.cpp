@@ -334,19 +334,71 @@ namespace brassica {
 			}
 		}
 
-		std::vector<GltfVertex> primVertices(mesh.NumVert());
-		for (std::uint32_t v = 0; v < mesh.NumVert(); ++v) {
-			std::size_t base = static_cast<std::size_t>(v) * mesh.numProp;
-			primVertices[v].position = glm::vec3(mesh.vertProperties[base + 0], mesh.vertProperties[base + 1], mesh.vertProperties[base + 2]);
-			primVertices[v].normal = glm::vec3(mesh.vertProperties[base + 3], mesh.vertProperties[base + 4], mesh.vertProperties[base + 5]);
-			if (vertexJointCount[v] >= 2) {
-				primVertices[v].joints = glm::uvec4(vertexJoints[v][0], vertexJoints[v][1], 0u, 0u);
-				primVertices[v].weights = glm::vec4(0.5f, 0.5f, 0.0f, 0.0f);
-			} else {
-				primVertices[v].joints = glm::uvec4(vertexJoints[v][0], 0u, 0u, 0u);
-				primVertices[v].weights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-			}
-		}
+// Inside BuildSkinnedManifoldAsset, just before building primVertices:
+
+// 1. Identify which vertices belong to the canopy (or any blend joint)
+std::vector<const std::vector<std::uint32_t>*> vertexBlendJoints(mesh.NumVert(), nullptr);
+for (std::size_t run = 0; run + 1 < mesh.runIndex.size(); ++run) {
+    auto it = idToJoint.find(mesh.runOriginalID[run]);
+    std::uint32_t jointIdx = (it != idToJoint.end()) ? it->second : 0u;
+
+    if (!joints[jointIdx].blendJoints.empty()) {
+        for (std::uint32_t t = mesh.runIndex[run]; t < mesh.runIndex[run + 1]; ++t) {
+            vertexBlendJoints[mesh.triVerts[t]] = &joints[jointIdx].blendJoints;
+        }
+    }
+}
+
+// 2. Finalize primVertices with injected soft-skinning
+std::vector<GltfVertex> primVertices(mesh.NumVert());
+for (std::uint32_t v = 0; v < mesh.NumVert(); ++v) {
+    std::size_t base = static_cast<std::size_t>(v) * mesh.numProp;
+    primVertices[v].position = glm::vec3(mesh.vertProperties[base], mesh.vertProperties[base + 1], mesh.vertProperties[base + 2]);
+    primVertices[v].normal = glm::vec3(mesh.vertProperties[base + 3], mesh.vertProperties[base + 4], mesh.vertProperties[base + 5]);
+
+    // Override CSG tracking if this vertex belongs to a blended mesh
+    if (vertexBlendJoints[v] != nullptr) {
+        const auto& bJoints = *(vertexBlendJoints[v]);
+
+        // Calculate squared distance to all target branch tips
+        std::vector<std::pair<float, std::uint32_t>> dists;
+        dists.reserve(bJoints.size());
+        for (std::uint32_t tj : bJoints) {
+            float d2 = glm::dot(primVertices[v].position - joints[tj].end, primVertices[v].position - joints[tj].end);
+            dists.push_back({d2, tj});
+        }
+
+        // Sort to find the nearest joints
+        std::sort(dists.begin(), dists.end());
+
+        float totalWeight = 0.0f;
+        glm::vec4 weights(0.0f);
+        glm::uvec4 jnts(0u);
+
+        // Take the top 4 closest joints for the vec4 envelope
+        int influenceCount = std::min(4, static_cast<int>(dists.size()));
+        for (int i = 0; i < influenceCount; ++i) {
+            float w = 1.0f / (dists[i].first + 1e-4f); // Inverse distance, epsilon to prevent div-by-zero
+            weights[i] = w;
+            jnts[i] = dists[i].second;
+            totalWeight += w;
+        }
+
+        primVertices[v].joints = jnts;
+        primVertices[v].weights = weights / totalWeight; // Normalize to 1.0
+    }
+    // Otherwise, fall back to the flawless CSG rigid attribution for the trunk
+    else if (vertexJointCount[v] >= 2) {
+        primVertices[v].joints = glm::uvec4(vertexJoints[v][0], vertexJoints[v][1], 0u, 0u);
+        primVertices[v].weights = glm::vec4(0.5f, 0.5f, 0.0f, 0.0f);
+    } else {
+        primVertices[v].joints = glm::uvec4(vertexJoints[v][0], 0u, 0u, 0u);
+        primVertices[v].weights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+
+
 		std::vector<std::uint32_t> primIndices(mesh.triVerts.begin(), mesh.triVerts.end());
 
 		std::vector<std::uint8_t> triangleBytes;

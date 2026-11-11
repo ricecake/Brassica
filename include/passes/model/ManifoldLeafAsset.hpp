@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <manifold/manifold.h>
+#include <glm/glm.hpp>
 
 namespace brassica {
 
@@ -37,6 +38,10 @@ namespace brassica {
 	// keeps the plain fan shape this function's sibling already provides.
 	manifold::Manifold BuildLeafBallCluster(
 		float leafSize, int leafCount, std::uint32_t seed, float widthRatio = 0.45f, float attachRadius = 0.0f
+	);
+
+	manifold::Manifold BuildGlobalCanopyHull(
+		const std::vector<glm::vec3>& terminalPoints, float leafSize, std::uint32_t seed
 	);
 
 } // namespace brassica

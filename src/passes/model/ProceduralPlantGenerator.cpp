@@ -277,27 +277,104 @@ void AddLeaves(PlantIR& ir, const PlantGenParams& params, std::mt19937& rng) {
 
 	} // namespace
 
-	std::vector<ManifoldJointSpec> BuildPlantJoints(const PlantGenParams& params) {
-		std::mt19937 rng(params.seed);
+std::vector<ManifoldJointSpec> BuildPlantJoints(const PlantGenParams& params) {
+	std::mt19937 rng(params.seed);
+	PlantIR ir;
+	GrowPlantIR(ir, params, rng);
+	if (params.enableFlowers) {
+		AddFlowers(ir, params, rng);
+	}
 
-		PlantIR ir;
-		GrowPlantIR(ir, params, rng);
-		if (params.enableFlowers) {
-			AddFlowers(ir, params, rng);
-		}
-		if (params.enableLeaves) {
-			AddLeaves(ir, params, rng);
-		}
-		ProceduralPlantOptimizer::Optimize(ir);
+	// REMOVED: AddLeaves(ir, params, rng);
 
-		std::vector<ManifoldJointSpec> joints;
-		for (int i = 0; i < static_cast<int>(ir.elements.size()); ++i) {
-			if (ir.elements[i].parent == -1) {
-				ConvertToJoints(ir, i, kModelNoSkeletonSentinel, glm::vec3(0.0f, 1.0f, 0.0f), params, joints);
+	ProceduralPlantOptimizer::Optimize(ir);
+
+	std::vector<ManifoldJointSpec> joints;
+	for (int i = 0; i < static_cast<int>(ir.elements.size()); ++i) {
+		if (ir.elements[i].parent == -1) {
+			ConvertToJoints(ir, i, kModelNoSkeletonSentinel, glm::vec3(0.0f, 1.0f, 0.0f), params, joints);
+		}
+	}
+if (params.enableLeaves) {
+    std::vector<glm::vec3> terminalPoints;
+    std::vector<std::uint32_t> terminalJoints;
+
+    // Find all joints that act as a parent to no other joint
+    for (std::uint32_t i = 0; i < joints.size(); ++i) {
+        bool isParent = false;
+        for (const auto& j : joints) {
+            if (j.parentIndex == i) {
+                isParent = true;
+                break;
+            }
+        }
+        if (!isParent) {
+            terminalJoints.push_back(i);
+            terminalPoints.push_back(joints[i].end);
+        }
+    }
+
+    if (!terminalPoints.empty()) {
+        ManifoldJointSpec canopySpec{};
+        canopySpec.parentIndex = 0;
+        canopySpec.start = glm::vec3(0.0f, 0.0f, 0.0f);
+        canopySpec.end   = glm::vec3(0.0f, 0.0f, 1.0f);
+        canopySpec.rigidity = params.baseRigidity;
+
+        // Tag this specific joint for soft-skinning to the branch tips
+        canopySpec.blendJoints = terminalJoints;
+
+        if (params.leafMaterialIndex.has_value()) {
+            canopySpec.materialIndex = params.leafMaterialIndex;
+        }
+
+        float leafSize = params.leafSize;
+        std::uint32_t seed = params.seed;
+        canopySpec.customShape = [terminalPoints, leafSize, seed]() {
+            return BuildGlobalCanopyHull(terminalPoints, leafSize, seed);
+        };
+
+        joints.push_back(canopySpec);
+    }
+}
+
+	// NEW: Extract terminal points and generate the global hull
+	if (params.enableLeaves) {
+		std::vector<glm::vec3> terminalPoints;
+		for (const auto& e : ir.elements) {
+			if (e.type == PlantElementType::Tube && e.children.empty()) {
+				terminalPoints.push_back(e.endPosition);
 			}
 		}
-		return joints;
+
+		if (!terminalPoints.empty()) {
+			ManifoldJointSpec canopySpec{};
+			canopySpec.parentIndex = 0; // Anchor the mesh to the trunk's root bone
+
+			// SegmentTransform maps local +Z to the directional vector between start and end.
+			// By setting end to +Z (0,0,1), SegmentTransform produces an identity matrix,
+			// preventing it from rotating our already-world-space hull coordinates.
+			canopySpec.start = glm::vec3(0.0f, 0.0f, 0.0f);
+			canopySpec.end   = glm::vec3(0.0f, 0.0f, 1.0f);
+			canopySpec.rigidity = params.baseRigidity;
+
+			if (params.leafMaterialIndex.has_value()) {
+				canopySpec.materialIndex = params.leafMaterialIndex;
+			}
+
+			float leafSize = params.leafSize;
+			std::uint32_t seed = params.seed;
+
+			canopySpec.customShape = [terminalPoints, leafSize, seed]() {
+				return BuildGlobalCanopyHull(terminalPoints, leafSize, seed);
+			};
+
+			joints.push_back(canopySpec);
+		}
 	}
+
+	return joints;
+}
 
 	ModelAsset BuildProceduralPlant(const PlantGenParams& params) {
 		return BuildSkinnedManifoldAsset(BuildPlantJoints(params), params.circularSegments, params.materialIndex);
