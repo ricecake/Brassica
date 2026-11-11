@@ -24,6 +24,7 @@ layout(push_constant) uniform DecorGenPushConstants {
 	uint  blockBaseSlot;  // first ModelInstanceBuffer slot this chunk owns
 	uint  instanceBufIdx;
 	uint  clipmapIndex; // bindless index for TerrainClipmapTexture
+	uint  weatherBiomeIndex; // bindless index for TerrainWeatherBiomeTexture
 	uint  terrainTextureDim;
 	float tileSize;
 	uint  treeModelBase; // first of 6 consecutive tree archetype model indices
@@ -40,9 +41,45 @@ void main() {
 	uint clumpIndex = gl_LocalInvocationID.x;
 	uint slot = push.blockBaseSlot + clumpIndex;
 
+	uint  cx = clumpIndex % 4u;
+	uint  cz = clumpIndex / 4u;
+	float cellStep = push.tileSize * 0.25;
+	vec2  clumpWorldXZ = push.worldOffsetXZ + vec2((float(cx) + 0.5) * cellStep, (float(cz) + 0.5) * cellStep);
+	float height = sampleTerrainClipmap(push.clipmapIndex, clumpWorldXZ, 0u, push.terrainTextureDim).r;
+
+	// Sample biome / climate at this clump position
+	float temp = 0.5;
+	float moisture = 0.5;
+	float severity = 0.0;
+	if (push.weatherBiomeIndex > 0u && push.weatherBiomeIndex != 0xFFFFFFFFu) {
+		vec4 weatherSample = sampleTerrainWeatherBiome(push.weatherBiomeIndex, vec3(clumpWorldXZ.x, height, clumpWorldXZ.y));
+		temp = weatherSample.g;
+		moisture = weatherSample.b;
+		severity = weatherSample.a;
+	}
+
+	float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+	WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+	uint biomeIdx = uint(clamp(wb.biomeIndex, 0.0, 9.0));
+
+	// Biome-aware density modulation:
+	// Hot & dry (cacti/scrub) has lower foliage cover than lush temperate/tropical forests,
+	// but still scaled up by the increased base density.
+	float effectiveDensity = push.density;
+	if (biomeIdx == 7u || moisture < 0.25) {
+		// Arid / Desert
+		effectiveDensity *= clamp(0.35 + moisture * 0.8, 0.2, 0.7);
+	} else if (biomeIdx == 0u) {
+		// Glacier / Ice
+		effectiveDensity *= 0.1;
+	} else {
+		// Temperate, Taiga, Tropical
+		effectiveDensity *= clamp(0.5 + moisture * 0.6, 0.4, 1.0);
+	}
+
 	uint  itemSeed = hashUint(push.cellSeed + clumpIndex * 17u + 1000u);
 	float existsRoll = pcg_hash(itemSeed);
-	if (existsRoll > push.density) {
+	if (existsRoll > effectiveDensity) {
 		// No decor here -- idempotent across regenerations of the same chunk (a chunk is only
 		// ever generated once while resident, but this keeps a stale slot from reading alive if
 		// density/ratios ever change between engine runs).
@@ -53,7 +90,24 @@ void main() {
 	float typeRoll = pcg_hash(itemSeed ^ 0x9e3779b9u);
 	uint  modelIndex;
 	if (typeRoll < push.treeRatio) {
-		uint variant = uint(pcg_hash(itemSeed ^ 0x85ebca6bu) * 6.0) % 6u;
+		// Tree archetype variants:
+		// 0: Small Deciduous, 1: Medium Deciduous, 2: Large Deciduous,
+		// 3: Pine, 4: Palm, 5: Cactus
+		uint treeType = getWhittakerTreeType(biomeIdx, temp, moisture);
+		uint variant = 0u;
+		if (treeType == 0u) {
+			// Cold areas with moisture: Pine
+			variant = 3u;
+		} else if (treeType == 2u) {
+			// Hot and moist: Palm
+			variant = 4u;
+		} else if (treeType == 3u) {
+			// Hot and dry: Cactus
+			variant = 5u;
+		} else {
+			// Temperate: Deciduous trees (variants 0, 1, 2)
+			variant = uint(pcg_hash(itemSeed ^ 0x85ebca6bu) * 3.0) % 3u;
+		}
 		modelIndex = push.treeModelBase + variant;
 	} else if (typeRoll < push.treeRatio + push.bushRatio) {
 		uint variant = uint(pcg_hash(itemSeed ^ 0xc2b2ae35u) * 2.0) % 2u;
@@ -65,12 +119,6 @@ void main() {
 		uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[slot].flags = 0u;
 		return;
 	}
-
-	uint  cx = clumpIndex % 4u;
-	uint  cz = clumpIndex / 4u;
-	float cellStep = push.tileSize * 0.25;
-	vec2  clumpWorldXZ = push.worldOffsetXZ + vec2((float(cx) + 0.5) * cellStep, (float(cz) + 0.5) * cellStep);
-	float height = sampleTerrainClipmap(push.clipmapIndex, clumpWorldXZ, 0u, push.terrainTextureDim).r;
 
 	float yaw = pcg_hash(itemSeed ^ 0x165667b1u) * 6.28318530718;
 

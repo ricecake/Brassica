@@ -106,7 +106,7 @@ namespace {
   brassica::graph::Import<brassica::ModelSkeletonBuffer>
   brassica::graph::Import<brassica::Swapchain>
   brassica::graph::Import<brassica::TerrainTLAS>
-  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture>>
+  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture> >
 STAGE 1:
   brassica::ParticleTypeBufferNode
 STAGE 2:
