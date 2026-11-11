@@ -123,7 +123,7 @@ CloudMarchResult marchClouds(
 	// a very long segment) -- boidish's own atmosphere_lowres.comp uses the same 1000 as a
 	// worst-case bound, not a typical step count; this loop normally exits via t < t_end long
 	// before reaching it.
-	const int kMaxIterations = 1000;
+	const int kMaxIterations = 100000;
 
 	// Weather texels are kilometres wide, so re-sampling the weather map every single ~50m step
 	// is more precision than it has any use for -- cache it and only refresh every 48m along the

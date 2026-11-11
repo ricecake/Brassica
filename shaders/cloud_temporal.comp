@@ -240,6 +240,17 @@ vec2 uv = (vec2(pixel) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 				vec2 sampleUV = (vec2(neighborFreshCoord) + 0.5) / vec2(push.outputWidth, push.outputHeight);
 
 				float sDepth = SAMPLE_NEAREST(push.depthIndex, sampleUV).r;
+				if (sDepth < 0.0) {
+					continue; // confirmed occluded (cloud_raymarch.comp's -1.0 sentinel), not a
+					          // real cloud depth -- same skip the 3b stats loop above already
+					          // uses. Without this, -1.0 always wins the comparison below against
+					          // any real positive cloud depth, corrupting closestCloudDepth (and
+					          // therefore reprojDepth/outMoments.w) into a negative value that
+					          // later defeats cloud_composite.frag's own full-resolution
+					          // safety-net comparison (length(relPos) < cloudDepth can never be
+					          // true once cloudDepth is negative) at exactly the thin/sparse
+					          // foliage silhouettes that safety net exists to protect.
+				}
 				if (sDepth < closestCloudDepth) {
 					closestCloudDepth = sDepth;
 					reprojVelocity = SAMPLE_NEAREST(push.velocityIndex, sampleUV).rg;

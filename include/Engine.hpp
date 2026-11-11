@@ -23,6 +23,9 @@
 #include "passes/lighting/LightManager.hpp"
 #include "passes/lighting/LightningManager.hpp"
 #include "passes/model/GltfModelManager.hpp"
+#include "passes/model/ModelInstanceManager.hpp"
+#include "passes/model/ModelRegistry.hpp"
+#include "passes/model/ProceduralArchetypeCatalog.hpp"
 #include "passes/particle/ParticleManager.hpp"
 #include "passes/AllNodes.hpp"
 #include "passes/material/MaterialManager.hpp"
@@ -32,6 +35,7 @@
 #include "ShaderWatcher.hpp"
 #include "SystemHandler.hpp"
 #include "TaskScheduler.h"
+#include "TextureDumpService.hpp"
 #include "passes/terrain/TerrainAccelerationStructure.hpp"
 #include "passes/terrain/TerrainManager.hpp"
 #include "types/AtmospherePushConstants.hpp"
@@ -339,6 +343,14 @@ namespace brassica {
 		MaterialManager   materialManager;
 		ParticleManager   particleManager;
 		GltfModelManager  gltfModelManager;
+		ModelRegistry     modelRegistry;
+		ModelInstanceManager modelInstanceManager;
+		TextureDumpService   textureDumpService;
+		// Populated from RegisterProceduralArchetypes()'s return value -- Stage 5.2's
+		// DecorPopulationNode needs these base model indices and queries them via ServiceLocator
+		// (ProceduralArchetypeCatalog.hpp), same pattern as modelRegistry/modelInstanceManager
+		// below.
+		ProceduralArchetypeIndices proceduralArchetypeIndices;
 		AtmosphereManager         atmosphereManager;
 		VolumetricLightingManager volumetricLightingManager;
 		CloudLightingManager      cloudLightingManager;

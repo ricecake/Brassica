@@ -1,0 +1,134 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 128, max_primitives = 128) out;
+
+#include "bindless.glsl"
+#include "gltf_mesh.glsl"
+#include "model_instance.glsl"
+
+layout(push_constant) uniform ModelRenderPushConstants {
+	uint instanceBufIdx;
+	uint modelDescBufIdx;
+	uint clipTableBufIdx;
+	uint vertexBufIdx;
+	uint meshletVertexBufIdx;
+	uint meshletTriangleBufIdx;
+	uint meshletBufIdx;
+	uint paletteBufIdx; // unused here -- the mesh shader reads payload.paletteBufIdx instead
+	uint materialBufferIndex;
+	uint visibleListBufIdx;
+	uint livePaletteBufIdx; // unused here, same reason
+}
+push;
+
+struct ModelTaskPayload {
+	vec3  relPosition;
+	float scale;
+	vec4  rotation;
+	uint  paletteBufIdx; // Stage 4: already resolved to baked-or-live by model_render.task
+	uint  paletteBaseA;
+	uint  paletteBaseB;
+	float blend;
+	uint  vertexBase;
+	uint  meshletVertexBase;
+	uint  meshletTriangleWordBase;
+	uint  meshletBase;
+};
+
+taskPayloadSharedEXT ModelTaskPayload payload;
+
+layout(location = 0) out vec3      outWorldPos[];
+layout(location = 1) out vec3      outNormal[];
+layout(location = 2) out vec2      outUv[];
+layout(location = 3) flat out uint outMaterialIndex[];
+layout(location = 4) flat out uint outMaterialBufferIndex[];
+
+void main() {
+	// The task shader's own EmitMeshTasksEXT(desc.meshletCount, 1, 1) call is scoped to this
+	// workgroup's single survivor (model_render.task), so gl_WorkGroupID.x is already that
+	// survivor's own local meshlet index -- no cross-survivor lookup needed (Stage 3).
+	uint meshletIndexLocal = gl_WorkGroupID.x;
+
+	vec3  relPosition = payload.relPosition;
+	float scale = payload.scale;
+	vec4  rotation = payload.rotation;
+	uint  paletteBufIdx = payload.paletteBufIdx;
+	uint  paletteBaseA = payload.paletteBaseA;
+	uint  paletteBaseB = payload.paletteBaseB;
+	float blend = payload.blend;
+	uint  vertexBase = payload.vertexBase;
+	uint  meshletVertexBase = payload.meshletVertexBase;
+	uint  meshletTriangleWordBase = payload.meshletTriangleWordBase;
+	uint  meshletIndex = payload.meshletBase + meshletIndexLocal;
+
+	GltfMeshlet meshlet = uGltfMeshletBuffers[nonuniformEXT(push.meshletBufIdx)].meshlets[meshletIndex];
+
+	uint vCount = min(meshlet.vertexCount, 128u);
+	uint pCount = min(meshlet.triangleCount, 128u);
+	SetMeshOutputsEXT(vCount, pCount);
+
+	for (uint i = 0u; i < vCount; ++i) {
+		uint srcVertexIndexLocal = uGltfMeshletVertexBuffers[nonuniformEXT(push.meshletVertexBufIdx)]
+			.indices[meshletVertexBase + meshlet.vertexOffset + i];
+		GltfVertex v = uGltfVertexBuffers[nonuniformEXT(push.vertexBufIdx)].vertices[vertexBase + srcVertexIndexLocal];
+
+		// Same weight-sum skinned/unskinned branch as the old gltf_render.mesh -- see its
+		// comment. "One skinning interface for every mode" (the plan's own phrase): this blend
+		// math never branches on baked vs. live -- payload.paletteBufIdx already resolved to the
+		// right bindless buffer (ModelClipPaletteBuffer or ModelLivePaletteBuffer) back in
+		// model_render.task, and both have the identical flat mat4[] shape, so reusing this one
+		// readonly alias for either is correct regardless of which physical buffer it points at.
+		float weightSum = v.weights.x + v.weights.y + v.weights.z + v.weights.w;
+		vec3  localPos = v.position;
+		vec3  localNormal = v.normal;
+		if (weightSum > 0.0001) {
+			mat4 skinA =
+				v.weights.x * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseA + v.joints.x] +
+				v.weights.y * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseA + v.joints.y] +
+				v.weights.z * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseA + v.joints.z] +
+				v.weights.w * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseA + v.joints.w];
+			mat4 skinB =
+				v.weights.x * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseB + v.joints.x] +
+				v.weights.y * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseB + v.joints.y] +
+				v.weights.z * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseB + v.joints.z] +
+				v.weights.w * uModelClipPaletteBuffers[nonuniformEXT(paletteBufIdx)].matrices[paletteBaseB + v.joints.w];
+			mat4 skin = (1.0 - blend) * skinA + blend * skinB;
+			localPos = (skin * vec4(v.position, 1.0)).xyz;
+			localNormal = normalize(mat3(skin) * v.normal);
+		}
+
+		vec3 instancePos = RotateByQuat(rotation, localPos * scale);
+		vec3 relWorldPos = relPosition + instancePos;
+		vec3 instanceNormal = RotateByQuat(rotation, localNormal);
+
+		vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
+		gl_MeshVerticesEXT[i].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
+		outWorldPos[i] = relWorldPos + uCameraPosition.xyz;
+		outNormal[i] = instanceNormal;
+		outUv[i] = v.uv;
+		outMaterialIndex[i] = meshlet.materialIndex;
+		outMaterialBufferIndex[i] = push.materialBufferIndex;
+	}
+
+	// meshlet.triangleOffset is model-local (as its producer authored it); meshletTriangleWordBase
+	// is where this survivor's model's packed-triangle chunk starts in the shared buffer -- see
+	// ModelDescEntry's own comment for why this adds cleanly in byte space regardless of whether
+	// that chunk's own byte length happens to be word-aligned.
+	uint triangleByteBase = meshletTriangleWordBase * 4u + meshlet.triangleOffset * 3u;
+	for (uint t = 0u; t < pCount; ++t) {
+		uint byte0 = triangleByteBase + t * 3u + 0u;
+		uint byte1 = triangleByteBase + t * 3u + 1u;
+		uint byte2 = triangleByteBase + t * 3u + 2u;
+
+		uint i0 = (uGltfMeshletTriangleBuffers[nonuniformEXT(push.meshletTriangleBufIdx)].indices[byte0 >> 2u] >>
+			((byte0 & 3u) * 8u)) & 0xFFu;
+		uint i1 = (uGltfMeshletTriangleBuffers[nonuniformEXT(push.meshletTriangleBufIdx)].indices[byte1 >> 2u] >>
+			((byte1 & 3u) * 8u)) & 0xFFu;
+		uint i2 = (uGltfMeshletTriangleBuffers[nonuniformEXT(push.meshletTriangleBufIdx)].indices[byte2 >> 2u] >>
+			((byte2 & 3u) * 8u)) & 0xFFu;
+
+		gl_PrimitiveTriangleIndicesEXT[t] = uvec3(i0, i1, i2);
+	}
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -64,6 +65,9 @@ namespace brassica::render {
 		// comment), but TonemapComputeNode's auto-exposure EMA adaptation genuinely needs it to
 		// stay framerate-independent.
 		float           deltaTime{1.0f / 60.0f};
+		// Model-instance wind-sway gust phase (model_live_eval.comp's uTimeMs) -- a plain
+		// millisecond counter, independent of deltaTime's framerate-adaptation role above.
+		std::uint32_t   timeMs{0};
 		float           worldScale{1.0f};
 		float           multiScatScale{1.0f};
 		float           cloudShadowIntensity{0.5f};

@@ -1,0 +1,91 @@
+#version 460
+
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "model_instance.glsl"
+#include "terrain.glsl"
+
+// Stage 5.2: one workgroup per chunk needing (re)generation this frame (DecorChunkAllocator's
+// own per-frame cap keeps this small), one thread per clump slot within the chunk
+// (local_size_x == kDecorInstancesPerChunk == 16, matching FoliageNode's own 4x4-clumps-per-tile
+// grid -- see shaders/foliage.mesh's own cellStep = tileSize*0.25). Writes real ModelInstance
+// records directly into the reserved decor slot range via the normal bindless storage-write
+// path -- no CPU round-trip, matching the plan's "GPU-side placement, not a CPU loop."
+//
+// Deliberately simpler than foliage.mesh's own biome-ratio-driven type selection (which reads
+// real biome/weather textures) -- this uses fixed tree/bush/rock ratios passed in via push
+// constants instead. A real, communicated simplification for this first version, not a silent
+// guess: revisit if decor placement should actually respect biome boundaries the way grass/
+// fern/flower still do.
+layout(push_constant) uniform DecorGenPushConstants {
+	vec2  worldOffsetXZ; // this tile's min XZ corner
+	uint  cellSeed;       // deterministic per-tile seed (DecorChunkAllocator's own hash)
+	uint  blockBaseSlot;  // first ModelInstanceBuffer slot this chunk owns
+	uint  instanceBufIdx;
+	uint  clipmapIndex; // bindless index for TerrainClipmapTexture
+	uint  terrainTextureDim;
+	float tileSize;
+	uint  treeModelBase; // first of 6 consecutive tree archetype model indices
+	uint  bushModelBase; // first of 2 consecutive bush archetype model indices
+	uint  rockModelBase; // first of 3 consecutive rock archetype model indices
+	float treeRatio;
+	float bushRatio;
+	float rockRatio;
+	float density; // probability a clump has any decor at all
+}
+push;
+
+void main() {
+	uint clumpIndex = gl_LocalInvocationID.x;
+	uint slot = push.blockBaseSlot + clumpIndex;
+
+	uint  itemSeed = hashUint(push.cellSeed + clumpIndex * 17u + 1000u);
+	float existsRoll = pcg_hash(itemSeed);
+	if (existsRoll > push.density) {
+		// No decor here -- idempotent across regenerations of the same chunk (a chunk is only
+		// ever generated once while resident, but this keeps a stale slot from reading alive if
+		// density/ratios ever change between engine runs).
+		uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[slot].flags = 0u;
+		return;
+	}
+
+	float typeRoll = pcg_hash(itemSeed ^ 0x9e3779b9u);
+	uint  modelIndex;
+	if (typeRoll < push.treeRatio) {
+		uint variant = uint(pcg_hash(itemSeed ^ 0x85ebca6bu) * 6.0) % 6u;
+		modelIndex = push.treeModelBase + variant;
+	} else if (typeRoll < push.treeRatio + push.bushRatio) {
+		uint variant = uint(pcg_hash(itemSeed ^ 0xc2b2ae35u) * 2.0) % 2u;
+		modelIndex = push.bushModelBase + variant;
+	} else if (typeRoll < push.treeRatio + push.bushRatio + push.rockRatio) {
+		uint variant = uint(pcg_hash(itemSeed ^ 0x27d4eb2fu) * 3.0) % 3u;
+		modelIndex = push.rockModelBase + variant;
+	} else {
+		uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[slot].flags = 0u;
+		return;
+	}
+
+	uint  cx = clumpIndex % 4u;
+	uint  cz = clumpIndex / 4u;
+	float cellStep = push.tileSize * 0.25;
+	vec2  clumpWorldXZ = push.worldOffsetXZ + vec2((float(cx) + 0.5) * cellStep, (float(cz) + 0.5) * cellStep);
+	float height = sampleTerrainClipmap(push.clipmapIndex, clumpWorldXZ, 0u, push.terrainTextureDim).r;
+
+	float yaw = pcg_hash(itemSeed ^ 0x165667b1u) * 6.28318530718;
+
+	ModelInstance inst;
+	inst.position = vec3(clumpWorldXZ.x, height, clumpWorldXZ.y);
+	inst.scale = 0.8 + 0.4 * pcg_hash(itemSeed ^ 0x8da6b343u);
+	inst.rotation = vec4(0.0, sin(yaw * 0.5), 0.0, cos(yaw * 0.5)); // yaw-only rotation around +Y
+	inst.modelIndex = modelIndex;
+	inst.clipIndex = kModelClipRestPose;
+	inst.startTimeMs = 0u;
+	// Live-capable unconditionally -- rocks' own desc.skeletonBase sentinel (ModelCullNode's
+	// eligibility check) safely falls back to baked/rest for them regardless, same convention
+	// Spawn()'s own liveCapable parameter already relies on.
+	inst.flags = kModelInstanceAliveBit | kModelInstanceLiveCapableBit;
+	inst.seed = itemSeed;
+
+	uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[slot] = inst;
+}

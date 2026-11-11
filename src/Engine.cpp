@@ -13,6 +13,13 @@
 #include "graph/Dot.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
+#include "passes/biome/resources.hpp"
+#include "passes/clouds/resources.hpp"
+#include "passes/model/ManifoldTreeAsset.hpp"
+#include "passes/model/ModelAsset.hpp"
+#include "passes/model/ProceduralArchetypeCatalog.hpp"
+#include "passes/model/ProceduralTreeAsset.hpp"
+#include "passes/terrain/resources.hpp"
 #include "passes/terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
 #include "types/CdlGradingData.hpp"
@@ -516,13 +523,48 @@ namespace brassica {
 			std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {})
 		);
 
-		// Stage 1 of the GLTF/GLB pipeline: load a single hardcoded test asset at startup -- no
-		// asset-selection UI or multi-model support yet, see GltfModelManager's own comment.
-		// Provided unconditionally regardless of load success/failure: a failed load just leaves
-		// GetMeshletCount() at 0, which already keeps GltfRenderNode inactive on its own.
-		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager);
-		serviceLocator.Provide<GltfModelManager>(
-			std::shared_ptr<GltfModelManager>(&gltfModelManager, [](GltfModelManager*) {})
+		// Stage 2: ModelRegistry is producer-agnostic -- GltfModelManager (a real glTF/GLB file)
+		// is one producer, BuildProceduralTreeAsset() (a hand-built asset, no file/textures at
+		// all) is another, proving the registry doesn't secretly assume glTF. Registered
+		// unconditionally regardless of the glTF load's success: a failed load just leaves
+		// cowAsset empty (0 meshlets), which registers as a harmless no-op model. Failed load
+		// result intentionally unchecked here, same as the old single-model call -- a model
+		// with GetTotalMeshletCount() == 0 already keeps ModelRenderNode inactive on its own.
+		ModelAsset cowAsset;
+		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager, cowAsset);
+		modelRegistry.RegisterAsset(cowAsset, "Cow");
+		modelRegistry.RegisterAsset(BuildProceduralTreeAsset(), "Procedural Tree");
+		modelRegistry.RegisterAsset(BuildManifoldTestTree(), "Manifold Test Tree");
+		proceduralArchetypeIndices = RegisterProceduralArchetypes(modelRegistry, materialManager);
+		serviceLocator.Provide<ModelRegistry>(std::shared_ptr<ModelRegistry>(&modelRegistry, [](ModelRegistry*) {}));
+		serviceLocator.Provide<ModelInstanceManager>(
+			std::shared_ptr<ModelInstanceManager>(&modelInstanceManager, [](ModelInstanceManager*) {})
+		);
+
+		// Debug texture dump: click-a-button GPU->CPU copy + PNG export for world-state
+		// textures (TextureDumpWidget, "Debug" category). Pre-registered, fixed list -- add
+		// the next one as one more RegisterDumpable<K>() call. TerrainBiomeMainTexture/
+		// TerrainWeatherBiomeTexture are TerrainBiomeNode's stable resolved outputs; the A/B
+		// suffixed keys are its internal CA ping-pong state (either side is "real," neither is
+		// uniquely "current" from outside that node), exposed separately rather than guessed at.
+		textureDumpService.Init(device, graphicsQueue, graphicsQueueFamily, allocator, physicalRegistry);
+		textureDumpService.RegisterDumpable<TerrainBiomeMainTexture>("Biome Map");
+		textureDumpService.RegisterDumpable<TerrainWeatherBiomeTexture>("Weather/Cloud Coverage Map");
+		textureDumpService.RegisterDumpable<TerrainWeatherPingPongTexture>("Weather CA Ping-Pong State");
+		textureDumpService.RegisterDumpable<TerrainWeatherMapATexture>("Weather CA State (A)");
+		textureDumpService.RegisterDumpable<TerrainWeatherMapBTexture>("Weather CA State (B)");
+		textureDumpService.RegisterDumpable<TerrainBiomeMapATexture>("Biome CA State (A)");
+		textureDumpService.RegisterDumpable<TerrainBiomeMapBTexture>("Biome CA State (B)");
+		textureDumpService.RegisterDumpable<TerrainClipmapTexture>("Terrain Height/Normal (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainMinMaxTexture>("Terrain Min/Max (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainBiomeTexture>("Terrain Biome Index (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainShadowMap>("Terrain Shadow Map");
+		textureDumpService.RegisterDumpable<CloudShadowMap>("Cloud Shadow Map");
+		serviceLocator.Provide<TextureDumpService>(
+			std::shared_ptr<TextureDumpService>(&textureDumpService, [](TextureDumpService*) {})
+		);
+		serviceLocator.Provide<ProceduralArchetypeIndices>(
+			std::shared_ptr<ProceduralArchetypeIndices>(&proceduralArchetypeIndices, [](ProceduralArchetypeIndices*) {})
 		);
 
 		particleManager.Initialize();
@@ -1449,8 +1491,8 @@ namespace brassica {
 			materialManager.RegisterBufferNode(frameGraph, physicalRegistry.Catalog());
 			lightManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
-			gltfModelManager.UpdatePose(0.0f); // no real frame time in this path -- see its own comment
-			gltfModelManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+			modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+			modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 			nodeRegistry.RegisterAllInto(frameGraph);
 			vk::Extent2D        extent = GetSwapchainExtent();
 			graph::FrameContext ctx{
@@ -1667,6 +1709,8 @@ namespace brassica {
 		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
 		ubo.previousViewProjMatrix = previousViewProjMatrix;
 		ubo.time = static_cast<float>(currentTime);
+		// From the double, not from the already-narrowed ubo.time -- see FrameUBO.hpp's comment.
+		ubo.timeMs = static_cast<std::uint32_t>(currentTime * 1000.0);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
 		ubo.nearPlane = camera.nearPlane;
@@ -1820,6 +1864,7 @@ namespace brassica {
 			.moonRadiance = moonRadiance,
 			.time = ubo.time,
 			.deltaTime = deltaTime,
+			.timeMs = ubo.timeMs,
 			.worldScale = 1.0f,
 			.multiScatScale = atmosphereManager.GetMultiScatScale(),
 			.cloudShadowIntensity = 0.5f,
@@ -1844,8 +1889,9 @@ namespace brassica {
 		materialManager.RegisterBufferNode(frameGraph, physicalRegistry.Catalog());
 		lightManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
-		gltfModelManager.UpdatePose(ubo.time);
-		gltfModelManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+		modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+		modelInstanceManager.SetCurrentTimeMs(ubo.timeMs);
+		modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
@@ -2448,14 +2494,15 @@ namespace brassica {
 		// image2D/image2DArray/image3D aliases at binding 3). AssignAndWriteBindlessBufferIndex
 		// (PhysicalRegistry.hpp) auto-registers *every* eStorageBuffer-usage buffer here the
 		// moment it's provisioned, regardless of whether anything actually reads its index --
-		// 21 distinct keys are live today (entity, material, 5x foliage archetype/instance, 5x
-		// gltf geometry, 7x particle buffers now that the cluster's reactivated), and
+		// confirmed on real hardware that 20+ distinct keys are live today (entity, material,
+		// clustered lighting, 5x foliage archetype/instance, 5x gltf geometry, the full
+		// Model*/decor buffer set, 7x particle buffers now that the cluster's reactivated), and
 		// BindlessArena's own index 0 is never handed out (see its own comment), so 16 slots
 		// only ever gave 15 usable ones -- confirmed overflowing on real hardware as a
 		// "vkUpdateDescriptorSets ... oversteps the bounds of this binding" validation error
-		// (same fix already landed independently on the model-work branch, commit 8a140f1,
-		// once *its* buffers pushed the same pre-existing 16-slot cap over). 64 gives real
-		// headroom beyond today's count.
+		// (same fix landed independently on both the main-unified and model-work branches once
+		// each side's own buffer growth pushed the same pre-existing 16-slot cap over). 64 gives
+		// real headroom beyond today's count.
 		bindings[6]
 			.setBinding(6)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)

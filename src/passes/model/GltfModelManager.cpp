@@ -1,20 +1,10 @@
 #include "passes/model/GltfModelManager.hpp"
 
-#include <cmath>
-
-#include "graph/Graph.hpp"
-#include "graph/ResourceCatalog.hpp"
-#include "vulkan/vulkan.hpp"
+#include "passes/model/ModelAsset.hpp"
 
 namespace brassica {
 
 	namespace {
-
-		graph::ResourceDesc DeviceAddressBufferDesc(std::uint64_t byteSize) {
-			graph::ResourceDesc desc = graph::StagedStorageBufferDesc(byteSize);
-			desc.usageMask |= static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eShaderDeviceAddress);
-			return desc;
-		}
 
 		std::uint32_t ResolveTextureId(std::int32_t imageIndex, const std::vector<std::uint32_t>& bindlessIndices) {
 			if (imageIndex < 0 || static_cast<std::size_t>(imageIndex) >= bindlessIndices.size()) {
@@ -23,12 +13,36 @@ namespace brassica {
 			return bindlessIndices[static_cast<std::size_t>(imageIndex)];
 		}
 
+		// Model-local (pre instance-transform) bounds, the union of every rest-pose skinned
+		// vertex -- same skin-and-bound pattern GltfModel::BakeClips uses per baked frame,
+		// just for the rest pose (palette[0..jointCount)) specifically.
+		void ComputeRestBounds(const std::vector<GltfVertex>& vertices, const std::vector<glm::mat4>& restPose, ModelAsset& asset) {
+			glm::vec3 lo(1e30f);
+			glm::vec3 hi(-1e30f);
+			for (const GltfVertex& v : vertices) {
+				float weightSum = v.weights.x + v.weights.y + v.weights.z + v.weights.w;
+				glm::vec3 pos = v.position;
+				if (weightSum > 0.0001f && !restPose.empty()) {
+					glm::mat4 skin = v.weights.x * restPose[v.joints.x] + v.weights.y * restPose[v.joints.y] +
+						v.weights.z * restPose[v.joints.z] + v.weights.w * restPose[v.joints.w];
+					pos = glm::vec3(skin * glm::vec4(v.position, 1.0f));
+				}
+				lo = glm::min(lo, pos);
+				hi = glm::max(hi, pos);
+			}
+			if (lo.x <= hi.x) {
+				asset.restBoundsCenter = (lo + hi) * 0.5f;
+				asset.restBoundsRadius = glm::length(hi - asset.restBoundsCenter);
+			}
+		}
+
 	} // namespace
 
 	bool GltfModelManager::LoadFromFile(
 		const std::filesystem::path&     path,
 		graph::PhysicalResourceRegistry& registry,
-		MaterialManager&                 materialManager
+		MaterialManager&                 materialManager,
+		ModelAsset&                      outAsset
 	) {
 		if (!m_model.LoadFromFile(path)) {
 			return false;
@@ -60,50 +74,23 @@ namespace brassica {
 		}
 		m_model.RemapMaterialIndices(localToGlobal);
 
-		m_vertexBufNode.SetData(m_model.Vertices());
-		m_meshletVertexBufNode.SetData(m_model.MeshletVertices());
-		m_meshletTriangleBufNode.SetData(m_model.MeshletTrianglesPacked());
-		m_meshletBufNode.SetData(m_model.Meshlets());
+		outAsset.vertices = m_model.Vertices();
+		outAsset.meshletVertices = m_model.MeshletVertices();
+		outAsset.meshletTrianglesPacked = m_model.MeshletTrianglesPacked();
+		outAsset.meshlets = m_model.Meshlets();
+		outAsset.jointCount = static_cast<std::uint32_t>(m_model.JointCount());
 
-		// Seeds the joint matrix buffer with a real pose immediately (t=0 of whichever animation
-		// is selected, or a single identity matrix if the model has no skin) -- UpdatePose is also
-		// called every frame from here on (Engine.cpp), but without this the very first frame's
-		// buffer would be empty/unset before that first call ever runs.
-		UpdatePose(0.0f);
+		// Baked once at load (Stage 0's measured 120 Hz floor -- see GltfModel::BakeClips's own
+		// comment).
+		m_model.BakeClips(120.0f, outAsset.palette, outAsset.clipTable);
+
+		std::vector<glm::mat4> restPose(
+			outAsset.palette.begin(),
+			outAsset.palette.begin() + static_cast<std::ptrdiff_t>(outAsset.jointCount)
+		);
+		ComputeRestBounds(outAsset.vertices, restPose, outAsset);
+
 		return true;
-	}
-
-	void GltfModelManager::UpdatePose(float time) {
-		std::vector<glm::mat4> jointMatrices;
-		if (m_model.JointCount() == 0) {
-			jointMatrices.assign(1, glm::mat4(1.0f));
-		} else {
-			float duration =
-				m_currentAnimationIndex < m_model.Animations().size()
-					? m_model.Animations()[m_currentAnimationIndex].duration
-					: 0.0f;
-			float wrappedTime = duration > 0.0f ? std::fmod(time, duration) : 0.0f;
-			m_model.EvaluatePose(m_currentAnimationIndex, wrappedTime, jointMatrices);
-		}
-		m_jointMatrixBufNode.SetData(jointMatrices);
-	}
-
-	void GltfModelManager::RegisterBufferNodes(graph::Graph& frameGraph, graph::ResourceCatalog& catalog) {
-		catalog.Get<GltfVertexBuffer>().byteSize = m_model.Vertices().size() * sizeof(GltfVertex);
-		catalog.Get<GltfMeshletVertexBuffer>().byteSize = m_model.MeshletVertices().size() * sizeof(std::uint32_t);
-		catalog.Get<GltfMeshletTriangleBuffer>().byteSize =
-			m_model.MeshletTrianglesPacked().size() * sizeof(std::uint32_t);
-		catalog.Get<GltfMeshletBuffer>().byteSize = m_model.Meshlets().size() * sizeof(GltfMeshlet);
-		// Mirrors UpdatePose's own jointMatrices.size() -- 1 identity matrix for an unskinned
-		// model, JointCount() otherwise.
-		catalog.Get<GltfJointMatrixBuffer>().byteSize =
-			(m_model.JointCount() > 0 ? m_model.JointCount() : 1) * sizeof(glm::mat4);
-
-		frameGraph.RegisterRef(m_vertexBufNode);
-		frameGraph.RegisterRef(m_meshletVertexBufNode);
-		frameGraph.RegisterRef(m_meshletTriangleBufNode);
-		frameGraph.RegisterRef(m_meshletBufNode);
-		frameGraph.RegisterRef(m_jointMatrixBufNode);
 	}
 
 } // namespace brassica

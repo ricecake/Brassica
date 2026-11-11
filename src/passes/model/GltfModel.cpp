@@ -9,16 +9,13 @@
 #include "fastgltf/core.hpp"
 #include "fastgltf/glm_element_traits.hpp"
 #include "fastgltf/tools.hpp"
-#include "meshoptimizer.h"
+#include "passes/model/MeshletBuilder.hpp"
 #include "spdlog/spdlog.h"
 #include "stb_image.h"
 
 namespace brassica {
 
 	namespace {
-
-		constexpr std::size_t kMaxMeshletVerts = 128;
-		constexpr std::size_t kMaxMeshletTris = 128;
 
 		// Decodes one triangle-list primitive's accessors and its meshlets, then appends them
 		// into the model-wide arrays, rebasing every index/offset so they address the model-wide
@@ -107,97 +104,14 @@ namespace brassica {
 				return;
 			}
 
-			std::size_t                     maxMeshlets = meshopt_buildMeshletsBound(
-                primIndices.size(),
-                kMaxMeshletVerts,
-                kMaxMeshletTris
-            );
-			std::vector<meshopt_Meshlet>    rawMeshlets(maxMeshlets);
-			std::vector<unsigned int>       rawMeshletVertices(maxMeshlets * kMaxMeshletVerts);
-			std::vector<unsigned char>      rawMeshletTriangles(maxMeshlets * kMaxMeshletTris * 3);
-
-			std::size_t meshletCount = meshopt_buildMeshlets(
-				rawMeshlets.data(),
-				rawMeshletVertices.data(),
-				rawMeshletTriangles.data(),
-				primIndices.data(),
-				primIndices.size(),
-				&primVertices[0].position.x,
-				primVertices.size(),
-				sizeof(GltfVertex),
-				kMaxMeshletVerts,
-				kMaxMeshletTris,
-				0.0f
-			);
-			rawMeshlets.resize(meshletCount);
-			if (meshletCount > 0) {
-				const meshopt_Meshlet& last = rawMeshlets.back();
-				rawMeshletVertices.resize(last.vertex_offset + last.vertex_count);
-				rawMeshletTriangles.resize(last.triangle_offset + last.triangle_count * 3);
-			} else {
-				rawMeshletVertices.clear();
-				rawMeshletTriangles.clear();
-			}
-
-			// Recommended by meshoptimizer's own meshopt_buildMeshlets doc comment: reorders each
-			// meshlet's own vertex/triangle ranges in place for better locality, same arrays /
-			// offsets, no rebasing implications for the code below.
-			for (const meshopt_Meshlet& m : rawMeshlets) {
-				meshopt_optimizeMeshlet(
-					&rawMeshletVertices[m.vertex_offset],
-					&rawMeshletTriangles[m.triangle_offset],
-					m.triangle_count,
-					m.vertex_count
-				);
-			}
-
-			const auto vertexBase = static_cast<std::uint32_t>(outVertices.size());
-			const auto meshletVertexBase = static_cast<std::uint32_t>(outMeshletVertices.size());
-			const auto triangleByteBase = static_cast<std::uint32_t>(triangleBytes.size());
-
-			outVertices.insert(outVertices.end(), primVertices.begin(), primVertices.end());
-
-			outMeshletVertices.reserve(outMeshletVertices.size() + rawMeshletVertices.size());
-			for (unsigned int localVertexIndex : rawMeshletVertices) {
-				outMeshletVertices.push_back(vertexBase + localVertexIndex);
-			}
-
-			triangleBytes.insert(triangleBytes.end(), rawMeshletTriangles.begin(), rawMeshletTriangles.end());
-
-			outMeshlets.reserve(outMeshlets.size() + rawMeshlets.size());
-			for (const meshopt_Meshlet& m : rawMeshlets) {
-				meshopt_Bounds bounds = meshopt_computeMeshletBounds(
-					&rawMeshletVertices[m.vertex_offset],
-					&rawMeshletTriangles[m.triangle_offset],
-					m.triangle_count,
-					&primVertices[0].position.x,
-					primVertices.size(),
-					sizeof(GltfVertex)
-				);
-
-				GltfMeshlet gpuMeshlet{};
-				gpuMeshlet.vertexOffset = meshletVertexBase + m.vertex_offset;
-				// meshopt's own triangle_offset addresses its flat uint8 micro-index buffer
-				// directly (a byte/corner offset); GltfMeshlet stores triangleOffset in *triangle*
-				// units instead (see shaders/gltf_mesh.glsl's GltfMeshletTriangleRef comment:
-				// byteIndex = meshlet.triangleOffset*3 + ...), so divide by 3 here. Always exact:
-				// meshopt lays out each meshlet's byte range as count*3, a whole multiple of 3.
-				gpuMeshlet.triangleOffset = (triangleByteBase + m.triangle_offset) / 3u;
-				gpuMeshlet.vertexCount = m.vertex_count;
-				gpuMeshlet.triangleCount = m.triangle_count;
-				gpuMeshlet.boundsCenter = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
-				gpuMeshlet.boundsRadius = bounds.radius;
-				gpuMeshlet.coneAxis = glm::vec3(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2]);
-				gpuMeshlet.coneCutoff = bounds.cone_cutoff;
-				// Local (this model's own Materials() index) for now -- GltfModelManager rewrites
-				// this to the real global MaterialBuffer index via RemapMaterialIndices once every
-				// GltfMaterial has been registered into the shared MaterialManager. 0xFFFFFFFFu
-				// ("no material") remaps to MaterialManager's own always-present default material
-				// at global index 0 -- see RemapMaterialIndices.
-				gpuMeshlet.materialIndex =
-					prim.materialIndex.has_value() ? static_cast<std::uint32_t>(prim.materialIndex.value()) : 0xFFFFFFFFu;
-				outMeshlets.push_back(gpuMeshlet);
-			}
+			// Local (this model's own Materials() index) for now -- GltfModelManager rewrites
+			// this to the real global MaterialBuffer index via RemapMaterialIndices once every
+			// GltfMaterial has been registered into the shared MaterialManager. 0xFFFFFFFFu
+			// ("no material") remaps to MaterialManager's own always-present default material
+			// at global index 0 -- see RemapMaterialIndices.
+			std::uint32_t materialIndex =
+				prim.materialIndex.has_value() ? static_cast<std::uint32_t>(prim.materialIndex.value()) : 0xFFFFFFFFu;
+			BuildMeshlets(primVertices, primIndices, materialIndex, outVertices, outMeshletVertices, triangleBytes, outMeshlets);
 		}
 
 		// Raw encoded (PNG/JPEG) bytes for one glTF image. GLB-embedded images are
@@ -713,6 +627,71 @@ namespace brassica {
 			std::uint32_t jointNode = m_jointNodeIndices[i];
 			glm::mat4     global = jointNode < globalTransforms.size() ? globalTransforms[jointNode] : glm::mat4(1.0f);
 			outJointMatrices[i] = global * m_inverseBindMatrices[i];
+		}
+	}
+
+	void GltfModel::BakeClips(
+		float                        sampleRateHz,
+		std::vector<glm::mat4>&      outPalette,
+		std::vector<ModelClipEntry>& outClipTable
+	) const {
+		outPalette.clear();
+		outClipTable.clear();
+
+		std::size_t jointCount = JointCount();
+		if (jointCount == 0) {
+			outPalette.assign(1, glm::mat4(1.0f)); // see this method's own header comment
+			return;
+		}
+
+		// Rest pose always occupies palette[0 .. jointCount) -- out-of-range animationIndex is
+		// EvaluatePose's own documented "fall back to rest pose" contract.
+		std::vector<glm::mat4> rest;
+		EvaluatePose(static_cast<std::uint32_t>(m_animations.size()), 0.0f, rest);
+		outPalette.insert(outPalette.end(), rest.begin(), rest.end());
+
+		float frameDt = 1.0f / sampleRateHz;
+		outClipTable.reserve(m_animations.size());
+		for (std::size_t clipIdx = 0; clipIdx < m_animations.size(); ++clipIdx) {
+			const GltfAnimation& anim = m_animations[clipIdx];
+
+			ModelClipEntry entry{};
+			entry.paletteBase = static_cast<std::uint32_t>(outPalette.size());
+			entry.durationMs = static_cast<std::uint32_t>(anim.duration * 1000.0f);
+			entry.frameDtMs = frameDt * 1000.0f;
+
+			glm::vec3 boundsMin(1e30f);
+			glm::vec3 boundsMax(-1e30f);
+
+			int frameCount = anim.duration > 0.0f ? static_cast<int>(anim.duration / frameDt) + 2 : 1;
+			for (int f = 0; f < frameCount; ++f) {
+				std::vector<glm::mat4> pose;
+				EvaluatePose(
+					static_cast<std::uint32_t>(clipIdx),
+					std::min(static_cast<float>(f) * frameDt, anim.duration),
+					pose
+				);
+				outPalette.insert(outPalette.end(), pose.begin(), pose.end());
+
+				for (const GltfVertex& v : m_vertices) {
+					float weightSum = v.weights.x + v.weights.y + v.weights.z + v.weights.w;
+					if (weightSum <= 0.0001f) {
+						continue; // unskinned vertex never moves with this clip; rest-pose bounds already cover it
+					}
+					glm::mat4 skin = v.weights.x * pose[v.joints.x] + v.weights.y * pose[v.joints.y] +
+						v.weights.z * pose[v.joints.z] + v.weights.w * pose[v.joints.w];
+					glm::vec3 pos = glm::vec3(skin * glm::vec4(v.position, 1.0f));
+					boundsMin = glm::min(boundsMin, pos);
+					boundsMax = glm::max(boundsMax, pos);
+				}
+			}
+
+			entry.frameCount = static_cast<std::uint32_t>(frameCount);
+			if (boundsMin.x <= boundsMax.x) {
+				entry.boundsCenter = (boundsMin + boundsMax) * 0.5f;
+				entry.boundsRadius = glm::length(boundsMax - entry.boundsCenter);
+			}
+			outClipTable.push_back(entry);
 		}
 	}
 

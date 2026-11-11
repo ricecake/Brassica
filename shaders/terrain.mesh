@@ -92,6 +92,12 @@ void main() {
 	vec2 offsetDist = abs(relBaseXZ);
 	float distToCam = max(offsetDist.x, offsetDist.y);
 
+	// alpha blends this vertex's height/normal/biome sample between morphLOD and morphLOD+1 near
+	// the outer edge of morphLOD's ring, so the surface doesn't pop when a meshlet's LOD changes.
+	// XZ-position morphing (snapping relBaseXZ itself toward the coarser grid) is disabled --
+	// relMorphedXZ stays equal to relBaseXZ -- so only height/normal/biome blend, not vertex
+	// position. (If XZ-morphing is ever re-enabled, morphedWorldXZ below needs to track
+	// relMorphedXZ again instead of being anchor-plus-localPos directly.)
 	float alpha = 0.0;
 	vec2  relMorphedXZ = relBaseXZ;
 	vec2 morphedWorldXZ = cameraSnapForMorph + pureGridOffset + localPos;

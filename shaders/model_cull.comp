@@ -1,0 +1,121 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "helpers/culling.glsl"
+#include "model_instance.glsl"
+
+// Stage 3/4: walks every instance slot once per frame (same fixed capacity walk model_render.task
+// used to do directly in Stage 1/2), resolving pose, picking a render mode, and frustum-culling
+// each live instance, compacting survivors into ModelVisibleListBuffer and sizing
+// ModelIndirectArgsBuffer's groupCountX for model_render.task's indirect dispatch -- see that
+// shader's own comment for how one compacted entry now maps to exactly one task workgroup.
+// groupCountX doubles as the live append counter, same idiom as FoliageIndirectArgsBuffer
+// (ModelCullResetNode zeroes it first).
+//
+// Mode selection (the plan's "capability flags x distance x pool budget"): an instance with
+// kModelInstanceLiveCapableBit set, whose model actually has skeleton data, within
+// kModelLiveDistanceThreshold of the camera, attempts an atomic claim on the fixed
+// kModelLiveBudget pool (ModelLiveIndirectArgsBuffer.rawLiveCount, also "atomic serves double
+// duty" -- it's both the claim-order index and ModelLiveEvalNode's own live count). A successful
+// claim skips ResolveModelPose entirely (nothing to resolve -- ModelLiveEvalNode fills the live
+// palette slot this same frame) and points paletteBaseA/B at that slot. Overflow (budget
+// exhausted) or ineligibility falls through to exactly today's baked/rest resolution.
+layout(push_constant) uniform ModelCullPushConstants {
+	uint instanceBufIdx;
+	uint modelDescBufIdx;
+	uint clipTableBufIdx;
+	uint visibleListBufIdx;
+	uint indirectArgsBufIdx;
+	uint liveListBufIdx;
+	uint liveIndirectArgsBufIdx;
+}
+push;
+
+// Distance threshold and bounds-padding factor are genuinely unspecified by the plan (it names
+// "distance" and "conservative cull bounds, padded by max bend x branch extent" without pinning
+// down numbers) -- these are first-cut concrete values, not a cut feature; tune freely.
+const float kModelLiveDistanceThreshold = 50.0;
+const float kModelLiveBoundsPaddingFactor = 1.5; // live-eligible instances get a bigger cull volume to cover wind bend
+
+void main() {
+	uint slot = gl_GlobalInvocationID.x;
+	if (slot >= kModelInstanceCapacity) {
+		return;
+	}
+
+	ModelInstance inst = uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[slot];
+	if ((inst.flags & kModelInstanceAliveBit) == 0u) {
+		return;
+	}
+
+	ModelDescEntry desc = uModelDescBuffers[nonuniformEXT(push.modelDescBufIdx)].entries[inst.modelIndex];
+
+	vec3 relPosition = inst.position - uCameraPosition.xyz;
+
+	bool liveEligible = (inst.flags & kModelInstanceLiveCapableBit) != 0u && desc.skeletonBase != kModelNoSkeletonSentinel &&
+		desc.jointCount <= kModelLiveMaxJointCount &&
+		dot(relPosition, relPosition) < kModelLiveDistanceThreshold * kModelLiveDistanceThreshold;
+
+	vec3  boundsCenter;
+	float boundsRadius;
+	if (inst.clipIndex < desc.clipCount) {
+		ModelClipEntry clip =
+			uModelClipTableBuffers[nonuniformEXT(push.clipTableBufIdx)].clips[desc.clipTableOffset + inst.clipIndex];
+		boundsCenter = relPosition + RotateByQuat(inst.rotation, clip.boundsCenter * inst.scale);
+		boundsRadius = clip.boundsRadius * inst.scale;
+	} else {
+		boundsCenter = relPosition + RotateByQuat(inst.rotation, desc.restBoundsCenter * inst.scale);
+		boundsRadius = desc.restBoundsRadius * inst.scale;
+	}
+	// Conservative cull bounds for a live-eligible instance (whether or not its claim below
+	// actually succeeds): a wind-bent branch can swing further than its rest/clip bounds alone
+	// would suggest.
+	if (liveEligible) {
+		boundsRadius *= kModelLiveBoundsPaddingFactor;
+	}
+
+	mat4 viewRel = mat4(mat3(uViewMatrix));
+	mat4 viewProjRel = uProjMatrix * viewRel;
+	vec3 margin = vec3(boundsRadius);
+	vec3 relMinB = boundsCenter - boundsRadius;
+	vec3 relMaxB = boundsCenter + boundsRadius;
+
+	if (!isAABBVisible(relMinB, relMaxB, viewProjRel, margin, -boundsRadius)) {
+		return;
+	}
+
+	uint  paletteBaseA, paletteBaseB;
+	float blend;
+	uint  mode = kModelVisibleModeBaked;
+
+	if (liveEligible) {
+		uint liveSlot =
+			atomicAdd(uModelLiveIndirectArgsBuffers[nonuniformEXT(push.liveIndirectArgsBufIdx)].rawLiveCount, 1u);
+		if (liveSlot < kModelLiveBudget) {
+			uModelLiveListBuffers[nonuniformEXT(push.liveListBufIdx)].instanceIndex[liveSlot] = slot;
+			paletteBaseA = liveSlot * kModelLiveMaxJointCount;
+			paletteBaseB = paletteBaseA;
+			blend = 0.0;
+			mode = kModelVisibleModeLive;
+		}
+	}
+
+	if (mode == kModelVisibleModeBaked) {
+		ResolveModelPose(inst, desc, uTimeMs, push.clipTableBufIdx, paletteBaseA, paletteBaseB, blend);
+	}
+
+	uint idx = atomicAdd(uModelIndirectArgsBuffers[nonuniformEXT(push.indirectArgsBufIdx)].groupCountX, 1u);
+	if (idx >= kModelInstanceCapacity) {
+		return;
+	}
+
+	ModelVisibleEntry entry;
+	entry.instanceIndex = slot;
+	entry.paletteBaseA = paletteBaseA;
+	entry.paletteBaseB = paletteBaseB;
+	entry.blend = blend;
+	entry.mode = mode;
+	uModelVisibleListBuffers[nonuniformEXT(push.visibleListBufIdx)].entries[idx] = entry;
+}

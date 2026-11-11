@@ -156,6 +156,17 @@ add_subdirectory(external/doctest)
 add_subdirectory(external/argparse)
 add_subdirectory(external/geometry-central)
 add_subdirectory(external/SPIRV-Reflect)
+
+# Manifold (CSG/boolean mesh ops, for procedural tree/bush/rock generation -- Stage 5 of the
+# GPU-driven model-instance plan). Disable everything that would otherwise pull in extra
+# FetchContent'd dependencies (googletest, TBB, nanobind) -- BUILD_SHARED_LIBS is already forced
+# OFF above, so Manifold's own `option(BUILD_SHARED_LIBS ... ON)` is a no-op (CMake's option()
+# doesn't override an already-cached variable).
+set(MANIFOLD_TEST OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_CBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_PYBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_PAR OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/manifold)
 if(TARGET eigen)
     target_compile_definitions(eigen INTERFACE EIGEN_MAX_ALIGN_BYTES=0 EIGEN_DONT_ALIGN)
 endif()
@@ -225,6 +236,7 @@ target_include_directories(brassica
         external/imgui_entt_entity_editor
         ${CMAKE_CURRENT_SOURCE_DIR}/external/geometry-central/include
         external/eigen
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/manifold/include
 )
 
 target_link_libraries(brassica
@@ -246,6 +258,7 @@ target_link_libraries(brassica
         efsw-static
         argparse
         geometry-central
+        manifold
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14.0)

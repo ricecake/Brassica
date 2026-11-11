@@ -79,47 +79,31 @@ namespace {
 	// `ctest -R test_rendergraph --output-on-failure` (or run the binary directly with
 	// `--test-case="Force-all-active*" --success`) and copy the printed "actual dump" back in
 	// here if a stage intentionally changes.
-	// Re-captured for the CPU/GPU light buffer split (passes/lighting/Light.hpp,
-	// LightManager.hpp/.cpp): stage count dropped from 25 to 21. Confirmed via git-stash
-	// comparison against the pre-split code that this is a real effect of the split, not a
-	// fixture-only guess -- the old shared LightsBuffer was a single multi-writer key
-	// (Import<LightsBuffer>, LightningAgeNode, ParticleBehaviorNode), so *every* reader of any
-	// light (including ones that only ever need the static CPU sun/moon, e.g. TerrainBiomeNode's
-	// climate_ca.comp sun-direction read) transitively had to wait for the GPU-light writer
-	// chain (ParticleBehaviorNode/LightningAgeNode) to finish first. Splitting into
-	// CpuLightsBuffer (single producer: LightManager's own PredefinedBufferNode, an Import<> here
-	// since this test has no LightManager -- ready in STAGE 0, same as every other
-	// manager-owned-buffer Import<> this test already registers) and GpuLightsBuffer (still
-	// multi-writer: GpuLightsResetNode/LightningAgeNode/ParticleBehaviorNode) means a
-	// CPU-light-only reader now only waits on STAGE 0 -- which is exactly why TerrainBiomeNode
-	// moved from STAGE 7 (right after ParticleBehaviorNode) down to STAGE 2 (right after
-	// GpuLightsResetNode, alongside TerrainGenNode). This is the intended effect of "split the
-	// lights to avoid weird round trips," not a dependency regression -- the schedule stayed
-	// acyclic/unambiguous (this test's own REQUIRE) and every node kept exactly the resource
-	// edges its own Setup() declares, just with fewer of them chained through one shared buffer.
-	// Re-captured again for ShadingRateComputeNode (variable rate shading): one-line addition,
-	// STAGE 2, alongside the other zero-dependency Compute nodes -- its only accesses are
-	// ReadPrevious<ShadingRateMap>()/ReadPrevious<HiZTexture>() (both resolve to an Import<> or a
-	// real producer already in STAGE 0/1, never this frame's own chain) and Create<ShadingRateMap>(),
-	// so it needs no explicit relation to anything. No MULTI-WRITER KEYS change: it's
-	// ShadingRateMap's sole producer, same as HiZDownsampleNode is for HiZTexture.
-	// Re-captured again after rebasing onto main (2026-11-10): GroundDebrisNode (main's own,
-	// independent addition) is a 5th GBuffer writer alongside Entity/FoliageArchetype/Foliage/
-	// Gltf/Terrain, landing in its own new STAGE 9 and shifting every later stage number by one.
-	// Also a cosmetic-only "History<HiZTexture> >" -> "History<HiZTexture>>" spacing change in the
-	// STAGE 0 import list -- a compiler/stdlib type-name rendering difference, not a real change.
+	// Re-captured for the CPU/GPU light buffer split and ShadingRateComputeNode (main's own
+	// lineage), then again after rebasing the model-work branch (generalized-model-mahem) onto
+	// main on 2026-11-10 -- GltfRenderNode replaced by ModelRenderNode, FoliageBakeNode/
+	// FoliageIndirectResetNode/FoliageArchetypeRenderNode deleted (superseded by
+	// DecorPopulationNode's persistent population of real Manifold-generated models), the full
+	// Model*/ModelInstanceWriteBuffer Import<> set and ModelCullResetNode/ModelInstanceScatterNode/
+	// DecorPopulationNode/ModelCullNode/ModelLiveFinalizeNode/ModelLiveEvalNode/ModelRenderNode
+	// added. Recaptured for real from a live run after resolving the rebase conflicts (see git
+	// history for this file around 2026-11-10).
 	const std::string kGoldenScheduleFixture =
 		R"FIXTURE(STAGE 0:
   brassica::graph::Import<brassica::AutoExposureBuffer>
   brassica::graph::Import<brassica::ClusteredLighting>
   brassica::graph::Import<brassica::CpuLightsBuffer>
   brassica::graph::Import<brassica::FoliageBiomeTableTexture>
-  brassica::graph::Import<brassica::GltfJointMatrixBuffer>
   brassica::graph::Import<brassica::GltfMeshletBuffer>
   brassica::graph::Import<brassica::GltfMeshletTriangleBuffer>
   brassica::graph::Import<brassica::GltfMeshletVertexBuffer>
   brassica::graph::Import<brassica::GltfVertexBuffer>
   brassica::graph::Import<brassica::MaterialBuffer>
+  brassica::graph::Import<brassica::ModelClipPaletteBuffer>
+  brassica::graph::Import<brassica::ModelClipTableBuffer>
+  brassica::graph::Import<brassica::ModelDescBuffer>
+  brassica::graph::Import<brassica::ModelInstanceWriteBuffer>
+  brassica::graph::Import<brassica::ModelSkeletonBuffer>
   brassica::graph::Import<brassica::Swapchain>
   brassica::graph::Import<brassica::TerrainTLAS>
   brassica::graph::Import<brassica::graph::History<brassica::HiZTexture>>
@@ -128,9 +112,9 @@ STAGE 1:
 STAGE 2:
   brassica::CloudVolumeGenNode
   brassica::EntityPrepareNode
-  brassica::FoliageBakeNode
-  brassica::FoliageIndirectResetNode
   brassica::GpuLightsResetNode
+  brassica::ModelCullResetNode
+  brassica::ModelInstanceScatterNode
   brassica::ParticleResetNode
   brassica::ShadingRateComputeNode
   brassica::TerrainBiomeNode
@@ -138,72 +122,76 @@ STAGE 2:
   brassica::TransmittanceLUTNode
 STAGE 3:
   brassica::CloudVolumeDownsampleNode
+  brassica::DecorPopulationNode
   brassica::MultiScatteringLUTNode
   brassica::TerrainMinMaxDownsampleNode
   brassica::TerrainReadbackNode
 STAGE 4:
   brassica::CloudShadowGenNode
+  brassica::ModelCullNode
   brassica::ParticleLivenessNode
   brassica::SkyViewLUTNode
   brassica::TerrainNode
   brassica::TerrainShadowNode
 STAGE 5:
   brassica::EntityNode
+  brassica::ModelLiveFinalizeNode
   brassica::ParticleGridBuildNode
   brassica::SkyBackgroundNode
 STAGE 6:
   brassica::FoliageNode
+  brassica::ModelLiveEvalNode
   brassica::ParticleBehaviorNode
 STAGE 7:
-  brassica::FoliageArchetypeRenderNode
+  brassica::GroundDebrisNode
   brassica::LightningAgeNode
 STAGE 8:
   brassica::ClusterLightAssignmentNode
-  brassica::GltfRenderNode
+  brassica::ModelRenderNode
   brassica::VolumetricFroxelGenNode
 STAGE 9:
-  brassica::GroundDebrisNode
-STAGE 10:
   brassica::CloudRenderNode
   brassica::GTAONode
-STAGE 11:
+STAGE 10:
   brassica::CloudTemporalNode
   brassica::DeferredNode
-STAGE 12:
+STAGE 11:
   brassica::UnderwaterParticleRenderNode
-STAGE 13:
+STAGE 12:
   brassica::LightningRenderNode
-STAGE 14:
+STAGE 13:
   brassica::WaterNode
-STAGE 15:
+STAGE 14:
   brassica::AboveWaterParticleRenderNode
-STAGE 16:
+STAGE 15:
   brassica::CirrusNode
   brassica::HiZDownsampleNode
-STAGE 17:
+STAGE 16:
   brassica::CloudCompositeNode
-STAGE 18:
+STAGE 17:
   brassica::VolumetricRenderNode
-STAGE 19:
+STAGE 18:
   brassica::TonemapComputeNode
-STAGE 20:
+STAGE 19:
   brassica::TonemapNode
-STAGE 21:
+STAGE 20:
   brassica::ImGuiNode
 MULTI-WRITER KEYS:
   brassica::AboveWaterParticleIndirectBuffer: brassica::ParticleLivenessNode, brassica::ParticleResetNode
   brassica::AutoExposureBuffer: brassica::graph::Import<brassica::AutoExposureBuffer>, brassica::TonemapComputeNode
   brassica::CloudDetailVolume: brassica::CloudVolumeDownsampleNode, brassica::CloudVolumeGenNode
   brassica::ClusteredLighting: brassica::graph::Import<brassica::ClusteredLighting>, brassica::ClusterLightAssignmentNode
-  brassica::FoliageIndirectArgsBuffer: brassica::FoliageIndirectResetNode, brassica::FoliageNode
-  brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
-  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
-  brassica::GBufferMaterial: brassica::EntityNode, brassica::GltfRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
-  brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
-  brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageArchetypeRenderNode, brassica::FoliageNode, brassica::GltfRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
+  brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
+  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
+  brassica::GBufferMaterial: brassica::EntityNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
+  brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
+  brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
   brassica::GpuLightsBuffer: brassica::GpuLightsResetNode, brassica::LightningAgeNode, brassica::ParticleBehaviorNode
   brassica::HdrColor: brassica::CirrusNode, brassica::CloudCompositeNode, brassica::DeferredNode, brassica::LightningRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::VolumetricRenderNode, brassica::WaterNode
   brassica::LightningStrikePool: brassica::TerrainBiomeNode, brassica::LightningAgeNode
+  brassica::ModelIndirectArgsBuffer: brassica::ModelCullResetNode, brassica::ModelCullNode
+  brassica::ModelInstanceBuffer: brassica::DecorPopulationNode, brassica::ModelInstanceScatterNode
+  brassica::ModelLiveIndirectArgsBuffer: brassica::ModelCullResetNode, brassica::ModelCullNode, brassica::ModelLiveFinalizeNode
   brassica::ParticleBuffer: brassica::ParticleBehaviorNode, brassica::ParticleLivenessNode
   brassica::ParticleGridHeadsBuffer: brassica::ParticleGridBuildNode, brassica::ParticleResetNode
   brassica::Swapchain: brassica::graph::Import<brassica::Swapchain>, brassica::ImGuiNode, brassica::TonemapNode
@@ -278,18 +266,30 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	// other Import<>s above: a key whose producer lives outside the auto-registered set.
 	frameGraph.Register<graph::Import<FoliageBiomeTableTexture>>();
 	// Same category again: GltfVertexBuffer/GltfMeshletVertexBuffer/GltfMeshletTriangleBuffer/
-	// GltfMeshletBuffer/GltfJointMatrixBuffer's real producers are GltfModelManager's
-	// PredefinedBufferNode members (GltfModelManager::RegisterBufferNodes), and MaterialBuffer's
-	// is MaterialManager's (MaterialManager::RegisterBufferNode) -- both called alongside
-	// RegisterAllInto in Engine.cpp's real graph builds, neither part of EngineNodeRegistry's
-	// auto-registered set. GltfRenderNode (auto-registered) is the one real consumer of all six
-	// once ForceAllActive() below stops letting its own Setup()-decided inactivity (no
-	// GltfModelManager service in this test) hide the gap.
+	// GltfMeshletBuffer/ModelClipPaletteBuffer/ModelClipTableBuffer/ModelDescBuffer/
+	// ModelSkeletonBuffer's real producers are ModelRegistry's PredefinedBufferNode members
+	// (ModelRegistry::RegisterBufferNodes -- Stage 2 moved these off GltfModelManager, which is
+	// now just one of ModelRegistry's producers; ModelSkeletonBuffer is Stage 4's), and
+	// ModelInstanceWriteBuffer's is ModelInstanceManager's, and MaterialBuffer's is
+	// MaterialManager's (MaterialManager::RegisterBufferNode) -- all called alongside
+	// RegisterAllInto in Engine.cpp's real graph builds, none part of EngineNodeRegistry's
+	// auto-registered set. ModelRenderNode/ModelInstanceScatterNode/ModelCullNode/
+	// ModelLiveEvalNode (all auto-registered) are the real consumers once ForceAllActive() below
+	// stops letting their own Setup()-decided inactivity (no ModelRegistry/ModelInstanceManager
+	// service in this test) hide the gap. ModelInstanceBuffer and Stage 3/4's own
+	// ModelVisibleListBuffer/ModelIndirectArgsBuffer/ModelLiveListBuffer/
+	// ModelLiveIndirectArgsBuffer/ModelLivePaletteBuffer are all catalog-converted (no Import<>
+	// needed -- their real producers, ModelInstanceScatterNode/ModelCullResetNode/ModelCullNode/
+	// ModelLiveEvalNode, are themselves auto-registered, so the catalog already resolves them).
 	frameGraph.Register<graph::Import<GltfVertexBuffer>>();
 	frameGraph.Register<graph::Import<GltfMeshletVertexBuffer>>();
 	frameGraph.Register<graph::Import<GltfMeshletTriangleBuffer>>();
 	frameGraph.Register<graph::Import<GltfMeshletBuffer>>();
-	frameGraph.Register<graph::Import<GltfJointMatrixBuffer>>();
+	frameGraph.Register<graph::Import<ModelClipPaletteBuffer>>();
+	frameGraph.Register<graph::Import<ModelClipTableBuffer>>();
+	frameGraph.Register<graph::Import<ModelDescBuffer>>();
+	frameGraph.Register<graph::Import<ModelSkeletonBuffer>>();
+	frameGraph.Register<graph::Import<ModelInstanceWriteBuffer>>();
 	frameGraph.Register<graph::Import<MaterialBuffer>>();
 
 	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
