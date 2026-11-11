@@ -10,6 +10,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/model/DecorChunkAllocator.hpp"
 #include "passes/model/ModelRegistry.hpp"
+#include "passes/biome/resources.hpp"
 #include "passes/model/ProceduralArchetypeCatalog.hpp"
 #include "passes/model/resources.hpp"
 #include "passes/terrain/resources.hpp"
@@ -34,6 +35,7 @@ namespace brassica {
 		std::uint32_t blockBaseSlot{0};
 		std::uint32_t instanceBufIdx{0};
 		std::uint32_t clipmapIndex{0};
+		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t terrainTextureDim{2048u};
 		float         tileSize{16.0f};
 		std::uint32_t treeModelBase{0};
@@ -42,10 +44,10 @@ namespace brassica {
 		float         treeRatio{0.1f};
 		float         bushRatio{0.1f};
 		float         rockRatio{0.05f};
-		float         density{0.3f};
+		float         density{0.65f};
 	};
 
-	static_assert(sizeof(DecorGenPushConstants) == 60, "DecorGenPushConstants size must be 60 bytes");
+	static_assert(sizeof(DecorGenPushConstants) == 64, "DecorGenPushConstants size must be 64 bytes");
 
 	struct DecorClearPushConstants {
 		std::uint32_t blockBaseSlot{0};
@@ -131,6 +133,7 @@ namespace brassica {
 			r.After<ModelInstanceScatterNode>();
 			r.Modify<ModelInstanceBuffer>();
 			r.Read<TerrainClipmapTexture>();
+			r.Read<TerrainWeatherBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -159,6 +162,7 @@ namespace brassica {
 
 			std::uint32_t instanceBufIdx = ctx.BufferIndex<ModelInstanceBuffer>();
 			std::uint32_t clipmapIdx = ctx.Index<TerrainClipmapTexture>();
+			std::uint32_t weatherBiomeIdx = ctx.Index<TerrainWeatherBiomeTexture>();
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			for (std::uint32_t blockBase : freedBlockBases) {
@@ -180,6 +184,7 @@ namespace brassica {
 				push.blockBaseSlot = entry.blockBaseSlot;
 				push.instanceBufIdx = instanceBufIdx;
 				push.clipmapIndex = clipmapIdx;
+				push.weatherBiomeIndex = weatherBiomeIdx;
 				push.terrainTextureDim = terrainTextureDim;
 				push.tileSize = kTileSize;
 				push.treeModelBase = archetypeIndices->treeBase;
