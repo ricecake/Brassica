@@ -47,7 +47,7 @@ namespace brassica {
 		float radiusFalloffPerSegment{0.93f}; // gentle -- segments are short, falloff compounds
 
 		float baseRigidity{0.95f};
-		float rigidityFalloffPerSegment{0.04f};
+		float rigidityFalloffPerSegment{0.025f};
 
 		int circularSegments{10};
 		// Hard cap on the FINAL (post-consolidation) joint count, enforced while converting the

@@ -61,18 +61,18 @@ namespace brassica {
 		PlantGenParams LargeTree() {
 			PlantGenParams p;
 			p.seed = 103;
-			p.maxSegments = 30;
-			p.segmentLength = 0.48f;
+			p.maxSegments = 18;       // Now represents depth. 18 segments is plenty.
+			p.segmentLength = 0.8f;   // Longer runs between joints (18 * 0.8m = ~14.4m tall)
 			p.directionJitterDegrees = 9.0f;
 			p.branchChance = 0.32f;
-			p.minBranchesPerNode = 3;
+			p.minBranchesPerNode = 2; // Reduced slightly to prevent exponential explosion
 			p.maxBranchesPerNode = 3;
-			p.trunkRadiusLow = 0.30f;
-			p.trunkRadiusHigh = 0.22f;
+			p.trunkRadiusLow = 0.60f; // 1.2m thick base
+			p.trunkRadiusHigh = 0.45f;
 			p.radiusFalloffPerSegment = 0.945f;
 			p.rigidityFalloffPerSegment = 0.04f;
 			p.circularSegments = 10;
-			p.maxJoints = 24;
+			p.maxJoints = 64;         // IMPORTANT: Must be raised so the tree isn't truncated
 			return p;
 		}
 
@@ -96,7 +96,7 @@ namespace brassica {
 			p.tierRadiusFalloff = 0.70f;
 			p.tierHeight = 1.15f;
 			p.tierOverlap = 0.35f;
-			p.tierBaseRigidity = 0.55f;
+			p.tierBaseRigidity = 0.95f;
 			p.circularSegments = 10;
 			return p;
 		}
@@ -338,8 +338,8 @@ namespace brassica {
 		PlantGenParams largeTree = LargeTree();
 		largeTree.materialIndex = barkMaterialIndex;
 		largeTree.enableLeaves = true;
-		largeTree.leafChance = 0.85f;
-		largeTree.leafSize = 0.26f;
+		largeTree.leafChance = 1.0f;
+		largeTree.leafSize = 2.5f;
 		largeTree.leafCount = 6;
 		largeTree.leafMaterialIndex = leafMaterialIndex;
 

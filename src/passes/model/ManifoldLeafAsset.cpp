@@ -139,7 +139,7 @@ namespace brassica {
 		// first ball.
 		float     baseOffset = attachRadius * 1.5f;
 		glm::vec3 clusterCenter(0.0f, 0.0f, baseOffset + leafSize * 0.5f);
-		float     clusterSpread = leafSize * 0.45f;
+		float clusterSpread = leafSize * 0.85f;
 
 		// At least 3 balls so the union reads as a lumpy clump rather than one or two bare
 		// spheres -- ballCount otherwise tracks leafCount so a denser preset's tuft also gets a
@@ -169,6 +169,7 @@ namespace brassica {
 			ballRadii.push_back(radius);
 
 			manifold::Manifold ball = manifold::Manifold::Sphere(static_cast<double>(radius), 8);
+			ball = ball.Scale(manifold::vec3(1.0, 1.2, 0.70));
 			parts.push_back(ball.Translate(manifold::vec3(center.x, center.y, center.z)));
 		}
 

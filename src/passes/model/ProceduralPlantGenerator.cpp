@@ -30,6 +30,7 @@ namespace brassica {
 			float     radiusHigh;
 			float     rigidity;
 			int       segmentsSinceBranch; // see PlantGenParams::minSegmentsBetweenBranches
+			int       chainDepth;
 		};
 
 		// Grows the raw IR: each queue entry is one short segment, branching (2-3 children) with
@@ -53,13 +54,18 @@ namespace brassica {
 			// The root starts already "cooled down" (eligible to branch immediately), matching
 			// the old no-cooldown behavior at the trunk base.
 			queue.push_back(PendingSegment{
-				trunkIdx, trunkDir, params.trunkRadiusHigh, params.baseRigidity, params.minSegmentsBetweenBranches
+				// trunkIdx, trunkDir, params.trunkRadiusHigh, params.baseRigidity, params.minSegmentsBetweenBranches
+				trunkIdx, trunkDir, params.trunkRadiusHigh, params.baseRigidity, params.minSegmentsBetweenBranches, 1
 			});
 
-			int segmentsGrown = 1;
-			while (!queue.empty() && segmentsGrown < params.maxSegments) {
+			while (!queue.empty()) {
 				PendingSegment parent = queue.front();
 				queue.pop_front();
+
+				if (parent.chainDepth >= params.maxSegments) {
+					continue;
+				}
+
 				glm::vec3 parentEnd = ir.elements[parent.irIndex].endPosition;
 				glm::vec3 perp = PickPerpendicular(parent.direction);
 
@@ -72,24 +78,33 @@ namespace brassica {
 				bool shouldBranch = eligibleToBranch && (unit(rng) < params.branchChance);
 				int  childCount = shouldBranch ? branchCountDist(rng) : 1;
 
-				for (int c = 0; c < childCount && segmentsGrown < params.maxSegments; ++c) {
+				float depthFactor = std::min(1.0f, static_cast<float>(parent.chainDepth) / (params.maxSegments * 0.4f));
+				float baseYaw = unit(rng) * glm::two_pi<float>();
+				for (int c = 0; c < childCount; ++c) {
 					glm::vec3 childDir;
 					if (shouldBranch) {
-						float     yaw = unit(rng) * glm::two_pi<float>();
+						// Distribute branches evenly (e.g. 180 deg apart for 2, 120 deg apart for 3)
+						float yaw = baseYaw + (glm::two_pi<float>() * static_cast<float>(c) / static_cast<float>(childCount));
+						yaw += (unit(rng) - 0.5f) * 0.2f; // Slight natural jitter so it isn't perfectly mathematical
+
 						glm::quat yawRot = glm::angleAxis(yaw, parent.direction);
 						glm::vec3 pitchAxis = yawRot * perp;
-						float     pitch = glm::radians(pitchDist(rng));
+
+						// Suppress pitch low on the trunk so early branches grow mostly upward
+						float pitch = glm::radians(pitchDist(rng)) * depthFactor;
 						glm::quat pitchRot = glm::angleAxis(pitch, pitchAxis);
-						childDir = glm::normalize(pitchRot * parent.direction);
+						glm::vec3 rawDir = pitchRot * parent.direction;
+
+						// Keep the upward pull to shape the canopy
+						float upwardPull = 0.5f * (static_cast<float>(parent.radiusHigh) / params.segmentLength);
+						childDir = glm::normalize(rawDir + glm::vec3(0.0f, 1.0f, 0.0f) * upwardPull);
 					} else {
-						// Small continuation wander -- real branch points use the full pitch
-						// range above; a straight-ish run only nudges slightly, which is what
-						// gives the eventual consolidated joint a gentle curve instead of a hard
-						// kink.
-						float     jitterYaw = unit(rng) * glm::two_pi<float>();
+						float jitterYaw = unit(rng) * glm::two_pi<float>();
 						glm::quat yawRot = glm::angleAxis(jitterYaw, parent.direction);
 						glm::vec3 jitterAxis = yawRot * perp;
-						float     jitterAngle = glm::radians(params.directionJitterDegrees) * (unit(rng) * 2.0f - 1.0f);
+
+						// Multiply the jitter angle by depthFactor to prevent the trunk from kinking early on
+						float jitterAngle = glm::radians(params.directionJitterDegrees) * (unit(rng) * 2.0f - 1.0f) * depthFactor;
 						glm::quat jitterRot = glm::angleAxis(jitterAngle, jitterAxis);
 						childDir = glm::normalize(jitterRot * parent.direction);
 					}
@@ -105,8 +120,9 @@ namespace brassica {
 						ir.AddTube(childStart, childEnd, parent.radiusHigh, childRadiusHigh, childRigidity, parent.irIndex);
 
 					int childSegmentsSinceBranch = shouldBranch ? 0 : parent.segmentsSinceBranch + 1;
-					queue.push_back(PendingSegment{childIdx, childDir, childRadiusHigh, childRigidity, childSegmentsSinceBranch});
-					++segmentsGrown;
+					queue.push_back(PendingSegment{
+						childIdx, childDir, childRadiusHigh, childRigidity, childSegmentsSinceBranch, parent.chainDepth + 1
+					});
 				}
 			}
 		}
@@ -132,25 +148,30 @@ namespace brassica {
 		// A terminal tube that didn't already grow a flower (AddFlowers, if enabled, runs first
 		// and leaves flowered tips with a real child -- the same "no children" check below
 		// naturally skips them) gets a chance at a leaf tuft instead.
-		void AddLeaves(PlantIR& ir, const PlantGenParams& params, std::mt19937& rng) {
-			std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-			int                                   originalCount = static_cast<int>(ir.elements.size());
-			for (int i = 0; i < originalCount; ++i) {
-				if (ir.elements[i].type != PlantElementType::Tube || !ir.elements[i].children.empty()) {
-					continue;
-				}
-				if (unit(rng) >= params.leafChance) {
-					continue;
-				}
-				// Rigidity 0.3 -- a leaf tuft sways more than the woody tip it's attached to,
-				// same reasoning SmallFlower's own stem rigidity uses. endRadius is this
-				// terminal tube's own tip radius, carried through so BuildLeafCluster knows how
-				// far past it each blade's base needs to clear the CSG union.
-				ir.AddLeaf(
-					ir.elements[i].endPosition, params.leafSize, params.leafCount, ir.elements[i].endRadius, 0.3f, i
-				);
-			}
+void AddLeaves(PlantIR& ir, const PlantGenParams& params, std::mt19937& rng) {
+	std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+	int                                   originalCount = static_cast<int>(ir.elements.size());
+
+	// Determine dynamic leaf size based on the highest point in the tree
+	float maxTreeHeight = 0.1f;
+	for (int i = 0; i < originalCount; ++i) {
+		maxTreeHeight = std::max(maxTreeHeight, ir.elements[i].endPosition.y);
+	}
+	// Scale cluster size to 15% of the tree's total height, using params.leafSize as a baseline modifier
+	float dynamicLeafSize = maxTreeHeight * 0.15f * params.leafSize;
+
+	for (int i = 0; i < originalCount; ++i) {
+		if (ir.elements[i].type != PlantElementType::Tube || !ir.elements[i].children.empty()) {
+			continue;
 		}
+		if (unit(rng) >= params.leafChance) {
+			continue;
+		}
+		ir.AddLeaf(
+			ir.elements[i].endPosition, dynamicLeafSize, params.leafCount, ir.elements[i].endRadius, 0.3f, i
+		);
+	}
+}
 
 		// Post-optimization invariant (ProceduralPlantOptimizer.cpp's own HandleJunctions):
 		// every Tube/ControlPoint has 0 or 1 children -- multi-child branch points only ever
