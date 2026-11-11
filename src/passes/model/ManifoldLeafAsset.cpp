@@ -131,112 +131,66 @@ namespace brassica {
 	manifold::Manifold BuildLeafBallCluster(
 		float leafSize, int leafCount, std::uint32_t seed, float widthRatio, float attachRadius
 	) {
-		std::mt19937                          rng(seed);
-		std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-
-		// Same CSG-absorption margin as BuildLeafCluster's own baseOffset, measured from the
-		// attaching tube's tip -- the whole ball cluster sits ahead of that margin, not just the
-		// first ball.
-		float     baseOffset = attachRadius * 1.5f;
+		// 1. Calculate attachment offset to avoid CSG absorption by the branch tip
+		float baseOffset = attachRadius * 1.5f;
 		glm::vec3 clusterCenter(0.0f, 0.0f, baseOffset + leafSize * 0.5f);
-		float clusterSpread = leafSize * 0.85f;
 
-		// At least 3 balls so the union reads as a lumpy clump rather than one or two bare
-		// spheres -- ballCount otherwise tracks leafCount so a denser preset's tuft also gets a
-		// denser ball cluster.
-		int ballCount = std::max(3, leafCount);
+		// 2. Generate a single low-res sphere.
+		// Reducing circular segments from the default drastically cuts triangle count.
+		manifold::Manifold canopy = manifold::Manifold::Sphere(static_cast<double>(leafSize), 5);
 
-		std::vector<glm::vec3> ballCenters;
-		std::vector<float>     ballRadii;
-		ballCenters.reserve(static_cast<std::size_t>(ballCount));
-		ballRadii.reserve(static_cast<std::size_t>(ballCount));
+		// 3. Scale into a flattened, wide bean/cloud shape
+		canopy = canopy.Scale(manifold::vec3(1.4, 0.6, 1.2));
 
-		std::vector<manifold::Manifold> parts;
-		parts.reserve(static_cast<std::size_t>(ballCount + leafCount));
+		// 4. Warp the vertices with a simple pseudo-random noise to make it lumpy
+		canopy = canopy.Warp([seed](manifold::vec3& v) {
+			// High-frequency spatial sine wave based on position
+			float noise = std::sin(v.x * 15.0f + seed) *
+						std::cos(v.y * 15.0f + seed) *
+						std::sin(v.z * 15.0f + seed);
 
-		for (int i = 0; i < ballCount; ++i) {
-			glm::vec3 jitter(unit(rng) * 2.0f - 1.0f, unit(rng) * 2.0f - 1.0f, unit(rng) * 2.0f - 1.0f);
-			float     jitterLen = glm::length(jitter);
-			if (jitterLen > 1e-4f) {
-				jitter = (jitter / jitterLen) * (unit(rng) * clusterSpread);
-			} else {
-				jitter = glm::vec3(0.0f);
-			}
-			glm::vec3 center = clusterCenter + jitter;
-			float     radius = leafSize * (0.35f + 0.25f * unit(rng));
+			// Displace vertices outward/inward by up to 15%
+			float displacement = 1.0f + (noise * 0.15f);
+			v.x *= displacement;
+			v.y *= displacement;
+			v.z *= displacement;
+		});
 
-			ballCenters.push_back(center);
-			ballRadii.push_back(radius);
+		// 5. Move to the branch tip
+		return canopy.Translate(manifold::vec3(clusterCenter.x, clusterCenter.y, clusterCenter.z));
+	}
 
-			manifold::Manifold ball = manifold::Manifold::Sphere(static_cast<double>(radius), 8);
-			ball = ball.Scale(manifold::vec3(1.0, 1.2, 0.70));
-			parts.push_back(ball.Translate(manifold::vec3(center.x, center.y, center.z)));
+	manifold::Manifold BuildGlobalCanopyHull(
+		const std::vector<glm::vec3>& terminalPoints, float leafSize, std::uint32_t seed
+	) {
+		if (terminalPoints.empty()) {
+			return manifold::Manifold();
 		}
 
-		// Blades "stuck to the side" of a random ball, radially outward from that ball's own
-		// center -- breaks up the ball cluster's otherwise-smooth silhouette, same shape
-		// AppendLeafBlade already builds for the plain fan cluster above. Appended into one
-		// shared vertex/triangle buffer (same pattern BuildLeafCluster's own per-blade loop
-		// already uses for several disjoint, possibly-overlapping blades in a single Manifold),
-		// then unioned with the balls below rather than left as a separate untouched Manifold --
-		// the CSG union is what actually welds a blade's embedded base into the ball it's
-		// attached to instead of leaving a visible seam.
-		std::vector<float>         bladeVertProperties;
-		std::vector<std::uint32_t> bladeTriVerts;
-		for (int i = 0; i < leafCount; ++i) {
-			auto      ballIdx = static_cast<std::size_t>(unit(rng) * static_cast<float>(ballCount)) % static_cast<std::size_t>(ballCount);
-			glm::vec3 ballCenter = ballCenters[ballIdx];
-			float     ballRadius = ballRadii[ballIdx];
+		std::vector<manifold::Manifold> spheres;
+		spheres.reserve(terminalPoints.size());
 
-			float azimuth = unit(rng) * glm::two_pi<float>();
-			// Polar angle from local +Z (the growth axis) -- biased away from straight up/down so
-			// blades mostly point outward/sideways rather than stacking along the trunk's own
-			// direction.
-			float     elevation = glm::radians(20.0f + unit(rng) * 90.0f);
-			glm::vec3 dir(
-				std::sin(elevation) * std::cos(azimuth), std::sin(elevation) * std::sin(azimuth), std::cos(elevation)
-			);
-
-			glm::quat orientation =
-				AlignZTo(dir) * glm::angleAxis(unit(rng) * glm::two_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
-			float scale = 0.5f + unit(rng) * 0.4f;
-			// Base pulled into the ball (anchors it visually, like a real petiole) while the
-			// blade's own length carries its tip well past the ball's surface -- same
-			// margin-vs-absorption tradeoff as BuildLeafCluster's baseOffset, just measured from
-			// a ball's surface instead of the attach tube's.
-			glm::vec3 bladeOrigin = ballCenter + dir * (ballRadius * 0.7f);
-
-			// AppendLeafBlade only takes an orientation, not a translation -- build at the local
-			// origin, then shift every vertex it just appended by bladeOrigin.
-			std::size_t vertBase = bladeVertProperties.size();
-			AppendLeafBlade(
-				leafSize * scale, leafSize * scale * widthRatio, 0.0f, orientation, bladeVertProperties, bladeTriVerts
-			);
-			for (std::size_t v = vertBase; v < bladeVertProperties.size(); v += 3) {
-				bladeVertProperties[v + 0] += bladeOrigin.x;
-				bladeVertProperties[v + 1] += bladeOrigin.y;
-				bladeVertProperties[v + 2] += bladeOrigin.z;
-			}
+		// Place a low-res sphere at every terminal branch tip
+		for (const glm::vec3& pt : terminalPoints) {
+			manifold::Manifold sphere = manifold::Manifold::Sphere(static_cast<double>(leafSize), 5);
+			spheres.push_back(sphere.Translate(manifold::vec3(pt.x, pt.y, pt.z)));
 		}
 
-		if (!bladeTriVerts.empty()) {
-			manifold::MeshGL bladeMesh;
-			bladeMesh.numProp = 3;
-			bladeMesh.vertProperties = std::move(bladeVertProperties);
-			bladeMesh.triVerts = std::move(bladeTriVerts);
-			parts.push_back(manifold::Manifold(bladeMesh));
-		}
+		// Wrap all spheres in a single convex boundary
+		manifold::Manifold canopy = manifold::Manifold::Hull(spheres);
 
-		manifold::Manifold combined =
-			(parts.size() == 1) ? parts[0] : manifold::Manifold::BatchBoolean(parts, manifold::OpType::Add);
-		if (combined.Status() != manifold::Manifold::Error::NoError) {
-			spdlog::critical("BuildLeafBallCluster: boolean union failed with status {}", static_cast<int>(combined.Status()));
-			// A bare sphere instead of an empty manifold -- the outer per-joint union
-			// (BuildSkinnedManifoldAsset's own BatchBoolean) tolerates an unexpected shape far
-			// better than a joint that silently contributes nothing at all.
-			return manifold::Manifold::Sphere(static_cast<double>(leafSize * 0.5), 8);
-		}
-		return combined;
+		// Displace the hull vertices slightly to create a pillowy, lumpy volume
+		canopy = canopy.Warp([seed](manifold::vec3& v) {
+			float noise = std::sin(v.x * 4.0f + seed) *
+						std::cos(v.y * 4.0f + seed) *
+						std::sin(v.z * 4.0f + seed);
+			float displacement = 1.0f + (noise * 0.08f);
+			v.x *= displacement;
+			v.y *= displacement;
+			v.z *= displacement;
+		});
+
+		return canopy;
 	}
 
 } // namespace brassica
