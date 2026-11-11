@@ -160,37 +160,74 @@ namespace brassica {
 		return canopy.Translate(manifold::vec3(clusterCenter.x, clusterCenter.y, clusterCenter.z));
 	}
 
-	manifold::Manifold BuildGlobalCanopyHull(
-		const std::vector<glm::vec3>& terminalPoints, float leafSize, std::uint32_t seed
-	) {
-		if (terminalPoints.empty()) {
-			return manifold::Manifold();
+manifold::Manifold BuildGlobalCanopyHull(
+	const std::vector<glm::vec3>& terminalPoints, float leafSize, std::uint32_t seed
+) {
+	if (terminalPoints.empty()) {
+		return manifold::Manifold();
+	}
+
+	std::vector<std::vector<glm::vec3>> clusters;
+	float clusterRadius = leafSize * 1.5f;
+
+	for (const glm::vec3& pt : terminalPoints) {
+		bool foundCluster = false;
+		for (auto& cluster : clusters) {
+			// Check proximity against ALL points in the cluster to allow chaining
+			for (const glm::vec3& existingPt : cluster) {
+				if (glm::length(pt - existingPt) < clusterRadius) {
+					cluster.push_back(pt);
+					foundCluster = true;
+					break;
+				}
+			}
+			if (foundCluster) break;
 		}
+		if (!foundCluster) {
+			clusters.push_back({pt});
+		}
+	}
 
+	std::vector<manifold::Manifold> clusteredHulls;
+	clusteredHulls.reserve(clusters.size());
+
+	for (const auto& cluster : clusters) {
 		std::vector<manifold::Manifold> spheres;
-		spheres.reserve(terminalPoints.size());
+		spheres.reserve(cluster.size());
 
-		// Place a low-res sphere at every terminal branch tip
-		for (const glm::vec3& pt : terminalPoints) {
+		for (const glm::vec3& pt : cluster) {
 			manifold::Manifold sphere = manifold::Manifold::Sphere(static_cast<double>(leafSize), 5);
+			// Flatten the spheres horizontally before hulling to create a bean-like profile
+			sphere = sphere.Scale(manifold::vec3(1.4, 0.6, 1.2));
 			spheres.push_back(sphere.Translate(manifold::vec3(pt.x, pt.y, pt.z)));
 		}
 
-		// Wrap all spheres in a single convex boundary
-		manifold::Manifold canopy = manifold::Manifold::Hull(spheres);
+		manifold::Manifold localHull = manifold::Manifold::Hull(spheres);
 
-		// Displace the hull vertices slightly to create a pillowy, lumpy volume
-		canopy = canopy.Warp([seed](manifold::vec3& v) {
+		localHull = localHull.Warp([seed](manifold::vec3& v) {
 			float noise = std::sin(v.x * 4.0f + seed) *
-						std::cos(v.y * 4.0f + seed) *
-						std::sin(v.z * 4.0f + seed);
+						  std::cos(v.y * 4.0f + seed) *
+						  std::sin(v.z * 4.0f + seed);
 			float displacement = 1.0f + (noise * 0.08f);
 			v.x *= displacement;
 			v.y *= displacement;
 			v.z *= displacement;
 		});
 
-		return canopy;
+		clusteredHulls.push_back(localHull);
 	}
+
+	if (clusteredHulls.size() == 1) {
+		return clusteredHulls[0];
+	}
+
+	manifold::Manifold combined = manifold::Manifold::BatchBoolean(clusteredHulls, manifold::OpType::Add);
+	if (combined.Status() != manifold::Manifold::Error::NoError) {
+		spdlog::warn("BuildGlobalCanopyHull: boolean union failed, returning first cluster");
+		return clusteredHulls[0];
+	}
+
+	return combined;
+}
 
 } // namespace brassica
