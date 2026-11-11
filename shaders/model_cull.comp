@@ -37,7 +37,20 @@ push;
 // "distance" and "conservative cull bounds, padded by max bend x branch extent" without pinning
 // down numbers) -- these are first-cut concrete values, not a cut feature; tune freely.
 const float kModelLiveDistanceThreshold = 50.0;
-const float kModelLiveBoundsPaddingFactor = 1.5; // live-eligible instances get a bigger cull volume to cover wind bend
+// 2.5, up from an earlier 1.5: that value was never actually checked against this file's own
+// stated goal ("padded by max bend x branch extent") for any real registered preset. A CPU-side
+// replica of model_live_eval.comp's exact wind-bend math (kModelWindStrength=0.6, gustVal=1,
+// the same per-joint chain composition), run against every currently-registered archetype's real
+// skeleton data, found BushA/BushB's own worst-case joint displacement exceeds 1.5's padding
+// margin by a real, measured amount (BushB: 1.693 vs a margin of only 0.721 at 1.5x) -- their
+// many short, flexible, chained branches swing well past what 1.5x covers. SmallTree/LargeTree/
+// Pine/Palm all stayed comfortably within 1.5x's own margin; this fix is sized off Bush's actual
+// worst case (needs >= ~2.18x) plus real headroom for the fact that this only tracks joint
+// *origins*, not how far a leaf-cluster's own vertices extend past its joint's origin on top of
+// that. Purely a bigger conservative AABB for live-eligible instances -- never introduces a false
+// negative elsewhere, only a marginally looser (cheaper to satisfy, not cheaper to compute) cull
+// test for everything else.
+const float kModelLiveBoundsPaddingFactor = 2.5; // live-eligible instances get a bigger cull volume to cover wind bend
 
 void main() {
 	uint slot = gl_GlobalInvocationID.x;
