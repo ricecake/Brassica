@@ -25,36 +25,36 @@ namespace brassica {
 		PlantGenParams SmallTree() {
 			PlantGenParams p;
 			p.seed = 101;
-			p.maxSegments = 14;
-			p.segmentLength = 0.35f;
-			p.directionJitterDegrees = 10.0f;
-			p.branchChance = 0.3f;
-			p.minBranchesPerNode = 2;
-			p.maxBranchesPerNode = 2;
-			p.trunkRadiusLow = 0.14f;
-			p.trunkRadiusHigh = 0.11f;
-			p.radiusFalloffPerSegment = 0.92f;
-			p.rigidityFalloffPerSegment = 0.07f;
+			p.maxSegments = 18;       // Now represents depth. 18 segments is plenty.
+			p.segmentLength = 0.3f;   // Longer runs between joints (18 * 0.8m = ~14.4m tall)
+			p.directionJitterDegrees = 9.0f;
+			p.branchChance = 0.32f;
+			p.minBranchesPerNode = 2; // Reduced slightly to prevent exponential explosion
+			p.maxBranchesPerNode = 3;
+			p.trunkRadiusLow = 0.15f; // 1.2m thick base
+			p.trunkRadiusHigh = 0.10f;
+			p.radiusFalloffPerSegment = 0.945f;
+			p.rigidityFalloffPerSegment = 0.04f;
 			p.circularSegments = 10;
-			p.maxJoints = 12;
+			p.maxJoints = 64;         // IMPORTANT: Must be raised so the tree isn't truncated
 			return p;
 		}
 
 		PlantGenParams MediumTree() {
 			PlantGenParams p;
 			p.seed = 102;
-			p.maxSegments = 24;
-			p.segmentLength = 0.42f;
-			p.directionJitterDegrees = 10.0f;
-			p.branchChance = 0.3f;
-			p.minBranchesPerNode = 2;
+			p.maxSegments = 18;       // Now represents depth. 18 segments is plenty.
+			p.segmentLength = 0.4f;   // Longer runs between joints (18 * 0.8m = ~14.4m tall)
+			p.directionJitterDegrees = 9.0f;
+			p.branchChance = 0.32f;
+			p.minBranchesPerNode = 2; // Reduced slightly to prevent exponential explosion
 			p.maxBranchesPerNode = 3;
-			p.trunkRadiusLow = 0.22f;
-			p.trunkRadiusHigh = 0.16f;
-			p.radiusFalloffPerSegment = 0.94f;
-			p.rigidityFalloffPerSegment = 0.045f;
+			p.trunkRadiusLow = 0.30f; // 1.2m thick base
+			p.trunkRadiusHigh = 0.20f;
+			p.radiusFalloffPerSegment = 0.945f;
+			p.rigidityFalloffPerSegment = 0.04f;
 			p.circularSegments = 10;
-			p.maxJoints = 20;
+			p.maxJoints = 64;         // IMPORTANT: Must be raised so the tree isn't truncated
 			return p;
 		}
 
@@ -143,7 +143,7 @@ namespace brassica {
 			p.directionJitterDegrees = 3.0f;
 			p.branchChance = 0.18f;
 			p.minBranchesPerNode = 1;
-			p.maxBranchesPerNode = 1;
+			p.maxBranchesPerNode = 2;
 			p.branchPitchMinDegrees = 15.0f;
 			p.branchPitchMaxDegrees = 40.0f;
 			p.trunkRadiusLow = 0.22f;
@@ -174,20 +174,20 @@ namespace brassica {
 			PlantGenParams p;
 			p.seed = 201;
 			p.maxSegments = 20;
-			p.segmentLength = 0.18f;
+			p.segmentLength = 0.05f;
 			p.directionJitterDegrees = 16.0f;
 			p.branchChance = 0.35f;
 			p.minBranchesPerNode = 2;
 			p.maxBranchesPerNode = 3;
 			p.branchPitchMinDegrees = 45.0f;
 			p.branchPitchMaxDegrees = 85.0f;
-			p.trunkRadiusLow = 0.08f;
-			p.trunkRadiusHigh = 0.06f;
+			p.trunkRadiusLow = 0.2f;
+			p.trunkRadiusHigh = 0.1f;
 			p.radiusFalloffPerSegment = 0.85f;
 			p.baseRigidity = 0.6f; // bushes sway more overall than a tree's own rigid trunk
-			p.rigidityFalloffPerSegment = 0.10f;
+			p.rigidityFalloffPerSegment = 0.05f;
 			p.circularSegments = 8;
-			p.maxJoints = 18;
+			p.maxJoints = 64;
 			return p;
 		}
 
@@ -196,7 +196,7 @@ namespace brassica {
 			p.seed = 202;
 			p.maxSegments = 24;
 			p.maxBranchesPerNode = 4;
-			p.maxJoints = 22;
+			p.maxJoints = 64;
 			return p;
 		}
 
@@ -324,22 +324,22 @@ namespace brassica {
 		PlantGenParams smallTree = SmallTree();
 		smallTree.materialIndex = barkMaterialIndex;
 		smallTree.enableLeaves = true;
-		smallTree.leafChance = 0.85f;
-		smallTree.leafSize = 0.18f;
+		smallTree.leafChance = 1.0f;
+		smallTree.leafSize = 0.625f;
 		smallTree.leafCount = 5;
 		smallTree.leafMaterialIndex = leafMaterialIndex;
 		PlantGenParams mediumTree = MediumTree();
 		mediumTree.materialIndex = barkMaterialIndex;
 		mediumTree.enableLeaves = true;
-		mediumTree.leafChance = 0.85f;
-		mediumTree.leafSize = 0.22f;
+		mediumTree.leafChance = 1.0f;
+		mediumTree.leafSize = 1.25f;
 		mediumTree.leafCount = 6;
 		mediumTree.leafMaterialIndex = leafMaterialIndex;
 		PlantGenParams largeTree = LargeTree();
 		largeTree.materialIndex = barkMaterialIndex;
 		largeTree.enableLeaves = true;
 		largeTree.leafChance = 1.0f;
-		largeTree.leafSize = 2.5f;
+		largeTree.leafSize = 2.0f;
 		largeTree.leafCount = 6;
 		largeTree.leafMaterialIndex = leafMaterialIndex;
 
@@ -352,6 +352,7 @@ namespace brassica {
 		palm.frondMaterialIndex = leafMaterialIndex;
 
 		PlantGenParams cactus = Cactus();
+		cactus.enableFlowers = true;
 		cactus.materialIndex = cactusMaterialIndex;
 
 		indices.treeBase = registry.RegisterAsset(BuildProceduralPlant(smallTree), "Small Tree");
@@ -364,15 +365,17 @@ namespace brassica {
 		PlantGenParams bushA = BushVariantA();
 		bushA.materialIndex = bushMaterialIndex;
 		bushA.enableLeaves = true;
+		bushA.enableFlowers = true;
 		bushA.leafChance = 0.85f;
-		bushA.leafSize = 0.09f;
+		bushA.leafSize = 0.35f;
 		bushA.leafCount = 4;
 		bushA.leafMaterialIndex = leafMaterialIndex;
 		PlantGenParams bushB = BushVariantB();
 		bushB.materialIndex = bushMaterialIndex;
 		bushB.enableLeaves = true;
+		bushB.enableFlowers = true;
 		bushB.leafChance = 0.85f;
-		bushB.leafSize = 0.09f;
+		bushB.leafSize = 0.25f;
 		bushB.leafCount = 4;
 		bushB.leafMaterialIndex = leafMaterialIndex;
 		indices.bushBase = registry.RegisterAsset(BuildProceduralPlant(bushA), "Bush A");
