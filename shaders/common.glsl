@@ -1060,3 +1060,62 @@ vec2 phasorNoise3DGrad(vec3 p, float mask, vec3 F, vec3 W, float phaseJitter, fl
 
     return Z;
 }
+
+struct NoiseCascade {
+    vec3 scales;
+    vec3 weights;
+};
+
+// Calculates the weight for a single layer based on its relative log-distance from the current view.
+// relativeDist: distance from the peak of this layer (0.0 = peak, -1.0 = one full octave below, 1.0 = above)
+float getLayerWeight(float relativeDist, float fadeIn, float hold, float fadeOut) {
+    // Map the [-1.0, 1.0] relative distance to the custom shape
+    float absDist = abs(relativeDist);
+
+    // If within the hold radius, return max weight
+    if (absDist <= hold * 0.5) return 1.0;
+
+    // Fade out mapping
+    float fadeStart = hold * 0.5;
+    float fadeEnd = fadeStart + (relativeDist < 0.0 ? fadeIn : fadeOut);
+
+    return 1.0 - smoothstep(fadeStart, fadeEnd, absDist);
+}
+
+NoiseCascade calculateDynamicLOD(float dist, float growthFactor, float fadeIn, float hold, float fadeOut) {
+    // Map distance to a continuous logarithmic scale (Base Layer = 0 at dist = 1)
+    // Adding a small epsilon or clamping distance prevents log(0)
+    float continuousLOD = log(max(dist, 1.0)) / log(growthFactor);
+
+    float baseLayer = floor(continuousLOD);
+    float t = fract(continuousLOD); // 0.0 to 1.0 transition within the current octave
+
+    NoiseCascade cascade;
+
+    // Calculate scales (below, current, above)
+    cascade.scales = vec3(
+        pow(growthFactor, baseLayer - 1.0),
+        pow(growthFactor, baseLayer),
+        pow(growthFactor, baseLayer + 1.0)
+    );
+
+    // Calculate relative distances for each layer
+    // When t = 0.0, current is at peak (0.0), below is at -1.0, above is at 1.0
+    vec3 relativeDistances = vec3(t + 1.0, t, t - 1.0);
+
+    cascade.weights = vec3(
+        getLayerWeight(relativeDistances.x, fadeIn, hold, fadeOut),
+        getLayerWeight(relativeDistances.y, fadeIn, hold, fadeOut),
+        getLayerWeight(relativeDistances.z, fadeIn, hold, fadeOut)
+    );
+
+    // Variance normalization:
+    // Linear blending of noise reduces contrast/variance.
+    // Normalizing by the inverse square root of the sum of squares preserves amplitude.
+    float weightSumSq = dot(cascade.weights, cascade.weights);
+    if (weightSumSq > 0.0) {
+        cascade.weights *= inversesqrt(weightSumSq);
+    }
+
+    return cascade;
+}
