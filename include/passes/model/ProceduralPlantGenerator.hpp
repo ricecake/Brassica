@@ -50,9 +50,13 @@ namespace brassica {
 		float rigidityFalloffPerSegment{0.025f};
 
 		int circularSegments{10};
-		// Hard cap on the FINAL (post-consolidation) joint count, enforced while converting the
-		// optimized IR into ManifoldJointSpecs -- comfortably under kModelLiveMaxJointCount (32),
-		// same reasoning TreeGenParams::maxJoints already documents.
+		// Hard cap on the joint count BEFORE the canopy joint (BuildPlantFromIR appends one more,
+		// uncounted against this), enforced while converting the optimized IR into
+		// ManifoldJointSpecs -- comfortably under kModelLiveMaxJointCount (72), same reasoning
+		// TreeGenParams::maxJoints already documents. ProceduralArchetypeCatalog's tree/bush
+		// presets override this default higher (up to 64) -- keep that override + 1 (the canopy
+		// joint) <= kModelLiveMaxJointCount. Confirmed the hard way: a bare 64 here silently kept
+		// every real tree/bush at 65 joints, one over the old cap.
 		std::uint32_t maxJoints{24};
 
 		// Flowers: a terminal (leaf) segment has this chance of growing a real flower head

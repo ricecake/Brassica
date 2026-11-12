@@ -1760,6 +1760,7 @@ namespace brassica {
 				mappedExposure->layers[i].enabled = s_exposureData.layers[i].enabled;
 				mappedExposure->layers[i].isMain = s_exposureData.layers[i].isMain;
 				mappedExposure->layers[i].isSky = s_exposureData.layers[i].isSky;
+				mappedExposure->layers[i].isCloud = s_exposureData.layers[i].isCloud;
 			}
 			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));
 		}
@@ -1810,6 +1811,7 @@ namespace brassica {
 		bindlessBindings.accelerationStructureBinding = 4;
 		bindlessBindings.sampledImage3DBinding = 5;
 		bindlessBindings.storageBufferBinding = 6;
+		bindlessBindings.stencilImage2DBinding = 7;
 		bindlessBindings.frameSet = frameDescriptorSets[activeFrame];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
@@ -2452,7 +2454,7 @@ namespace brassica {
 		if (bindlessSetLayout) {
 			return;
 		}
-		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 		// Binding 0: uTextures2D
 		bindings[0]
 			.setBinding(0)
@@ -2508,13 +2510,22 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(64)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 7: uUTextures2D -- stencil-aspect-only sampled catalog (bindless.glsl). Small
+		// count: only a combined depth-stencil format with real eSampled usage registers here
+		// (PhysicalRegistry::AssignAndWriteBindlessIndices), which today is just GBufferDepth.
+		bindings[7]
+			.setBinding(7)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(16)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 7> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 8> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
@@ -2531,7 +2542,8 @@ namespace brassica {
 		// resource's descriptor is written once at creation and read for the rest of its life,
 		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
 		std::array<vk::DescriptorPoolSize, 5> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 32},
+			// +16 for binding 7 (uUTextures2D, the stencil-only sampled catalog)
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 32 + 16},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
@@ -2597,6 +2609,7 @@ namespace brassica {
 		bindlessBindings.accelerationStructureBinding = 4;
 		bindlessBindings.sampledImage3DBinding = 5;
 		bindlessBindings.storageBufferBinding = 6;
+		bindlessBindings.stencilImage2DBinding = 7;
 		bindlessBindings.frameSet = frameDescriptorSets[0];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);

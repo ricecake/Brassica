@@ -83,6 +83,13 @@ namespace brassica {
 		float _pad2{0.0f};
 
 		std::uint32_t histogram[256]{0};
+		// Snapshot of the previous frame's fully-accumulated histogram, written by
+		// bloom_downsample.comp's update_layer_ae right before it zeroes `histogram` for this
+		// frame's accumulation. `histogram` itself is always zero by the time s_exposureReadback's
+		// frame-overlap-delayed copy (below) can observe it, since the reset is the last write to
+		// that field before the buffer slot comes back around -- a settings UI reading live
+		// histogram data must read this field instead.
+		std::uint32_t histogramSnapshot[256]{0};
 	};
 
 	// bloom_downsample.comp indexes `layers[2]` as a std430 array of LayerData; std430 rounds an
@@ -119,12 +126,18 @@ namespace brassica {
 		std::int32_t  enabled{1};
 		std::int32_t  isMain{0};
 		std::int32_t  isSky{0};
+		// A third hard override, same shape as isSky: weight 1.0 for a pixel the depth-stencil
+		// system classified as cloud (GBufferDepth's stencil aspect == 2, written by
+		// CloudCompositeNode), 0.0 otherwise -- bypassing the depth-falloff math exactly like
+		// isMain/isSky. Lets a cloud pixel get its own dedicated layer instead of being bucketed
+		// into isSky's stats just because it also fails the old binary depth>=1.0 test.
+		std::int32_t  isCloud{0};
 		// std430 rounds an array-of-structs element stride up to a multiple of 16 -- LayerDataHost
-		// is already a multiple of 16 (its own static_assert above), and the 7 trailing scalars
-		// here (28 bytes) need 4 more to reach the next 16-byte boundary. See the static_assert
-		// below for what breaks if this drifts (same spirv-dis-confirmed failure mode as
-		// LayerDataHost's own padding comment).
-		float _pad0{0.0f};
+		// is already a multiple of 16 (its own static_assert above), and the 8 trailing scalars
+		// here (32 bytes) already land on a 16-byte boundary, so no explicit padding field is
+		// needed anymore (unlike before isCloud was added, when 7 scalars needed 4 bytes of padding
+		// to reach one). See the static_assert below for what breaks if this drifts (same
+		// spirv-dis-confirmed failure mode as LayerDataHost's own padding comment).
 	};
 
 	static_assert(

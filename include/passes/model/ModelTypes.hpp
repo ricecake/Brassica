@@ -160,10 +160,16 @@ namespace brassica {
 
 	// Stage 4: pool sizing for ModelLiveEvalNode's transient ModelLivePaletteBuffer -- a fixed
 	// budget (not instance-count-derived, since the budget IS the cap ModelCullNode's atomic
-	// claim enforces) times a fixed max joint count per live-capable model (the procedural tree
-	// has 3; this leaves headroom for a richer future skeleton without a buffer resize).
+	// claim enforces) times a fixed max joint count per live-capable model. Procedural trees/bushes
+	// are generated with up to 64 joints (ProceduralArchetypeCatalog's maxJoints overrides) PLUS
+	// one extra synthetic canopy joint ProceduralPlantGenerator.cpp always appends after that cap
+	// (joints.push_back(canopySpec), uncounted against maxJoints) -- real trees/bushes land at 65,
+	// not 64. Keep this >= the real generated max or ModelCullNode's jointCount check silently
+	// falls back to baked everywhere, which is exactly what a bare 64 here did (confirmed: wind
+	// sway still didn't activate after raising this from 32 to 64, because every real tree was
+	// landing at 65 joints, one over).
 	inline constexpr std::uint32_t kModelLiveBudget = 256u;
-	inline constexpr std::uint32_t kModelLiveMaxJointCount = 32u;
+	inline constexpr std::uint32_t kModelLiveMaxJointCount = 72u;
 
 	// Stage 3: one already-culled, already-pose-resolved survivor, written by ModelCullNode
 	// (model_cull.comp) and consumed by model_render.task. Carries only what the task shader

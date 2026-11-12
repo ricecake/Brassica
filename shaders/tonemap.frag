@@ -56,6 +56,12 @@ layout(push_constant) uniform TonemapPushConstants {
 	// Same reasoning -- appended after bloomEnabled, another trailing scalar with nothing after
 	// it needing bigger alignment.
 	int  numCdlEntries;
+
+	// Same reasoning again -- see TonemapPushConstants.hpp's comment.
+	uint stencilIndex;
+
+	// TEMPORARY debug aid -- see TonemapPushConstants.hpp's comment.
+	int  debugVisualizeStencil;
 } params;
 
 // Planckian locus approximation for temperature to RGB
@@ -220,7 +226,9 @@ void main() {
 	if (params.depthTextureIndex > 0u) {
 		rawDepth = SAMPLE_NEAREST(params.depthTextureIndex, inUV).r;
 	}
-	bool  isSkyPixel = rawDepth >= 1.0;
+	// Same cloud-vs-sky stencil classification as bloom_downsample.comp -- see its comment.
+	bool  isCloudPixel = SAMPLE_STENCIL_NEAREST(params.stencilIndex, inUV) == 2u;
+	bool  isSkyPixel = !isCloudPixel && (rawDepth >= 1.0);
 	float linearZ = linearizeDepth(rawDepth, uNearPlane, uFarPlane);
 
 	// 1. Guided Upsampling for LTM. One shared low-res LTM pyramid feeds every layer
@@ -233,7 +241,7 @@ void main() {
 		bool  anyLtmForGuidance = false;
 		for (int i = 0; i < numExposureLayers; ++i) {
 			ExposureLayer layer = layers[i];
-			float weight = exposureLayerWeight(layer, linearZ, isSkyPixel);
+			float weight = exposureLayerWeight(layer, linearZ, isSkyPixel, isCloudPixel);
 			if (weight <= 0.0 || layer.data.ltmEnabled == 0) {
 				continue;
 			}
@@ -303,7 +311,7 @@ void main() {
 	bool anyLayerApplied = false;
 	for (int i = 0; i < numExposureLayers; ++i) {
 		ExposureLayer layer = layers[i];
-		float weight = exposureLayerWeight(layer, linearZ, isSkyPixel);
+		float weight = exposureLayerWeight(layer, linearZ, isSkyPixel, isCloudPixel);
 		if (weight <= 0.0) {
 			continue;
 		}
@@ -314,4 +322,17 @@ void main() {
 	}
 
 	outColor = vec4(clamp(result, 0.0, 1.0), 1.0);
+
+	// TEMPORARY debug aid -- see TonemapPushConstants.hpp's comment. Overrides every exposure/
+	// tonemap/CDL/LTM result above with a flat classification tint, so the stencil write (from
+	// CloudCompositeNode) and read (SAMPLE_STENCIL_NEAREST) can be checked in total isolation.
+	if (params.debugVisualizeStencil != 0) {
+		if (isCloudPixel) {
+			outColor = vec4(1.0, 0.0, 1.0, 1.0); // magenta: stencil read back as 2 (cloud)
+		} else if (isSkyPixel) {
+			outColor = vec4(0.0, 1.0, 1.0, 1.0); // cyan: depth sentinel, no stencil involved
+		} else {
+			outColor = vec4(0.0, 0.0, 0.0, 1.0); // black: scene (stencil 0, or anything else)
+		}
+	}
 }

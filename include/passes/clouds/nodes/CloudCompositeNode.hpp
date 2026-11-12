@@ -41,8 +41,18 @@ namespace brassica {
 	// Read<CloudAccumulatedColor/Transmittance>() already orders this after CloudTemporalNode's
 	// sole Create<> of both via the usual Create-before-accessor edge.
 	struct CloudCompositeNode: render::NodeRegistrar<CloudCompositeNode> {
+		// depthTest/depthWrite false: this pass doesn't touch GBufferDepth's depth aspect at all
+		// (its own occlusion test already runs by hand against CloudMoments/GBufferPosition, see
+		// cloud_composite.frag) -- Modify<GBufferDepth>() below is only to gain stencil-write
+		// access, and depthFormat on the BindGraphics call is what makes StencilMode::Write legal
+		// (PipelineLibrary.cpp requires a real depthFormat to enable the stencil test at all).
+		// stencilReference=2 (passed to BindGraphics) marks every non-discarded fragment as cloud
+		// -- see cloud_composite.frag's discard for which fragments that excludes.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
+			.depthTest = false,
+			.depthWrite = false,
+			.stencilMode = render::StencilMode::Write,
 			.enableShadingRate = false,
 		};
 
@@ -84,6 +94,16 @@ namespace brassica {
 			r.Read<GBufferPosition>();
 			r.Read<GBufferAlbedo>();
 			r.Modify<HdrColor>();
+			// ReadWrite, not Read: a genuinely read-only declaration gets storeOp=eNone for both
+			// depth and stencil aspects (DynamicRenderingWrapper::Begin mirrors stencil's load/
+			// store onto whatever depth got), which would silently discard this pass's own stencil
+			// write. depthTest/depthWrite are both false in kPipelineState, so the real depth
+			// aspect this loads is otherwise untouched -- only stencil (classification=2, see
+			// cloud_composite.frag) actually changes. The opaque GBuffer pass's existing sole
+			// Create<GBufferDepth>() already orders this node after it via the usual Create-
+			// before-accessor edge, same as every pre-existing Read<GBufferDepth>() elsewhere
+			// (TonemapNode, TonemapComputeNode) -- no new explicit ordering needed for that.
+			r.Modify<GBufferDepth>();
 			r.After<CirrusNode>();
 		}
 
@@ -97,14 +117,20 @@ namespace brassica {
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};
-			render::ResolvedPipeline       resolved = render::BindGraphics(
+			// depthFormat (GBufferDepth's real format) is what lets PipelineLibrary legally enable
+			// the stencil test at all for a StencilMode other than Disabled -- stencilReference=2
+			// is the classification value every non-discarded fragment stamps (cloud_composite.frag).
+			render::ResolvedPipeline resolved = render::BindGraphics(
                 ctx,
                 *pipelineLibrary,
                 stages,
                 kPipelineState,
                 colorFormats,
                 push,
-                vk::ShaderStageFlagBits::eFragment
+                vk::ShaderStageFlagBits::eFragment,
+                GBufferDepth::kFormat,
+                render::ExtraSets{},
+                /*stencilReference=*/2u
             );
 			if (!resolved.pipeline) {
 				return;

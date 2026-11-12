@@ -69,11 +69,22 @@ namespace brassica {
 		// CdlGradingLayers (cdl_grading.glsl, frameSet binding 6) to iterate for depth-based
 		// grading, applied uniformly to every pixel regardless of which exposure layer is active.
 		std::int32_t numCdlEntries{1};
+
+		// Same reasoning again -- bindless index into uUTextures2D (bindless.glsl) for
+		// GBufferDepth's stencil aspect, same purpose as BloomPushConstants.hpp's own stencilIndex.
+		std::uint32_t stencilIndex{0};
+
+		// TEMPORARY debug aid for the depth-stencil cloud-classification prototype: when nonzero,
+		// tonemap.frag overrides the final color with a flat magenta (cloud) / cyan (sky) tint
+		// instead of running any exposure/tonemap math, so the classification itself can be
+		// checked visually in isolation from every layer-blend computation downstream of it.
+		// Remove once the classification is confirmed working on real hardware.
+		std::int32_t debugVisualizeStencil{0};
 	};
 
 	static_assert(
-		sizeof(TonemapPushConstants) == 152,
-		"TonemapPushConstants size must be 152 bytes -- must match tonemap.frag's push_constant block exactly"
+		sizeof(TonemapPushConstants) == 160,
+		"TonemapPushConstants size must be 160 bytes -- must match tonemap.frag's push_constant block exactly"
 	);
 
 	inline TonemapPushConstants s_tonemapPush{};

@@ -87,6 +87,12 @@ struct LayerData {
 	float _pad2;
 
 	uint  histogram[256];
+	// Snapshot of the previous frame's fully-accumulated histogram, written by
+	// bloom_downsample.comp's update_layer_ae right before it zeroes `histogram` for this frame's
+	// accumulation. CPU readback must read this field, not `histogram` -- by the time any readback
+	// can see this buffer slot, `histogram` has already been reset to 0 (see AutoExposureData.hpp's
+	// histogramSnapshot comment).
+	uint  histogramSnapshot[256];
 };
 
 // One depth-ranged auto-exposure/tonemap layer. Mirrors cdl_grading.glsl's CdlEntry pattern
@@ -104,9 +110,12 @@ struct ExposureLayer {
 	int       enabled;
 	int       isMain;
 	int       isSky;
-	// std430 rounds an array-of-structs element stride up to a multiple of 16 -- see
-	// AutoExposureData.hpp's matching padding and static_assert.
-	float _pad0;
+	// A third hard override, same shape as isSky -- see AutoExposureData.hpp's ExposureLayerHost
+	// comment for the full explanation (weight 1.0 for a stencil-classified cloud pixel).
+	int       isCloud;
+	// std430 rounds an array-of-structs element stride up to a multiple of 16 -- the 8 trailing
+	// scalars above (targetDepth..isCloud) already land on a 16-byte boundary now, so no explicit
+	// padding field is needed -- see AutoExposureData.hpp's matching comment and static_assert.
 };
 
 #define MAX_EXPOSURE_LAYERS 8
@@ -120,17 +129,20 @@ layout(std430, set = 0, binding = 5) buffer AutoExposureBuffer {
 // Same weight function cdl_grading.glsl's depth-ranged CdlEntry loop already uses. Callers loop
 // i in 0..numExposureLayers and skip any layer with weight <= 0.0 (an isMain layer with
 // enabled == 0 still blocks nothing else, so disabled layers simply contribute zero weight here
-// rather than being filtered out of the loop itself). isSkyPixel is the same `depth >= 1.0`
-// background test every caller already computes locally -- passed in rather than re-derived here
-// since this function only ever sees linearZ, which saturates at the far plane and isn't a
-// reliable binary signal on its own (unlike isMain, isSky is a hard override, not a smooth
-// falloff, so it needs the real sentinel test, not a depth comparison).
-float exposureLayerWeight(ExposureLayer layer, float linearZ, bool isSkyPixel) {
+// rather than being filtered out of the loop itself). isSkyPixel/isCloudPixel are the same
+// classification tests every caller already computes locally -- passed in rather than re-derived
+// here since this function only ever sees linearZ, which saturates at the far plane and isn't a
+// reliable binary signal on its own (unlike isMain, isSky/isCloud are hard overrides, not a smooth
+// falloff, so they need the real classification, not a depth comparison).
+float exposureLayerWeight(ExposureLayer layer, float linearZ, bool isSkyPixel, bool isCloudPixel) {
 	if (layer.enabled == 0) {
 		return 0.0;
 	}
 	if (layer.isMain != 0) {
 		return 1.0;
+	}
+	if (layer.isCloud != 0) {
+		return isCloudPixel ? 1.0 : 0.0;
 	}
 	if (layer.isSky != 0) {
 		return isSkyPixel ? 1.0 : 0.0;

@@ -124,6 +124,7 @@ namespace brassica {
 			downPush.srcResolution = glm::vec2(ctx.width, ctx.height);
 			downPush.hdrColorIndex = ctx.Index<HdrColor>();
 			downPush.depthIndex = ctx.Index<GBufferDepth>();
+			downPush.stencilIndex = ctx.StencilIndex<GBufferDepth>();
 
 			downPush.outMip0Index = ctx.StorageIndex<BloomTextureMip0>();
 			downPush.outMip1Index = ctx.StorageIndex<BloomTextureMip1>();
@@ -309,6 +310,7 @@ namespace brassica {
 			push.ltmFusedIndex = ctx.Index<LtmFusedTexture>();
 			push.ltmExpMipIndex = ctx.Index<LtmExpTextureMip0>();
 			push.depthTextureIndex = ctx.Index<GBufferDepth>();
+			push.stencilIndex = ctx.StencilIndex<GBufferDepth>();
 			push.ltmRes = glm::vec2(ctx.width / 2, ctx.height / 2);
 			push.numCdlEntries = s_cdlGradingLayers.numEntries;
 

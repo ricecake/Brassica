@@ -27,10 +27,13 @@ namespace brassica {
 		float         baseRigidity{0.95f};           // trunk
 		float         rigidityFalloffPerLevel{0.3f}; // more flexible with each level of depth
 		int           circularSegments{10};
-		// Hard cap, comfortably under kModelLiveMaxJointCount (32) -- ModelCullNode's live-mode
+		// Hard cap, comfortably under kModelLiveMaxJointCount (72) -- ModelCullNode's live-mode
 		// eligibility check silently falls back to baked/rest for any model whose jointCount
 		// exceeds that budget, so this generator enforces the limit itself rather than relying
 		// on maxDepth/branch-count alone (worst case 3 branches/level * depth 3 would be 40).
+		// ProceduralArchetypeCatalog's tree/bush presets override this default higher (up to 64)
+		// to avoid truncating real trees -- keep that override + 1 (ProceduralPlantGenerator's
+		// canopy joint, added on top of this cap, not counted against it) <= kModelLiveMaxJointCount.
 		std::uint32_t maxJoints{24};
 	};
 

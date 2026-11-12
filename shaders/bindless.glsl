@@ -101,6 +101,14 @@ layout(set = 1, binding = 3, r8ui) uniform uimage2D uImagesR8UI[];
 // (PhysicalRegistry::AssignAndWriteBindlessIndices, sampledImage3DBinding) -- a genuine texture3D,
 // not a 2D-array pressed into service for a volume it was never shaped for.
 layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
+// Binding 7: stencil-aspect-only sampled catalog, independently sized/counted from binding 0
+// (PhysicalRegistry::AssignAndWriteBindlessIndices, stencilImage2DBinding) -- a combined
+// depth-stencil format's stencil aspect must be sampled through a dedicated integer view (GLSL's
+// uint-sampled texture type, not the float texture2D the depth aspect already uses at binding 0),
+// since a sampled descriptor can only have one aspect and one numeric-format class. Registered
+// only for textures that actually have a stencil component and real eSampled usage (today, just
+// GBufferDepth) -- see PhysicalResource.hpp's m_stencilSampledView comment.
+layout(set = 1, binding = 7) uniform utexture2D uUTextures2D[];
 
 // Sampler catalog indices, written once by Engine::InitGlobalDescriptors and injected here via
 // Shader::RegisterConstant's [[NAME]] substitution -- GLSL and C++ read the same catalog by
@@ -143,5 +151,12 @@ layout(set = 1, binding = 5) uniform texture3D uTextures3D[];
 // aren't meaningful for a raymarch loop's per-step world-space sample position.
 #define SAMPLE_3D_LINEAR_LOD(idx, uvw, lod)                                                                           \
 	textureLod(sampler3D(uTextures3D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_LINEAR_REPEAT_MIP]), uvw, lod)
+
+// idx is a bindless index into uUTextures2D (NodeContext::StencilIndex<K>() on the C++ side) --
+// returns the raw stencil reference value written by whichever pass last wrote it (render::
+// StencilMode::Write), as a uint in [0, 255]. Nearest only: stencil values are classification
+// IDs, not continuous data, so filtering them would be meaningless.
+#define SAMPLE_STENCIL_NEAREST(idx, uv)                                                                               \
+	texture(usampler2D(uUTextures2D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uv).r
 
 #endif // BRASSICA_BINDLESS_GLSL

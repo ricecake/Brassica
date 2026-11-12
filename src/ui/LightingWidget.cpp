@@ -1,5 +1,6 @@
 #include "ui/LightingWidget.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -41,6 +42,15 @@ namespace brassica::ui {
 					s_tonemapPush.bloomEnabled = bloomEnabled ? 1 : 0;
 				}
 				ImGui::Checkbox("Enable Bloom/Auto-Exposure Compute Pass", &s_tonemapComputePassEnabled);
+
+				// TEMPORARY debug aid -- see TonemapPushConstants.hpp's debugVisualizeStencil
+				// comment. Replaces the final image with a flat magenta(cloud)/cyan(sky)/
+				// black(scene) tint so the depth-stencil cloud classification can be checked in
+				// isolation from exposure math. Remove once confirmed working on real hardware.
+				bool debugVisualizeStencil = s_tonemapPush.debugVisualizeStencil != 0;
+				if (ImGui::Checkbox("DEBUG: Visualize Cloud/Sky/Scene Stencil", &debugVisualizeStencil)) {
+					s_tonemapPush.debugVisualizeStencil = debugVisualizeStencil ? 1 : 0;
+				}
 
 				if (bloomEnabled) {
 					ImGui::SliderFloat("Intensity##Bloom", &s_tonemapPush.intensity, 0.0f, 2.0f);
@@ -111,7 +121,7 @@ namespace brassica::ui {
 							std::vector<float> histValues(256);
 							float              maxHistVal = 1.0f;
 							for (int i = 0; i < 256; i++) {
-								histValues[i] = static_cast<float>(liveLayer.histogram[i]);
+								histValues[i] = static_cast<float>(liveLayer.histogramSnapshot[i]);
 								if (histValues[i] > maxHistVal) {
 									maxHistVal = histValues[i];
 								}
@@ -126,6 +136,24 @@ namespace brassica::ui {
 								maxHistVal,
 								ImVec2(300, 80)
 							);
+							if (ImGui::IsItemHovered()) {
+								// Matches bloom_downsample.comp's MIN_LOG_LUMA/MAX_LOG_LUMA bin mapping exactly.
+								constexpr float kMinLogLuma = -10.0f;
+								constexpr float kMaxLogLuma = 14.0f;
+								const ImVec2    rectMin = ImGui::GetItemRectMin();
+								const ImVec2    rectMax = ImGui::GetItemRectMax();
+								const float     relX =
+									(ImGui::GetMousePos().x - rectMin.x) / std::max(rectMax.x - rectMin.x, 1.0f);
+								const int bin = std::clamp(static_cast<int>(relX * 256.0f), 0, 255);
+								const float binLogLuma =
+									kMinLogLuma + (static_cast<float>(bin) + 0.5f) / 256.0f * (kMaxLogLuma - kMinLogLuma);
+								ImGui::SetTooltip(
+									"Bin %d | Luma: %.4f | Weight: %.0f",
+									bin,
+									std::exp(binLogLuma),
+									histValues[bin]
+								);
+							}
 							ImGui::TreePop();
 						}
 					} else {
@@ -216,7 +244,8 @@ namespace brassica::ui {
 					ExposureLayerHost& layerHostForHeader = s_exposureData.layers[static_cast<std::size_t>(i)];
 					std::string        headerName = layerHostForHeader.isSky != 0
 						? "Layer " + std::to_string(i) + " (Sky)"
-						: "Layer " + std::to_string(i);
+						: (layerHostForHeader.isCloud != 0 ? "Layer " + std::to_string(i) + " (Cloud)"
+						                                   : "Layer " + std::to_string(i));
 					bool removeRequested = false;
 					if (ImGui::TreeNode(headerName.c_str())) {
 						ExposureLayerHost& layerHost = s_exposureData.layers[static_cast<std::size_t>(i)];
@@ -233,9 +262,28 @@ namespace brassica::ui {
 						bool isSky = layerHost.isSky != 0;
 						if (ImGui::Checkbox("Sky Layer (background only)##ExposureLayer", &isSky)) {
 							layerHost.isSky = isSky ? 1 : 0;
+							if (isSky) {
+								layerHost.isCloud = 0;
+							}
 						}
 
-						if (layerHost.isSky == 0) {
+						// Cloud overrides the same way Sky does, but on the depth-stencil system's
+						// cloud classification (GBufferDepth's stencil aspect == 2, written by
+						// CloudCompositeNode) instead of the background depth sentinel -- lets a
+						// layer target "visible cloud" specifically rather than inheriting Sky's
+						// stats just because a raymarched cloud doesn't write real opaque depth
+						// either. Mutually exclusive with Sky in this UI (isCloud is checked first
+						// in exposureLayerWeight if both were somehow set, so this isn't a hazard
+						// either way, but there's no reason to let a layer ask to be both at once).
+						bool isCloud = layerHost.isCloud != 0;
+						if (ImGui::Checkbox("Cloud Layer##ExposureLayer", &isCloud)) {
+							layerHost.isCloud = isCloud ? 1 : 0;
+							if (isCloud) {
+								layerHost.isSky = 0;
+							}
+						}
+
+						if (layerHost.isSky == 0 && layerHost.isCloud == 0) {
 							ImGui::SliderFloat("Target Depth##ExposureLayer", &layerHost.targetDepth, 0.1f, 1000.0f);
 							ImGui::SliderFloat("Falloff Width##ExposureLayer", &layerHost.falloffWidth, 0.1f, 500.0f);
 							ImGui::SliderFloat("Falloff Rate##ExposureLayer", &layerHost.falloffRate, 0.1f, 10.0f);

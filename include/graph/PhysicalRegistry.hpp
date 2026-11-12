@@ -139,6 +139,7 @@ namespace brassica::graph {
 			std::uint32_t           accelerationStructureBinding = 4;
 			std::uint32_t           sampledImage3DBinding = 5;
 			std::uint32_t           storageBufferBinding = 6;
+			std::uint32_t           stencilImage2DBinding = 7;
 
 			// The always-bound frame set (set 0) -- just the per-frame UBO. Genuinely varies by
 			// active frame index (Engine::DrawFrame rebuilds this every frame); this registry
@@ -285,6 +286,14 @@ namespace brassica::graph {
 			return tex ? tex->GetSampledBindlessIndex() : 0;
 		}
 
+		// The stencil-only-sampled-array index for id -- 0 (no fallback reserved there, unlike
+		// GetBindlessIndex) covers both "id is not a texture" and "id's texture has no stencil
+		// component", same non-distinguishing reasoning as GetBindlessIndex above.
+		[[nodiscard]] std::uint32_t GetStencilBindlessIndex(ResourceId id) const {
+			auto tex = GetTexture(id);
+			return tex ? tex->GetStencilBindlessIndex() : 0;
+		}
+
 		// ResourceServices: the lookup NodeContext::Index<K>() (Execution.hpp) calls through
 		// to. Checks the AS registry first since an AS's ResourceId never resolves via
 		// GetTexture -- the two kinds are disjoint, so this is never ambiguous -- then falls
@@ -306,6 +315,11 @@ namespace brassica::graph {
 		// raw registry pointer).
 		[[nodiscard]] std::uint32_t StorageIndexOf(ResourceId id, std::uint32_t mip = 0) const override {
 			return GetStorageBindlessIndex(id, mip);
+		}
+
+		// ResourceServices: the lookup NodeContext::StencilIndex<K>() calls through to.
+		[[nodiscard]] std::uint32_t StencilIndexOf(ResourceId id) const override {
+			return GetStencilBindlessIndex(id);
 		}
 
 		// ResourceServices: the lookup NodeContext::BufferIndex<K>() (Execution.hpp) calls through
@@ -512,6 +526,7 @@ namespace brassica::graph {
 			// that nothing in flight can still reference them. See BindlessArena's comment.
 			m_sampledArena.ProcessRetirements(frameIndex);
 			m_sampledArrayArena.ProcessRetirements(frameIndex);
+			m_sampledStencilArena.ProcessRetirements(frameIndex);
 			m_storageArena.ProcessRetirements(frameIndex);
 			m_accelStructArena.ProcessRetirements(frameIndex);
 			ProcessBufferRetirements(frameIndex);
@@ -721,6 +736,7 @@ namespace brassica::graph {
 			m_bufferPool.Reset();
 			m_sampledArena.Reset();
 			m_sampledArrayArena.Reset();
+			m_sampledStencilArena.Reset();
 			m_storageArena.Reset();
 			m_accelStructArena.Reset();
 			m_fallbackTexture.reset();
@@ -873,6 +889,25 @@ namespace brassica::graph {
 			m_device.updateDescriptorSets(write, {});
 		}
 
+		// Writes into the stencil-only sampled catalog (bindless.glsl's uUTextures2D, binding 7) --
+		// a single binding, unlike WriteSampledImageDescriptor's Plain2D/Array2D/Volume3D split,
+		// since a stencil-aspect view only ever comes from a plain 2D depth-stencil texture today.
+		void WriteStencilSampledImageDescriptor(std::uint32_t index, vk::ImageView view, vk::ImageLayout layout) {
+			if (!m_bindless.set || m_bindless.stencilImage2DBinding == 0xFFFFFFFFu) {
+				return;
+			}
+			vk::DescriptorImageInfo imageInfo{{}, view, layout};
+			vk::WriteDescriptorSet  write{
+                m_bindless.set,
+                m_bindless.stencilImage2DBinding,
+                index,
+                1,
+                vk::DescriptorType::eSampledImage,
+                &imageInfo,
+            };
+			m_device.updateDescriptorSets(write, {});
+		}
+
 		void WriteStorageImageDescriptor(std::uint32_t index, vk::ImageView view) {
 			if (!m_bindless.set || m_bindless.storageImageBinding == 0xFFFFFFFFu) {
 				return;
@@ -993,6 +1028,18 @@ namespace brassica::graph {
 				// CreateView built specifically for this case, or the one real view for every
 				// other format.
 				WriteSampledImageDescriptor(index, tex.GetSampledView(), layout, sampledKind);
+
+				// A combined depth-stencil format additionally gets a second, independent index
+				// into the stencil-only sampled catalog (bindless.glsl's uUTextures2D) -- the same
+				// layout applies, since both aspects of a depth-stencil image transition together
+				// (there is no separate-depth-stencil-layout support in this registry's barrier
+				// seam). GetStencilSampledView() returns a null handle for every other format, so
+				// this never fires for them.
+				if (HasStencilComponent(static_cast<vk::Format>(desc.formatCode))) {
+					const std::uint32_t stencilIndex = m_sampledStencilArena.Allocate();
+					tex.SetStencilBindlessIndex(stencilIndex);
+					WriteStencilSampledImageDescriptor(stencilIndex, tex.GetStencilSampledView(), layout);
+				}
 			}
 			if (usage & vk::ImageUsageFlagBits::eStorage) {
 				if (tex.HasPerMipStorage()) {
@@ -1026,6 +1073,9 @@ namespace brassica::graph {
 				BindlessArena& arena = isVolume ? m_sampled3DArena
 												: (texDesc.layers > 1 ? m_sampledArrayArena : m_sampledArena);
 				arena.Retire(tex.GetSampledBindlessIndex(), frameIndex);
+			}
+			if (tex.GetStencilBindlessIndex() != 0) {
+				m_sampledStencilArena.Retire(tex.GetStencilBindlessIndex(), frameIndex);
 			}
 			if (tex.HasPerMipStorage()) {
 				for (std::uint32_t mip = 0; mip < tex.MipViewCount(); ++mip) {
@@ -1376,6 +1426,7 @@ namespace brassica::graph {
 		BindlessArena    m_sampledArena;      // sampledImage2DBinding
 		BindlessArena    m_sampledArrayArena; // sampledImage2DArrayBinding -- see AssignAndWriteBindlessIndices
 		BindlessArena    m_sampled3DArena;    // sampledImage3DBinding -- see AssignAndWriteBindlessIndices
+		BindlessArena    m_sampledStencilArena; // stencilImage2DBinding -- see AssignAndWriteBindlessIndices
 		BindlessArena    m_storageArena;
 		BindlessArena    m_bufferArena; // storageBufferBinding -- see AssignAndWriteBindlessBufferIndex
 		BindlessArena    m_accelStructArena;

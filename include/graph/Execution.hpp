@@ -262,6 +262,12 @@ namespace brassica::graph {
 		// buffer-bindless arena just to keep compiling.
 		virtual std::uint32_t BufferIndexOf(ResourceId) const { return 0u; }
 
+		// The stencil-only-aspect analogue of IndexOf, for a texture registered with a real
+		// stencil component and eSampled usage (PhysicalRegistry.hpp's AssignAndWriteBindlessIndices,
+		// stencilImage2DBinding). Non-pure, defaulted to 0, same reasoning as BufferIndexOf: added
+		// after other ResourceServices implementations already existed.
+		virtual std::uint32_t StencilIndexOf(ResourceId) const { return 0u; }
+
 		virtual void WaitIdle() {}
 
 		// Begins a CPU write into `id`'s current-frame slot -- valid only for a resource whose
@@ -419,6 +425,12 @@ namespace brassica::graph {
 		[[nodiscard]] std::uint32_t BufferIndex() const {
 			CheckDeclared<K>("BufferIndex");
 			return resources ? resources->BufferIndexOf(IdOf<K>()) : 0u;
+		}
+
+		template <typename K>
+		[[nodiscard]] std::uint32_t StencilIndex() const {
+			CheckDeclared<K>("StencilIndex");
+			return resources ? resources->StencilIndexOf(IdOf<K>()) : 0u;
 		}
 
 		// Writes sizeBytes into K's current-frame slot via fn(std::span<std::byte>), then

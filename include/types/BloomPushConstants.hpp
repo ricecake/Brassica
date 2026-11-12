@@ -31,11 +31,17 @@ namespace brassica {
 		float         softness{0.5f};
 		float         karisDampening{1.0f};
 		float         maxPoolingFactor{0.0f};
+		// Appended last, deliberately: every scalar field in this struct, same reasoning as
+		// TonemapPushConstants.hpp's bloomEnabled comment -- inserting a new field anywhere earlier
+		// shifts every C++ offset after it with no compensating padding. Bindless index into
+		// uUTextures2D (bindless.glsl) for GBufferDepth's stencil aspect -- lets isSkyPixel exclude
+		// a real cloud pixel instead of guessing purely from depth.
+		std::uint32_t stencilIndex{0};
 	};
 
 	static_assert(
-		sizeof(DownsamplePushConstants) == 100,
-		"DownsamplePushConstants size must be 100 bytes -- must match bloom_downsample.comp's push_constant block "
+		sizeof(DownsamplePushConstants) == 104,
+		"DownsamplePushConstants size must be 104 bytes -- must match bloom_downsample.comp's push_constant block "
 		"exactly"
 	);
 

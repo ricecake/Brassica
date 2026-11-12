@@ -23,7 +23,7 @@ const uint kDecorSlotBase = kManualInstanceCapacity;
 const uint kModelInstanceCapacity = kManualInstanceCapacity + kDecorCapacity; // mirrors include/model/ModelTypes.hpp
 const uint kModelNoSkeletonSentinel = 0xFFFFFFFFu;
 const uint kModelLiveBudget = 256u;
-const uint kModelLiveMaxJointCount = 32u;
+const uint kModelLiveMaxJointCount = 72u; // mirrors include/model/ModelTypes.hpp
 const uint kModelVisibleModeBaked = 0u;
 const uint kModelVisibleModeLive = 1u;
 
