@@ -32,7 +32,7 @@ layout(push_constant) uniform DownsamplePushConstants {
 	float maxPoolingFactor;
 	// Appended last -- see BloomPushConstants.hpp's comment on why this field specifically has to
 	// go here and nowhere else in this struct.
-	uint  stencilIndex;
+	uint  cloudTransmittanceIndex;
 } push;
 
 shared vec3 s_mip[16][16];
@@ -202,13 +202,17 @@ void main() {
 		vec4 ray_view = uInvProjMatrix * vec4(ndc, -1.0, 1.0);
 		ray_view = vec4(ray_view.xy, -1.0, 0.0);
 		vec3 worldDir = normalize((uInvViewMatrix * ray_view).xyz);
-		// Real cloud classification (GBufferDepth's stencil aspect, written by CloudCompositeNode)
-		// instead of guessing from depth -- a raymarched cloud never writes real opaque depth, so
-		// the old `centerDepth >= 1.0` test alone bucketed clouds into isSkyPixel right alongside
-		// open sky, letting them inherit the sky layer's own (differently-tuned, differently-
-		// swinging) exposure stats. 2 == cloud (CloudCompositePushConstants' stencilReference).
-		bool isCloudPixel = SAMPLE_STENCIL_NEAREST(push.stencilIndex, uv) == 2u;
-		bool isSkyPixel = !isCloudPixel && (centerDepth >= 1.0);
+		bool isSkyPixel = centerDepth >= 1.0;
+
+		// Real local cloud opacity, sampled directly from the raymarch's own accumulated
+		// transmittance (a plain texture -- no stencil involved) rather than a hard classification
+		// -- see exposureLayerWeight's comment (autoexposure.glsl) for why this needs to be
+		// continuous: a thin/translucent edge should hand most of its weight to whatever's behind
+		// it (isSkyPixel already covers that, unaffected by cloud presence), not snap entirely to
+		// the Cloud layer's own exposure/tonemap tuning.
+		vec3  cloudTransmittance = SAMPLE_LINEAR(push.cloudTransmittanceIndex, uv).rgb;
+		float avgCloudTransmittance = (cloudTransmittance.r + cloudTransmittance.g + cloudTransmittance.b) / 3.0;
+		float cloudWeight = clamp(1.0 - avgCloudTransmittance, 0.0, 1.0);
 
 		float luma = dot(centerSample, vec3(0.2126, 0.7152, 0.0722));
 		float logLuma = log(max(luma, 0.0001));
@@ -233,7 +237,7 @@ void main() {
 		// of each layer. This prevents the main layer's histogram from capturing pixels fully covered
 		// by another layer, acting purely as a fallback for the remaining weight.
 		for (int li = numExposureLayers - 1; li >= 0; --li) {
-			float baseWeight = exposureLayerWeight(layers[li], linearZ, isSkyPixel, isCloudPixel);
+			float baseWeight = exposureLayerWeight(layers[li], linearZ, isSkyPixel, cloudWeight);
 			if (baseWeight <= 0.0 || remainingWeight <= 0.0) {
 				continue;
 			}

@@ -34,9 +34,12 @@ namespace brassica {
 		// Appended last, deliberately: every scalar field in this struct, same reasoning as
 		// TonemapPushConstants.hpp's bloomEnabled comment -- inserting a new field anywhere earlier
 		// shifts every C++ offset after it with no compensating padding. Bindless index into
-		// uUTextures2D (bindless.glsl) for GBufferDepth's stencil aspect -- lets isSkyPixel exclude
-		// a real cloud pixel instead of guessing purely from depth.
-		std::uint32_t stencilIndex{0};
+		// CloudAccumulatedTransmittance -- sampled directly (a plain texture, no stencil involved)
+		// so the Cloud exposure layer's weight can be the real local cloud opacity instead of a
+		// hard binary classification. Replaces this field's old stencilIndex purpose: the binary
+		// stencil signal turned out to produce a visible seam at translucent cloud edges, since it
+		// snapped the whole pixel to 100% Cloud-layer treatment the instant any haze was detected.
+		std::uint32_t cloudTransmittanceIndex{0};
 	};
 
 	static_assert(

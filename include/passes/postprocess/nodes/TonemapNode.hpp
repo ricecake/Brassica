@@ -12,6 +12,7 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
+#include "passes/clouds/resources.hpp"
 #include "passes/postprocess/resources.hpp"
 #include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
@@ -89,6 +90,7 @@ namespace brassica {
 			r.Active(s_tonemapComputePassEnabled);
 			r.Read<HdrColor>();
 			r.Read<GBufferDepth>();
+			r.Read<CloudAccumulatedTransmittance>();
 			r.Modify<AutoExposureBuffer>();
 			r.Create<BloomTextureMip0>();
 			r.Create<BloomTextureMip1>();
@@ -124,7 +126,7 @@ namespace brassica {
 			downPush.srcResolution = glm::vec2(ctx.width, ctx.height);
 			downPush.hdrColorIndex = ctx.Index<HdrColor>();
 			downPush.depthIndex = ctx.Index<GBufferDepth>();
-			downPush.stencilIndex = ctx.StencilIndex<GBufferDepth>();
+			downPush.cloudTransmittanceIndex = ctx.Index<CloudAccumulatedTransmittance>();
 
 			downPush.outMip0Index = ctx.StorageIndex<BloomTextureMip0>();
 			downPush.outMip1Index = ctx.StorageIndex<BloomTextureMip1>();
@@ -294,6 +296,7 @@ namespace brassica {
 			r.Keystone<brassica::phase::ToneMap>();
 			r.Read<HdrColor>();
 			r.Read<GBufferDepth>();
+			r.Read<CloudAccumulatedTransmittance>();
 			r.Read<BloomTextureMip0>();
 			r.Read<LtmFusedTexture>();
 			r.Read<LtmExpTextureMip0>();
@@ -311,6 +314,7 @@ namespace brassica {
 			push.ltmExpMipIndex = ctx.Index<LtmExpTextureMip0>();
 			push.depthTextureIndex = ctx.Index<GBufferDepth>();
 			push.stencilIndex = ctx.StencilIndex<GBufferDepth>();
+			push.cloudTransmittanceIndex = ctx.Index<CloudAccumulatedTransmittance>();
 			push.ltmRes = glm::vec2(ctx.width / 2, ctx.height / 2);
 			push.numCdlEntries = s_cdlGradingLayers.numEntries;
 

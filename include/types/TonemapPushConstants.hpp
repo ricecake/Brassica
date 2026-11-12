@@ -80,11 +80,17 @@ namespace brassica {
 		// checked visually in isolation from every layer-blend computation downstream of it.
 		// Remove once the classification is confirmed working on real hardware.
 		std::int32_t debugVisualizeStencil{0};
+
+		// Bindless index into CloudAccumulatedTransmittance -- sampled directly (a plain texture,
+		// no stencil involved) so the Cloud exposure layer's weight can be the real local cloud
+		// opacity instead of a hard binary classification. See BloomPushConstants.hpp's identical
+		// field for the full reasoning.
+		std::uint32_t cloudTransmittanceIndex{0};
 	};
 
 	static_assert(
-		sizeof(TonemapPushConstants) == 160,
-		"TonemapPushConstants size must be 160 bytes -- must match tonemap.frag's push_constant block exactly"
+		sizeof(TonemapPushConstants) == 164,
+		"TonemapPushConstants size must be 164 bytes -- must match tonemap.frag's push_constant block exactly"
 	);
 
 	inline TonemapPushConstants s_tonemapPush{};

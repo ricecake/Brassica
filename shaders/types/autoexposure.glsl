@@ -129,12 +129,21 @@ layout(std430, set = 0, binding = 5) buffer AutoExposureBuffer {
 // Same weight function cdl_grading.glsl's depth-ranged CdlEntry loop already uses. Callers loop
 // i in 0..numExposureLayers and skip any layer with weight <= 0.0 (an isMain layer with
 // enabled == 0 still blocks nothing else, so disabled layers simply contribute zero weight here
-// rather than being filtered out of the loop itself). isSkyPixel/isCloudPixel are the same
-// classification tests every caller already computes locally -- passed in rather than re-derived
-// here since this function only ever sees linearZ, which saturates at the far plane and isn't a
-// reliable binary signal on its own (unlike isMain, isSky/isCloud are hard overrides, not a smooth
-// falloff, so they need the real classification, not a depth comparison).
-float exposureLayerWeight(ExposureLayer layer, float linearZ, bool isSkyPixel, bool isCloudPixel) {
+// rather than being filtered out of the loop itself). isSkyPixel is the same `depth >= 1.0`
+// background test every caller already computes locally -- passed in rather than re-derived here
+// since this function only ever sees linearZ, which saturates at the far plane and isn't a
+// reliable binary signal on its own (unlike isMain, isSky is a hard override, not a smooth
+// falloff, so it needs the real sentinel test, not a depth comparison).
+//
+// cloudWeight is NOT a classification bool like isSkyPixel -- it's the real local cloud opacity
+// (1.0 - the cloud raymarch's own transmittance at this pixel, sampled directly from
+// CloudAccumulatedTransmittance by every caller), continuous in [0, 1]. A hard binary cloud/not-
+// cloud split (the first version of this) snapped a translucent edge pixel straight to 100% Cloud-
+// layer treatment the instant any haze was detected, producing a visible seam -- an opaque cloud
+// core still gets the Cloud layer at full weight, but a thin edge gets a small share of it and
+// lets the normal back-to-front remainingWeight mechanism hand the rest to whatever's actually
+// behind it (Sky or Scene), exactly like Sky itself falls back to Main.
+float exposureLayerWeight(ExposureLayer layer, float linearZ, bool isSkyPixel, float cloudWeight) {
 	if (layer.enabled == 0) {
 		return 0.0;
 	}
@@ -142,7 +151,7 @@ float exposureLayerWeight(ExposureLayer layer, float linearZ, bool isSkyPixel, b
 		return 1.0;
 	}
 	if (layer.isCloud != 0) {
-		return isCloudPixel ? 1.0 : 0.0;
+		return cloudWeight;
 	}
 	if (layer.isSky != 0) {
 		return isSkyPixel ? 1.0 : 0.0;

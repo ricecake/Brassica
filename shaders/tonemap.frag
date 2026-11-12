@@ -62,6 +62,9 @@ layout(push_constant) uniform TonemapPushConstants {
 
 	// TEMPORARY debug aid -- see TonemapPushConstants.hpp's comment.
 	int  debugVisualizeStencil;
+
+	// Same reasoning again -- see TonemapPushConstants.hpp's comment.
+	uint cloudTransmittanceIndex;
 } params;
 
 // Planckian locus approximation for temperature to RGB
@@ -226,10 +229,19 @@ void main() {
 	if (params.depthTextureIndex > 0u) {
 		rawDepth = SAMPLE_NEAREST(params.depthTextureIndex, inUV).r;
 	}
-	// Same cloud-vs-sky stencil classification as bloom_downsample.comp -- see its comment.
-	bool  isCloudPixel = SAMPLE_STENCIL_NEAREST(params.stencilIndex, inUV) == 2u;
-	bool  isSkyPixel = !isCloudPixel && (rawDepth >= 1.0);
+	bool  isSkyPixel = rawDepth >= 1.0;
 	float linearZ = linearizeDepth(rawDepth, uNearPlane, uFarPlane);
+
+	// Binary stencil classification -- kept only for the debug visualization below, not for the
+	// real exposure blend. See bloom_downsample.comp's comment: the Cloud layer's actual weight
+	// (cloudWeight, just below) is now the real local cloud opacity sampled directly from
+	// CloudAccumulatedTransmittance, which blends translucent edges smoothly instead of snapping
+	// the whole pixel to 100% Cloud-layer treatment.
+	bool  isCloudPixel = SAMPLE_STENCIL_NEAREST(params.stencilIndex, inUV) == 2u;
+
+	vec3  cloudTransmittance = SAMPLE_LINEAR(params.cloudTransmittanceIndex, inUV).rgb;
+	float avgCloudTransmittance = (cloudTransmittance.r + cloudTransmittance.g + cloudTransmittance.b) / 3.0;
+	float cloudWeight = clamp(1.0 - avgCloudTransmittance, 0.0, 1.0);
 
 	// 1. Guided Upsampling for LTM. One shared low-res LTM pyramid feeds every layer
 	// (bloom_downsample.comp blends each layer's contribution into it the same sequential way),
@@ -241,7 +253,7 @@ void main() {
 		bool  anyLtmForGuidance = false;
 		for (int i = 0; i < numExposureLayers; ++i) {
 			ExposureLayer layer = layers[i];
-			float weight = exposureLayerWeight(layer, linearZ, isSkyPixel, isCloudPixel);
+			float weight = exposureLayerWeight(layer, linearZ, isSkyPixel, cloudWeight);
 			if (weight <= 0.0 || layer.data.ltmEnabled == 0) {
 				continue;
 			}
@@ -311,7 +323,7 @@ void main() {
 	bool anyLayerApplied = false;
 	for (int i = 0; i < numExposureLayers; ++i) {
 		ExposureLayer layer = layers[i];
-		float weight = exposureLayerWeight(layer, linearZ, isSkyPixel, isCloudPixel);
+		float weight = exposureLayerWeight(layer, linearZ, isSkyPixel, cloudWeight);
 		if (weight <= 0.0) {
 			continue;
 		}
