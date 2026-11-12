@@ -45,9 +45,9 @@ struct Cell2 {
 const float MAX_TEMP = 35.0;        // Celsius at Equator sea-level
 const float MIN_TEMP = -20.0;       // Celsius at Pole
 const float LAPSE_RATE = 25.0;      // Temp drop per 1.0 elevation unit
-const float CONDENSATION_RATE = 0.05;
+const float CONDENSATION_RATE = 0.125;
 const float DIFFUSION_RATE = 0.15;   // How fast groundwater spreads
-const float BASE_EVAPORATION = 0.025;
+const float BASE_EVAPORATION = 0.0125;
 
 void main() {
 	ivec2 pos = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + push.cellOffset);
@@ -108,8 +108,13 @@ void main() {
 	vec4 upwind1Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx1)], wrappedUpwind);
 	float incomingAir = upwind1Data.g;
 
+	float upwindLat = (float(wrappedUpwind.y) / float(dim)) * 2.0 - 1.0;
+	// Calculate the temperature of the air blowing into this cell
+	float upwindTempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(upwindLat)) - (upwind1Data.r * LAPSE_RATE);
+
 	if (upwind1Data.r <= 0.02 || me1.elevation <= 0.02) {
-		incomingAir = max(incomingAir, 0.85);
+		upwindTempC = min(upwindTempC, abs(upwindTempC - tempC)/2);
+		incomingAir = max(incomingAir, mix(0.1, 0.5, smoothstep(5.0, 40.0, upwindTempC)));
 	}
 
 	// Evaporation boost from closeness of groundwater level to elevation (shallow water table)
@@ -120,10 +125,6 @@ void main() {
 
 	float elevationDelta = me1.elevation - upwind1Data.r;
 
-	float upwindLat = (float(wrappedUpwind.y) / float(dim)) * 2.0 - 1.0;
-	// Calculate the temperature of the air blowing into this cell
-	float upwindTempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(upwindLat)) - (upwind1Data.r * LAPSE_RATE);
-
 	// Frontal Lift: Positive if cold air is moving into warm air (a cold front)
 	// Cold air acts like a wedge, lifting warm, moist air and forcing condensation
 	float frontalLift = max(0.0, tempC - upwindTempC);
@@ -131,10 +132,10 @@ void main() {
 	// Aerosol CCN effect increases condensation / rain likelihood for a given air moisture
 	float ccnBoost = 1.0 + clamp(me2.aerosol, 0.0, 2.0) * 1.5;
 
-float rain = 0.0;
+	float rain = 0.0;
 	if (elevationDelta > 0.0) {
 		// Orographic (terrain) lift
-		rain = min(incomingAir, pow(elevationDelta, 1.2) * CONDENSATION_RATE * ccnBoost);
+		rain = min(incomingAir, pow(elevationDelta, 1.4) * CONDENSATION_RATE * ccnBoost);
 	} else if (frontalLift > 1.5) {
 		// Frontal lift: Sharp temp drop squeezes moisture out into a storm band
 		rain = min(incomingAir, frontalLift * 0.04 * ccnBoost);
@@ -309,8 +310,8 @@ float rain = 0.0;
 	// cloudCoverage almost never actually saturates to 0 or 1 -- it just graduates, which read as
 	// a sky that's always "partly cloudy" and never genuinely clear or overcast. Narrowed to
 	// roughly that measured sigma so the noise's own spread can carry a cell past either edge.
-	const float kCoverageSoftness = 0.6;
-	float coverageThreshold = mix(1.0, -1.0, baseCoverage);
+	const float kCoverageSoftness = 0.5;
+	float coverageThreshold = mix(1.0, 0.0, baseCoverage);
 	float texturedNoise = cloudNoise + detailNoise * 0.3;
 	float cloudCoverage = smoothstep(
 		coverageThreshold - kCoverageSoftness,
@@ -326,7 +327,7 @@ float rain = 0.0;
 
 	float weatherType = mix(baseWeatherType, 1.0, activeFrontIntensity);
 	float moistureContent = clamp(next1.groundwater, 0.0, 1.0);
-	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC) + activeFrontIntensity * 0.5, 0.0, 1.0);
+	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC) + activeFrontIntensity * 0.125, 0.0, 1.0);
 
 	// Lightning trigger (shaders/lighting.glsl's LightningStrikePool). Cloud-to-cloud strikes
 	// only for v1: both endpoints stay within the cloud shell (5000-20000m, matching

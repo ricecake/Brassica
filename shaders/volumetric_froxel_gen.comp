@@ -155,7 +155,7 @@ void main() {
 			float baseDensity =  u_fogDensity * (0.25 + 0.125 * weatherMoisture + 0.8 * weatherCoverage);
 
 			// Rain increases fog density; snow blizzards and flurries increase density even further (whiteout conditions)
-			float densityMult = mix(1.0, mix(2.5, 3.2, snowFraction), precipFactor);
+			float densityMult = mix(baseDensity, mix(2.5, 3.2, snowFraction), precipFactor);
 
 			float heightDiff = max(0.0, worldPos.y - fogBase);
 

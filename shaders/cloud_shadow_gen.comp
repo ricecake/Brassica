@@ -42,7 +42,7 @@ float sampleCloudExtinction(vec3 p_cloud) {
 		weatherMoisture = weatherSample.b;
 	}
 
-	if (weatherCoverage <= 0.01) return 0.0;
+	if (weatherCoverage <= 0.05) return 0.0;
 
 	// Same wind advection as cloud_raymarch.comp, so shadows don't drift away from the clouds
 	// casting them over a session. Deliberately skips the curl-noise warp the main pass also
@@ -51,7 +51,7 @@ float sampleCloudExtinction(vec3 p_cloud) {
 	vec3 advectedPos = p_cloud - getCloudAdvectionSpeed(clamp(hFrac, 0.0, 1.0)) * uTime;
 	float baseDensity = sampleCloudVolume(advectedPos, distFromCam, push.volumeIndices.x);
 	float density = cloudShapeDensity(baseDensity, hFrac, weatherCoverage, weatherType, weatherMoisture);
-	if (density <= 0.0) return 0.0;
+	if (density <= 0.05) return 0.0;
 
 	// Collapsed to a scalar the same way cloud_raymarch.comp's own reprojection heuristic does
 	// (averaging channels), since the shadow map stores one scalar optical depth, not per-channel.
@@ -184,6 +184,7 @@ void main() {
 		float fogDiff = max(0.0, p.y - u_fogBaseHeight);
 		float fogExt = u_fogDensity * exp(-u_fogHeightFalloff * fogDiff);
 		float ext = cloudExt + fogExt;
+		ext *= smoothstep(0.01, 0.02, ext);
 
 		maxExt = max(maxExt, ext);
 		optDepth += ext * activeStepSize;
