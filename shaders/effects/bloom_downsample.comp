@@ -45,6 +45,22 @@ float get_saturation(vec3 c) {
 	return sqrt(max(dot(c - l, c - l) / 3.0, 0.0));
 }
 
+// Calculates a safe multiplier to prevent sky luminance from blowing out the Uchimura shoulder
+float calculateSkyAttenuation(vec3 rawHdrColor, float uchimuraM, float uchimuraL, float rolloffStrength) {
+	float luma = dot(rawHdrColor, vec3(0.2126, 0.7152, 0.0722));
+
+	// Define the threshold where Uchimura starts compressing
+	float shoulderStart = uchimuraM + uchimuraL;
+
+	// Calculate how far past the linear region this pixel is
+	float overdrive = max(0.0, luma - shoulderStart);
+
+	// Apply a rational rolloff: 1 / (1 + x)
+	float multiplier = 1.0 / (1.0 + rolloffStrength * overdrive);
+
+	return multiplier;
+}
+
 void update_layer_ae(int layerIdx) {
 	// Calculate total weight
 	float totalWeight = 0.0;
@@ -267,6 +283,14 @@ void main() {
 			if (layers[li].data.useAutoExposure != 0) {
 				layerExposure = layers[li].data.targetLuminance / max(layers[li].data.adaptedLuminance, 0.0001);
 				layerExposure = clamp(layerExposure, layers[li].data.minExposure, layers[li].data.maxExposure);
+
+				if (layers[li].isSky == 1) {
+					float attenuation = calculateSkyAttenuation(centerSample * layerExposure, layers[li].data.autoUchimuraM, layers[li].data.autoUchimuraL, 1.20);
+					// float mask = smoothstep(-3.14 * 0.125, 0.5 * 1.5707, asin(worldDir.y));
+					// attenuation = mix(attenuation, 1.0, mask);
+					exposure *= attenuation;
+				}
+
 			} else {
 				layerExposure = (layers[li].data.iso / 100.0) * (1.0 / (layers[li].data.aperture * layers[li].data.aperture)) * layers[li].data.exposureTime;
 			}

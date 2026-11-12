@@ -182,13 +182,13 @@ CloudMarchResult marchClouds(
 			// convention (atmosphere_lowres.comp/helpers/clouds.glsl), applied to this specific
 			// noise call rather than ported line-for-line -- boidish's own doCheap hooks around
 			// this exact warp are dead/commented out in its current source.
-			bool doCheap = (t >= mix(t_start, t_end, 0.5)) || all(lessThan(cloudTransmittance, vec3(0.75)));
+			bool doCheap = (t >= mix(t_start, t_end, 0.5)) || all(lessThan(cloudTransmittance, vec3(0.705)));
 			vec3 curlOffset = vec3(0.0);
 			if (!doCheap) {
 				mat3 grad;
-				cross_noise_fbm(advectedPos/(prevDensity+750), 3, uTime*0.05, grad);
+				cross_noise_fbm(advectedPos/(prevDensity+5000), 4, uTime*0.05, grad);
 				vec3 cross_curl = get_curl(grad);
-				curlOffset = 50.0*grad*cross_curl;
+				curlOffset = 200.0*grad*cross_curl * (smoothstep(0.0, 0.75, cloudHeightFrac));
 			}
 
 			float baseDensity = sampleCloudVolume(advectedPos+curlOffset, distFromCam, push.volumeIndex);
