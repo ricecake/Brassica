@@ -194,30 +194,35 @@ void main() {
 		// all-or-nothing scene/sky pick); the per-pixel scalars this dispatch outputs itself
 		// (bloom's exposure/dynMaxLuma, the shared LTM exposures/weights) blend across layers in
 		// array order with the same sequential mix() idiom tonemap.frag's final color blend uses.
-		float exposure = 1.0;
-		float dynMaxLuma = 10.0;
+		float exposure = 0.0;
+		float dynMaxLuma = 0.0;
 		bool  anyLayerWeighted = false;
 		bool  anyLtmEnabled = false;
 
-		for (int li = 0; li < numExposureLayers; ++li) {
-			float weight = exposureLayerWeight(layers[li], linearZ, isSkyPixel);
-			if (weight <= 0.0) {
+		float remainingWeight = 1.0;
+
+		// Iterate back-to-front (top layer down to main) to calculate the actual visible contribution
+		// of each layer. This prevents the main layer's histogram from capturing pixels fully covered
+		// by another layer, acting purely as a fallback for the remaining weight.
+		for (int li = numExposureLayers - 1; li >= 0; --li) {
+			float baseWeight = exposureLayerWeight(layers[li], linearZ, isSkyPixel);
+			if (baseWeight <= 0.0 || remainingWeight <= 0.0) {
 				continue;
 			}
 
+			// How much this layer actually contributes to the final pixel after upper layers take their share
+			float effectiveWeight = baseWeight * remainingWeight;
+
 			if (layers[li].data.useAutoExposure != 0) {
-				// Calculate weight based on distance to focus point
 				float dist = distance(uv, layers[li].data.focusPoint);
 				float centerWeight = exp(-dist * layers[li].data.centerWeightTightness);
 
 				if (isSkyPixel) {
-					// Raise the floor: ignore/down-weight sky-range pixels near or below the
-					// horizon so dark sub-horizon values don't drag down this layer's luminance.
 					centerWeight *= smoothstep(-0.05, 0.1, worldDir.y);
 				}
 
-				// Atomic add to this layer's own histogram bin (weight scaled to uint)
-				atomicAdd(layers[li].data.histogram[bin], uint(weight * centerWeight * 1024.0));
+				// Atomic add to this layer's own histogram bin using effective visibility
+				atomicAdd(layers[li].data.histogram[bin], uint(effectiveWeight * centerWeight * 1024.0));
 			}
 
 			// LTM generation for Mip 0
@@ -238,7 +243,6 @@ void main() {
 
 				vec3 layerExposures = vec3(l1, l2, l3);
 
-				// Weights
 				vec3 e;
 				e.x = exp(-0.5 * (l1 - layers[li].data.ltmTarget) * (l1 - layers[li].data.ltmTarget) / (layers[li].data.ltmSigma * layers[li].data.ltmSigma));
 				e.y = exp(-0.5 * (l2 - layers[li].data.ltmTarget) * (l2 - layers[li].data.ltmTarget) / (layers[li].data.ltmSigma * layers[li].data.ltmSigma));
@@ -249,19 +253,16 @@ void main() {
 				s.y = get_saturation(tc2);
 				s.z = get_saturation(tc3);
 
-				// Combine weights
 				vec3 layerWeights = pow(max(e, vec3(0.0001)), vec3(layers[li].data.ltmWeightExposedness)) * pow(max(s, vec3(0.0001)), vec3(layers[li].data.ltmWeightSaturation));
-
 				float layerWeightSum = layerWeights.x + layerWeights.y + layerWeights.z;
 				layerWeights /= max(layerWeightSum, 0.00001);
 
-				ltmExposures = anyLtmEnabled ? mix(ltmExposures, layerExposures, weight) : layerExposures;
-				ltmWeights = anyLtmEnabled ? mix(ltmWeights, layerWeights, weight) : layerWeights;
+				ltmExposures += layerExposures * effectiveWeight;
+				ltmWeights += layerWeights * effectiveWeight;
 				anyLtmEnabled = true;
 			}
 
-			// Exposure for bloom extraction -- bloom's threshold/knee below operate on one
-			// combined HDR value per pixel, so blend the scalar the same sequential way.
+			// Exposure for bloom extraction
 			float layerExposure;
 			if (layers[li].data.useAutoExposure != 0) {
 				layerExposure = layers[li].data.targetLuminance / max(layers[li].data.adaptedLuminance, 0.0001);
@@ -269,13 +270,29 @@ void main() {
 			} else {
 				layerExposure = (layers[li].data.iso / 100.0) * (1.0 / (layers[li].data.aperture * layers[li].data.aperture)) * layers[li].data.exposureTime;
 			}
-			// Smoothly scale the maximum allowed bloom energy based on this layer's adaptation --
-			// nightCap/dayCap are the min/max post-exposure energy this layer's bloom may reach.
 			float layerDynMaxLuma = mix(10.0, 500.0, smoothstep(0.01, 1000.0, layers[li].data.adaptedLuminance));
 
-			exposure = anyLayerWeighted ? mix(exposure, layerExposure, weight) : layerExposure;
-			dynMaxLuma = anyLayerWeighted ? mix(dynMaxLuma, layerDynMaxLuma, weight) : layerDynMaxLuma;
+			exposure += layerExposure * effectiveWeight;
+			dynMaxLuma += layerDynMaxLuma * effectiveWeight;
 			anyLayerWeighted = true;
+
+			remainingWeight -= effectiveWeight;
+		}
+
+		// Normalize if the sum of weights didn't reach 1.0 (restores the behavior where a
+		// single low-weight layer was forced to act as an opaque baseline)
+		float totalAccumulatedWeight = 1.0 - remainingWeight;
+		if (totalAccumulatedWeight > 0.0 && totalAccumulatedWeight < 1.0) {
+			float invWeight = 1.0 / totalAccumulatedWeight;
+			exposure *= invWeight;
+			dynMaxLuma *= invWeight;
+			if (anyLtmEnabled) {
+				ltmExposures *= invWeight;
+				ltmWeights *= invWeight;
+			}
+		} else if (!anyLayerWeighted) {
+			exposure = 1.0;
+			dynMaxLuma = 10.0;
 		}
 
 		if (anyLtmEnabled) {
