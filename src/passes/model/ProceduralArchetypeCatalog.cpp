@@ -87,14 +87,14 @@ namespace brassica {
 			PineGenParams p;
 			p.seed = 501;
 			p.trunkSegments = 4;
-			p.trunkHeight = 2.6f;
-			p.trunkRadiusLow = 0.16f;
-			p.trunkRadiusHigh = 0.09f;
+			p.trunkHeight = 3.6f;
+			p.trunkRadiusLow = 0.26f;
+			p.trunkRadiusHigh = 0.1f;
 			p.trunkBaseRigidity = 0.95f;
 			p.tierCount = 3;
 			p.tierBaseRadius = 0.85f;
 			p.tierRadiusFalloff = 0.70f;
-			p.tierHeight = 1.15f;
+			p.tierHeight = 2.15f;
 			p.tierOverlap = 0.35f;
 			p.tierBaseRigidity = 0.95f;
 			p.circularSegments = 10;

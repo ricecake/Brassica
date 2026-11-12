@@ -46,7 +46,7 @@ namespace brassica {
 		float trunkRadiusHigh{0.16f};
 		float radiusFalloffPerSegment{0.93f}; // gentle -- segments are short, falloff compounds
 
-		float baseRigidity{0.95f};
+		float baseRigidity{0.9f};
 		float rigidityFalloffPerSegment{0.025f};
 
 		int circularSegments{10};

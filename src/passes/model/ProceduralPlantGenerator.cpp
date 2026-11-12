@@ -112,7 +112,9 @@ namespace brassica {
 					float lengthJitter = 1.0f + params.segmentLengthVariance * (unit(rng) * 2.0f - 1.0f);
 					float childLength = std::max(0.05f, params.segmentLength * lengthJitter);
 					float childRadiusHigh = std::max(0.01f, parent.radiusHigh * params.radiusFalloffPerSegment);
-					float childRigidity = std::max(0.05f, parent.rigidity - params.rigidityFalloffPerSegment);
+
+					float depthRatio = static_cast<float>(parent.chainDepth) / static_cast<float>(params.maxSegments);
+					float childRigidity = glm::mix(params.baseRigidity, 0.05f, std::min(1.0f, depthRatio));
 
 					glm::vec3 childStart = parentEnd;
 					glm::vec3 childEnd = childStart + childDir * childLength;
