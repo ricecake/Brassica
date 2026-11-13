@@ -1175,6 +1175,17 @@ namespace brassica {
 		};
 		shadingRateFeatures.attachmentFragmentShadingRate = VK_TRUE;
 
+		// shading_rate.comp derives its per-tile rate from this frame's own HdrColor via real
+		// dFdx/dFdy (GL_KHR_compute_shader_derivatives), not a depth-based proxy -- quad-grouped
+		// (derivative_group_quadsKHR), one workgroup per tile, 16x16 invocations (one per pixel).
+		// Newly added 2026-11-13; unlike every other extension requested here, this one has no
+		// prior confirmation of real support on sgreenhusted's test hardware -- the engine will
+		// simply fail device selection if it's missing, same as any other hard requirement here.
+		VkPhysicalDeviceComputeShaderDerivativesFeaturesNV computeDerivativeFeatures{
+			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_NV
+		};
+		computeDerivativeFeatures.computeDerivativeGroupQuads = VK_TRUE;
+
 		VkPhysicalDeviceFeatures features1{};
 		features1.shaderInt64 = VK_TRUE;
 		features1.fragmentStoresAndAtomics = VK_TRUE;
@@ -1210,10 +1221,12 @@ namespace brassica {
 			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)
+			.add_required_extension(VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME)
 			.add_required_extension_features(meshFeatures)
 			.add_required_extension_features(asFeatures)
 			.add_required_extension_features(rqFeatures)
-			.add_required_extension_features(shadingRateFeatures);
+			.add_required_extension_features(shadingRateFeatures)
+			.add_required_extension_features(computeDerivativeFeatures);
 
 		auto phys_ret = selector.select();
 		if (!phys_ret) {
@@ -1298,6 +1311,18 @@ namespace brassica {
 					shadingRateProps.maxFragmentShadingRateAttachmentTexelSize.height
 				);
 			}
+
+			// shading_rate.comp's local_size_x/y (and its shared-memory reduction array size)
+			// have to equal the real clamped tile size exactly -- one workgroup per tile, one
+			// invocation per pixel, for its derivative_group_quadsKHR-based gradient measurement
+			// -- but GLSL local_size must be a compile-time literal, and this value isn't known
+			// until the clamp above runs. Baked in via the same [[CONSTANT]] text-substitution
+			// Shader::RegisterDefaultConstants() already uses for sampler indices, registered
+			// here (before any node's Init() compiles a shader, confirmed by this running inside
+			// InitVulkan(), itself called before EngineNodeRegistry::InitAll() in Engine::Init)
+			// rather than waiting for InitGlobalDescriptors' own RegisterDefaultConstants() call.
+			Shader::RegisterConstant("SHADING_RATE_TILE_WIDTH", s_shadingRateTileWidth);
+			Shader::RegisterConstant("SHADING_RATE_TILE_HEIGHT", s_shadingRateTileHeight);
 		}
 
 		// 3. Logical Device

@@ -11,11 +11,13 @@
 namespace fs = std::filesystem;
 
 TEST_CASE("Validate All GLSL Shaders Compile Successfully") {
+	// RegisterDefaultConstants(), not a hand-rolled duplicate of its own 4 sampler constants --
+	// this validation needs every real default this engine's shaders can depend on (e.g.
+	// shading_rate.comp's SHADING_RATE_TILE_WIDTH/HEIGHT, which have no built-in fallback the
+	// way a bare #define would), not just whichever subset happened to exist when this test was
+	// first written.
 	brassica::Shader::ClearConstants();
-	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_CLAMP", 0u);
-	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_CLAMP", 1u);
-	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_LINEAR_REPEAT_MIP", 2u);
-	brassica::Shader::RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+	brassica::Shader::RegisterDefaultConstants();
 
 	std::string shaderDir = "shaders";
 	if (!fs::exists(shaderDir)) {

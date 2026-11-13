@@ -192,6 +192,23 @@ namespace brassica::graph {
 			constants::Class::ShadingRate::TileHeight
 		};
 
+		// Set via AccessHandle::ShadingRateTexelSize() -- unlike shadingRateTexelSize above (a
+		// size parameter with an always-nonzero default, so its value alone can never say whether
+		// the setter was actually called), this is a plain intent marker: "this Read wants the
+		// Graphics-only FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR role," the same shape
+		// asAttachment already has for a depth-role Read. CompileRelational (RelationalCompiler.hpp)
+		// is the only reader -- the real role/layout decision for execution still comes from
+		// AttachmentRoleFor's catalog usage/format check (ResourceState.hpp), which this field
+		// never touches; it exists solely so the compiler can tell "a Graphics read that wants the
+		// FSR-attachment layout" apart from "a plain Compute/Graphics read of the same key that
+		// doesn't," without needing the catalog access (usage/format) it doesn't have. Without
+		// this, a plain Compute read (ShadingRateComputeNode's own ReadPrevious<ShadingRateMap>(),
+		// needing eGeneral) and a tagged Graphics read of the same History<ShadingRateMap> key
+		// (needing eFragmentShadingRateAttachmentOptimalKHR) could land in the same schedule
+		// stage with no edge between them -- two plain reads never get one otherwise -- producing
+		// a real cross-domain layout conflict confirmed on real hardware.
+		bool shadingRateAttachment = false;
+
 		// Set via AccessHandle::AnyOrder() -- the author is asserting that a conflicting write
 		// against this exact key from another AnyOrder() access needs no relation, because the
 		// two commute (e.g. depth-tested opaque geometry writing disjoint screen regions). Without

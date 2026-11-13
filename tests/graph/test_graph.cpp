@@ -1647,6 +1647,59 @@ TEST_CASE("A phase's keystone is a true sink: After<keystone>() lands after ever
 
 namespace {
 
+	struct VrsLikeMap: DummyDesc {};
+
+	// Mirrors ShadingRateComputeNode's own real shape: a plain Read of the resource it also
+	// writes, on Compute.
+	struct VrsComputeReaderNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<VrsLikeMap>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Mirrors TerrainNode/ModelRenderNode/EntityNode/DeferredNode's own real shape: a Graphics
+	// Read tagged ShadingRateTexelSize(), wanting the FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR
+	// role -- a different VkImageLayout than VrsComputeReaderNode's plain Compute read of the
+	// exact same key wants.
+	struct VrsGraphicsReaderNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<VrsLikeMap>().ShadingRateTexelSize({8, 8});
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+// Regression test for the real-hardware cross-domain VRS layout conflict: two plain reads of
+// the same key never get an edge from anything else in CompileRelational (no write is involved
+// at all), so with nothing else ordering these two, they'd land in the same stage -- which is
+// exactly what happened for ShadingRateMap before the layoutTagFor-based RAR edge existed.
+TEST_CASE("CompileRelational: a ShadingRateTexelSize()-tagged read never co-stages with an untagged read of the same key") {
+	Graph graph;
+	graph.Register<VrsComputeReaderNode>();
+	graph.Register<VrsGraphicsReaderNode>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty()); // never a reported ambiguity -- always a real, silent edge
+
+	std::size_t computeReader = IndexOfNamed(graph.Nodes(), "VrsComputeReaderNode");
+	std::size_t graphicsReader = IndexOfNamed(graph.Nodes(), "VrsGraphicsReaderNode");
+
+	CHECK(RelStageOf(result, computeReader) != RelStageOf(result, graphicsReader));
+	// Deterministic tie-break, by descriptor name ("VrsComputeReaderNode" < "VrsGraphicsReaderNode"):
+	// pins down *which* order this resolves to, not just that the two differ, so a future change
+	// to the tie-break rule shows up here instead of silently flipping only in the real engine.
+	CHECK(RelStageOf(result, computeReader) < RelStageOf(result, graphicsReader));
+}
+
+namespace {
+
 	struct SecondLightingKeystoneNode {
 		void Setup(SetupBuilder& r, const FrameContext&) {
 			r.Domain(ExecutionDomain::Graphics);

@@ -95,6 +95,29 @@ namespace {
 	// real GBufferDepth writer and stages 15-17 reshuffled (CirrusNode/HiZDownsampleNode no
 	// longer share a stage) -- neither was caused by this branch's own work, both were simply
 	// never re-captured after whatever upstream change introduced them.
+	// Recaptured again 2026-11-13 (VRS cross-domain layout-conflict fix, RelationalCompiler's
+	// new RAR edge kind): ShadingRateComputeNode no longer co-stages with the four
+	// ShadingRateTexelSize()-tagged Graphics readers of History<ShadingRateMap> -- it moves from
+	// stage 2 into stage 11 (joining UnderwaterParticleRenderNode), the one new edge needed since
+	// DeferredNode/EntityNode/ModelRenderNode already transitively precede every tagged reader.
+	// This is the ONLY diff from the pre-fix baseline -- an earlier recapture attempt also made
+	// the RAR rule trigger on asAttachment (GBufferDepth's WaterNode/LightningRenderNode reads),
+	// which was wrong: GBufferDepth already has real writers correctly ordering every reader via
+	// RAW edges, and the new rule's alphabetical tie-break raced against (and won against, via
+	// the cycle-avoidance guard silently dropping the correct edge) that real ordering, putting
+	// TonemapComputeNode/TonemapNode before WaterNode and breaking cloud/volumetric compositing
+	// on real hardware. Fixed by scoping the RAR trigger to shadingRateAttachment only -- see its
+	// own comment, Execution.hpp -- confirmed via a clean diff against the pre-fix baseline
+	// (git show dc6504782f7190a21e85c97d335f610b3f30b534:tests/test_rendergraph.cpp) showing only
+	// ShadingRateComputeNode's stage changed, nothing else.
+	// Recaptured again 2026-11-13 (derivative-based VRS: shading_rate.comp now measures this
+	// frame's own HdrColor via real screen-space derivatives instead of last frame's HiZTexture):
+	// ShadingRateComputeNode moves again, from stage 11 to stage 18 (joining TonemapComputeNode),
+	// since Read<HdrColor>() (replacing ReadPrevious<HiZTexture>()) puts it after HdrColor's last
+	// writer this frame (VolumetricRenderNode, stage 17) via the ordinary "reader sees final
+	// state" RAW rule -- not a RelationalCompiler change this time, just a real new resource
+	// dependency. Confirmed via the same clean-diff-against-baseline technique: only
+	// ShadingRateComputeNode's own line moved, nothing else.
 	const std::string kGoldenScheduleFixture =
 		R"FIXTURE(STAGE 0:
   brassica::graph::Import<brassica::AutoExposureBuffer>
@@ -125,7 +148,6 @@ STAGE 2:
   brassica::ModelCullResetNode
   brassica::ModelInstanceScatterNode
   brassica::ParticleResetNode
-  brassica::ShadingRateComputeNode
   brassica::TerrainBiomeNode
   brassica::TerrainGenNode
   brassica::TransmittanceLUTNode
@@ -181,6 +203,7 @@ STAGE 17:
   brassica::HiZDownsampleNode
   brassica::VolumetricRenderNode
 STAGE 18:
+  brassica::ShadingRateComputeNode
   brassica::TonemapComputeNode
 STAGE 19:
   brassica::TonemapNode

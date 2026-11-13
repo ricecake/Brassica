@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 
+#include "constants.h"
 #include "spdlog/spdlog.h"
 
 namespace brassica {
@@ -403,6 +404,21 @@ namespace brassica {
 		}
 		if (replacements.find("[[BRASSICA_SAMPLER_NEAREST_REPEAT]]") == replacements.end()) {
 			RegisterConstant("BRASSICA_SAMPLER_NEAREST_REPEAT", 3u);
+		}
+		// Default/pre-device-selection values for shading_rate.comp's local_size_x/y -- Engine.cpp's
+		// InitVulkan() overrides these with the real device-clamped tile size well before this
+		// function's own call site (InitGlobalDescriptors) ever runs, so the "if not already
+		// present" guard here correctly leaves that real value alone in the full engine. Only
+		// matters for callers that compile shading_rate.comp without ever running InitVulkan's
+		// clamp logic -- test_shaders.cpp's standalone compile-everything validation, the
+		// shaderResolver CLI tool with no explicit -C override -- where these give it a valid,
+		// syntactically-correct value to compile against instead of leaving the [[...]] tags
+		// unresolved.
+		if (replacements.find("[[SHADING_RATE_TILE_WIDTH]]") == replacements.end()) {
+			RegisterConstant("SHADING_RATE_TILE_WIDTH", constants::Class::ShadingRate::TileWidth);
+		}
+		if (replacements.find("[[SHADING_RATE_TILE_HEIGHT]]") == replacements.end()) {
+			RegisterConstant("SHADING_RATE_TILE_HEIGHT", constants::Class::ShadingRate::TileHeight);
 		}
 	}
 

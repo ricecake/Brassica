@@ -1,24 +1,37 @@
 #version 460
+#extension GL_NV_compute_shader_derivatives : require
+
 #include "bindless.glsl"
 #include "helpers/hash.glsl"
 #include "helpers/distribution.glsl"
 
-layout(local_size_x = 8, local_size_y = 8) in;
+// One workgroup per shading-rate tile, one invocation per pixel within it.
+// [[SHADING_RATE_TILE_WIDTH]]/[[SHADING_RATE_TILE_HEIGHT]] (Shader::RegisterConstant's own
+// text-substitution, not a GLSL macro -- see ShadingRateComputeNode.hpp's class comment) bake in
+// the REAL device-clamped tile size (Engine.cpp's InitVulkan, s_shadingRateTileWidth/Height)
+// at shader-compile time: local_size_x/y have to be compile-time GLSL literals, and that clamped
+// value isn't known until device selection runs, which is always before this shader is ever
+// compiled. derivative_group_quadsKHR groups invocations into 2x2 adjacent-pixel quads (needs
+// even local_size_x/y -- true for every tile size this engine's own RATE_1X1/2X2/4X4 encoding
+// already assumes is power-of-two, see below) so dFdx/dFdy behave exactly like they would in a
+// fragment shader.
+layout(local_size_x = [[SHADING_RATE_TILE_WIDTH]], local_size_y = [[SHADING_RATE_TILE_HEIGHT]]) in;
+layout(derivative_group_quadsNV) in;
 
 layout(push_constant) uniform ShadingRatePushConstants {
-	uint prevShadingRateIndex; // bindless STORAGE index, History<ShadingRateMap>
-	uint outShadingRateIndex;  // bindless STORAGE index, ShadingRateMap (this frame)
-	uint prevHiZIndex;        // bindless SAMPLED index, History<HiZTexture>
-	uint frameCounter;
-	uint tileWidth;
-	uint tileHeight;
+	uint  prevShadingRateIndex; // bindless STORAGE index, History<ShadingRateMap>
+	uint  outShadingRateIndex;  // bindless STORAGE index, ShadingRateMap (this frame)
+	uint  hdrColorIndex;        // bindless SAMPLED index, HdrColor (this frame, fully composited)
+	uint  frameCounter;
+	uvec2 screenSize; // pixels, not tiles
 } push;
 
 // VK_KHR_fragment_shading_rate attachment texel encoding: value = (log2(width) << 2) | log2(height)
 // -- see the Vulkan spec's "Fragment Shading Rate Attachment" section. Only the three rates this
 // node ever produces are named; a device reporting a non-power-of-two-friendly min/max texel size
-// would need a richer rate set, out of scope here (Engine.cpp logs a warning if the fixed 16x16
-// tile size falls outside the device's reported range).
+// would need a richer rate set, out of scope here (Engine.cpp logs a warning, and clamps
+// s_shadingRateTileWidth/Height, whenever the requested 16x16 default falls outside the device's
+// reported range).
 const uint RATE_1X1 = 0u;  // (0 << 2) | 0
 const uint RATE_2X2 = 5u;  // (1 << 2) | 1
 const uint RATE_4X4 = 10u; // (2 << 2) | 2
@@ -37,8 +50,53 @@ uint FinerRate(uint rate) {
 	return RATE_1X1;
 }
 
+// One slot per invocation in the workgroup, for the max-reduction below -- the substituted
+// tile-size literals multiply out to a real compile-time constant expression (e.g. 16*16), same
+// as the local_size declaration above.
+shared float sharedGradEnergy[[[SHADING_RATE_TILE_WIDTH]] * [[SHADING_RATE_TILE_HEIGHT]]];
+
 void main() {
-	ivec2 tileCoord = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 tileCoord = ivec2(gl_WorkGroupID.xy);
+	ivec2 pixelCoord = tileCoord * ivec2(gl_WorkGroupSize.xy) + ivec2(gl_LocalInvocationID.xy);
+	uint  localIndex = gl_LocalInvocationIndex;
+
+	// Clamp, don't branch, for an edge tile's out-of-bounds pixels (screenSize isn't necessarily
+	// a multiple of the tile size): every invocation in every 2x2 quad must take the exact same
+	// path for dFdx/dFdy to be well-defined, so this still participates in the sample and
+	// reduction below, just reads a harmlessly-duplicated edge pixel instead of an OOB one.
+	ivec2 clampedPixel = min(pixelCoord, ivec2(push.screenSize) - 1);
+	vec2  uv = (vec2(clampedPixel) + 0.5) / vec2(push.screenSize);
+
+	vec3 color = SAMPLE_NEAREST(push.hdrColorIndex, uv).rgb;
+	// Cheap perceptual compression before differencing, not a real tonemap operator -- just
+	// enough of a curve that a linear-HDR gradient near a bright highlight (e.g. the sun disk)
+	// doesn't dwarf every other tile's gradient even though tonemapping would compress it down
+	// to something visually minor.
+	color = color / (1.0 + color);
+
+	vec3  ddx = dFdx(color);
+	vec3  ddy = dFdy(color);
+	float gradEnergy = dot(ddx, ddx) + dot(ddy, ddy);
+
+	// Max-reduce across the whole tile: any single pixel pair with a sharp color edge (a thin
+	// specular highlight, a texture seam, a shadow edge) should be enough to keep the tile fine,
+	// not get averaged away by the rest of a mostly-flat tile.
+	sharedGradEnergy[localIndex] = gradEnergy;
+	barrier();
+	// gl_WorkGroupSize (a real GLSL constant reflecting the layout(local_size_x/y=...) above, not
+	// another [[CONSTANT]] substitution) -- avoids tripling up the same substituted value.
+	uint totalInvocations = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+	for (uint stride = totalInvocations / 2u; stride > 0u; stride >>= 1u) {
+		if (localIndex < stride) {
+			sharedGradEnergy[localIndex] = max(sharedGradEnergy[localIndex], sharedGradEnergy[localIndex + stride]);
+		}
+		barrier();
+	}
+
+	if (localIndex != 0u) {
+		return;
+	}
+
 	ivec2 outSize = imageSize(uImagesR8UI[nonuniformEXT(push.outShadingRateIndex)]);
 	if (tileCoord.x >= outSize.x || tileCoord.y >= outSize.y) {
 		return;
@@ -66,25 +124,16 @@ void main() {
 		// currently coarse can't see fine detail, so it must never be the one deciding to stay
 		// coarse.
 		//
-		// Heuristic: HiZTexture's (min, max) depth spread across this tile's footprint, sampled
-		// at the mip whose texel matches the tile size exactly (log2(tileWidth), tileWidth/Height
-		// are always equal and a power of two -- constants::Class::ShadingRate). A large spread
-		// means a depth discontinuity (e.g. a silhouette edge) crosses this tile, where per-pixel
-		// shading can legitimately differ a lot -- keep it fine. A small spread means a flat,
-		// coherent surface -- safe to coarsen. This is deliberately simpler than the napkin
-		// reference heuristic it's based on (which also taps GBufferNormal): GBufferNormal has no
-		// History-lifetime double-buffer today, so "last frame's normals" isn't a resource this
-		// node can safely read -- a reasonable starting point, not a hard requirement, easy to
-		// extend once/if that changes.
-		vec2  tileUV = (vec2(tileCoord) + 0.5) / vec2(outSize);
-		float hizMip = log2(float(push.tileWidth));
-		vec2  minMaxDepth = textureLod(
-			sampler2D(uTextures2D[nonuniformEXT(push.prevHiZIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
-			tileUV,
-			hizMip
-		).rg;
-		float depthSpread = minMaxDepth.g - minMaxDepth.r;
-		bool  hasFineDetail = depthSpread > 0.01;
+		// Heuristic: the max per-pixel screen-space color-gradient energy found anywhere in this
+		// tile (sharedGradEnergy[0] after the reduction above). A large value means a visible
+		// color edge crosses the tile -- texture detail, a specular highlight, a shadow boundary,
+		// a depth-driven silhouette if (and only if) it actually produces a visible color
+		// difference -- where per-pixel shading can legitimately differ a lot, so keep it fine. A
+		// small value means nothing visibly changes across the tile -- safe to coarsen,
+		// regardless of whether that's because the surface is geometrically flat or just visually
+		// uniform. Threshold picked as a reasonable starting point, not yet tuned against real
+		// hardware/content.
+		bool hasFineDetail = sharedGradEnergy[0] > 0.0003;
 		newRate = hasFineDetail ? RATE_1X1 : CoarserRate(prevRate);
 	} else {
 		// Already coarser than 1x1 and not this frame's measurement tile -- relax one step finer,

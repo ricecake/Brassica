@@ -57,6 +57,9 @@ namespace brassica::graph {
 
 			AccessHandle& ShadingRateTexelSize(std::array<std::uint32_t, 2> size) {
 				m_builder.m_realizations[m_index].shadingRateTexelSize = size;
+				// See ResourceRealization::shadingRateAttachment's own comment -- this call is
+				// the only signal that a plain size-field default wasn't enough to carry.
+				m_builder.m_realizations[m_index].shadingRateAttachment = true;
 				return *this;
 			}
 
