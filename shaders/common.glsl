@@ -1062,56 +1062,54 @@ vec2 phasorNoise3DGrad(vec3 p, float mask, vec3 F, vec3 W, float phaseJitter, fl
 }
 
 struct NoiseCascade {
-    vec3 scales;
+    vec3 frequencies;
     vec3 weights;
 };
 
-// Calculates the weight for a single layer based on its relative log-distance from the current view.
-// relativeDist: distance from the peak of this layer (0.0 = peak, -1.0 = one full octave below, 1.0 = above)
+// Calculates the weight for a single layer based on its relative log-distance
 float getLayerWeight(float relativeDist, float fadeIn, float hold, float fadeOut) {
-    // Map the [-1.0, 1.0] relative distance to the custom shape
     float absDist = abs(relativeDist);
-
-    // If within the hold radius, return max weight
     if (absDist <= hold * 0.5) return 1.0;
 
-    // Fade out mapping
     float fadeStart = hold * 0.5;
     float fadeEnd = fadeStart + (relativeDist < 0.0 ? fadeIn : fadeOut);
 
     return 1.0 - smoothstep(fadeStart, fadeEnd, absDist);
 }
 
-NoiseCascade calculateDynamicLOD(float dist, float growthFactor, float fadeIn, float hold, float fadeOut) {
-    // Map distance to a continuous logarithmic scale (Base Layer = 0 at dist = 1)
-    // Adding a small epsilon or clamping distance prevents log(0)
-    float continuousLOD = log(max(dist, 1.0)) / log(growthFactor);
+NoiseCascade calculateDynamicLOD(float dist, float baseFreq, float growthFactor) {
+    // Map distance to continuous logarithmic octave scale
+    float continuousLOD = log2(max(dist, 1.0)) / log2(growthFactor);
 
     float baseLayer = floor(continuousLOD);
-    float t = fract(continuousLOD); // 0.0 to 1.0 transition within the current octave
+    float t = fract(continuousLOD); // 0.0 to 1.0 transition within current octave
 
     NoiseCascade cascade;
 
-    // Calculate scales (below, current, above)
-    cascade.scales = vec3(
-        pow(growthFactor, baseLayer - 1.0),
-        pow(growthFactor, baseLayer),
-        pow(growthFactor, baseLayer + 1.0)
+    // Frequencies for Macro (baseLayer - 1), Medium (baseLayer), Micro (baseLayer + 1)
+    cascade.frequencies = vec3(
+        baseFreq * pow(growthFactor, -(baseLayer - 1.0)),
+        baseFreq * pow(growthFactor, -baseLayer),
+        baseFreq * pow(growthFactor, -(baseLayer + 1.0))
     );
 
-    // Calculate relative distances for each layer
-    // When t = 0.0, current is at peak (0.0), below is at -1.0, above is at 1.0
-    vec3 relativeDistances = vec3(t + 1.0, t, t - 1.0);
+    // Absolute octave-space distance from continuousLOD to each layer's integer index
+    vec3 octaveDistances = vec3(
+        1.0 + t, // Layer -1 (Macro)
+        t,       // Layer 0  (Medium)
+        1.0 - t  // Layer +1 (Micro)
+    );
 
+    // Raised Cosine (Hann) window ensures smooth 3-tap blending with zero gaps.
+    // Weights are 1.0 at center distance 0.0, and smoothly curve down to 0.0 at distance 1.0.
+    const float PI = 3.14159265;
     cascade.weights = vec3(
-        getLayerWeight(relativeDistances.x, fadeIn, hold, fadeOut),
-        getLayerWeight(relativeDistances.y, fadeIn, hold, fadeOut),
-        getLayerWeight(relativeDistances.z, fadeIn, hold, fadeOut)
+        octaveDistances.x < 1.0 ? 0.5 + 0.5 * cos(octaveDistances.x * PI) : 0.0,
+        octaveDistances.y < 1.0 ? 0.5 + 0.5 * cos(octaveDistances.y * PI) : 0.0,
+        octaveDistances.z < 1.0 ? 0.5 + 0.5 * cos(octaveDistances.z * PI) : 0.0
     );
 
-    // Variance normalization:
-    // Linear blending of noise reduces contrast/variance.
-    // Normalizing by the inverse square root of the sum of squares preserves amplitude.
+    // Variance normalization preserves contrast and amplitude across blends
     float weightSumSq = dot(cascade.weights, cascade.weights);
     if (weightSumSq > 0.0) {
         cascade.weights *= inversesqrt(weightSumSq);

@@ -100,71 +100,68 @@ void main() {
 	// Phase time scales with surface wind exposure:
 	float exposedTime = uTime * windExposure;
 
-	vec3 noisePosL = warpNoise + worldPos * 0.01;
-	vec3 noisePosM = warpNoise + worldPos * 0.1;
-	vec3 noisePosS = warpNoise + worldPos;
+// -------------------------------------------------------------------------
+	// Unified 3-Tier Dynamic LOD Base Noises
+	// -------------------------------------------------------------------------
+
+	// Configure the dynamic LOD. You can tweak lodDistanceScale to control how fast layers shift.
+	float lodDistanceScale = 0.05;
+	float baseFrequency = 1.0;
+	float growthFactor = 2.0; // Octaves double in size
+
+	NoiseCascade cascade = calculateDynamicLOD(
+		effDist * lodDistanceScale,
+		baseFrequency,
+		growthFactor
+		// 0.25, 0.50, 0.25 // Fade in, Hold, Fade out
+	);
+
+	// Apply dynamic scales to the noise coordinates
+	vec3 noisePosL = warpNoise + worldPos * cascade.frequencies.x; // Macro
+	vec3 noisePosM = warpNoise + worldPos * cascade.frequencies.y; // Medium
+	vec3 noisePosS = warpNoise + worldPos * cascade.frequencies.z; // Micro
+
+	// Scale wave speeds by frequency to prevent distance waves from looking hyper-fast
+	// Can we make the windspeed biome dependent?
+	float timeL = exposedTime * cascade.frequencies.x * 0.0625;
+	float timeM = exposedTime * cascade.frequencies.y * 0.0625;
+	float timeS = exposedTime * cascade.frequencies.z * 0.0625;
 
 	// Align phasor spatial frequency F and advection velocity W with windTangent
-	vec3 windWaveF_L = normalize(windTangent + warpCurl * 0.2);
-	vec3 windWaveF_M = normalize(windTangent + warpCurl * 0.4);
-	vec3 windWaveF_S = normalize(windTangent + warpCurl * 0.6);
+	vec3 windWaveF_L = normalize(windTangent + warpCurl);// * 0.2);
+	vec3 windWaveF_M = normalize(windTangent + warpCurl);// * 0.4);
+	vec3 windWaveF_S = normalize(windTangent + warpCurl);// * 0.6);
 
 	vec3 macroGrad3D;
-	vec2 macroValPhase = phasorNoise3DGrad(noisePosL, 1.0, windWaveF_L, windTangent, 0.68, 0.01 * exposedTime, macroGrad3D);
+	vec2 macroValPhase = phasorNoise3DGrad(noisePosL, 1.0, windWaveF_L, windTangent, 0.68, timeL, macroGrad3D);
 	float macroVal = macroValPhase.x / max(length(macroValPhase), 0.0001);
 
 	vec3 mediumGrad3D;
-	vec2 mediumValPhase = phasorNoise3DGrad(noisePosM, 1.0, windWaveF_M, windTangent, 0.68, 0.025 * exposedTime, mediumGrad3D);
+	vec2 mediumValPhase = phasorNoise3DGrad(noisePosM, 1.0, windWaveF_M, windTangent, 0.68, timeM, mediumGrad3D);
 	float mediumVal = mediumValPhase.x / max(length(mediumValPhase), 0.0001);
 
 	vec3 microGrad3D;
-	vec2 microValPhase = phasorNoise3DGrad(noisePosS, 1.0, windWaveF_S, windTangent, 0.68, 0.05 * exposedTime, microGrad3D);
+	vec2 microValPhase = phasorNoise3DGrad(noisePosS, 1.0, windWaveF_S, windTangent, 0.68, timeS, microGrad3D);
 	float microVal = microValPhase.x / max(length(microValPhase), 0.0001);
 
-/*
-	vec3 scaled_pos = noisePos;//vec3(noisePos.xz * 0.022, noisePos.y * 0.011);
-	float footprint = length(dFdx(scaled_pos)) + length(dFdy(scaled_pos));
-	vec4 macro = simplex_flow_noise_grad(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), vec2(0, 1), 256);
-	// float medium = simplex_fbm_curl(scaled_pos, 8, uTime, N, footprint, 512);
-	// float medium = phasimpleNoise(noisePos.xz*0.01, normalize(B.xz), 0.50*uTime);
-	// vec2 Z = phasorNoise3D(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 1.0, normalize(macro.yzw), B, 0.0, uTime);
-	// medium = Z.x/length(Z);
-	vec4 micro = simplex_flow_noise_grad(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), vec2(1, 0), 64);
+	// CHAIN RULE FIX: Multiply the returned gradient by the layer's frequency scale.
+	// Without this, your normals will randomly flatten or exaggerate as the scale shifts.
+	vec2 macroGrad  = macroGrad3D.xz * cascade.frequencies.x;
+	vec2 mediumGrad = mediumGrad3D.xz * cascade.frequencies.y;
+	vec2 microGrad  = microGrad3D.xz * cascade.frequencies.z;
 
-	vec3 macroGrad3D = macro.yzw;
-	// float macroVal = macro.x;// = dot_noise_fbm(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 3, 0.0, macroGrad3D);
-	float macroVal = dot_noise_fbm(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 3, 0.0, macroGrad3D);
+	macroGrad  /= (1.0 + length(macroGrad));
+	mediumGrad /= (1.0 + length(mediumGrad));
+	microGrad  /= (1.0 + length(microGrad));
 
-	vec3 mediumGrad3D = macro.yzw;
-	// float mediumVal = medium;//dot_noise_fbm(vec3(noisePos.xz * 0.22, noisePos.y * 0.11), 2, 37.0, mediumGrad3D);
-	float mediumVal = dot_noise_fbm(vec3(noisePos.xz * 0.22, noisePos.y * 0.11), 2, 37.0, mediumGrad3D);
+	// Map cascade weights directly to your color and normal blend variables
+	float wMacroColor  = cascade.weights.x;
+	float wMediumColor = cascade.weights.y;
+	float wMicroColor  = cascade.weights.z;
 
-	vec3 microGrad3D = micro.yzw;
-	// float microVal = micro.x;//dot_noise_fbm(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), 2, 83.0, microGrad3D);
-	float microVal = dot_noise_fbm(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), 2, 83.0, microGrad3D);
-*/
-	// Scale analytical gradients by base frequency (chain rule: d(noise)/d(noisePos) = d(noise)/dp * freq)
-	vec2 macroGrad  = macroGrad3D.xz;
-	vec2 mediumGrad = mediumGrad3D.xz;
-	vec2 microGrad  = microGrad3D.xz;
-
-	// -------------------------------------------------------------------------
-	// 3-Band Distance Cross-Fading: One fading out, one sustaining, one fading in.
-	// Near transition (~15m to ~120m): Micro fades out, Medium sustains, Macro fades in.
-	// Sum of active noise weight is preserved to maintain consistent surface complexity.
-	// -------------------------------------------------------------------------
-	vec4 fadeRanges = vec4(250.0, 500.0, 1000.0, 5000.0);
-	float nearBlend = smoothstep(fadeRanges[0], fadeRanges[1], effDist);
-	float farBlend = smoothstep(fadeRanges[1], fadeRanges[2], effDist);
-	float horizonFade = smoothstep(fadeRanges[2], fadeRanges[3], effDist);
-
-	float wMicroColor  = (1.0 - nearBlend);
-	float wMediumColor = (1.0 - farBlend);
-	float wMacroColor  = (1.0 - horizonFade);
-
-	float wMicroNorm  = (1.0 - nearBlend);
-	float wMediumNorm = (1.0 - farBlend);
-	float wMacroNorm  = (1.0 - horizonFade);
+	float wMacroNorm  = cascade.weights.x;
+	float wMediumNorm = cascade.weights.y;
+	float wMicroNorm  = cascade.weights.z;
 
 	vec4 weights = inMaterialWeights;
 	float grassW = weights.x;
@@ -214,7 +211,9 @@ void main() {
 
 	// Evaluate the cosine palette with parameter t modulated by moisture, slope, and procedural noise.
 	// As distance increases, modulation seamlessly transitions from medium-scale variegation to broad macro-scale geographic variation.
-	float palNoise = mix(mediumVal, macroVal, nearBlend);
+// Evaluate the cosine palette with parameter t modulated by moisture, slope, and procedural noise.
+	// This linearly blends all 3 dynamic layers to determine the biome palette offset.
+	float palNoise = (macroVal * wMacroColor) + (mediumVal * wMediumColor) + (microVal * wMicroColor);
 	float palT = clamp(0.60 + 0.25 * palNoise + 0.15 * (moisture - 0.5) + 0.10 * (N.y - 0.7), 0.0, 1.0);
 	vec3 paletteColor = evalCosinePalette(palA, palB, palC, palD, palT);
 
