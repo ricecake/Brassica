@@ -143,7 +143,46 @@ namespace brassica {
 		UploadAll();
 	}
 
+	void ModelRegistry::RebuildFlatTriangleIndices() {
+		m_flatTriangleIndices.clear();
+		m_flatIndexRanges.assign(m_descs.size(), ModelFlatIndexRange{});
+
+		for (std::size_t modelIndex = 0; modelIndex < m_descs.size(); ++modelIndex) {
+			const ModelDescEntry& desc = m_descs[modelIndex];
+			std::uint32_t         indexBase = static_cast<std::uint32_t>(m_flatTriangleIndices.size());
+
+			for (std::uint32_t ml = 0; ml < desc.meshletCount; ++ml) {
+				const GltfMeshlet& meshlet = m_meshlets[desc.meshletBase + ml];
+				// Mirrors shaders/model_render.mesh's triangleByteBase exactly: meshlet.
+				// triangleOffset is model-local, meshletTriangleWordBase is where this model's
+				// own packed-triangle chunk starts in the shared buffer.
+				std::uint32_t triangleByteBase = desc.meshletTriangleWordBase * 4u + meshlet.triangleOffset * 3u;
+				for (std::uint32_t t = 0; t < meshlet.triangleCount; ++t) {
+					for (std::uint32_t k = 0; k < 3u; ++k) {
+						std::uint32_t byteIdx = triangleByteBase + t * 3u + k;
+						std::uint32_t word = m_meshletTrianglesPacked[byteIdx / 4u];
+						std::uint32_t localVertexIndex = (word >> ((byteIdx % 4u) * 8u)) & 0xFFu;
+						// localVertexIndex is meshlet-local (0..meshlet.vertexCount); resolve
+						// through the same meshlet-vertex-remap table model_render.mesh reads to
+						// get the model-local (0-based, pre-vertexBase) GltfVertexBuffer index.
+						std::uint32_t srcVertexIndexLocal =
+							m_meshletVertices[desc.meshletVertexBase + meshlet.vertexOffset + localVertexIndex];
+						m_flatTriangleIndices.push_back(srcVertexIndexLocal);
+					}
+				}
+			}
+
+			m_flatIndexRanges[modelIndex] = ModelFlatIndexRange{
+				.indexBase = indexBase,
+				.indexCount = static_cast<std::uint32_t>(m_flatTriangleIndices.size()) - indexBase,
+			};
+		}
+	}
+
 	void ModelRegistry::UploadAll() {
+		++m_version;
+		RebuildFlatTriangleIndices();
+
 		// Byte sizes now live on each key's own catalog instance (RegisterBufferNodes below), not
 		// here -- SetData() just assigns the data (graph::Node.hpp's HostWriteNode::SetData).
 		m_vertexBufNode.SetData(m_vertices);

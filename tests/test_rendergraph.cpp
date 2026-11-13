@@ -88,11 +88,20 @@ namespace {
 	// DecorPopulationNode/ModelCullNode/ModelLiveFinalizeNode/ModelLiveEvalNode/ModelRenderNode
 	// added. Recaptured for real from a live run after resolving the rebase conflicts (see git
 	// history for this file around 2026-11-10).
+	// Recaptured again 2026-11-12 (model-shadows Stage 2): DecorTLAS/DecorTemplateBlasAddressBuffer
+	// Import<>s and DecorTemplateBlasNode/DecorTlasNode added. This recapture also folds in a
+	// pre-existing drift found while verifying this change against the pre-Stage-2 baseline
+	// (confirmed present there too, so unrelated to Stage 2 itself): CloudCompositeNode is now a
+	// real GBufferDepth writer and stages 15-17 reshuffled (CirrusNode/HiZDownsampleNode no
+	// longer share a stage) -- neither was caused by this branch's own work, both were simply
+	// never re-captured after whatever upstream change introduced them.
 	const std::string kGoldenScheduleFixture =
 		R"FIXTURE(STAGE 0:
   brassica::graph::Import<brassica::AutoExposureBuffer>
   brassica::graph::Import<brassica::ClusteredLighting>
   brassica::graph::Import<brassica::CpuLightsBuffer>
+  brassica::graph::Import<brassica::DecorTLAS>
+  brassica::graph::Import<brassica::DecorTemplateBlasAddressBuffer>
   brassica::graph::Import<brassica::FoliageBiomeTableTexture>
   brassica::graph::Import<brassica::GltfMeshletBuffer>
   brassica::graph::Import<brassica::GltfMeshletTriangleBuffer>
@@ -105,12 +114,12 @@ namespace {
   brassica::graph::Import<brassica::ModelInstanceWriteBuffer>
   brassica::graph::Import<brassica::ModelSkeletonBuffer>
   brassica::graph::Import<brassica::Swapchain>
-  brassica::graph::Import<brassica::TerrainTLAS>
-  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture> >
+  brassica::graph::Import<brassica::graph::History<brassica::HiZTexture>>
 STAGE 1:
   brassica::ParticleTypeBufferNode
 STAGE 2:
   brassica::CloudVolumeGenNode
+  brassica::DecorTemplateBlasNode
   brassica::EntityPrepareNode
   brassica::GpuLightsResetNode
   brassica::ModelCullResetNode
@@ -128,6 +137,7 @@ STAGE 3:
   brassica::TerrainReadbackNode
 STAGE 4:
   brassica::CloudShadowGenNode
+  brassica::DecorTlasNode
   brassica::ModelCullNode
   brassica::ParticleLivenessNode
   brassica::SkyViewLUTNode
@@ -165,10 +175,10 @@ STAGE 14:
   brassica::AboveWaterParticleRenderNode
 STAGE 15:
   brassica::CirrusNode
-  brassica::HiZDownsampleNode
 STAGE 16:
   brassica::CloudCompositeNode
 STAGE 17:
+  brassica::HiZDownsampleNode
   brassica::VolumetricRenderNode
 STAGE 18:
   brassica::TonemapComputeNode
@@ -181,8 +191,9 @@ MULTI-WRITER KEYS:
   brassica::AutoExposureBuffer: brassica::graph::Import<brassica::AutoExposureBuffer>, brassica::TonemapComputeNode
   brassica::CloudDetailVolume: brassica::CloudVolumeDownsampleNode, brassica::CloudVolumeGenNode
   brassica::ClusteredLighting: brassica::graph::Import<brassica::ClusteredLighting>, brassica::ClusterLightAssignmentNode
+  brassica::DecorTLAS: brassica::graph::Import<brassica::DecorTLAS>, brassica::DecorTlasNode
   brassica::GBufferAlbedo: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
-  brassica::GBufferDepth: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
+  brassica::GBufferDepth: brassica::CloudCompositeNode, brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::AboveWaterParticleRenderNode, brassica::UnderwaterParticleRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
   brassica::GBufferMaterial: brassica::EntityNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
   brassica::GBufferNormal: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
   brassica::GBufferPosition: brassica::EntityNode, brassica::FoliageNode, brassica::ModelRenderNode, brassica::TerrainNode, brassica::GroundDebrisNode
@@ -196,7 +207,6 @@ MULTI-WRITER KEYS:
   brassica::ParticleGridHeadsBuffer: brassica::ParticleGridBuildNode, brassica::ParticleResetNode
   brassica::Swapchain: brassica::graph::Import<brassica::Swapchain>, brassica::ImGuiNode, brassica::TonemapNode
   brassica::TerrainMinMaxTexture: brassica::TerrainGenNode, brassica::TerrainMinMaxDownsampleNode
-  brassica::TerrainTLAS: brassica::graph::Import<brassica::TerrainTLAS>, brassica::TerrainGenNode
   brassica::UnderwaterParticleIndirectBuffer: brassica::ParticleLivenessNode, brassica::ParticleResetNode
 )FIXTURE";
 
@@ -215,8 +225,15 @@ TEST_CASE("Real TerrainGenNode/SkyBackgroundNode/TerrainNode/DeferredNode compos
 
 	{
 		graph::Graph frameGraph;
-		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		frameGraph.Register<graph::Import<Swapchain>>();
+		// DecorTLAS's real registration is physical-layer (Engine::Init's
+		// RegisterImportedAccelerationStructure call, already run above via engine.Init) -- this
+		// Import<> is the separate graph-layer producer edge DecorTlasNode's Modify<DecorTLAS>()
+		// needs, same category as DecorTemplateBlasAddressBuffer below (DecorAccelerationStructure's
+		// own PredefinedBufferNode producer is manager-owned, not part of EngineNodeRegistry's
+		// auto-registered set, so this synthetic graph needs an explicit stand-in).
+		frameGraph.Register<graph::Import<DecorTLAS>>();
+		frameGraph.Register<graph::Import<DecorTemplateBlasAddressBuffer>>();
 
 		render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
 
@@ -248,7 +265,6 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	render::EngineNodeRegistry::Instance().CreateAll();
 
 	graph::Graph frameGraph;
-	frameGraph.Register<graph::Import<TerrainTLAS>>();
 	frameGraph.Register<graph::Import<Swapchain>>();
 	frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 	// CpuLightsBuffer's real producer is LightManager's own PredefinedBufferNode
@@ -291,6 +307,11 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	frameGraph.Register<graph::Import<ModelSkeletonBuffer>>();
 	frameGraph.Register<graph::Import<ModelInstanceWriteBuffer>>();
 	frameGraph.Register<graph::Import<MaterialBuffer>>();
+	// Same two stand-ins as the other real-graph test above -- this test never calls
+	// Engine::Init (no ServiceLocator/DecorAccelerationStructure here at all), so both of
+	// DecorTlasNode's manager-owned dependencies need an explicit Import<>.
+	frameGraph.Register<graph::Import<DecorTLAS>>();
+	frameGraph.Register<graph::Import<DecorTemplateBlasAddressBuffer>>();
 
 	render::EngineNodeRegistry::Instance().RegisterAllInto(frameGraph);
 

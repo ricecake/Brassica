@@ -139,6 +139,17 @@ namespace brassica {
 
 	inline constexpr std::uint32_t kModelNoSkeletonSentinel = 0xFFFFFFFFu;
 
+	// CPU-only bookkeeping (no GLSL mirror, never uploaded as a struct): one registered model's
+	// range within ModelRegistry::GetFlatTriangleIndices()'s flat, model-local (0-based, not
+	// vertexBase-rebased) uint32 triangle index list. Produced by flattening
+	// model_render.mesh's meshlet-local-byte -> meshlet-vertex-remap -> model-local-index double
+	// indirection once per registry change, for the decor acceleration structure's triangle BLAS
+	// geometry -- see DecorAccelerationStructure.hpp.
+	struct ModelFlatIndexRange {
+		std::uint32_t indexBase{0};
+		std::uint32_t indexCount{0}; // 3 * triangleCount
+	};
+
 	// Stage 4 (model/ModelSkeletonAsset, ModelLiveEvalNode): one joint's rest pose + live-eval
 	// parameters, in topological order (parentIndex < this joint's own index within the model's
 	// ModelSkeletonBuffer range) so ModelLiveEvalNode can compose globals with a single forward

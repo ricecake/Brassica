@@ -40,7 +40,6 @@ namespace brassica {
 		std::uint32_t gAlbedoIndex{0};
 		std::uint32_t backgroundIndex{0};
 		std::uint32_t clipmapIndex{0};
-		std::uint32_t tlasIndex{0};
 		std::uint32_t gDepthIndex{0};
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t biomeIndex{0};
@@ -54,6 +53,11 @@ namespace brassica {
 		std::uint32_t shadowMapIndex{0};
 		std::uint32_t cpuLightsIndex{0};
 		std::uint32_t gpuLightsIndex{0};
+		// Appended, not interleaved -- see feedback_push_constant_struct_editing. Decor shadow
+		// ray query (model-shadows Stage 3): DecorTLAS is always registered unconditionally at
+		// Engine::Init, so this index is never a "not provisioned yet" sentinel the way a lazily-
+		// written buffer's index can be -- no validity check needed before using it.
+		std::uint32_t decorTlasIndex{0};
 	};
 
 	struct DeferredNode: render::NodeRegistrar<DeferredNode> {
@@ -104,10 +108,8 @@ namespace brassica {
 
 		// Reads every GBuffer key (genuinely, unlike AtmosphereCompositeNode/CirrusNode/
 		// CloudRenderNode/VolumetricRenderNode below -- this is the one real exception lesson
-		// #2's writeup calls out). AtmosphereRadiance and TerrainTLAS are both catalog-converted
-		// (S2) now -- no .Desc() needed on either Read<>() below, including TerrainTLAS's, now
-		// that Provision()'s AccelerationStructure detection checks the registry's own
-		// m_accelStructs map directly instead of a realization's raw desc.kind.
+		// #2's writeup calls out). AtmosphereRadiance is catalog-converted (S2) now -- no
+		// .Desc() needed on its Read<>() below.
 		// Read<TerrainWeatherBiomeTexture>() restored (S4): catalog-converted since batch 5, so
 		// the lesson #10 hazard that justified omitting it is gone -- this was simply never
 		// re-added when that batch landed, found and fixed empirically while migrating this
@@ -139,8 +141,8 @@ namespace brassica {
 			r.Read<GTAOTexture>();
 			r.Read<CloudShadowMap>();
 			r.Read<AtmosphereRadiance>();
-			r.Read<TerrainTLAS>();
 			r.Read<TerrainShadowMap>();
+			r.Read<DecorTLAS>();
 			// Attachment-only VRS (ShadingRateComputeNode) -- a reasonable candidate per its own
 			// design comment (Deferred's ray-query shadows are exactly the per-pixel-expensive
 			// work VRS exists to coarsen). TileWidth/TileHeight match ShadingRateComputeNode's own
@@ -159,7 +161,6 @@ namespace brassica {
 			push.gDepthIndex = ctx.Index<GBufferDepth>();
 			push.backgroundIndex = ctx.Index<AtmosphereRadiance>();
 			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
-			push.tlasIndex = ctx.Index<TerrainTLAS>();
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
@@ -169,6 +170,7 @@ namespace brassica {
 			push.shadowMapIndex = ctx.Index<TerrainShadowMap>();
 			push.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>();
 			push.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
+			push.decorTlasIndex = ctx.Index<DecorTLAS>();
 
 			std::array<GraphicsShader*, 2> stages{&vertShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

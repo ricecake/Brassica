@@ -10,6 +10,7 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/lighting/ILightManager.hpp"
+#include "passes/model/resources.hpp"
 #include "passes/RenderPhases.hpp"
 #include "passes/lighting/resources.hpp"
 #include "resources/core.hpp"
@@ -30,6 +31,10 @@ namespace brassica {
 		glm::uvec2    screenSize{0, 0};
 		float         radiusWorld{1.0f};
 		float         intensity{1.0f};
+		// Ray-traced decor occlusion probes (model-shadows AO stage) -- DecorTLAS is always
+		// registered unconditionally at Engine::Init, same "never a not-provisioned-yet
+		// sentinel" reasoning as DeferredPushConstants::decorTlasIndex's own comment.
+		std::uint32_t decorTlasIndex{0};
 	};
 
 	struct GTAONode: render::NodeRegistrar<GTAONode> {
@@ -75,6 +80,7 @@ namespace brassica {
 			r.Read<GBufferPosition>();
 			r.Read<GBufferNormal>();
 			r.Read<GBufferDepth>();
+			r.Read<DecorTLAS>();
 			r.Create<GTAOTexture>();
 		}
 
@@ -88,6 +94,7 @@ namespace brassica {
 			push.gDepthIndex = ctx.Index<GBufferDepth>();
 			push.outGtaoIndex = ctx.StorageIndex<GTAOTexture>();
 			push.screenSize = glm::uvec2(width, height);
+			push.decorTlasIndex = ctx.Index<DecorTLAS>();
 
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, gtaoShader, push);
 			if (!resolved.pipeline) {

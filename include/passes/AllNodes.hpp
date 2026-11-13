@@ -20,6 +20,8 @@
 #include "passes/clouds/nodes/CloudVolumeGenNode.hpp"
 #include "passes/lighting/nodes/ClusterLightAssignmentNode.hpp"
 #include "passes/model/nodes/DecorPopulationNode.hpp"
+#include "passes/model/nodes/DecorTemplateBlasNode.hpp"
+#include "passes/model/nodes/DecorTlasNode.hpp"
 #include "passes/scene/nodes/DeferredNode.hpp"
 #include "passes/entity/nodes/EntityNode.hpp"
 #include "passes/entity/nodes/EntityPrepareNode.hpp"

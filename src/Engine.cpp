@@ -255,8 +255,7 @@ namespace brassica {
 				.device = device,
 				.pipelineLibrary = &pipelineLibrary,
 				.shaderWatcher = &shaderWatcher,
-				.terrainAS = &terrainAS,
-				.dispatchLoader = &terrainAS.GetDls(),
+				.dispatchLoader = &dls,
 				.physicalRegistry = &physicalRegistry,
 				.swapchainFormat = GetSwapchainFormat(),
 			};
@@ -300,7 +299,7 @@ namespace brassica {
 			physicalRegistry.Reset();
 			queueRecorder.Destroy();
 
-			terrainAS.DestroyAccelerationStructures();
+			decorAS.Destroy();
 
 			pipelineLibrary.Reset();
 			render::EngineNodeRegistry::Instance().DestroyAll(device);
@@ -407,7 +406,14 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		terrainAS.Init(instance, device, allocator, physicalRegistry.ConcurrentFamilies());
+		dls.init(instance, device);
+		decorAS.Init(device, allocator, &dls, physicalRegistry.ConcurrentFamilies());
+		// Registered once, here -- unlike TerrainTLAS's old every-frame re-registration (needed
+		// pre-update-after-bind to guarantee the descriptor write landed before any command
+		// buffer read it), DecorTLAS's handle never changes after this (same object, rebuilt in
+		// place every frame by DecorTlasNode), and descriptorBindingAccelerationStructureUpdateAfterBind
+		// is now enabled for this binding, so one registration suffices.
+		physicalRegistry.RegisterImportedAccelerationStructure<DecorTLAS>(decorAS.GetTLAS());
 
 		// Simple constant seed, not a real terrain query -- no node/pipeline exists yet at this
 		// point in Init, so there's no cheap way to ask the GPU what's actually there. The
@@ -445,8 +451,7 @@ namespace brassica {
 			.device = device,
 			.pipelineLibrary = &pipelineLibrary,
 			.shaderWatcher = &shaderWatcher,
-			.terrainAS = &terrainAS,
-			.dispatchLoader = &terrainAS.GetDls(),
+			.dispatchLoader = &dls,
 			.physicalRegistry = &physicalRegistry,
 			.swapchainFormat = GetSwapchainFormat(),
 		};
@@ -461,8 +466,6 @@ namespace brassica {
 		render::EngineNodeRegistry::Instance().CreateAll();
 		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
-		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
-
 		{
 			float altitude = std::max(10.0f, camera.position.y);
 			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
@@ -473,7 +476,6 @@ namespace brassica {
 
 		shaderWatcher.Initialize();
 		pipelineLibrary.Initialize();
-		terrainAS.Initialize();
 		terrainManager.Initialize();
 		physicalRegistry.Initialize();
 
@@ -537,6 +539,9 @@ namespace brassica {
 		modelRegistry.RegisterAsset(BuildManifoldTestTree(), "Manifold Test Tree");
 		proceduralArchetypeIndices = RegisterProceduralArchetypes(modelRegistry, materialManager);
 		serviceLocator.Provide<ModelRegistry>(std::shared_ptr<ModelRegistry>(&modelRegistry, [](ModelRegistry*) {}));
+		serviceLocator.Provide<DecorAccelerationStructure>(
+			std::shared_ptr<DecorAccelerationStructure>(&decorAS, [](DecorAccelerationStructure*) {})
+		);
 		serviceLocator.Provide<ModelInstanceManager>(
 			std::shared_ptr<ModelInstanceManager>(&modelInstanceManager, [](ModelInstanceManager*) {})
 		);
@@ -598,9 +603,6 @@ namespace brassica {
 		}));
 		serviceLocator.Provide<TerrainManager>(std::shared_ptr<TerrainManager>(&terrainManager, [](TerrainManager*) {
 		}));
-		serviceLocator.Provide<TerrainAccelerationStructure>(
-			std::shared_ptr<TerrainAccelerationStructure>(&terrainAS, [](TerrainAccelerationStructure*) {})
-		);
 		serviceLocator.Provide<graph::PhysicalResourceRegistry>(
 			std::shared_ptr<graph::PhysicalResourceRegistry>(&physicalRegistry, [](graph::PhysicalResourceRegistry*) {})
 		);
@@ -613,7 +615,6 @@ namespace brassica {
 		atmosphereManager.LoadState(configManager);
 		volumetricLightingManager.LoadState(configManager);
 		cloudLightingManager.LoadState(configManager);
-		terrainAS.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
 		physicalRegistry.LoadState(configManager);
@@ -1129,10 +1130,12 @@ namespace brassica {
 		// hard way when storageBufferBinding (binding 6, PhysicalRegistry's bindless buffer arena)
 		// shipped without shaderStorageBufferArrayNonUniformIndexing/
 		// descriptorBindingStorageBufferUpdateAfterBind and every device that actually validates
-		// them (unlike this Mac's MoltenVK, which resolves them for free) rejected it. Deliberately
-		// NOT requesting descriptorBindingAccelerationStructureUpdateAfterBind (the spottiest of
-		// this family) or descriptorBindingVariableDescriptorCount (unused -- see
-		// ShadingRateAttachmentDesc-style fixed-size arrays in InitGlobalDescriptors).
+		// them (unlike this Mac's MoltenVK, which resolves them for free) rejected it.
+		// descriptorBindingAccelerationStructureUpdateAfterBind (requested below, on asFeatures)
+		// is also enabled now -- it lets the decor TLAS's binding-4 slot be rewritten every frame
+		// without the strict "write the descriptor before recording any command buffer that reads
+		// it" discipline terrain's TLAS needed. descriptorBindingVariableDescriptorCount stays
+		// unused -- see ShadingRateAttachmentDesc-style fixed-size arrays in InitGlobalDescriptors.
 		VkPhysicalDeviceVulkan12Features features12{};
 		features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 		features12.descriptorIndexing = VK_TRUE;
@@ -1157,6 +1160,7 @@ namespace brassica {
 			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
 		};
 		asFeatures.accelerationStructure = VK_TRUE;
+		asFeatures.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
 
 		VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
 		rqFeatures.rayQuery = VK_TRUE;
@@ -1484,7 +1488,6 @@ namespace brassica {
 			nodeRegistry.SetFrameParamsAll(frameParams);
 
 			graph::Graph frameGraph;
-			frameGraph.Register<graph::Import<TerrainTLAS>>();
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
 			frameGraph.Register<graph::Import<ClusteredLighting>>();
@@ -1492,6 +1495,7 @@ namespace brassica {
 			lightManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
 			modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+			decorAS.RegisterBufferNode(frameGraph, physicalRegistry.Catalog(), modelRegistry);
 			modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 			nodeRegistry.RegisterAllInto(frameGraph);
 			vk::Extent2D        extent = GetSwapchainExtent();
@@ -1825,8 +1829,6 @@ namespace brassica {
 
 		bool forceRegeneration = terrainManager.ShouldForceRegeneration();
 
-		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
-
 		// SetFrameParams is a data-flow concern (this frame's camera/water-level/LOD data),
 		// deliberately kept separate from NodeServices/InitAll -- see the CRTP auto-registration
 		// plan's Context section. Unlike Init (once, heterogeneous per node type), every node
@@ -1878,7 +1880,6 @@ namespace brassica {
 		nodeRegistry.SetFrameParamsAll(frameParams);
 
 		graph::Graph frameGraph;
-		frameGraph.Register<graph::Import<TerrainTLAS>>();
 		// CpuLightsBuffer/GpuLightsBuffer need no Import<> fallback the way the old hybrid
 		// LightsBuffer did: GpuLightsResetNode (CpuLightsBuffer's analogue is LightManager's own
 		// PredefinedBufferNode, registered via RegisterBufferNode below) is never gated by
@@ -1892,6 +1893,7 @@ namespace brassica {
 		lightManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
 		modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+		decorAS.RegisterBufferNode(frameGraph, physicalRegistry.Catalog(), modelRegistry);
 		modelInstanceManager.SetCurrentTimeMs(ubo.timeMs);
 		modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 		nodeRegistry.RegisterAllInto(frameGraph);
@@ -2524,7 +2526,7 @@ namespace brassica {
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::ePartiallyBound,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,

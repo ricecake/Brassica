@@ -19,7 +19,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "passes/terrain/TerrainAccelerationStructure.hpp"
 
 namespace brassica {
 
@@ -51,9 +50,6 @@ namespace brassica {
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
 	// every sampled input is a bindless index, resolved through NodeContext::Index<K>() below.
-	// The BLAS/TLAS build stays entirely out-of-band, unchanged, now owned by
-	// TerrainAccelerationStructure (terrain/TerrainAccelerationStructure.hpp) rather than a
-	// class that also used to own a pipeline.
 	//
 	// Like GradientNode/DeferredNode, reconstructed fresh every frame -- pipelineLibrary/
 	// taskShader/meshShader/fragShader point at Engine-owned, persistent state, and
@@ -75,16 +71,16 @@ namespace brassica {
 			.enableShadingRate = true,
 		};
 
-		render::PipelineLibrary*      pipelineLibrary = nullptr;
-		TaskShader                    taskShader;
-		MeshShader                    meshShader;
-		FragmentShader                fragShader;
-		TerrainAccelerationStructure* terrainAS = nullptr;
-		TerrainPushConstants          push{};
+		render::PipelineLibrary*     pipelineLibrary = nullptr;
+		TaskShader                   taskShader;
+		MeshShader                   meshShader;
+		FragmentShader               fragShader;
+		const DispatchLoaderDynamic* dls = nullptr;
+		TerrainPushConstants         push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			terrainAS = services.terrainAS;
+			dls = services.dispatchLoader;
 			if (!taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task") ||
 			    !meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh") ||
 			    !fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag")) {
@@ -166,8 +162,8 @@ namespace brassica {
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			uint32_t          taskGroupCount = (push.gridParams.z + 31) / 32;
-			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
-				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
+			if (dls && dls->vkCmdDrawMeshTasksEXT) {
+				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, *dls);
 			}
 		}
 	};

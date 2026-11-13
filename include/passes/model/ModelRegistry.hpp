@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,47 @@ namespace brassica {
 			return modelIndex < m_descs.size() ? m_descs[modelIndex].clipCount : 0u;
 		}
 
+		[[nodiscard]] std::uint32_t GetVertexBase(std::uint32_t modelIndex) const {
+			return modelIndex < m_descs.size() ? m_descs[modelIndex].vertexBase : 0u;
+		}
+
+		// hasNext ? next model's own vertexBase : total vertex count -- the same derivation
+		// ReplaceAsset already relies on internally (ModelRegistry.cpp) for every shared buffer,
+		// since UploadAll() always re-concatenates every model contiguously in registration order.
+		[[nodiscard]] std::uint32_t GetVertexCount(std::uint32_t modelIndex) const {
+			if (modelIndex >= m_descs.size()) {
+				return 0u;
+			}
+			std::uint32_t base = m_descs[modelIndex].vertexBase;
+			std::uint32_t end = (modelIndex + 1 < m_descs.size()) ? m_descs[modelIndex + 1].vertexBase
+																   : static_cast<std::uint32_t>(m_vertices.size());
+			return end - base;
+		}
+
+		// Flat, model-local (0-based) triangle index list for the decor acceleration structure's
+		// BLAS geometry -- see ModelFlatIndexRange's own comment for how this is derived.
+		[[nodiscard]] std::span<const std::uint32_t> GetFlatTriangleIndices() const { return m_flatTriangleIndices; }
+
+		// For DecorAccelerationStructure's own vertex-position buffer copy -- deliberately NOT
+		// read from the shared catalog GltfVertexBuffer via device address: that buffer is
+		// MinimalDevice-reachable generic infrastructure (model registration, wind bounds,
+		// procedural generation tests all touch it on a device with no AS support at all -- see
+		// tests/MinimalDevice.hpp's own "do not add... acceleration structure... requirements
+		// here" comment), so tagging it with AS-build usage broke every one of those tests. A
+		// private copy, owned entirely by DecorAccelerationStructure, keeps that requirement
+		// scoped to code that actually needs it.
+		[[nodiscard]] std::span<const GltfVertex> GetVertices() const { return m_vertices; }
+
+		[[nodiscard]] ModelFlatIndexRange GetFlatIndexRange(std::uint32_t modelIndex) const {
+			return modelIndex < m_flatIndexRanges.size() ? m_flatIndexRanges[modelIndex] : ModelFlatIndexRange{};
+		}
+
+		// Bumped once per UploadAll() call (every RegisterAsset/ReplaceAsset) -- the one signal
+		// DecorAccelerationStructure needs to know its per-template BLASes are stale, without
+		// inventing a second change-detection mechanism alongside the registry's own existing
+		// "re-upload everything" trigger.
+		[[nodiscard]] std::uint64_t GetVersion() const { return m_version; }
+
 		// Total meshlets across every registered model -- ModelRenderNode's own Active() gate
 		// ("is there anything loaded at all") reads this, same role GltfModelManager's
 		// GetMeshletCount() played for the single-model Stage 1 node.
@@ -87,6 +129,14 @@ namespace brassica {
 		// need to re-upload everything regardless of which model actually changed.
 		void UploadAll();
 
+		// Re-derives m_flatTriangleIndices/m_flatIndexRanges from the current m_descs/m_meshlets/
+		// m_meshletVertices/m_meshletTrianglesPacked, walking exactly the same meshlet-local-byte
+		// -> meshlet-vertex-remap -> model-local-index double indirection model_render.mesh
+		// resolves per-vertex at draw time (shaders/model_render.mesh), so the two never drift.
+		// Called from UploadAll() -- same "re-upload everything on any registry change" trigger
+		// as every other derived vector here, no separate change-detection mechanism.
+		void RebuildFlatTriangleIndices();
+
 		std::vector<GltfVertex>     m_vertices;
 		std::vector<std::uint32_t>  m_meshletVertices;
 		std::vector<std::uint32_t>  m_meshletTrianglesPacked;
@@ -96,6 +146,10 @@ namespace brassica {
 		std::vector<ModelDescEntry>     m_descs;
 		std::vector<ModelSkeletonJoint> m_skeleton;
 		std::vector<std::string>        m_names;
+
+		std::vector<std::uint32_t>      m_flatTriangleIndices;
+		std::vector<ModelFlatIndexRange> m_flatIndexRanges;
+		std::uint64_t                    m_version{0};
 
 		graph::PredefinedBufferNode<GltfVertexBuffer, GltfVertex, SubPhase::Prepare>            m_vertexBufNode;
 		graph::PredefinedBufferNode<GltfMeshletVertexBuffer, std::uint32_t, SubPhase::Prepare>   m_meshletVertexBufNode;

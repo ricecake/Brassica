@@ -1,4 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <array>
+#include <span>
+
 #include "doctest/doctest.h"
 
 #include "passes/model/ModelRegistry.hpp"
@@ -45,7 +48,91 @@ namespace {
 		return asset;
 	}
 
+	// One meshlet, 4 vertices, 2 triangles -- meshletVertices is a non-identity remap (reversed)
+	// so a test against it actually exercises the meshlet-local -> model-local indirection, not
+	// just a vertexOffset of zero.
+	ModelAsset MakeFlatteningTestAsset() {
+		ModelAsset asset = MakeTinyAsset(4, 0, 0, 1, 0, 0);
+		asset.meshletVertices = {3, 2, 1, 0}; // meshlet-local i -> model-local (3 - i)
+
+		// Packed triangle bytes, meshlet-local vertex indices: triangle0 = (0,1,2), triangle1 =
+		// (0,2,3) -- 6 bytes total, little-endian-packed into 2 uint32 words.
+		std::array<std::uint8_t, 6> bytes{0, 1, 2, 0, 2, 3};
+		asset.meshletTrianglesPacked.assign(2, 0u);
+		for (std::size_t i = 0; i < bytes.size(); ++i) {
+			asset.meshletTrianglesPacked[i / 4] |= static_cast<std::uint32_t>(bytes[i]) << ((i % 4) * 8);
+		}
+
+		GltfMeshlet meshlet{};
+		meshlet.vertexOffset = 0;
+		meshlet.triangleOffset = 0;
+		meshlet.vertexCount = 4;
+		meshlet.triangleCount = 2;
+		asset.meshlets = {meshlet};
+		return asset;
+	}
+
 } // namespace
+
+TEST_CASE("ModelRegistry flattens a meshlet's packed-byte/remap double indirection into model-local triangle indices") {
+	ModelRegistry registry;
+	std::uint32_t modelIndex = registry.RegisterAsset(MakeFlatteningTestAsset());
+
+	ModelFlatIndexRange range = registry.GetFlatIndexRange(modelIndex);
+	CHECK(range.indexBase == 0);
+	CHECK(range.indexCount == 6);
+
+	std::span<const std::uint32_t> indices = registry.GetFlatTriangleIndices();
+	REQUIRE(indices.size() == 6);
+	// meshlet-local (0,1,2) -> model-local (3,2,1); meshlet-local (0,2,3) -> model-local (3,1,0).
+	CHECK(indices[0] == 3);
+	CHECK(indices[1] == 2);
+	CHECK(indices[2] == 1);
+	CHECK(indices[3] == 3);
+	CHECK(indices[4] == 1);
+	CHECK(indices[5] == 0);
+}
+
+TEST_CASE("ModelRegistry's flat triangle indices accumulate correct per-model ranges across multiple models") {
+	ModelRegistry registry;
+	std::uint32_t first = registry.RegisterAsset(MakeFlatteningTestAsset());
+	std::uint32_t second = registry.RegisterAsset(MakeFlatteningTestAsset());
+
+	ModelFlatIndexRange firstRange = registry.GetFlatIndexRange(first);
+	ModelFlatIndexRange secondRange = registry.GetFlatIndexRange(second);
+
+	CHECK(firstRange.indexBase == 0);
+	CHECK(firstRange.indexCount == 6);
+	CHECK(secondRange.indexBase == 6);
+	CHECK(secondRange.indexCount == 6);
+	CHECK(registry.GetFlatTriangleIndices().size() == 12);
+
+	// Both models share the identical asset shape, so their flattened indices (model-local,
+	// never rebased by vertexBase) should be byte-for-byte identical despite living at different
+	// vertexBase offsets in the shared GltfVertexBuffer.
+	std::span<const std::uint32_t> indices = registry.GetFlatTriangleIndices();
+	for (std::size_t i = 0; i < 6; ++i) {
+		CHECK(indices[i] == indices[6 + i]);
+	}
+
+	CHECK(registry.GetVertexBase(first) == 0);
+	CHECK(registry.GetVertexCount(first) == 4);
+	CHECK(registry.GetVertexBase(second) == 4);
+	CHECK(registry.GetVertexCount(second) == 4);
+}
+
+TEST_CASE("ModelRegistry::ReplaceAsset rebuilds flat triangle indices from the new asset's geometry") {
+	ModelRegistry registry;
+	std::uint32_t modelIndex = registry.RegisterAsset(MakeTinyAsset(4, 4, 0, 0, 0, 0));
+	CHECK(registry.GetFlatIndexRange(modelIndex).indexCount == 0);
+
+	registry.ReplaceAsset(modelIndex, MakeFlatteningTestAsset());
+
+	ModelFlatIndexRange range = registry.GetFlatIndexRange(modelIndex);
+	CHECK(range.indexCount == 6);
+	REQUIRE(registry.GetFlatTriangleIndices().size() == 6);
+	CHECK(registry.GetFlatTriangleIndices()[0] == 3);
+}
 
 TEST_CASE("ModelRegistry::ReplaceAsset overwrites one model in place, leaving siblings untouched") {
 	ModelRegistry registry;

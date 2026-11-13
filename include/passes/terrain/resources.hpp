@@ -11,16 +11,6 @@
 
 namespace brassica {
 
-	// The result of TerrainPass::BuildOrUpdateAccelerationStructure, registered into the graph
-	// as an Imported AccelerationStructure resource. The build itself stays entirely out-of-band
-	// (TerrainPass's own transient command pool/queue, unchanged); only the result flows through
-	// the graph. Both real touchers (TerrainGenNode, DeferredNode) used to need their own
-	// explicit .Desc(graph::AccelerationStructureDesc()) escape-hatch call, since Provision()'s
-	// AccelerationStructure detection used to switch on a realization's own raw, pre-resolution
-	// desc.kind; now checked against the registry's own m_accelStructs map directly instead
-	// (PhysicalRegistry.hpp's Provision), so this key needs no escape hatch anywhere.
-	struct TerrainTLAS: ImportedAccelerationStructure {};
-
 	// mips = 1: this image has no mip chain of its own -- only TerrainMinMaxTexture below does.
 	struct TerrainClipmapShape {
 		static constexpr std::uint32_t kMips = 1;

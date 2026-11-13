@@ -8,6 +8,7 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "VulkanCompat.hpp"
 #include "ArgparseManager.hpp"
 #include "AtmosphereManager.hpp"
 #include "audio/AudioManager.hpp"
@@ -22,6 +23,7 @@
 #include "InputHandler.hpp"
 #include "passes/lighting/LightManager.hpp"
 #include "passes/lighting/LightningManager.hpp"
+#include "passes/model/DecorAccelerationStructure.hpp"
 #include "passes/model/GltfModelManager.hpp"
 #include "passes/model/ModelInstanceManager.hpp"
 #include "passes/model/ModelRegistry.hpp"
@@ -36,7 +38,6 @@
 #include "SystemHandler.hpp"
 #include "TaskScheduler.h"
 #include "TextureDumpService.hpp"
-#include "passes/terrain/TerrainAccelerationStructure.hpp"
 #include "passes/terrain/TerrainManager.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
@@ -344,6 +345,7 @@ namespace brassica {
 		ParticleManager   particleManager;
 		GltfModelManager  gltfModelManager;
 		ModelRegistry     modelRegistry;
+		DecorAccelerationStructure decorAS;
 		ModelInstanceManager modelInstanceManager;
 		TextureDumpService   textureDumpService;
 		// Populated from RegisterProceduralArchetypes()'s return value -- Stage 5.2's
@@ -362,7 +364,10 @@ namespace brassica {
 		// fields here are untouched by that and keep their derived defaults.
 		AtmospherePushConstants atmosphere{};
 
-		TerrainAccelerationStructure terrainAS;
+		// Loaded once in Init() via dls.init(instance, device) -- the shared source of every
+		// dynamically-loaded extension function pointer (e.g. vkCmdDrawMeshTasksEXT) handed to
+		// nodes through NodeServices::dispatchLoader, not owned by any one feature.
+		DispatchLoaderDynamic dls;
 
 		TerrainManager terrainManager;
 

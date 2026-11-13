@@ -169,4 +169,34 @@ namespace brassica {
 			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
 	};
 
+	// The decor triangle TLAS -- see model/DecorAccelerationStructure.hpp for ownership. Imported
+	// exactly like the deleted TerrainTLAS was: a plain-member-owned handle, pre-registered via
+	// RegisterImportedAccelerationStructure before Setup/Compile run every frame
+	// (PhysicalRegistry.hpp's Provision expects every AS key to already be in m_accelStructs).
+	struct DecorTLAS: ImportedAccelerationStructure {};
+
+	// Per-registered-model BLAS device address (lo/hi uint32 pairs -- GLSL has no native uint64
+	// buffer element type), uploaded by DecorAccelerationStructure::RegisterBufferNode whenever
+	// its templates rebuild. model_decor_tlas_instances.comp reads this to resolve each alive
+	// decor instance's template BLAS reference with no CPU-side per-instance work.
+	struct DecorTemplateBlasAddressBuffer: ConfiguredExternalBuffer<DecorTemplateBlasAddressBuffer> {
+		static constexpr vk::BufferUsageFlags kUsage =
+			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
+	};
+
+	// Hand-packed VkAccelerationStructureInstanceKHR entries (64 bytes each, GLSL has no native
+	// type for this struct) for every decor slot in [kDecorSlotBase, kDecorSlotBase +
+	// kDecorCapacity), written by model_decor_tlas_instances.comp and consumed directly by
+	// DecorAccelerationStructure::BuildTLAS as the TLAS's instance geometry data. Fixed-size,
+	// covering the whole decor capacity every frame (far-only MVP, Stage 2's own deliberate scope
+	// cut: every slot gets a real instance, dead ones just get instanceMask = 0 -- see that
+	// shader's own comment) rather than a GPU-compacted subset, so no indirect-build device
+	// feature is needed yet.
+	struct DecorTLASInstanceBuffer: FixedBuffer<DecorTLASInstanceBuffer> {
+		static constexpr std::uint64_t kByteSize = static_cast<std::uint64_t>(kDecorCapacity) * 64u;
+		static constexpr vk::BufferUsageFlags kUsage = vk::BufferUsageFlagBits::eStorageBuffer |
+			vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
+	};
+
 } // namespace brassica
