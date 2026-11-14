@@ -40,6 +40,51 @@ void main() {
 	float roughness = inMaterial.g;
 	float glint = inMaterial.b;
 
+	vec4 weights = inMaterialWeights;
+	float grassW = weights.x;
+	float rockW  = weights.y;
+	float sandW  = weights.z;
+	float snowW  = weights.w;
+
+	// Sample climate weather biome parameters if available
+	float cloudCoverage = 0.0;
+	float temp = 0.5;
+	float moisture = 0.5;
+	float severity = 0.0;
+	bool hasWeather = false;
+
+	if (params.weatherBiomeIndex > 0u) {
+		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, worldPos);
+		cloudCoverage = weatherSample.r;
+		temp = weatherSample.g;
+		moisture = weatherSample.b;
+		severity = weatherSample.a;
+		hasWeather = true;
+	}
+
+	WhittakerBiome wb;
+	vec3 palA, palB, palC, palD;
+	if (hasWeather) {
+		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+		wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+		palA = wb.palA;
+		palB = wb.palB;
+		palC = wb.palC;
+		palD = wb.palD;
+	} else {
+		uint bIdx = params.biomeIndex;
+		wb.biomeIndex = float(bIdx);
+		wb.roughness = 0.75;
+		wb.snowCover = 0.0;
+		getWhittakerBiomePalette(bIdx, palA, palB, palC, palD);
+		wb.palA = palA;
+		wb.palB = palB;
+		wb.palC = palC;
+		wb.palD = palD;
+		wb.color = evalCosinePalette(palA, palB, palC, palD, 0.65);
+	}
+
+
 	// View vector and grazing angle for screen-space footprint:
 	vec3 viewDir = -normalize(inPosition);
 	float NdotV = clamp(abs(dot(N, viewDir)), 0.20, 1.0);
@@ -105,8 +150,8 @@ void main() {
 	// -------------------------------------------------------------------------
 
 	// Configure the dynamic LOD. You can tweak lodDistanceScale to control how fast layers shift.
-	float lodDistanceScale = 0.05;
-	float baseFrequency = 1.0;
+	float lodDistanceScale = 0.001;
+	float baseFrequency = 0.050;
 	float growthFactor = 2.0; // Octaves double in size
 
 	NoiseCascade cascade = calculateDynamicLOD(
@@ -117,15 +162,15 @@ void main() {
 	);
 
 	// Apply dynamic scales to the noise coordinates
-	vec3 noisePosL = warpNoise + worldPos * cascade.frequencies.x; // Macro
-	vec3 noisePosM = warpNoise + worldPos * cascade.frequencies.y; // Medium
-	vec3 noisePosS = warpNoise + worldPos * cascade.frequencies.z; // Micro
+	vec3 noisePosL = (warpNoise + worldPos) * cascade.frequencies.x; // Macro
+	vec3 noisePosM = (warpNoise + worldPos) * cascade.frequencies.y; // Medium
+	vec3 noisePosS = (warpNoise + worldPos) * cascade.frequencies.z; // Micro
 
 	// Scale wave speeds by frequency to prevent distance waves from looking hyper-fast
 	// Can we make the windspeed biome dependent?
-	float timeL = exposedTime * cascade.frequencies.x * 0.0625;
-	float timeM = exposedTime * cascade.frequencies.y * 0.0625;
-	float timeS = exposedTime * cascade.frequencies.z * 0.0625;
+	float timeL = exposedTime * cascade.frequencies.x * 0.625;
+	float timeM = exposedTime * cascade.frequencies.y * 0.625;
+	float timeS = exposedTime * cascade.frequencies.z * 0.625;
 
 	// Align phasor spatial frequency F and advection velocity W with windTangent
 	vec3 windWaveF_L = normalize(windTangent + warpCurl);// * 0.2);
@@ -163,51 +208,7 @@ void main() {
 	float wMediumNorm = cascade.weights.y;
 	float wMicroNorm  = cascade.weights.z;
 
-	vec4 weights = inMaterialWeights;
-	float grassW = weights.x;
-	float rockW  = weights.y;
-	float sandW  = weights.z;
-	float snowW  = weights.w;
-
 	vec2 perturbedGradSum = vec2(0.0);
-
-	// Sample climate weather biome parameters if available
-	float cloudCoverage = 0.0;
-	float temp = 0.5;
-	float moisture = 0.5;
-	float severity = 0.0;
-	bool hasWeather = false;
-
-	if (params.weatherBiomeIndex > 0u) {
-		vec4 weatherSample = sampleTerrainWeatherBiome(params.weatherBiomeIndex, worldPos);
-		cloudCoverage = weatherSample.r;
-		temp = weatherSample.g;
-		moisture = weatherSample.b;
-		severity = weatherSample.a;
-		hasWeather = true;
-	}
-
-	WhittakerBiome wb;
-	vec3 palA, palB, palC, palD;
-	if (hasWeather) {
-		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
-		wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
-		palA = wb.palA;
-		palB = wb.palB;
-		palC = wb.palC;
-		palD = wb.palD;
-	} else {
-		uint bIdx = params.biomeIndex;
-		wb.biomeIndex = float(bIdx);
-		wb.roughness = 0.75;
-		wb.snowCover = 0.0;
-		getWhittakerBiomePalette(bIdx, palA, palB, palC, palD);
-		wb.palA = palA;
-		wb.palB = palB;
-		wb.palC = palC;
-		wb.palD = palD;
-		wb.color = evalCosinePalette(palA, palB, palC, palD, 0.65);
-	}
 
 	// Evaluate the cosine palette with parameter t modulated by moisture, slope, and procedural noise.
 	// As distance increases, modulation seamlessly transitions from medium-scale variegation to broad macro-scale geographic variation.
