@@ -96,7 +96,7 @@ namespace brassica {
 			p.tierRadiusFalloff = 0.70f;
 			p.tierHeight = 2.15f;
 			p.tierOverlap = 0.35f;
-			p.tierBaseRigidity = 0.95f;
+			p.tierBaseRigidity = 0.98f;
 			p.circularSegments = 10;
 			return p;
 		}
@@ -114,14 +114,14 @@ namespace brassica {
 			PalmGenParams p;
 			p.seed = 502;
 			p.trunkSegments = 5;
-			p.trunkHeight = 7.0f;
-			p.trunkRadiusLow = 0.26f;
-			p.trunkRadiusHigh = 0.17f;
+			p.trunkHeight = 12.0f;
+			p.trunkRadiusLow = 0.32f;
+			p.trunkRadiusHigh = 0.27f;
 			p.trunkBendAmount = 0.8f;
 			p.trunkBaseRigidity = 0.9f;
 			p.frondCount = 5;
 			p.frondLength = 2.7f;
-			p.frondWidth = 0.5f;
+			p.frondWidth = 0.75f;
 			p.frondDroop = 0.9f;
 			p.frondSegments = 4;
 			p.frondRigidity = 0.5f;
@@ -184,7 +184,7 @@ namespace brassica {
 			p.trunkRadiusLow = 0.2f;
 			p.trunkRadiusHigh = 0.1f;
 			p.radiusFalloffPerSegment = 0.85f;
-			p.baseRigidity = 0.6f; // bushes sway more overall than a tree's own rigid trunk
+			p.baseRigidity = 0.99f; // bushes sway more overall than a tree's own rigid trunk
 			p.rigidityFalloffPerSegment = 0.05f;
 			p.circularSegments = 8;
 			p.maxJoints = 64;
@@ -327,21 +327,27 @@ namespace brassica {
 		smallTree.leafChance = 1.0f;
 		smallTree.leafSize = 0.625f;
 		smallTree.leafCount = 5;
+		smallTree.baseRigidity = 0.99f;
+		smallTree.rigidityFalloffPerSegment = 0.00625f;
 		smallTree.leafMaterialIndex = leafMaterialIndex;
 		PlantGenParams mediumTree = MediumTree();
 		mediumTree.materialIndex = barkMaterialIndex;
 		mediumTree.enableLeaves = true;
 		mediumTree.leafChance = 1.0f;
 		mediumTree.leafSize = 1.25f;
-		mediumTree.leafCount = 6;
+		mediumTree.leafCount = 5;
+		mediumTree.baseRigidity = 0.99f;
+		mediumTree.rigidityFalloffPerSegment = 0.00625f;
 		mediumTree.leafMaterialIndex = leafMaterialIndex;
 		PlantGenParams largeTree = LargeTree();
 		largeTree.materialIndex = barkMaterialIndex;
 		largeTree.enableLeaves = true;
 		largeTree.leafChance = 1.0f;
-		largeTree.leafSize = 2.0f;
-		largeTree.leafCount = 6;
+		largeTree.leafSize = 1.5f;
+		largeTree.leafCount = 5;
 		largeTree.leafMaterialIndex = leafMaterialIndex;
+		largeTree.baseRigidity = 0.99f;
+		largeTree.rigidityFalloffPerSegment = 0.00625f;
 
 		PineGenParams pine = Pine();
 		pine.materialIndex = barkMaterialIndex;
@@ -367,16 +373,18 @@ namespace brassica {
 		bushA.enableLeaves = true;
 		bushA.enableFlowers = true;
 		bushA.leafChance = 0.85f;
-		bushA.leafSize = 0.35f;
+		bushA.leafSize = 1.25f;
 		bushA.leafCount = 4;
+		bushA.baseRigidity = 0.99f;
 		bushA.leafMaterialIndex = leafMaterialIndex;
 		PlantGenParams bushB = BushVariantB();
 		bushB.materialIndex = bushMaterialIndex;
 		bushB.enableLeaves = true;
 		bushB.enableFlowers = true;
 		bushB.leafChance = 0.85f;
-		bushB.leafSize = 0.25f;
+		bushB.leafSize = 1.75f;
 		bushB.leafCount = 4;
+		bushB.baseRigidity = 0.99f;
 		bushB.leafMaterialIndex = leafMaterialIndex;
 		indices.bushBase = registry.RegisterAsset(BuildProceduralPlant(bushA), "Bush A");
 		registry.RegisterAsset(BuildProceduralPlant(bushB), "Bush B");

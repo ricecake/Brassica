@@ -156,6 +156,9 @@ float exposureLayerWeight(ExposureLayer layer, float linearZ, bool isSkyPixel, f
 	if (layer.isSky != 0) {
 		return isSkyPixel ? 1.0 : 0.0;
 	}
+	if (isSkyPixel) {
+		return 0.0;
+	}
 	float dist = abs(linearZ - layer.targetDepth);
 	float x = clamp(dist / max(layer.falloffWidth, 0.0001), 0.0, 1.0);
 	return pow(1.0 - x, layer.falloffRate);

@@ -113,8 +113,8 @@ namespace brassica {
 					float childLength = std::max(0.05f, params.segmentLength * lengthJitter);
 					float childRadiusHigh = std::max(0.01f, parent.radiusHigh * params.radiusFalloffPerSegment);
 
-					float depthRatio = static_cast<float>(parent.chainDepth) / static_cast<float>(params.maxSegments);
-					float childRigidity = glm::mix(params.baseRigidity, 0.05f, std::min(1.0f, depthRatio));
+					float depthRatio = (static_cast<float>(params.maxSegments) - static_cast<float>(parent.chainDepth) ) / static_cast<float>(params.maxSegments);
+					float childRigidity = glm::mix(params.baseRigidity, params.baseRigidity - static_cast<float>(parent.chainDepth) * params.rigidityFalloffPerSegment, std::min(1.0f, depthRatio));
 
 					glm::vec3 childStart = parentEnd;
 					glm::vec3 childEnd = childStart + childDir * childLength;
@@ -170,7 +170,7 @@ void AddLeaves(PlantIR& ir, const PlantGenParams& params, std::mt19937& rng) {
 			continue;
 		}
 		ir.AddLeaf(
-			ir.elements[i].endPosition, dynamicLeafSize, params.leafCount, ir.elements[i].endRadius, 0.3f, i
+			ir.elements[i].endPosition, dynamicLeafSize, params.leafCount, ir.elements[i].endRadius, params.baseRigidity*0.75, i
 		);
 	}
 }

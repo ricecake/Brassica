@@ -236,7 +236,10 @@ void main() {
 		// Iterate back-to-front (top layer down to main) to calculate the actual visible contribution
 		// of each layer. This prevents the main layer's histogram from capturing pixels fully covered
 		// by another layer, acting purely as a fallback for the remaining weight.
+		for (int mainValue = 0; mainValue <= 1; mainValue++)
 		for (int li = numExposureLayers - 1; li >= 0; --li) {
+			if (layers[li].isMain != mainValue) continue;
+
 			float baseWeight = exposureLayerWeight(layers[li], linearZ, isSkyPixel, cloudWeight);
 			if (baseWeight <= 0.0 || remainingWeight <= 0.0) {
 				continue;
