@@ -8,7 +8,7 @@
 #include "passes/material/MaterialManager.hpp"
 
 TEST_CASE("MaterialData - std430 Layout and Sentinel Values") {
-	CHECK(sizeof(brassica::MaterialData) == 160);
+	CHECK(sizeof(brassica::MaterialData) == 176);
 	CHECK(brassica::UNBOUND_TEXTURE_ID == 0xFFFFFFFFu);
 
 	brassica::MaterialData mat;
@@ -18,7 +18,10 @@ TEST_CASE("MaterialData - std430 Layout and Sentinel Values") {
 	CHECK(mat.textureIds.w == brassica::UNBOUND_TEXTURE_ID);
 
 	CHECK(mat.colorTintOffset == glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-	CHECK(mat.shadingBitmask == 0u);
+	CHECK(mat.materialRole == static_cast<std::uint32_t>(brassica::MaterialRole::Standard));
+	CHECK(mat.noiseScale == doctest::Approx(1.0f));
+	CHECK(mat.noiseWarp == doctest::Approx(0.0f));
+	CHECK(mat.noiseSharpness == doctest::Approx(0.5f));
 	CHECK(mat.uvScaleOffset == glm::vec4(1.0f, 1.0f, 0.0f, 0.0f));
 
 	CHECK(mat.palette[0] == glm::vec4(0.5f, 0.5f, 0.5f, 0.0f));
@@ -28,6 +31,7 @@ TEST_CASE("MaterialData - std430 Layout and Sentinel Values") {
 
 	CHECK(mat.baseColorFactor == glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 	CHECK(mat.emissiveFactor == glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
+	CHECK(mat.proceduralShading == glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
 }
 
 TEST_CASE("MaterialManager - Material Registration, Retrieval, and Updates") {
@@ -44,7 +48,7 @@ TEST_CASE("MaterialManager - Material Registration, Retrieval, and Updates") {
 	brassica::MaterialData customMat{};
 	customMat.textureIds = glm::uvec4(10, 11, 12, 13);
 	customMat.colorTintOffset = glm::vec4(0.1f, 0.8f, 0.2f, 5.0f);
-	customMat.shadingBitmask = 0b00000001;
+	customMat.materialRole = static_cast<std::uint32_t>(brassica::MaterialRole::ProceduralLeaf);
 	customMat.uvScaleOffset = glm::vec4(2.0f, 2.0f, 0.5f, 0.5f);
 	customMat.palette[0] = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
 
@@ -59,14 +63,14 @@ TEST_CASE("MaterialManager - Material Registration, Retrieval, and Updates") {
 	CHECK(retrievedMat->colorTintOffset.y == doctest::Approx(0.8f));
 	CHECK(retrievedMat->colorTintOffset.z == doctest::Approx(0.2f));
 	CHECK(retrievedMat->colorTintOffset.w == doctest::Approx(5.0f));
-	CHECK(retrievedMat->shadingBitmask == 1u);
+	CHECK(retrievedMat->materialRole == static_cast<std::uint32_t>(brassica::MaterialRole::ProceduralLeaf));
 	CHECK(retrievedMat->uvScaleOffset == glm::vec4(2.0f, 2.0f, 0.5f, 0.5f));
 
 	// Update existing material
-	customMat.shadingBitmask = 0b00000011;
+	customMat.materialRole = static_cast<std::uint32_t>(brassica::MaterialRole::ProceduralBark);
 	bool updated = mgr.UpdateMaterial(id1, customMat);
 	CHECK(updated == true);
-	CHECK(mgr.GetMaterial(id1)->shadingBitmask == 3u);
+	CHECK(mgr.GetMaterial(id1)->materialRole == static_cast<std::uint32_t>(brassica::MaterialRole::ProceduralBark));
 
 	// Update invalid ID fails
 	bool invalidUpdate = mgr.UpdateMaterial(999, customMat);

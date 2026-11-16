@@ -283,6 +283,21 @@ namespace brassica {
 		MaterialData barkMaterial;
 		barkMaterial.baseColorFactor = glm::vec4(0.36f, 0.24f, 0.14f, 1.0f);
 		barkMaterial.colorTintOffset.y = 0.9f; // roughness strength -- bark reads as matte
+		// Opts bark into gltf.frag's vertical ridge/fissure noise (see MaterialRole). normal
+		// blend stays partial (0.6) so the trunk's real macro curvature still reads through the
+		// ridge detail instead of being fully replaced by it.
+		barkMaterial.materialRole = static_cast<std::uint32_t>(MaterialRole::ProceduralBark);
+		barkMaterial.noiseScale = 3.0f;
+		barkMaterial.noiseWarp = 0.4f;
+		barkMaterial.noiseSharpness = 0.25f;
+		barkMaterial.proceduralShading.x = 0.6f;
+		// c=0.5 (half a cosine cycle over t in [0,1]) so t=0 and t=1 land on opposite ends --
+		// gltf.frag feeds this 1-ridgeMask, so grooves (dark end) and ridge crests (light end)
+		// read as genuinely different shades, not the same color wrapping around.
+		barkMaterial.palette[0] = glm::vec4(0.22f, 0.14f, 0.08f, 0.0f);
+		barkMaterial.palette[1] = glm::vec4(0.12f, 0.08f, 0.05f, 0.0f);
+		barkMaterial.palette[2] = glm::vec4(0.5f, 0.5f, 0.5f, 0.0f);
+		barkMaterial.palette[3] = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
 		std::uint32_t barkMaterialIndex = materialManager.RegisterMaterial(barkMaterial);
 
 		MaterialData bushMaterial;
@@ -293,6 +308,20 @@ namespace brassica {
 		MaterialData rockMaterial;
 		rockMaterial.baseColorFactor = glm::vec4(0.45f, 0.43f, 0.40f, 1.0f);
 		rockMaterial.colorTintOffset.y = 0.95f;
+		// Opts rock into gltf.frag's faceted Worley noise (see MaterialRole). normal blend is
+		// close to fully procedural (0.8) -- unlike bark's subtler ridges, facets are meant to
+		// be the dominant visual read on a rock's surface.
+		rockMaterial.materialRole = static_cast<std::uint32_t>(MaterialRole::ProceduralRock);
+		rockMaterial.noiseScale = 4.0f;
+		rockMaterial.noiseWarp = 0.3f;
+		rockMaterial.noiseSharpness = 0.12f;
+		rockMaterial.proceduralShading.x = 0.8f;
+		// Same c=0.5 half-cycle convention as bark's palette, so the seam (dark) and facet
+		// interior (light) read as distinct greys instead of wrapping to the same shade.
+		rockMaterial.palette[0] = glm::vec4(0.45f, 0.43f, 0.40f, 0.0f);
+		rockMaterial.palette[1] = glm::vec4(0.12f, 0.12f, 0.12f, 0.0f);
+		rockMaterial.palette[2] = glm::vec4(0.5f, 0.5f, 0.5f, 0.0f);
+		rockMaterial.palette[3] = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
 		std::uint32_t rockMaterialIndex = materialManager.RegisterMaterial(rockMaterial);
 
 		MaterialData flowerMaterial;
@@ -307,6 +336,25 @@ namespace brassica {
 		MaterialData leafMaterial;
 		leafMaterial.baseColorFactor = glm::vec4(0.25f, 0.55f, 0.16f, 1.0f);
 		leafMaterial.colorTintOffset.y = 0.75f;
+		// Opts this material into gltf.frag's procedural leaf-canopy noise (see MaterialRole).
+		// scale/sharpness match the noise's own former hardcoded constants (LEAF_SCALE=7.5,
+		// smoothstep width 0.14) and normal blend stays fully procedural (1.0) -- a straight
+		// data-driven swap of gltf.frag's old unconditional-for-every-fragment behavior, not a
+		// visual change. warp stays 0 (no domain warp applied at this scale yet).
+		leafMaterial.materialRole = static_cast<std::uint32_t>(MaterialRole::ProceduralLeaf);
+		leafMaterial.noiseScale = 7.5f;
+		leafMaterial.noiseSharpness = 0.14f;
+		leafMaterial.proceduralShading.x = 1.0f;
+		// Green cosine palette (a + b*cos(2*PI*(c*t+d)), see evaluateCosinePalette) driving
+		// per-leaf hue variance in gltf.frag instead of baseColorFactor's flat tint above, which
+		// the ProceduralLeaf role now ignores in favor of this. t=0 reads as a fresh green,
+		// t=0.5 as a deep green close to the old deepGreen/freshGreen split gltf.frag's
+		// commented-out shadeLeaf() sketch used, with a small per-channel phase offset for a
+		// little natural hue drift across the cycle instead of a flat brightness-only ramp.
+		leafMaterial.palette[0] = glm::vec4(0.16f, 0.32f, 0.10f, 0.0f);
+		leafMaterial.palette[1] = glm::vec4(0.09f, 0.14f, 0.06f, 0.0f);
+		leafMaterial.palette[2] = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+		leafMaterial.palette[3] = glm::vec4(0.0f, 0.05f, 0.10f, 0.0f);
 		std::uint32_t leafMaterialIndex = materialManager.RegisterMaterial(leafMaterial);
 
 		// Darker, bluer than leafMaterial -- real conifer needles read noticeably less bright
