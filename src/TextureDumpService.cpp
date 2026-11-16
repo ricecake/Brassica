@@ -21,27 +21,37 @@ namespace brassica {
 
 	namespace {
 
-		// The three float/half-float formats every currently-registered world-state texture
-		// actually uses (confirmed against resources/ResourceTypes.hpp's WeatherBiomeImage2D/
-		// TerrainLODImage2D/FixedImage2D CRTP bases) -- not a general arbitrary-vk::Format
-		// decoder. Add a case here if a future dumpable texture needs one; Dump() fails loudly
-		// (logged, not silently wrong output) for anything not listed.
+		// The float/half-float formats every currently-registered world-state texture actually
+		// uses (confirmed against resources/ResourceTypes.hpp's WeatherBiomeImage2D/
+		// TerrainLODImage2D/FixedImage2D CRTP bases), plus ShadingRateMap's own raw-byte eR8Uint
+		// -- not a general arbitrary-vk::Format decoder. Add a case here if a future dumpable
+		// texture needs one; Dump() fails loudly (logged, not silently wrong output) for anything
+		// not listed.
 		struct FormatInfo {
 			std::uint32_t channels = 0;
 			std::uint32_t bytesPerComponent = 0;
 			bool          isHalfFloat = false;
+			bool          isUint8 = false; // a raw byte value, not an IEEE-754 bit pattern
 		};
 
 		bool LookupFormat(vk::Format format, FormatInfo& out) {
 			switch (format) {
 			case vk::Format::eR32G32B32A32Sfloat:
-				out = {4, 4, false};
+				out = {4, 4, false, false};
 				return true;
 			case vk::Format::eR32G32Sfloat:
-				out = {2, 4, false};
+				out = {2, 4, false, false};
 				return true;
 			case vk::Format::eR16G16B16A16Sfloat:
-				out = {4, 2, true};
+				out = {4, 2, true, false};
+				return true;
+			case vk::Format::eR8Uint:
+				// ShadingRateMap's own format (AttachmentRoleFor's "Image2D/eR8Uint by
+				// convention" comment, ResourceState.hpp) -- a raw VK_KHR_fragment_shading_rate-
+				// encoded rate byte (shading_rate.comp's RATE_1X1/2X2/4X4 = 0/5/10), not a
+				// normalized color, but the same per-channel min/max-then-remap below still gives
+				// a readable grayscale image: darkest tile = finest rate, brightest = coarsest.
+				out = {1, 1, false, true};
 				return true;
 			default:
 				return false;
@@ -49,6 +59,9 @@ namespace brassica {
 		}
 
 		float ReadComponent(const std::uint8_t* pixelBase, std::uint32_t component, const FormatInfo& fmt) {
+			if (fmt.isUint8) {
+				return static_cast<float>(pixelBase[component]);
+			}
 			if (fmt.isHalfFloat) {
 				std::uint16_t half;
 				std::memcpy(&half, pixelBase + component * 2, sizeof(half));

@@ -565,6 +565,7 @@ namespace brassica {
 		textureDumpService.RegisterDumpable<TerrainBiomeTexture>("Terrain Biome Index (LOD 0)");
 		textureDumpService.RegisterDumpable<TerrainShadowMap>("Terrain Shadow Map");
 		textureDumpService.RegisterDumpable<CloudShadowMap>("Cloud Shadow Map");
+		textureDumpService.RegisterDumpable<ShadingRateMap>("Shading Rate Map");
 		serviceLocator.Provide<TextureDumpService>(
 			std::shared_ptr<TextureDumpService>(&textureDumpService, [](TextureDumpService*) {})
 		);
