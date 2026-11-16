@@ -13,6 +13,7 @@
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
+#include "passes/scene/resources.hpp"
 #include "resources.hpp"
 #include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
@@ -35,19 +36,25 @@ namespace brassica {
 		alignas(16) glm::vec4 camUp{0.0f, 1.0f, 0.0f, 1.777f};     // xyz = camUp, w = aspect
 		alignas(16) glm::vec4 sunDir{0.0f, 1.0f, 0.0f, 1.0f};      // xyz = sunDir, w = sunIntensity
 		alignas(16) glm::vec4 sunColor{3.0f, 2.94f, 2.76f, 0.6f};  // rgb = sunColor, w = phase anisotropy g
-		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu}; // x = scat0|1, y = scat2|ext0, z = ext1|2, w = noise|skyView
+		// x = scat0|1, y = scat2|ext0, z = ext1|2, w = numTerrainLevels|skyView (low 16 bits used
+		// to be a dead 0xFFFF placeholder -- now carries terrainGridParams.x for
+		// makeTerrainOcclusionContext's early-occlusion trace, S3).
+		alignas(16) glm::uvec4 indices0{0xFFFFFFFFu};
 		// x = clipmap|minMax, y = cloudShadow|weatherBiome, z = shadowMap|gridTextureDim, w = unused
 		// (previously held a bit-cast float mieHumidityBoost; that and fogParams's
 		// density/falloff/base now live on VolumetricLightingManager/AtmosphereUBO instead).
 		alignas(16) glm::uvec4 indices1{0xFFFFFFFFu};
+		// Bindless sampled index for HiZTexture (S3's early-occlusion skip) -- a plain unpacked
+		// slot since indices0/1 are already fully packed; y/z/w reserved for now.
+		alignas(16) glm::uvec4 indices2{0xFFFFFFFFu};
 	};
 
 	// fogParams (density/falloff/base) dropped entirely -- VolumetricLightingManager's settings
 	// now live on the shared AtmosphereUBO (u_fogDensity etc., shaders/atmosphere/common.glsl),
 	// not here. gridTextureDim moved into indices1.z's previously-unused high 16 bits.
 	static_assert(
-		sizeof(VolumetricFroxelGenPushConstants) == 112,
-		"VolumetricFroxelGenPushConstants must be exactly 112 bytes"
+		sizeof(VolumetricFroxelGenPushConstants) == 128,
+		"VolumetricFroxelGenPushConstants must be exactly 128 bytes"
 	);
 
 	// Manages 3 froxel grid cascades for volumetric fog, scattering, and god rays.
@@ -86,6 +93,7 @@ namespace brassica {
 		}
 
 		std::uint32_t gridTextureDim{0};
+		std::uint32_t numTerrainLevels{0};
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			cameraPos = p.cameraPosition;
@@ -97,6 +105,7 @@ namespace brassica {
 			genPush.sunDir = glm::vec4(p.sunDir, 1.0f);
 			genPush.sunColor = glm::vec4(p.sunRadiance, 0.6f); // w = anisotropy g
 			gridTextureDim = p.terrainGridParams.w;
+			numTerrainLevels = p.terrainGridParams.x;
 		}
 
 		// TerrainClipmapTexture/TerrainMinMaxTexture are now both catalog-converted (own
@@ -125,6 +134,11 @@ namespace brassica {
 			r.Read<CpuLightsBuffer>();
 			r.Read<GpuLightsBuffer>();
 			r.Read<TerrainShadowMap>();
+			// S3: this frame's HiZ, not ReadPrevious -- unlike FoliageNode's genuine chicken-and-
+			// egg case (culling happens before this frame's opaque draws exist), nothing this node
+			// produces is consumed until CloudCompositeNode's fog-compositing half, well after HiZDownsampleNode has
+			// already built this frame's real pyramid from this frame's GBufferDepth.
+			r.Read<HiZTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -150,11 +164,13 @@ namespace brassica {
 			std::uint32_t shadowMapIndex = ctx.Index<TerrainShadowMap>();
 			std::uint32_t cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>();
 			std::uint32_t gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
+			std::uint32_t hizIndex = ctx.Index<HiZTexture>();
 
 			genPush.indices0.x = pack16(scat0, scat1);
 			genPush.indices0.y = pack16(scat2, ext0);
 			genPush.indices0.z = pack16(ext1, ext2);
-			genPush.indices0.w = pack16(0xFFFF, skyViewIndex);
+			genPush.indices0.w = pack16(numTerrainLevels, skyViewIndex);
+			genPush.indices2.x = hizIndex;
 
 			genPush.indices1.x = pack16(clipmapIndex, minMaxIndex);
 			genPush.indices1.y = pack16(cloudShadowIndex, weatherBiomeIndex);

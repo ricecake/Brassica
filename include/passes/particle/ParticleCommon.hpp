@@ -19,7 +19,6 @@ namespace brassica {
 	// writer-chain relations in UnderwaterParticleRenderNode.hpp/AboveWaterParticleRenderNode.hpp
 	// need just the type's name -- see ClusterLightAssignmentNode.hpp's identical reasoning.
 	struct WaterNode;
-	struct VolumetricRenderNode;
 	struct CirrusNode;
 	struct CloudCompositeNode;
 

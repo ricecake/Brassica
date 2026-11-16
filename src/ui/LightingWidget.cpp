@@ -43,15 +43,6 @@ namespace brassica::ui {
 				}
 				ImGui::Checkbox("Enable Bloom/Auto-Exposure Compute Pass", &s_tonemapComputePassEnabled);
 
-				// TEMPORARY debug aid -- see TonemapPushConstants.hpp's debugVisualizeStencil
-				// comment. Replaces the final image with a flat magenta(cloud)/cyan(sky)/
-				// black(scene) tint so the depth-stencil cloud classification can be checked in
-				// isolation from exposure math. Remove once confirmed working on real hardware.
-				bool debugVisualizeStencil = s_tonemapPush.debugVisualizeStencil != 0;
-				if (ImGui::Checkbox("DEBUG: Visualize Cloud/Sky/Scene Stencil", &debugVisualizeStencil)) {
-					s_tonemapPush.debugVisualizeStencil = debugVisualizeStencil ? 1 : 0;
-				}
-
 				if (bloomEnabled) {
 					ImGui::SliderFloat("Intensity##Bloom", &s_tonemapPush.intensity, 0.0f, 2.0f);
 					ImGui::SliderFloat("Threshold", &s_bloomDownsamplePush.threshold, 0.0f, 3.0f);

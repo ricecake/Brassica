@@ -15,6 +15,7 @@ namespace brassica {
 		std::uint32_t outMip2Index{0};
 		std::uint32_t outMip3Index{0};
 		std::uint32_t outMip4Index{0};
+		// Main LTM pyramid slot (isMain layers, and any generic depth-ranged custom layer).
 		std::uint32_t outExpMip0Index{0};
 		std::uint32_t outExpMip1Index{0};
 		std::uint32_t outExpMip2Index{0};
@@ -40,11 +41,39 @@ namespace brassica {
 		// stencil signal turned out to produce a visible seam at translucent cloud edges, since it
 		// snapped the whole pixel to 100% Cloud-layer treatment the instant any haze was detected.
 		std::uint32_t cloudTransmittanceIndex{0};
+		// Sky/Cloud LTM pyramid slots, appended last (same reasoning as cloudTransmittanceIndex's
+		// own comment above). Separate from the Main slot above so a long horizon's/cloud edge's
+		// box-filter neighborhood can't pull Main's texels toward Sky's or Cloud's own exposure
+		// ratio (the "more sky in frame brightens the ground" bug) -- blended only at
+		// tonemap.frag's final per-pixel step, same as every other per-layer value already is.
+		// The Cloud slot is also what actually lets a Cloud layer's own ltmWeightContrast/
+		// ltmBoostLocalContrast tuning do anything (ltm_fuse.comp used to hardcode layers[0]'s
+		// values for every pixel regardless of which layer dominated there).
+		std::uint32_t outExpMip0SkyIndex{0};
+		std::uint32_t outExpMip1SkyIndex{0};
+		std::uint32_t outExpMip2SkyIndex{0};
+		std::uint32_t outExpMip3SkyIndex{0};
+		std::uint32_t outExpMip4SkyIndex{0};
+		std::uint32_t outWgtMip0SkyIndex{0};
+		std::uint32_t outWgtMip1SkyIndex{0};
+		std::uint32_t outWgtMip2SkyIndex{0};
+		std::uint32_t outWgtMip3SkyIndex{0};
+		std::uint32_t outWgtMip4SkyIndex{0};
+		std::uint32_t outExpMip0CloudIndex{0};
+		std::uint32_t outExpMip1CloudIndex{0};
+		std::uint32_t outExpMip2CloudIndex{0};
+		std::uint32_t outExpMip3CloudIndex{0};
+		std::uint32_t outExpMip4CloudIndex{0};
+		std::uint32_t outWgtMip0CloudIndex{0};
+		std::uint32_t outWgtMip1CloudIndex{0};
+		std::uint32_t outWgtMip2CloudIndex{0};
+		std::uint32_t outWgtMip3CloudIndex{0};
+		std::uint32_t outWgtMip4CloudIndex{0};
 	};
 
 	static_assert(
-		sizeof(DownsamplePushConstants) == 104,
-		"DownsamplePushConstants size must be 104 bytes -- must match bloom_downsample.comp's push_constant block "
+		sizeof(DownsamplePushConstants) == 184,
+		"DownsamplePushConstants size must be 184 bytes -- must match bloom_downsample.comp's push_constant block "
 		"exactly"
 	);
 

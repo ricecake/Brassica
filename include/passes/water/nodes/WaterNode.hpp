@@ -56,7 +56,7 @@ namespace brassica {
 	// pipeline-creation call. Just a resource contract, a phase, a pipeline-state literal, and
 	// two shaders.
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
-		// S4: no kPhase -- After<VolumetricRenderNode>()/Before<CirrusNode>() (below) place it in
+		// S4: no kPhase -- After<DeferredNode>()/Before<CirrusNode>() (below) place it in
 		// the HdrColor writer chain as real edges instead. (The old SubPhase::WaterRender's own
 		// history -- fixing a prior collision with ParticleSystemNode's Phase::Late -- is moot now
 		// that ordering doesn't come from a phase number at all.)
@@ -124,9 +124,8 @@ namespace brassica {
 		// Read<>, not Modify<> -- despite depthTest=true, this node never writes depth, so it's
 		// not a writer-pairwise participant on any GBuffer key at all.
 		//
-		// After<VolumetricRenderNode>()/Before<CirrusNode>() (S4) close the two gaps in the
-		// HdrColor writer chain that previously relied on phase-int ordering alone -- see
-		// VolumetricRenderNode.hpp's identical comment.
+		// After<DeferredNode>()/Before<CirrusNode>() (S4) close the two gaps in the HdrColor
+		// writer chain that previously relied on phase-int ordering alone.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<GBufferPosition>();

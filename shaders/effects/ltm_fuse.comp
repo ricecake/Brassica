@@ -10,6 +10,12 @@ layout(push_constant) uniform LtmFusePushConstants {
 	uint outFusedIndex;
 	int  startMip; // e.g. numMips - 1
 	int  endMip;   // e.g. 0 (full resolution of the low-res target)
+	// Which ExposureLayer (AutoExposureBuffer, autoexposure.glsl) this fuse pass's own exp/wgt
+	// textures belong to -- this pass now runs once per LTM pyramid slot (Main/Sky/Cloud), each
+	// with its own textures and its own dominant layer's ltmWeightContrast/ltmBoostLocalContrast,
+	// instead of every slot getting layers[0]'s (Main's) values regardless of which layer's
+	// pyramid is actually being fused.
+	int  layerIndex;
 } push;
 
 void main() {
@@ -36,12 +42,14 @@ void main() {
 
 		vec3 w = textureLod(sampler2D(uTextures2D[nonuniformEXT(push.wgtTextureIndex)], uSamplers[BRASSICA_SAMPLER_LINEAR_CLAMP]), uv, float(i - 1)).rgb;
 
-		// Contrast weight (Laplacian magnitude)
-		vec3 c = pow(max(abs(laplacian), vec3(0.0001)), vec3(layers[0].data.ltmWeightContrast));
+		// Contrast weight (Laplacian magnitude) -- this slot's own dominant layer's tuning, not
+		// always Main's (ltm_fuse.comp's old layers[0] hardcode, which meant a Sky or Cloud
+		// layer's own contrast sliders never had any effect once their LTM pyramid existed).
+		vec3 c = pow(max(abs(laplacian), vec3(0.0001)), vec3(layers[push.layerIndex].data.ltmWeightContrast));
 		w *= c;
 
-		if (layers[0].data.ltmBoostLocalContrast > 0.0) {
-			w *= (abs(laplacian) * layers[0].data.ltmBoostLocalContrast + 1.0);
+		if (layers[push.layerIndex].data.ltmBoostLocalContrast > 0.0) {
+			w *= (abs(laplacian) * layers[push.layerIndex].data.ltmBoostLocalContrast + 1.0);
 		}
 
 		float wSum = w.x + w.y + w.z;

@@ -33,11 +33,37 @@ layout(push_constant) uniform DownsamplePushConstants {
 	// Appended last -- see BloomPushConstants.hpp's comment on why this field specifically has to
 	// go here and nowhere else in this struct.
 	uint  cloudTransmittanceIndex;
+	// Sky/Cloud LTM pyramid slots -- see BloomPushConstants.hpp's matching comment. Main's slot
+	// keeps the field names above; these are the two other hard-classification kinds.
+	uint  outExpMip0SkyIndex;
+	uint  outExpMip1SkyIndex;
+	uint  outExpMip2SkyIndex;
+	uint  outExpMip3SkyIndex;
+	uint  outExpMip4SkyIndex;
+	uint  outWgtMip0SkyIndex;
+	uint  outWgtMip1SkyIndex;
+	uint  outWgtMip2SkyIndex;
+	uint  outWgtMip3SkyIndex;
+	uint  outWgtMip4SkyIndex;
+	uint  outExpMip0CloudIndex;
+	uint  outExpMip1CloudIndex;
+	uint  outExpMip2CloudIndex;
+	uint  outExpMip3CloudIndex;
+	uint  outExpMip4CloudIndex;
+	uint  outWgtMip0CloudIndex;
+	uint  outWgtMip1CloudIndex;
+	uint  outWgtMip2CloudIndex;
+	uint  outWgtMip3CloudIndex;
+	uint  outWgtMip4CloudIndex;
 } push;
 
 shared vec3 s_mip[16][16];
 shared vec3 s_ltmExp[16][16];
 shared vec3 s_ltmWgt[16][16];
+shared vec3 s_ltmExpSky[16][16];
+shared vec3 s_ltmWgtSky[16][16];
+shared vec3 s_ltmExpCloud[16][16];
+shared vec3 s_ltmWgtCloud[16][16];
 
 // Constants for histogram
 const float MIN_LOG_LUMA = -10.0;
@@ -186,8 +212,14 @@ void main() {
 	ivec2 numGroups = ivec2(gl_NumWorkGroups.xy);
 
 	vec3 bloomColor = vec3(0.0);
-	vec3 ltmExposures = vec3(0.0);
-	vec3 ltmWeights = vec3(0.0);
+	// Separate per-slot LTM accumulators (Main/Sky/Cloud) -- see autoexposure/tonemap layer
+	// comment below for why these can no longer share one pyramid.
+	vec3 ltmExposuresMain = vec3(0.0);
+	vec3 ltmWeightsMain = vec3(0.0);
+	vec3 ltmExposuresSky = vec3(0.0);
+	vec3 ltmWeightsSky = vec3(0.0);
+	vec3 ltmExposuresCloud = vec3(0.0);
+	vec3 ltmWeightsCloud = vec3(0.0);
 
 	if (id.x < mip0Size.x && id.y < mip0Size.y) {
 		vec2 uv = (vec2(id) + 0.5) / vec2(mip0Size);
@@ -229,7 +261,9 @@ void main() {
 		float exposure = 0.0;
 		float dynMaxLuma = 0.0;
 		bool  anyLayerWeighted = false;
-		bool  anyLtmEnabled = false;
+		bool  anyMainLtmEnabled = false;
+		bool  anySkyLtmEnabled = false;
+		bool  anyCloudLtmEnabled = false;
 
 		float remainingWeight = 1.0;
 
@@ -292,9 +326,23 @@ void main() {
 				float layerWeightSum = layerWeights.x + layerWeights.y + layerWeights.z;
 				layerWeights /= max(layerWeightSum, 0.00001);
 
-				ltmExposures += layerExposures * effectiveWeight;
-				ltmWeights += layerWeights * effectiveWeight;
-				anyLtmEnabled = true;
+				// Route into this layer's own pyramid slot -- isMain/isCloud/isSky are mutually
+				// exclusive hard overrides (exposureLayerWeight's own priority order), any other
+				// generic depth-ranged layer falls back to Main's slot, same as the shared-
+				// pyramid behavior this replaces.
+				if (layers[li].isCloud != 0) {
+					ltmExposuresCloud += layerExposures * effectiveWeight;
+					ltmWeightsCloud += layerWeights * effectiveWeight;
+					anyCloudLtmEnabled = true;
+				} else if (layers[li].isSky != 0) {
+					ltmExposuresSky += layerExposures * effectiveWeight;
+					ltmWeightsSky += layerWeights * effectiveWeight;
+					anySkyLtmEnabled = true;
+				} else {
+					ltmExposuresMain += layerExposures * effectiveWeight;
+					ltmWeightsMain += layerWeights * effectiveWeight;
+					anyMainLtmEnabled = true;
+				}
 			}
 
 			// Exposure for bloom extraction
@@ -323,24 +371,43 @@ void main() {
 		}
 
 		// Normalize if the sum of weights didn't reach 1.0 (restores the behavior where a
-		// single low-weight layer was forced to act as an opaque baseline)
+		// single low-weight layer was forced to act as an opaque baseline). The same scalar
+		// rescales every per-slot LTM accumulator too -- it's a "the weights summed to less than
+		// 1, scale everything back up as if they'd summed to 1" correction, not a per-slot
+		// quantity, so each slot that accumulated anything gets the same invWeight applied.
 		float totalAccumulatedWeight = 1.0 - remainingWeight;
 		if (totalAccumulatedWeight > 0.0 && totalAccumulatedWeight < 1.0) {
 			float invWeight = 1.0 / totalAccumulatedWeight;
 			exposure *= invWeight;
 			dynMaxLuma *= invWeight;
-			if (anyLtmEnabled) {
-				ltmExposures *= invWeight;
-				ltmWeights *= invWeight;
+			if (anyMainLtmEnabled) {
+				ltmExposuresMain *= invWeight;
+				ltmWeightsMain *= invWeight;
+			}
+			if (anySkyLtmEnabled) {
+				ltmExposuresSky *= invWeight;
+				ltmWeightsSky *= invWeight;
+			}
+			if (anyCloudLtmEnabled) {
+				ltmExposuresCloud *= invWeight;
+				ltmWeightsCloud *= invWeight;
 			}
 		} else if (!anyLayerWeighted) {
 			exposure = 1.0;
 			dynMaxLuma = 10.0;
 		}
 
-		if (anyLtmEnabled) {
-			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0Index)], id, vec4(ltmExposures, 1.0));
-			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0Index)], id, vec4(ltmWeights, 1.0));
+		if (anyMainLtmEnabled) {
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0Index)], id, vec4(ltmExposuresMain, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0Index)], id, vec4(ltmWeightsMain, 1.0));
+		}
+		if (anySkyLtmEnabled) {
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0SkyIndex)], id, vec4(ltmExposuresSky, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0SkyIndex)], id, vec4(ltmWeightsSky, 1.0));
+		}
+		if (anyCloudLtmEnabled) {
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0CloudIndex)], id, vec4(ltmExposuresCloud, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0CloudIndex)], id, vec4(ltmWeightsCloud, 1.0));
 		}
 
 		float knee = max(push.threshold * push.softness, 0.0001);
@@ -395,8 +462,12 @@ void main() {
 	}
 
 	s_mip[localId.x][localId.y] = bloomColor;
-	s_ltmExp[localId.x][localId.y] = ltmExposures;
-	s_ltmWgt[localId.x][localId.y] = ltmWeights;
+	s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+	s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+	s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+	s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+	s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+	s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 
 	barrier();
 
@@ -417,15 +488,22 @@ void main() {
 		}
 	}
 
-	// Whether to propagate the LTM exposure/weight mip chain at all -- a uniform buffer read, same
-	// across every invocation, so computing it once here and reusing it below (instead of
-	// re-deriving the OR of every layer's ltmEnabled 4 times, once per mip level) is a plain
-	// dedup, not a behavior change.
-	bool anyLayerLtmConfigured = false;
+	// Whether to propagate each slot's LTM exposure/weight mip chain at all -- a uniform buffer
+	// read, same across every invocation, so computing it once here and reusing it below
+	// (instead of re-deriving it 4 times, once per mip level) is a plain dedup, not a behavior
+	// change. Per-slot (not one combined bool) so a layer that isn't configured for LTM doesn't
+	// force an unrelated slot's pyramid to still propagate.
+	bool anyMainLtmConfigured = false;
+	bool anySkyLtmConfigured = false;
+	bool anyCloudLtmConfigured = false;
 	for (int li = 0; li < numExposureLayers; ++li) {
-		if (layers[li].data.ltmEnabled != 0) {
-			anyLayerLtmConfigured = true;
-			break;
+		if (layers[li].data.ltmEnabled == 0) continue;
+		if (layers[li].isCloud != 0) {
+			anyCloudLtmConfigured = true;
+		} else if (layers[li].isSky != 0) {
+			anySkyLtmConfigured = true;
+		} else {
+			anyMainLtmConfigured = true;
 		}
 	}
 
@@ -443,21 +521,53 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (anyLayerLtmConfigured) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 1][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 1] +
 						  s_ltmExp[localId.x + 1][localId.y + 1]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 1][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 1] +
 						  s_ltmWgt[localId.x + 1][localId.y + 1]) * 0.25;
 			if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1Index)], outId, vec4(ltmWeightsMain, 1.0));
 			}
-			s_ltmExp[localId.x][localId.y] = ltmExposures;
-			s_ltmWgt[localId.x][localId.y] = ltmWeights;
+			s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+			s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 1][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 1] +
+						  s_ltmExpSky[localId.x + 1][localId.y + 1]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 1][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 1] +
+						  s_ltmWgtSky[localId.x + 1][localId.y + 1]) * 0.25;
+			if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+			s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+			s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 1][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 1] +
+						  s_ltmExpCloud[localId.x + 1][localId.y + 1]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 1][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 1] +
+						  s_ltmWgtCloud[localId.x + 1][localId.y + 1]) * 0.25;
+			if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
+			}
+			s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+			s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 		}
 	}
 
@@ -476,21 +586,53 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (anyLayerLtmConfigured) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 2][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 2] +
 						  s_ltmExp[localId.x + 2][localId.y + 2]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 2][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 2] +
 						  s_ltmWgt[localId.x + 2][localId.y + 2]) * 0.25;
 			if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2Index)], outId, vec4(ltmWeightsMain, 1.0));
 			}
-			s_ltmExp[localId.x][localId.y] = ltmExposures;
-			s_ltmWgt[localId.x][localId.y] = ltmWeights;
+			s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+			s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 2][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 2] +
+						  s_ltmExpSky[localId.x + 2][localId.y + 2]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 2][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 2] +
+						  s_ltmWgtSky[localId.x + 2][localId.y + 2]) * 0.25;
+			if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+			s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+			s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 2][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 2] +
+						  s_ltmExpCloud[localId.x + 2][localId.y + 2]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 2][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 2] +
+						  s_ltmWgtCloud[localId.x + 2][localId.y + 2]) * 0.25;
+			if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
+			}
+			s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+			s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 		}
 	}
 
@@ -509,21 +651,53 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (anyLayerLtmConfigured) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 4][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 4] +
 						  s_ltmExp[localId.x + 4][localId.y + 4]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 4][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 4] +
 						  s_ltmWgt[localId.x + 4][localId.y + 4]) * 0.25;
 			if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3Index)], outId, vec4(ltmWeightsMain, 1.0));
 			}
-			s_ltmExp[localId.x][localId.y] = ltmExposures;
-			s_ltmWgt[localId.x][localId.y] = ltmWeights;
+			s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+			s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 4][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 4] +
+						  s_ltmExpSky[localId.x + 4][localId.y + 4]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 4][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 4] +
+						  s_ltmWgtSky[localId.x + 4][localId.y + 4]) * 0.25;
+			if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+			s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+			s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 4][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 4] +
+						  s_ltmExpCloud[localId.x + 4][localId.y + 4]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 4][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 4] +
+						  s_ltmWgtCloud[localId.x + 4][localId.y + 4]) * 0.25;
+			if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
+			}
+			s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+			s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 		}
 	}
 
@@ -541,18 +715,46 @@ void main() {
 			imageStore(uImagesGenericWrite[nonuniformEXT(push.outMip4Index)], outId, vec4(bloomColor, 1.0));
 		}
 
-		if (anyLayerLtmConfigured) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 8][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 8] +
 						  s_ltmExp[localId.x + 8][localId.y + 8]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 8][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 8] +
 						  s_ltmWgt[localId.x + 8][localId.y + 8]) * 0.25;
 			if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4Index)], outId, vec4(ltmWeightsMain, 1.0));
+			}
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 8][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 8] +
+						  s_ltmExpSky[localId.x + 8][localId.y + 8]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 8][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 8] +
+						  s_ltmWgtSky[localId.x + 8][localId.y + 8]) * 0.25;
+			if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 8][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 8] +
+						  s_ltmExpCloud[localId.x + 8][localId.y + 8]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 8][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 8] +
+						  s_ltmWgtCloud[localId.x + 8][localId.y + 8]) * 0.25;
+			if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
 			}
 		}
 	}

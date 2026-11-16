@@ -33,6 +33,9 @@ namespace brassica {
 		std::uint32_t outFusedIndex{0};
 		std::int32_t  startMip{4};
 		std::int32_t  endMip{0};
+		// Which ExposureLayer this fuse dispatch's textures belong to -- see shaders/effects/
+		// ltm_fuse.comp's matching comment.
+		std::int32_t  layerIndex{0};
 	};
 
 	// S4: no kPhase -- Read<HdrColor>()/Read<GBufferDepth>() are both backed by sole-creator
@@ -108,6 +111,34 @@ namespace brassica {
 			r.Create<LtmWgtTextureMip3>();
 			r.Create<LtmWgtTextureMip4>();
 			r.Create<LtmFusedTexture>();
+			// Sky/Cloud LTM pyramid slots -- declared unconditionally regardless of whether a
+			// Sky/Cloud exposure layer currently exists (same rule every Active()-gated-only node
+			// in this file already follows: resource declarations can't vary with runtime layer
+			// config, only whole-node enablement can, or the union graph would change frame to
+			// frame). An unconfigured slot just gets zero-filled input and a harmless zero fused
+			// output that nothing downstream reads.
+			r.Create<LtmExpTextureMip0Sky>();
+			r.Create<LtmExpTextureMip1Sky>();
+			r.Create<LtmExpTextureMip2Sky>();
+			r.Create<LtmExpTextureMip3Sky>();
+			r.Create<LtmExpTextureMip4Sky>();
+			r.Create<LtmWgtTextureMip0Sky>();
+			r.Create<LtmWgtTextureMip1Sky>();
+			r.Create<LtmWgtTextureMip2Sky>();
+			r.Create<LtmWgtTextureMip3Sky>();
+			r.Create<LtmWgtTextureMip4Sky>();
+			r.Create<LtmFusedTextureSky>();
+			r.Create<LtmExpTextureMip0Cloud>();
+			r.Create<LtmExpTextureMip1Cloud>();
+			r.Create<LtmExpTextureMip2Cloud>();
+			r.Create<LtmExpTextureMip3Cloud>();
+			r.Create<LtmExpTextureMip4Cloud>();
+			r.Create<LtmWgtTextureMip0Cloud>();
+			r.Create<LtmWgtTextureMip1Cloud>();
+			r.Create<LtmWgtTextureMip2Cloud>();
+			r.Create<LtmWgtTextureMip3Cloud>();
+			r.Create<LtmWgtTextureMip4Cloud>();
+			r.Create<LtmFusedTextureCloud>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -145,6 +176,28 @@ namespace brassica {
 			downPush.outWgtMip2Index = ctx.StorageIndex<LtmWgtTextureMip2>();
 			downPush.outWgtMip3Index = ctx.StorageIndex<LtmWgtTextureMip3>();
 			downPush.outWgtMip4Index = ctx.StorageIndex<LtmWgtTextureMip4>();
+
+			downPush.outExpMip0SkyIndex = ctx.StorageIndex<LtmExpTextureMip0Sky>();
+			downPush.outExpMip1SkyIndex = ctx.StorageIndex<LtmExpTextureMip1Sky>();
+			downPush.outExpMip2SkyIndex = ctx.StorageIndex<LtmExpTextureMip2Sky>();
+			downPush.outExpMip3SkyIndex = ctx.StorageIndex<LtmExpTextureMip3Sky>();
+			downPush.outExpMip4SkyIndex = ctx.StorageIndex<LtmExpTextureMip4Sky>();
+			downPush.outWgtMip0SkyIndex = ctx.StorageIndex<LtmWgtTextureMip0Sky>();
+			downPush.outWgtMip1SkyIndex = ctx.StorageIndex<LtmWgtTextureMip1Sky>();
+			downPush.outWgtMip2SkyIndex = ctx.StorageIndex<LtmWgtTextureMip2Sky>();
+			downPush.outWgtMip3SkyIndex = ctx.StorageIndex<LtmWgtTextureMip3Sky>();
+			downPush.outWgtMip4SkyIndex = ctx.StorageIndex<LtmWgtTextureMip4Sky>();
+
+			downPush.outExpMip0CloudIndex = ctx.StorageIndex<LtmExpTextureMip0Cloud>();
+			downPush.outExpMip1CloudIndex = ctx.StorageIndex<LtmExpTextureMip1Cloud>();
+			downPush.outExpMip2CloudIndex = ctx.StorageIndex<LtmExpTextureMip2Cloud>();
+			downPush.outExpMip3CloudIndex = ctx.StorageIndex<LtmExpTextureMip3Cloud>();
+			downPush.outExpMip4CloudIndex = ctx.StorageIndex<LtmExpTextureMip4Cloud>();
+			downPush.outWgtMip0CloudIndex = ctx.StorageIndex<LtmWgtTextureMip0Cloud>();
+			downPush.outWgtMip1CloudIndex = ctx.StorageIndex<LtmWgtTextureMip1Cloud>();
+			downPush.outWgtMip2CloudIndex = ctx.StorageIndex<LtmWgtTextureMip2Cloud>();
+			downPush.outWgtMip3CloudIndex = ctx.StorageIndex<LtmWgtTextureMip3Cloud>();
+			downPush.outWgtMip4CloudIndex = ctx.StorageIndex<LtmWgtTextureMip4Cloud>();
 
 			render::ResolvedPipeline downResolved =
 				render::BindCompute(ctx, *pipelineLibrary, downsampleShader, downPush);
@@ -218,28 +271,69 @@ namespace brassica {
 				vkCmd.pipelineBarrier2(upDep);
 			}
 
-			// Compute LTM Fuse Pass
+			// Compute LTM Fuse Pass -- once per pyramid slot (Main/Sky/Cloud), each against its
+			// own exp/wgt textures and its own dominant layer's ltmWeightContrast/
+			// ltmBoostLocalContrast (layerIndex). Looked up fresh every frame rather than
+			// assumed fixed at 0/1/2 since layers are addable/removable/reorderable at runtime
+			// via the Lighting widget.
+			auto findLtmLayerIndex = [](auto&& pred) -> std::int32_t {
+				for (std::int32_t i = 0; i < s_exposureData.numLayers; ++i) {
+					const ExposureLayerHost& layer = s_exposureData.layers[static_cast<std::size_t>(i)];
+					if (pred(layer) && layer.data.ltmEnabled != 0) {
+						return i;
+					}
+				}
+				// No matching/LTM-enabled layer for this slot -- safe default index (0, always
+				// valid); this slot's fused output won't be read downstream either way, since
+				// tonemap.frag's own per-layer weight/ltmEnabled check already gates that.
+				return 0;
+			};
+			std::int32_t mainLtmLayerIdx =
+				findLtmLayerIndex([](const ExposureLayerHost& l) { return l.isSky == 0 && l.isCloud == 0; });
+			std::int32_t skyLtmLayerIdx = findLtmLayerIndex([](const ExposureLayerHost& l) { return l.isSky != 0; });
+			std::int32_t cloudLtmLayerIdx =
+				findLtmLayerIndex([](const ExposureLayerHost& l) { return l.isCloud != 0; });
+
+			std::uint32_t groupsX = (ctx.width / 2 + 15) / 16;
+			std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
+			vk::MemoryBarrier2 fuseBarrier(
+				vk::PipelineStageFlagBits2::eComputeShader,
+				vk::AccessFlagBits2::eShaderStorageWrite,
+				vk::PipelineStageFlagBits2::eFragmentShader,
+				vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead
+			);
+			vk::DependencyInfo fuseDep({}, 1, &fuseBarrier);
+
 			fusePush.expTextureIndex = ctx.Index<LtmExpTextureMip0>();
 			fusePush.wgtTextureIndex = ctx.Index<LtmWgtTextureMip0>();
 			fusePush.outFusedIndex = ctx.StorageIndex<LtmFusedTexture>();
 			fusePush.startMip = 4;
 			fusePush.endMip = 0;
-
-			render::ResolvedPipeline fuseResolved = render::BindCompute(ctx, *pipelineLibrary, ltmFuseShader, fusePush);
-
-			if (fuseResolved.pipeline) {
-				std::uint32_t groupsX = (ctx.width / 2 + 15) / 16;
-				std::uint32_t groupsY = (ctx.height / 2 + 15) / 16;
+			fusePush.layerIndex = mainLtmLayerIdx;
+			render::ResolvedPipeline fuseResolvedMain = render::BindCompute(ctx, *pipelineLibrary, ltmFuseShader, fusePush);
+			if (fuseResolvedMain.pipeline) {
 				vkCmd.dispatch(groupsX, groupsY, 1);
+				vkCmd.pipelineBarrier2(fuseDep);
+			}
 
-				vk::MemoryBarrier2 barrier(
-					vk::PipelineStageFlagBits2::eComputeShader,
-					vk::AccessFlagBits2::eShaderStorageWrite,
-					vk::PipelineStageFlagBits2::eFragmentShader,
-					vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead
-				);
-				vk::DependencyInfo dep({}, 1, &barrier);
-				vkCmd.pipelineBarrier2(dep);
+			fusePush.expTextureIndex = ctx.Index<LtmExpTextureMip0Sky>();
+			fusePush.wgtTextureIndex = ctx.Index<LtmWgtTextureMip0Sky>();
+			fusePush.outFusedIndex = ctx.StorageIndex<LtmFusedTextureSky>();
+			fusePush.layerIndex = skyLtmLayerIdx;
+			render::ResolvedPipeline fuseResolvedSky = render::BindCompute(ctx, *pipelineLibrary, ltmFuseShader, fusePush);
+			if (fuseResolvedSky.pipeline) {
+				vkCmd.dispatch(groupsX, groupsY, 1);
+				vkCmd.pipelineBarrier2(fuseDep);
+			}
+
+			fusePush.expTextureIndex = ctx.Index<LtmExpTextureMip0Cloud>();
+			fusePush.wgtTextureIndex = ctx.Index<LtmWgtTextureMip0Cloud>();
+			fusePush.outFusedIndex = ctx.StorageIndex<LtmFusedTextureCloud>();
+			fusePush.layerIndex = cloudLtmLayerIdx;
+			render::ResolvedPipeline fuseResolvedCloud = render::BindCompute(ctx, *pipelineLibrary, ltmFuseShader, fusePush);
+			if (fuseResolvedCloud.pipeline) {
+				vkCmd.dispatch(groupsX, groupsY, 1);
+				vkCmd.pipelineBarrier2(fuseDep);
 			}
 		}
 	};
@@ -300,6 +394,10 @@ namespace brassica {
 			r.Read<BloomTextureMip0>();
 			r.Read<LtmFusedTexture>();
 			r.Read<LtmExpTextureMip0>();
+			r.Read<LtmFusedTextureSky>();
+			r.Read<LtmExpTextureMip0Sky>();
+			r.Read<LtmFusedTextureCloud>();
+			r.Read<LtmExpTextureMip0Cloud>();
 			r.Modify<Swapchain>();
 		}
 
@@ -312,8 +410,11 @@ namespace brassica {
 			push.bloomBlurIndex = ctx.Index<BloomTextureMip0>();
 			push.ltmFusedIndex = ctx.Index<LtmFusedTexture>();
 			push.ltmExpMipIndex = ctx.Index<LtmExpTextureMip0>();
+			push.ltmFusedSkyIndex = ctx.Index<LtmFusedTextureSky>();
+			push.ltmExpMipSkyIndex = ctx.Index<LtmExpTextureMip0Sky>();
+			push.ltmFusedCloudIndex = ctx.Index<LtmFusedTextureCloud>();
+			push.ltmExpMipCloudIndex = ctx.Index<LtmExpTextureMip0Cloud>();
 			push.depthTextureIndex = ctx.Index<GBufferDepth>();
-			push.stencilIndex = ctx.StencilIndex<GBufferDepth>();
 			push.cloudTransmittanceIndex = ctx.Index<CloudAccumulatedTransmittance>();
 			push.ltmRes = glm::vec2(ctx.width / 2, ctx.height / 2);
 			push.numCdlEntries = s_cdlGradingLayers.numEntries;

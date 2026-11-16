@@ -58,13 +58,14 @@ layout(push_constant) uniform TonemapPushConstants {
 	int  numCdlEntries;
 
 	// Same reasoning again -- see TonemapPushConstants.hpp's comment.
-	uint stencilIndex;
-
-	// TEMPORARY debug aid -- see TonemapPushConstants.hpp's comment.
-	int  debugVisualizeStencil;
-
-	// Same reasoning again -- see TonemapPushConstants.hpp's comment.
 	uint cloudTransmittanceIndex;
+
+	// Sky/Cloud LTM pyramid slots -- see TonemapPushConstants.hpp's matching comment.
+	// ltmFusedIndex/ltmExpMipIndex above are Main's slot.
+	uint ltmFusedSkyIndex;
+	uint ltmExpMipSkyIndex;
+	uint ltmFusedCloudIndex;
+	uint ltmExpMipCloudIndex;
 } params;
 
 // Planckian locus approximation for temperature to RGB
@@ -218,6 +219,54 @@ vec3 ApplyExposureLayerChain(ExposureLayer layer, vec3 ltmCorrectedColor, vec3 b
 	return pow(clamp(result, 0.0, 1.0), vec3(1.0 / gammaVal));
 }
 
+// Guided upsample of one LTM pyramid slot's fused result against this layer's own exposure
+// ratio -- was inline in main() against one shared pyramid; now called once per active layer
+// against that layer's own slot (Main/Sky/Cloud), see main()'s call site comment.
+float computeLtmMultiplier(uint fusedIndex, uint expMipIndex, vec2 ltmRes, vec2 uv, float guidanceLuma) {
+	float momentX = 0.0;
+	float momentY = 0.0;
+	float momentX2 = 0.0;
+	float momentXY = 0.0;
+	float weightSum = 0.0;
+
+	vec2 texelSize = 1.0 / ltmRes;
+
+	for (int dy = -1; dy <= 1; dy++) {
+		for (int dx = -1; dx <= 1; dx++) {
+			vec2 offset = vec2(dx, dy) * texelSize;
+			float x = SAMPLE_LINEAR(expMipIndex, uv + offset).y; // mid-exposure lightness
+			float y = SAMPLE_LINEAR(fusedIndex, uv + offset).r;  // fused lightness
+
+			float w = exp(-0.5 * float(dx*dx + dy*dy) / (0.7 * 0.7));
+			momentX += x * w;
+			momentY += y * w;
+			momentX2 += x * x * w;
+			momentXY += x * y * w;
+			weightSum += w;
+		}
+	}
+
+	momentX /= weightSum;
+	momentY /= weightSum;
+	momentX2 /= weightSum;
+	momentXY /= weightSum;
+
+	float A = (momentXY - momentX * momentY) / (max(momentX2 - momentX * momentX, 0.0) + 0.00001);
+	float B = momentY - A * momentX;
+
+	float localFusedLuma = max(A * guidanceLuma + B, 0.0);
+	float finalMultiplier = localFusedLuma / max(guidanceLuma, 0.0001);
+
+	// Prevent artifacts in very dark areas
+	float lerpToUnityThreshold = 0.007;
+	if (guidanceLuma < lerpToUnityThreshold) {
+		float t = guidanceLuma / lerpToUnityThreshold;
+		finalMultiplier = mix(1.0, finalMultiplier, t * t);
+	}
+
+	return finalMultiplier;
+}
+
 void main() {
 	vec3 sceneColor = SAMPLE_NEAREST(params.hdrColorIndex, inUV).rgb;
 	vec3 bloomColor = vec3(0.0);
@@ -232,24 +281,19 @@ void main() {
 	bool  isSkyPixel = rawDepth >= 1.0;
 	float linearZ = linearizeDepth(rawDepth, uNearPlane, uFarPlane);
 
-	// Binary stencil classification -- kept only for the debug visualization below, not for the
-	// real exposure blend. See bloom_downsample.comp's comment: the Cloud layer's actual weight
-	// (cloudWeight, just below) is now the real local cloud opacity sampled directly from
-	// CloudAccumulatedTransmittance, which blends translucent edges smoothly instead of snapping
-	// the whole pixel to 100% Cloud-layer treatment.
-	bool  isCloudPixel = SAMPLE_STENCIL_NEAREST(params.stencilIndex, inUV) == 2u;
-
 	vec3  cloudTransmittance = SAMPLE_LINEAR(params.cloudTransmittanceIndex, inUV).rgb;
 	float avgCloudTransmittance = (cloudTransmittance.r + cloudTransmittance.g + cloudTransmittance.b) / 3.0;
 	float cloudWeight = clamp(1.0 - avgCloudTransmittance, 0.0, 1.0);
 
-	// 1. Guided Upsampling for LTM. One shared low-res LTM pyramid feeds every layer
-	// (bloom_downsample.comp blends each layer's contribution into it the same sequential way),
-	// so the "guidance" exposure ratio used to compare against that fused result is blended
-	// across layers here too, rather than pinned to a single hardcoded layer.
+	// 1. Guided Upsampling for LTM. Each layer now has its own pyramid slot (Main/Sky/Cloud,
+	// bloom_downsample.comp) instead of one shared one -- a long horizon's/cloud edge's box-
+	// filter neighborhood used to pull a layer's guidance exposure toward whichever other layer
+	// shared the pyramid (the "more sky in frame brightens the ground" bug). Each active layer
+	// computes its own multiplier against its own slot, blended across layers by weight, same
+	// per-pixel idiom every other per-layer value in this shader already uses.
 	vec3 ltmCorrectedColor = sceneColor;
-	if (params.ltmFusedIndex > 0u && params.ltmExpMipIndex > 0u && params.ltmRes.x > 0.0 && params.ltmRes.y > 0.0) {
-		float blendedAutoExp = 1.0;
+	if (params.ltmRes.x > 0.0 && params.ltmRes.y > 0.0) {
+		float blendedMultiplier = 1.0;
 		bool  anyLtmForGuidance = false;
 		for (int i = 0; i < numExposureLayers; ++i) {
 			ExposureLayer layer = layers[i];
@@ -257,59 +301,35 @@ void main() {
 			if (weight <= 0.0 || layer.data.ltmEnabled == 0) {
 				continue;
 			}
+
+			uint fusedIdx;
+			uint expMipIdx;
+			if (layer.isCloud != 0) {
+				fusedIdx = params.ltmFusedCloudIndex;
+				expMipIdx = params.ltmExpMipCloudIndex;
+			} else if (layer.isSky != 0) {
+				fusedIdx = params.ltmFusedSkyIndex;
+				expMipIdx = params.ltmExpMipSkyIndex;
+			} else {
+				fusedIdx = params.ltmFusedIndex;
+				expMipIdx = params.ltmExpMipIndex;
+			}
+			if (fusedIdx == 0u || expMipIdx == 0u) {
+				continue;
+			}
+
 			float layerAutoExp = layer.data.targetLuminance / max(layer.data.avgLuma, 0.0001);
-			blendedAutoExp = anyLtmForGuidance ? mix(blendedAutoExp, layerAutoExp, weight) : layerAutoExp;
+			vec3 currentExposure = sceneColor * layerAutoExp;
+			vec3 currentAces = aces(currentExposure);
+			float guidanceLuma = sqrt(max(dot(currentAces, vec3(0.2126, 0.7152, 0.0722)), 0.0));
+
+			float layerMultiplier = computeLtmMultiplier(fusedIdx, expMipIdx, params.ltmRes, inUV, guidanceLuma);
+			blendedMultiplier = anyLtmForGuidance ? mix(blendedMultiplier, layerMultiplier, weight) : layerMultiplier;
 			anyLtmForGuidance = true;
 		}
 
 		if (anyLtmForGuidance) {
-			vec3 currentExposure = sceneColor * blendedAutoExp;
-			vec3 currentAces = aces(currentExposure);
-			float guidanceLuma = sqrt(max(dot(currentAces, vec3(0.2126, 0.7152, 0.0722)), 0.0));
-
-			// Sample 3x3 neighborhood from low-res textures for guided filter
-			float momentX = 0.0;
-			float momentY = 0.0;
-			float momentX2 = 0.0;
-			float momentXY = 0.0;
-			float weightSum = 0.0;
-
-			vec2 texelSize = 1.0 / params.ltmRes;
-
-			for (int dy = -1; dy <= 1; dy++) {
-				for (int dx = -1; dx <= 1; dx++) {
-					vec2 offset = vec2(dx, dy) * texelSize;
-					float x = SAMPLE_LINEAR(params.ltmExpMipIndex, inUV + offset).y; // mid-exposure lightness
-					float y = SAMPLE_LINEAR(params.ltmFusedIndex, inUV + offset).r;  // fused lightness
-
-					float w = exp(-0.5 * float(dx*dx + dy*dy) / (0.7 * 0.7));
-					momentX += x * w;
-					momentY += y * w;
-					momentX2 += x * x * w;
-					momentXY += x * y * w;
-					weightSum += w;
-				}
-			}
-
-			momentX /= weightSum;
-			momentY /= weightSum;
-			momentX2 /= weightSum;
-			momentXY /= weightSum;
-
-			float A = (momentXY - momentX * momentY) / (max(momentX2 - momentX * momentX, 0.0) + 0.00001);
-			float B = momentY - A * momentX;
-
-			float localFusedLuma = max(A * guidanceLuma + B, 0.0);
-			float finalMultiplier = localFusedLuma / max(guidanceLuma, 0.0001);
-
-			// Prevent artifacts in very dark areas
-			float lerpToUnityThreshold = 0.007;
-			if (guidanceLuma < lerpToUnityThreshold) {
-				float t = guidanceLuma / lerpToUnityThreshold;
-				finalMultiplier = mix(1.0, finalMultiplier, t * t);
-			}
-
-			ltmCorrectedColor *= finalMultiplier;
+			ltmCorrectedColor *= blendedMultiplier;
 		}
 	}
 
@@ -334,17 +354,4 @@ void main() {
 	}
 
 	outColor = vec4(clamp(result, 0.0, 1.0), 1.0);
-
-	// TEMPORARY debug aid -- see TonemapPushConstants.hpp's comment. Overrides every exposure/
-	// tonemap/CDL/LTM result above with a flat classification tint, so the stencil write (from
-	// CloudCompositeNode) and read (SAMPLE_STENCIL_NEAREST) can be checked in total isolation.
-	if (params.debugVisualizeStencil != 0) {
-		if (isCloudPixel) {
-			outColor = vec4(1.0, 0.0, 1.0, 1.0); // magenta: stencil read back as 2 (cloud)
-		} else if (isSkyPixel) {
-			outColor = vec4(0.0, 1.0, 1.0, 1.0); // cyan: depth sentinel, no stencil involved
-		} else {
-			outColor = vec4(0.0, 0.0, 0.0, 1.0); // black: scene (stencil 0, or anything else)
-		}
-	}
 }

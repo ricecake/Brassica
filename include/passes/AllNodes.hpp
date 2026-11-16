@@ -57,5 +57,4 @@
 #include "passes/terrain/nodes/GroundDebrisNode.hpp"
 #include "passes/postprocess/nodes/TonemapNode.hpp"
 #include "passes/volumetrics/nodes/VolumetricFroxelGenNode.hpp"
-#include "passes/volumetrics/nodes/VolumetricRenderNode.hpp"
 #include "passes/water/nodes/WaterNode.hpp"

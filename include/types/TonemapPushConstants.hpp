@@ -70,27 +70,26 @@ namespace brassica {
 		// grading, applied uniformly to every pixel regardless of which exposure layer is active.
 		std::int32_t numCdlEntries{1};
 
-		// Same reasoning again -- bindless index into uUTextures2D (bindless.glsl) for
-		// GBufferDepth's stencil aspect, same purpose as BloomPushConstants.hpp's own stencilIndex.
-		std::uint32_t stencilIndex{0};
-
-		// TEMPORARY debug aid for the depth-stencil cloud-classification prototype: when nonzero,
-		// tonemap.frag overrides the final color with a flat magenta (cloud) / cyan (sky) tint
-		// instead of running any exposure/tonemap math, so the classification itself can be
-		// checked visually in isolation from every layer-blend computation downstream of it.
-		// Remove once the classification is confirmed working on real hardware.
-		std::int32_t debugVisualizeStencil{0};
-
 		// Bindless index into CloudAccumulatedTransmittance -- sampled directly (a plain texture,
 		// no stencil involved) so the Cloud exposure layer's weight can be the real local cloud
 		// opacity instead of a hard binary classification. See BloomPushConstants.hpp's identical
 		// field for the full reasoning.
 		std::uint32_t cloudTransmittanceIndex{0};
+
+		// Sky/Cloud LTM pyramid slots, appended last (same reasoning as every other trailing
+		// field's comment above). ltmFusedIndex/ltmExpMipIndex above are now specifically Main's
+		// slot; the guided-upsample block blends across whichever of these three a given pixel's
+		// active layers actually use, same per-layer weighted blend every other value in this
+		// shader already does.
+		std::uint32_t ltmFusedSkyIndex{0};
+		std::uint32_t ltmExpMipSkyIndex{0};
+		std::uint32_t ltmFusedCloudIndex{0};
+		std::uint32_t ltmExpMipCloudIndex{0};
 	};
 
 	static_assert(
-		sizeof(TonemapPushConstants) == 164,
-		"TonemapPushConstants size must be 164 bytes -- must match tonemap.frag's push_constant block exactly"
+		sizeof(TonemapPushConstants) == 172,
+		"TonemapPushConstants size must be 172 bytes -- must match tonemap.frag's push_constant block exactly"
 	);
 
 	inline TonemapPushConstants s_tonemapPush{};

@@ -6,6 +6,8 @@
 #include "lighting.glsl"
 #include "helpers/lighting.glsl"
 #include "helpers/cloud_shadow.glsl"
+#include "helpers/cloud_density.glsl"
+#include "helpers/tonemapping.glsl"
 #include "terrain.glsl"
 #include "atmosphere/common.glsl"
 
@@ -17,13 +19,16 @@ layout(push_constant) uniform VolumetricFroxelGenPushConstants {
 	vec4  camUp;       // xyz = camera up vector, w = aspect
 	vec4  sunDir;      // xyz = sun direction, w = sun intensity
 	vec4  sunColor;    // rgb = sun color/radiance, w = phase anisotropy g
-	uvec4 indices0;    // x = scat0|scat1, y = scat2|ext0, z = ext1|ext2, w = noise|skyView
+	uvec4 indices0;    // x = scat0|scat1, y = scat2|ext0, z = ext1|ext2, w = numTerrainLevels|skyView
 	// x = clipmap|minMax, y = cloudShadow|weatherBiome, z = shadowMap|gridTextureDim,
 	// w = cpuLightsIndex|gpuLightsIndex (previously fully unused -- had held a bit-cast float
 	// mieHumidityBoost; that and fogParams's density/falloff/base now come from
 	// u_mieHumidityBoost/u_fogDensity/u_fogHeightFalloff/u_fogBaseHeight on the shared
 	// AtmosphereUBO, atmosphere/common.glsl).
 	uvec4 indices1;
+	// x = hizIndex (bindless sampled index for HiZTexture, S3's early-occlusion skip); y/z/w
+	// reserved, unpacked here instead of indices0/1 since those are already fully packed.
+	uvec4 indices2;
 } push;
 
 uint unpackLow16(uint val) {
@@ -57,6 +62,34 @@ float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint shadow
 	return mix(0.15, 1.0, softVal);
 }
 
+// Ray direction through one CORNER of a froxel column's frustum slice (cornerX/cornerY in
+// [0..128]/[0..96], the edges of the 128x96 column grid -- not a column's own center the way
+// viewRayDir below is). Same projection formula as viewRayDir, just evaluated without the
+// center's +0.5 offset.
+vec3 froxelCornerRayDir(uint cornerX, uint cornerY, vec3 camRight, vec3 camUp, float tanHalfFov, float aspect, vec3 camForward) {
+	float ndcX = (float(cornerX) / 128.0) * 2.0 - 1.0;
+	float ndcY = 1.0 - (float(cornerY) / 96.0) * 2.0;
+	return normalize(ndcX * aspect * tanHalfFov * camRight + ndcY * tanHalfFov * camUp + camForward);
+}
+
+// isDirectionOccludedByTerrain's cell/layer DDA steps horizontally (XZ) -- for a near-vertical
+// ray (small dir.xz), that DDA's own per-axis "exit" math degenerates toward "never exits this
+// cell/layer," collapsing the whole trace into one giant step whose gMin ends up ~= the ray's
+// own origin height, compared against the origin's immediate local terrain cell -- a false HIT
+// is then plausible from ordinary nearby terrain roughness alone, even with open sky directly
+// ahead. Confirmed via real-hardware report: isolated "pillars" (single froxel columns) reading
+// fully occluded while looking up near the ground, worse the steeper the look angle. Skipping
+// the trace once a ray is steep enough is always safe (same "prefer under-culling over a false-
+// black artifact" rule the 4-corner conservatism above already follows) -- terrain overhangs
+// directly above the camera aren't a case this fog-occlusion feature needs to get right.
+void traceTerrainOcclusionSafe(TerrainOcclusionContext ctx, vec3 origin, vec3 dir, inout float distance) {
+	const float kMinHorizontalComponent = 0.3; // ~72.5 degrees above/below horizontal
+	if (length(dir.xz) < kMinHorizontalComponent) {
+		return;
+	}
+	isDirectionOccludedByTerrain(ctx, origin, dir, distance);
+}
+
 void main() {
 	uvec2 xy = gl_GlobalInvocationID.xy;
 	if (xy.x >= 128 || xy.y >= 96) return;
@@ -67,7 +100,9 @@ void main() {
 	uint ext0  = unpackHigh16(push.indices0.y);
 	uint ext1  = unpackLow16(push.indices0.z);
 	uint ext2  = unpackHigh16(push.indices0.z);
+	uint numTerrainLevels = unpackLow16(push.indices0.w);
 	uint skyViewIndex    = unpackHigh16(push.indices0.w);
+	uint hizIndex = push.indices2.x;
 	uint clipMapIndex    = unpackLow16(push.indices1.x);
 	uint minMaxIndex       = unpackHigh16(push.indices1.x);
 	uint cloudShadowIndex  = unpackLow16(push.indices1.y);
@@ -94,8 +129,94 @@ void main() {
 		push.camForward.xyz
 	);
 
+	// Loop-invariant across every cascade/z-slice below (128x96x64x3 = ~2.4M voxels engine-wide,
+	// 192 iterations per thread here): each of these depends only on push.*/viewRayDir, both
+	// fixed for the whole thread, so there's no reason to recompute them per voxel. Mirrors the
+	// camRight hoist above, just extended consistently -- these were the stragglers still inside
+	// the loop.
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+	float sunElevation = max(0.0, push.sunDir.y);
+	float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
+	float baseDirectSunScatteringBoost = 1.0 + lowSunFactor * 1.5;
+	float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
+	float cosTheta = dot(viewRayDir, push.sunDir.xyz);
+	uint maxCpuLightsToSample = min(uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].count, 4u);
+	uint maxGpuLightsToSample = min(uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].count, 28u);
+
 	float cascadeRanges[3] = float[3](300.0, 3000.0, 100000.0);
 	const float kExpAlpha = 3.5;
+
+	// Conservative "furthest this column can possibly need to march" distance, computed once per
+	// column (cascade-independent -- it's a property of the ray itself) rather than per-voxel.
+	// Two independent sources, combined by taking the nearer: a real hierarchical ray/terrain
+	// trace (same traceTerrainOcclusion machinery foliage/decor shadows already use -- far more
+	// precise than a flat min-height threshold, and cheap since it runs once per column, not once
+	// per voxel), and a HiZ min-depth query over this column's own screen-space footprint
+	// (catches everything else already in the GBuffer this frame -- foliage, models, water --
+	// that the terrain-only trace can't see). Neither test can see what's beyond the farthest
+	// cascade, so both start from that bound.
+	//
+	// DEBUG TOGGLES (temporary, for isolating the all-black-below-cloud-layer report -- see
+	// their own comments below for current status). Both at 0 reproduces the pre-S3 behavior
+	// (opaqueDist always == farthest cascade, no early-exit).
+#define DEBUG_VOLUMETRIC_TERRAIN_OCCLUSION 1
+	// Confirmed via real-hardware A/B test to be the source of a full-screen-black regression --
+	// suspected cause is HiZTexture (Lifetime::History) read via a plain Read<>()/ctx.Index<>()
+	// in the SAME frame as its producer, which RelationalCompiler.hpp's zero-init-if-no-active-
+	// writer-precedes-this-read check exempts for Persistent/External lifetimes but not History
+	// (see its hasActiveWriterPreceding comment) -- plausible, not yet confirmed with a GPU
+	// capture. Disabled pending that; re-enable to test once fixed.
+#define DEBUG_VOLUMETRIC_HIZ_OCCLUSION 0
+	float opaqueDist = cascadeRanges[2];
+	{
+#if DEBUG_VOLUMETRIC_TERRAIN_OCCLUSION
+		TerrainOcclusionContext terrainOccCtx =
+			makeTerrainOcclusionContext(minMaxIndex, gridTextureDim, numTerrainLevels, 0.0);
+
+		// Conservative: trace all 4 corners of this column's own frustum slice, not just its
+		// center ray (viewRayDir) -- a froxel column is a wide wedge (1/128 x 1/96 of the whole
+		// screen), and a single center-ray hit on a terrain feature at one edge of that wedge
+		// was marking the ENTIRE column opaque even where most of its footprint is actually
+		// open, producing blocky false-occlusion artifacts. Taking the FARTHEST of the 4 corner
+		// hits (a corner that doesn't hit at all leaves its distance at the full cascade range,
+		// via isDirectionOccludedByTerrain's own "leaves hitDistance untouched on a miss"
+		// contract) means the column is only ever marked occluded where its whole footprint
+		// genuinely is -- 4x the trace cost per column, still far cheaper than per-voxel.
+		vec3 corner00 = froxelCornerRayDir(xy.x, xy.y, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+		vec3 corner10 = froxelCornerRayDir(xy.x + 1u, xy.y, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+		vec3 corner01 = froxelCornerRayDir(xy.x, xy.y + 1u, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+		vec3 corner11 = froxelCornerRayDir(xy.x + 1u, xy.y + 1u, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+
+		float terrainDist00 = cascadeRanges[2];
+		float terrainDist10 = cascadeRanges[2];
+		float terrainDist01 = cascadeRanges[2];
+		float terrainDist11 = cascadeRanges[2];
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner00, terrainDist00);
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner10, terrainDist10);
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner01, terrainDist01);
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner11, terrainDist11);
+
+		float terrainDist = max(max(terrainDist00, terrainDist10), max(terrainDist01, terrainDist11));
+		opaqueDist = min(opaqueDist, terrainDist);
+#endif
+
+#if DEBUG_VOLUMETRIC_HIZ_OCCLUSION
+		// This column's own screen-space footprint -- a direct 1/128 x 1/96 slice of the full
+		// UV range, independent of resolution (same raster grid both the froxel dispatch and
+		// every other screen-space pass in this engine share), not something that needs
+		// projecting through camForward/tanHalfFov/aspect the way viewRayDir above does.
+		vec2 colUVMin = vec2(float(xy.x) / 128.0, float(xy.y) / 96.0);
+		vec2 colUVMax = vec2(float(xy.x + 1u) / 128.0, float(xy.y + 1u) / 96.0);
+		float minNdcDepth = sampleMinDepthInRect(colUVMin, colUVMax, hizIndex);
+		if (minNdcDepth < 1.0) {
+			float linearZ = linearizeDepth(minNdcDepth, uNearPlane, uFarPlane);
+			float forwardComponent = dot(viewRayDir, push.camForward.xyz);
+			if (forwardComponent > 1e-4) {
+				opaqueDist = min(opaqueDist, linearZ / forwardComponent);
+			}
+		}
+#endif
+	}
 
 	for (int c = 0; c < 3; ++c) {
 		uint scatIdx = cascadeScatteringIdx[c];
@@ -106,7 +227,11 @@ void main() {
 
 		vec3 accumulatedScattering = vec3(0.0);
 		vec3 accumulatedTransmittance = vec3(1.0);
-		bool hasOccluded = false;
+		// Latches true the first voxel that's either past opaqueDist (real terrain/HiZ-visible
+		// geometry, computed once per column above) or already fully extinct from accumulated
+		// in-scattering density -- both mean nothing farther along this column can be seen.
+		// dist only increases with z, so once true it stays true for the rest of this cascade.
+		bool columnOpaque = false;
 
 		// float jitter = InterleavedGradientNoise(vec2(xy), int(uFrameIndex));
 
@@ -125,8 +250,29 @@ void main() {
 
 			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist;
 
-			// Sample weather map at worldPos XZ
-			float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+			// distNear, not the voxel's center (dist) -- with exponential Z-sizing, a far voxel
+			// can span thousands of metres, and killing it as soon as its CENTER crosses
+			// opaqueDist discards its entire near half, which can still be legitimately visible
+			// well before the real occluder. Comparing the near edge only ever kills a voxel
+			// once its whole span, including the nearest point, is actually past it.
+			if (!columnOpaque && (distNear >= opaqueDist || dot(accumulatedTransmittance, vec3(0.3333)) < 0.05)) {
+				columnOpaque = true;
+				accumulatedTransmittance = vec3(0.0);
+			}
+
+			if (columnOpaque) {
+				// Past a known real surface (terrain trace or HiZ) or already fully extinct --
+				// skip every bit of the expensive weather/density/lighting work below for the
+				// rest of this cascade. Still write every voxel every frame (never leave a texel
+				// unwritten) so there's no uninitialized-read risk downstream; the written value
+				// is just frozen at "nothing more visible from here on."
+				imageStore(uImages3DGenericWrite[nonuniformEXT(scatIdx)], vox, vec4(accumulatedScattering, 0.0));
+				imageStore(uImages3DGenericWrite[nonuniformEXT(extIdx)], vox, vec4(accumulatedTransmittance, 1.0));
+				continue;
+			}
+
+			// Sample weather map at worldPos XZ (worldExtent hoisted above the cascade/z loop --
+			// a pure constant, no reason to recompute it 192x per thread)
 			vec2 weatherUV = fract((worldPos.xz / worldExtent) + 0.5);
 			vec4 weatherSample = vec4(0.0);
 			if (weatherBiomeIndex > 0u && weatherBiomeIndex != 0xFFFFu) {
@@ -138,6 +284,14 @@ void main() {
 
 			// Total precipitation intensity factor (high moisture + cloud coverage)
 			float precipFactor = smoothstep(0.35, 0.8, weatherMoisture) * smoothstep(0.2, 0.6, weatherCoverage);
+
+			// Rain/snow originates from the cloud layer -- structurally contain it there instead
+			// of relying only on the independent camera-altitude fade a few lines down (which
+			// fades by the CAMERA's altitude, not this voxel's, and was the real reason
+			// precipitation tint could read as leaking above the cloud deck when viewed from
+			// above it). Fades out across the cloud band itself rather than a hard cutoff, to
+			// avoid a visible seam at the boundary.
+			precipFactor *= 1.0 - smoothstep(CLOUD_LAYER_BOTTOM, CLOUD_LAYER_TOP, worldPos.y);
 
 			// Determine temperature and snow conditions:
 			// weatherType reflects normalized temperature / instability [0..1]
@@ -163,11 +317,11 @@ void main() {
 			float noiseCuttoff = 1.0 - smoothstep(10000, 40000, dist);
 			float noise = 1.0;
 			if (noiseCuttoff > 0.0) {
-				// noise = noiseCuttoff*dot_noise_fbm((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), 3, 0.25*uTime);
-				noise = noiseCuttoff*dnoise((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), vec3(1,0,0), 0.25*uTime);
+				noise = noiseCuttoff*dot_noise_fbm((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), 3, 0.25*uTime);
+				// noise = noiseCuttoff*dnoise((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), vec3(1,0,0), 0.25*uTime);
 			}
 			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff)  * clamp(0.5+0.5*(noise), 0.125, 1.0);
-			density *= (1.0 - smoothstep(4500, 10000, uCameraPosition.y));
+			// density *= (1.0 - smoothstep(4500, 10000, uCameraPosition.y));
 
 			// Atmospheric Rayleigh and Mie scattering coefficients
 			float heightM = max(0.0, worldPos.y);
@@ -194,11 +348,11 @@ void main() {
 			vec3 totalScatCoeff = fogScatCoeff + rayleighScat + mieScat;
 			vec3 totalExtCoeff = fogExtCoeff + rayleighExt + mieExt;
 
-			// Low sun elevation godray boost and anisotropy
-			float sunElevation = max(0.0, push.sunDir.y);
-			float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
-			float directSunScatteringBoost = 1.0 + lowSunFactor * 1.5;
-			float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
+			// Low sun elevation godray boost and anisotropy -- sunElevation/lowSunFactor/
+			// sunAnisotropyG hoisted above the cascade/z loop (push.sunDir/push.sunColor-only,
+			// invariant per thread); directSunScatteringBoost still needs its own per-voxel copy
+			// since the underwater branch below conditionally overwrites it.
+			float directSunScatteringBoost = baseDirectSunScatteringBoost;
 			float rainG = mix(sunAnisotropyG, 0.88, rainFactor);
 			float effectiveG = mix(rainG, 0.72, snowFactor);
 
@@ -249,10 +403,8 @@ void main() {
 				shadowTerm *= cloudTransmittance;
 			}
 
-			// --- 2. DIRECT SUN SCATTERING ---
-			float cosTheta = dot(viewRayDir, push.sunDir.xyz);
-			float rayleighPhase = (3.0 / (16.0 * PI)) * (1.0 + cosTheta * cosTheta);
-
+			// --- 2. DIRECT SUN SCATTERING --- (cosTheta hoisted above the cascade/z loop --
+			// viewRayDir/sunDir-only, invariant per thread)
 			float miePhase = dualHenyeyGreenstein(cosTheta, effectiveG);
 			float msPhase = dualHenyeyGreenstein(cosTheta, effectiveG * 0.15);
 			float msWeight = clamp(weatherMoisture * 1.5 + rainFactor + snowFactor * 1.8, 0.15, 2.2);
@@ -303,8 +455,9 @@ void main() {
 			// CPU-authored point/spot lights beyond sun/moon, which this loop already skips via
 			// the LIGHT_TYPE_DIRECTIONAL check, are rare): 4 CPU + 28 GPU, same total cost as
 			// before the split.
+			// maxCpuLightsToSample/maxGpuLightsToSample hoisted above the cascade/z loop -- both
+			// are index-invariant buffer-count reads, no reason to re-fetch them 192x per thread.
 			vec3 localLightScattering = vec3(0.0);
-			uint maxCpuLightsToSample = min(uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].count, 4u);
 			for (uint li = 0u; li < maxCpuLightsToSample; ++li) {
 				Light light = uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].lights[li];
 				if (light.intensity <= 0.0) continue;
@@ -328,7 +481,6 @@ void main() {
 				float localPhase = dualHenyeyGreenstein(cosL, effectiveG);
 				localLightScattering += light.color * light.intensity * attenuation * localPhase;
 			}
-			uint maxGpuLightsToSample = min(uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].count, 28u);
 			for (uint li = 0u; li < maxGpuLightsToSample; ++li) {
 				Light light = uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].lights[li];
 				if (light.intensity <= 0.0) continue;
@@ -355,7 +507,18 @@ void main() {
 			// Add the groundBounceScat to the final cell energy
 			vec3 cellScattering = directSun + ambientScat + groundBounceScat + localLightScattering + vec3(emissivity);//*vec3(0,100000,0);
 
-			vec3 sliceTransmittance = exp(-totalExtCoeff * voxelSizeZ);
+			// Smoothly fade this voxel's own contribution over whatever fraction of its span is
+			// still before opaqueDist, instead of letting the hard columnOpaque cutoff above
+			// apply all-or-nothing at voxel granularity -- the boundary voxel straddling the
+			// terrain hit otherwise either contributes its full width or (next iteration) gets
+			// discarded entirely, either way a hard, visibly black edge once exponential Z-
+			// sizing makes that voxel wide. Self-scales with voxel width, so this is always
+			// "fade over this one voxel," not a fixed-distance fade that's invisible near the
+			// camera and huge far away.
+			float visibleFraction = clamp((opaqueDist - distNear) / voxelSizeZ, 0.0, 1.0);
+			float effectiveVoxelSizeZ = voxelSizeZ * visibleFraction;
+
+			vec3 sliceTransmittance = exp(-totalExtCoeff * effectiveVoxelSizeZ);
 			vec3 integratedScattering = cellScattering * (vec3(1.0) - sliceTransmittance) / max(vec3(1e-7), totalExtCoeff);
 
 			accumulatedScattering += integratedScattering * accumulatedTransmittance;

@@ -187,12 +187,18 @@ namespace brassica {
 	// by hand every Init() call; now it's just this layer's own default, editable at runtime like
 	// any other). Both layers stay fully removable/editable via RemoveLayer()/the Lighting
 	// widget -- this is a default, not a hardcoded special case.
+	// Third default layer, isCloud -- same reasoning as isSky above: a cloud pixel gets its own
+	// dedicated exposure/LTM tuning instead of inheriting whatever's behind it (Sky, or Main for
+	// a cloud over dim terrain). targetLuminance left at LayerDataHost's own 0.25 default rather
+	// than copying Sky's 0.5 -- clouds aren't uniformly as bright as open sky, and this is a
+	// default users can retune same as any other layer.
 	inline ExposureDataHost s_exposureData{
 		.layers = {
 			ExposureLayerHost{.isMain = 1},
 			ExposureLayerHost{.data = {.targetLuminance = 0.5f}, .isSky = 1},
+			ExposureLayerHost{.isCloud = 1},
 		},
-		.numLayers = 2,
+		.numLayers = 3,
 	};
 
 	// Copies only the fields QuickSettingsWidget's ImGui sliders expose (see LayerDataHost's

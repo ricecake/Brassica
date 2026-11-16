@@ -6,14 +6,22 @@
 #include "atmosphere/common.glsl"
 #include "helpers/constants.glsl"
 
-// Normalized [0,1] fraction through the cloud band (5000m-20000m), curved for planet horizon
-// drop-off the same way every other curved-world consumer is (terrain.mesh/foliage.mesh/
-// particle.mesh/deferred.frag/terrain.glsl's terrainDropOff).
+// Cloud band bounds (world Y, metres) -- shared so every consumer (cloud raymarch's shell
+// intersection, the volumetric fog march's precipitation containment, the cloud/fog composite's
+// camera-vs-cloud-layer order test) agrees on the same band instead of each hardcoding its own
+// copy of 5000.0/15000.0.
+#define CLOUD_LAYER_BOTTOM 5000.0
+#define CLOUD_LAYER_THICKNESS 15000.0
+#define CLOUD_LAYER_TOP (CLOUD_LAYER_BOTTOM + CLOUD_LAYER_THICKNESS)
+
+// Normalized [0,1] fraction through the cloud band, curved for planet horizon drop-off the same
+// way every other curved-world consumer is (terrain.mesh/foliage.mesh/particle.mesh/
+// deferred.frag/terrain.glsl's terrainDropOff).
 float heightFraction(vec3 worldPos, float distFromCam) {
 	float distSq = distFromCam * distFromCam;
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 	float adjustedY = worldPos.y + dropOff;
-	return (adjustedY - 5000.0) / 15000.0;
+	return (adjustedY - CLOUD_LAYER_BOTTOM) / CLOUD_LAYER_THICKNESS;
 }
 
 // Height gradients for different cloud types: vec4(bottom_fade_start, bottom_fade_end,
