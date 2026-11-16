@@ -135,6 +135,6 @@ namespace brassica {
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(CirrusNode);
+	// BRASSICA_REGISTER_NODE(CirrusNode);
 
 } // namespace brassica

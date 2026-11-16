@@ -194,6 +194,16 @@ uint terrainClipmapLevelFor(vec2 worldXZ, uint textureDim, uint numLevels) {
 	return min(level, numLevels);
 }
 
+// Sample terrain clipmap (r = height, g = variance, ba = octahedral encoded normal)
+vec4 sampleTerrainDetailsAtPoint(
+	uint  clipmapIndex,
+	vec2  worldXZ,
+	uint  textureDim
+) {
+	uint level = terrainClipmapLevelFor(worldXZ, textureDim, 11);
+	return sampleTerrainClipmap(clipmapIndex, worldXZ, level, textureDim);
+}
+
 // Same curvature correction every other curved-world consumer applies at its own sample
 // points (terrain.mesh/foliage.mesh/particle.mesh/deferred.frag) -- kept camera-centered
 // here too, consistent with how the world is actually drawn.

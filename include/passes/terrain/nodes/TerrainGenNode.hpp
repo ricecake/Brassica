@@ -50,6 +50,7 @@ namespace brassica {
 		glm::vec3                        cameraPos{0.0f};
 		bool                             hasUpdate{true};
 		bool                             forceRegeneration{true};
+		bool                             shaderChanged{false};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -64,7 +65,9 @@ namespace brassica {
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-			watcher.RegisterShader(&genShader);
+			watcher.RegisterShader(&genShader, [this](){
+				shaderChanged = true;
+			});
 		}
 
 		void Destroy(vk::Device device) {
@@ -75,7 +78,7 @@ namespace brassica {
 			cameraPos = p.cameraPosition;
 			push.gridParams = p.terrainGridParams;
 			hasUpdate = p.cameraPosition != p.previousCameraPosition;
-			forceRegeneration = p.forceRegeneration;
+			forceRegeneration = p.forceRegeneration || shaderChanged;
 
 			// Publishes this frame's numLODs onto all three keys' catalog instances -- the one
 			// piece of runtime config their Desc() needs beyond FrameContext (ResourceKeys.hpp).
@@ -107,6 +110,9 @@ namespace brassica {
 		void Execute(graph::NodeContext& ctx) {
 			if (!hasUpdate && !forceRegeneration) {
 				return;
+			}
+			if (shaderChanged) {
+				shaderChanged = false;
 			}
 
 			push.clipmapStorageIdx = ctx.StorageIndex<TerrainClipmapTexture>();
