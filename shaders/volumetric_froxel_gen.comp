@@ -68,6 +68,7 @@ void main() {
 	uint ext1  = unpackLow16(push.indices0.z);
 	uint ext2  = unpackHigh16(push.indices0.z);
 	uint skyViewIndex    = unpackHigh16(push.indices0.w);
+	uint clipMapIndex    = unpackLow16(push.indices1.x);
 	uint minMaxIndex       = unpackHigh16(push.indices1.x);
 	uint cloudShadowIndex  = unpackLow16(push.indices1.y);
 	uint weatherBiomeIndex = unpackHigh16(push.indices1.y);
