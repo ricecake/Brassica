@@ -83,7 +83,17 @@ vec3 froxelCornerRayDir(uint cornerX, uint cornerY, vec3 camRight, vec3 camUp, f
 // black artifact" rule the 4-corner conservatism above already follows) -- terrain overhangs
 // directly above the camera aren't a case this fog-occlusion feature needs to get right.
 void traceTerrainOcclusionSafe(TerrainOcclusionContext ctx, vec3 origin, vec3 dir, inout float distance) {
-	const float kMinHorizontalComponent = 0.3; // ~72.5 degrees above/below horizontal
+	// EXPERIMENT (2026-11-17, unconfirmed): widened from 0.3 (~72.5 degrees) after a real-hardware
+	// report of dark "pillars" that aren't strongly tied to the camera's overall look angle, each
+	// fixed to one spot while the camera stays within a small area and vanishing/reappearing
+	// elsewhere once it moves far enough -- consistent with this same degenerate-first-step false
+	// HIT, just triggered by a ray that isn't quite steep enough for the old threshold to skip,
+	// against whatever local terrain roughness happens to be nearby right now (hence "fixed" per
+	// camera position, since it's that nearby cell's own data, and it moving on once the camera's
+	// local terrain cell changes). Confirm on real hardware before trusting this value; if pillars
+	// persist, the root fix likely needs to bound terrainMarchStep's own first step near the
+	// origin instead of widening this skip further.
+	const float kMinHorizontalComponent = 0.5; // ~60 degrees above/below horizontal
 	if (length(dir.xz) < kMinHorizontalComponent) {
 		return;
 	}
@@ -255,7 +265,22 @@ void main() {
 			// opaqueDist discards its entire near half, which can still be legitimately visible
 			// well before the real occluder. Comparing the near edge only ever kills a voxel
 			// once its whole span, including the nearest point, is actually past it.
-			if (!columnOpaque && (distNear >= opaqueDist || dot(accumulatedTransmittance, vec3(0.3333)) < 0.05)) {
+			if (!columnOpaque && distNear >= opaqueDist) {
+				// Past real geometry (terrain trace or HiZ) -- there's no fog volume left to
+				// render beyond an opaque surface, so the correct sentinel is "nothing here"
+				// (transmittance 1, the same no-fog-contribution value cloud_composite.frag's own
+				// sampleFroxelCascade already returns on its early-outs), not "fully opaque"
+				// (transmittance 0). Clamping to 0 here was painting an extra, unearned coat of
+				// black fog directly onto the terrain's own already-lit color right at the
+				// occlusion boundary -- visible as a dark band that shifts with that boundary's
+				// own frame-to-frame jitter.
+				columnOpaque = true;
+				accumulatedTransmittance = vec3(1.0);
+			} else if (!columnOpaque && dot(accumulatedTransmittance, vec3(0.3333)) < 0.05) {
+				// The fog itself has already attenuated nearly everything behind it -- a real
+				// physical result of accumulation, not a boundary artifact. Round down to exactly
+				// 0 purely to skip the remaining voxels' work; unlike the geometry case above,
+				// this one's sentinel value is correct as "fully opaque" already.
 				columnOpaque = true;
 				accumulatedTransmittance = vec3(0.0);
 			}

@@ -119,7 +119,7 @@ vec3 calculatePhasorOffsetAndNormal(vec2 uv, float time, float distToCam, float 
 	// Scale each tier's time by its own frequency (terrain.frag's identical fix) so the
 	// long-wavelength tier doesn't visually race across the surface at the rate its short-
 	// wavelength sibling does once both are blended together.
-	vec3 tierTime = 0.25 * time * speed * cascade.frequencies;
+	vec3 tierTime = time * speed * clamp(cascade.frequencies, 0.125, 1.0);
 
 	// 3. Phasor noise evaluation with analytical gradient, once per cascade tier
 	vec3 basePos = vec3(uv.x, 0.0, uv.y);
