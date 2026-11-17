@@ -27,7 +27,6 @@
 #include <entt/entity/registry.hpp>
 #include "passes/lighting/ILightManager.hpp"
 #include "passes/lighting/LightManager.hpp"
-#include "passes/lighting/LightningManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
 #include "ServiceLocator.hpp"
@@ -745,27 +744,6 @@ TEST_CASE("LightManager day/night cycle and behaviors") {
 	CHECK(mgr.GetLights().size() == 3);
 	mgr.RemoveLight(morseId);
 	CHECK(mgr.GetLights().size() == 2);
-}
-
-TEST_CASE("LightningManager strike generation and flash light updates") {
-	brassica::LightManager lightMgr;
-	brassica::LightningManager lightningMgr;
-
-	CHECK(lightningMgr.GetActiveStrikes().empty());
-
-	lightningMgr.TriggerStrike(
-		brassica::LightningType::BOLT,
-		glm::vec3(0.0f, 500.0f, 0.0f),
-		glm::vec3(10.0f, 0.0f, 10.0f),
-		glm::vec3(0.8f, 0.9f, 1.0f),
-		lightMgr
-	);
-
-	CHECK(lightningMgr.GetActiveStrikes().size() == 1);
-	CHECK(lightMgr.GetLights().size() == 3);
-
-	lightningMgr.Update(0.1f, 0.1f, lightMgr);
-	CHECK(lightningMgr.GetGlobalPulse() > 0.0f);
 }
 
 namespace {

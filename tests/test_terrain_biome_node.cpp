@@ -88,7 +88,9 @@ TEST_CASE("TerrainBiomeNode lifecycle, recipe setup, and resource realizations")
 
 	// Verify push constant structures for climate compute shaders
 	CHECK(sizeof(ClimateInitialPushConstants) == 16);
-	CHECK(sizeof(ClimateCAPushConstants) == 40);
+	// 40 -> 44: deltaTime appended (LightningManager's trigger-rate fix needs the real per-frame
+	// delta to convert a target strikes-per-second rate into a per-visit roll chance).
+	CHECK(sizeof(ClimateCAPushConstants) == 44);
 }
 
 TEST_CASE("TerrainBiomeNode partial CA update cycle and ping-pong buffer swapping") {

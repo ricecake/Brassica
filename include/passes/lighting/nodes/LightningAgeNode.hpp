@@ -47,11 +47,7 @@ namespace brassica {
 
 		void Destroy(vk::Device device) { ageShader.Destroy(device); }
 
-		// push.deltaTime stays at its hardcoded 60fps-assumption default -- matches
-		// ParticleSystemNode's own identical approach (its deltaTime member is never updated
-		// from SetFrameParams either); no node in this codebase threads a real measured delta
-		// through NodeFrameParams today, so this isn't a new imprecision.
-		void SetFrameParams(const render::NodeFrameParams&) {}
+		void SetFrameParams(const render::NodeFrameParams& p) { push.deltaTime = p.deltaTime; }
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);

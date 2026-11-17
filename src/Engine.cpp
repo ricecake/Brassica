@@ -596,6 +596,11 @@ namespace brassica {
 			std::shared_ptr<CloudLightingManager>(&cloudLightingManager, [](CloudLightingManager*) {})
 		);
 
+		lightningManager.Initialize();
+		serviceLocator.Provide<LightningManager>(
+			std::shared_ptr<LightningManager>(&lightningManager, [](LightningManager*) {})
+		);
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -616,6 +621,7 @@ namespace brassica {
 		atmosphereManager.LoadState(configManager);
 		volumetricLightingManager.LoadState(configManager);
 		cloudLightingManager.LoadState(configManager);
+		lightningManager.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
 		physicalRegistry.LoadState(configManager);
@@ -1693,7 +1699,6 @@ namespace brassica {
 		audioManager.Update(deltaTime);
 
 		lightManager.Update(deltaTime, camera.position);
-		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
 		// Sync UI-tunable settings into the live push-constant struct before anything below
 		// reads it (the AtmosphereUBO upload and this frame's NodeFrameParams.atmosphere, used
@@ -1704,6 +1709,7 @@ namespace brassica {
 		atmosphereManager.ApplyTo(atmosphere);
 		cloudLightingManager.ApplyTo(atmosphere);
 		volumetricLightingManager.ApplyTo(atmosphere);
+		lightningManager.ApplyTo(atmosphere);
 
 		FrameDetails frameDetails{
 			.deltaTime = deltaTime,
@@ -1755,13 +1761,6 @@ namespace brassica {
 		}
 
 		LightingUBO lightingUbo = lightManager.GetLightingUBO();
-		// LightManager has no knowledge of LightningManager (a separate Engine-owned system,
-		// updated above), so it always returns a zeroed lightningColor -- overwrite it here
-		// with the real global pulse/color instead of adding a cross-system dependency to
-		// LightManager's own API. Previously always zero: shaders/lighting.glsl's
-		// uLightningColor was wired up on the shader side with nothing upstream ever writing
-		// it, so cloud_render.frag's lightning glow term never fired.
-		lightingUbo.lightningColor = glm::vec4(lightningManager.GetGlobalColor(), lightningManager.GetGlobalPulse());
 		if (lightingUboMapped[activeFrame]) {
 			std::memcpy(lightingUboMapped[activeFrame], &lightingUbo, sizeof(LightingUBO));
 			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));

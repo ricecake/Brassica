@@ -69,11 +69,12 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	vec3  cloudExtinctionColor;
 	// Scales the cloud's reflected light (direct + ambient, NOT the lightning emissive glow).
 	vec3  cloudAlbedo;
-	// GPU-driven lightning (climate_ca.comp's trigger, lightning_age.comp's reserved-light-
-	// slot write) -- lightningFrequencyScale multiplies the per-cell trigger probability;
-	// lightningFlashIntensity scales the reserved uLights[] range's intensity.
+	// GPU-driven lightning (LightningManager; climate_ca.comp's trigger, lightning_age.comp's
+	// reserved-light-slot write) -- lightningFrequencyScale multiplies the per-cell trigger
+	// probability; lightningIntensityScale scales bolt brightness, the reserved uLights[]
+	// range's intensity, and cloud glow strength together.
 	float lightningFrequencyScale;
-	float lightningFlashIntensity;
+	float lightningIntensityScale;
 	// Sun aureole (SkyBackgroundNode's sky.frag) -- previously a hardcoded 0.5f push-constant
 	// literal with no settings surface.
 	float sunAureoleStrength;
@@ -89,6 +90,22 @@ layout(std140, set = 0, binding = 4) uniform AtmosphereUBO {
 	float fogHeightFalloff;
 	float fogBaseHeight;
 	float mieHumidityBoost;
+
+	// More GPU-driven lightning settings -- see AtmospherePushConstants.hpp's identical comment
+	// on each field for why these are appended here instead of next to
+	// lightningFrequencyScale/lightningIntensityScale above.
+	float lightningSpawnRadius;
+	float lightningStormThreshold;
+	float lightningCloudGlowRadius;
+	float lightningCloudFlashRadius;
+	uint  lightningIgnoreWeather;
+	float lightningGroundStrikeChance;
+	float lightningGroundFlashRadius;
+	float lightningLifetimeScale;
+	vec3  lightningBaseColor;
+	vec3  lightningHumidColor;
+	vec3  lightningDustyColor;
+	float lightningColorVariance;
 }
 u_atmosphere;
 
@@ -144,7 +161,7 @@ u_atmosphere;
 #define u_cloudExtinctionColor u_atmosphere.cloudExtinctionColor
 #define u_cloudAlbedo u_atmosphere.cloudAlbedo
 #define u_lightningFrequencyScale u_atmosphere.lightningFrequencyScale
-#define u_lightningFlashIntensity u_atmosphere.lightningFlashIntensity
+#define u_lightningIntensityScale u_atmosphere.lightningIntensityScale
 #define u_sunAureoleStrength u_atmosphere.sunAureoleStrength
 #define u_colorVarianceScale u_atmosphere.colorVarianceScale
 #define u_colorVarianceStrength u_atmosphere.colorVarianceStrength
@@ -152,6 +169,18 @@ u_atmosphere;
 #define u_fogHeightFalloff u_atmosphere.fogHeightFalloff
 #define u_fogBaseHeight u_atmosphere.fogBaseHeight
 #define u_mieHumidityBoost u_atmosphere.mieHumidityBoost
+#define u_lightningSpawnRadius u_atmosphere.lightningSpawnRadius
+#define u_lightningStormThreshold u_atmosphere.lightningStormThreshold
+#define u_lightningCloudGlowRadius u_atmosphere.lightningCloudGlowRadius
+#define u_lightningCloudFlashRadius u_atmosphere.lightningCloudFlashRadius
+#define u_lightningIgnoreWeather u_atmosphere.lightningIgnoreWeather
+#define u_lightningGroundStrikeChance u_atmosphere.lightningGroundStrikeChance
+#define u_lightningGroundFlashRadius u_atmosphere.lightningGroundFlashRadius
+#define u_lightningLifetimeScale u_atmosphere.lightningLifetimeScale
+#define u_lightningBaseColor u_atmosphere.lightningBaseColor
+#define u_lightningHumidColor u_atmosphere.lightningHumidColor
+#define u_lightningDustyColor u_atmosphere.lightningDustyColor
+#define u_lightningColorVariance u_atmosphere.lightningColorVariance
 
 bool intersectSphere(vec3 ro, vec3 rd, float radius, out float t0, out float t1) {
 	float b = dot(ro, rd);

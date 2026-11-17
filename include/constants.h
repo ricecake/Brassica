@@ -134,10 +134,10 @@ namespace brassica {
 				constexpr float DefaultGTAOIntensity = 1.0f;        // linear strength multiplier on raw occlusion
 				constexpr float DefaultGTAODirectInfluence = 0.35f; // how much AO also darkens direct lighting (0 = indirect-only)
 
-				// Lightning Defaults
-				constexpr float DefaultLightningMaxLifetime = 0.3f;
+				// Lightning Defaults (DefaultLightningBranchProbability/DefaultLightningColor()
+				// aren't consumed yet -- reserved for the branching/color-variety work still to
+				// come on top of this settings-UI port).
 				constexpr float DefaultLightningBranchProbability = 0.15f;
-				constexpr float DefaultLightningThickness = 1.5f;
 				constexpr float DefaultLightningColorR = 0.8f;
 				constexpr float DefaultLightningColorG = 0.9f;
 				constexpr float DefaultLightningColorB = 1.0f;

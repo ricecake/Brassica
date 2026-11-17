@@ -36,7 +36,6 @@ layout(push_constant) uniform CloudRaymarchPushConstants {
 	uint  outputWidth;
 	uint  outputHeight;
 	float deltaTime;
-	uint  gpuLightsIndex;
 } push;
 
 vec4 sampleCloudShadow(vec3 p) {
@@ -96,10 +95,20 @@ struct CloudMarchResult {
 	float totalWeight;
 };
 
-// lightningPulseColor: rgb = brightest active strike's color, w = its normalized flicker
-// envelope -- computed once per pixel in main() (see there for why), not per raymarch step.
+// lightningPulseColor: rgb = the selected strike's color, w = its flicker envelope;
+// lightningGlowWorldPos: that same strike's (flat) world position -- both picked once per pixel
+// in main() by the strike most visible along this ray (see there for why), not per raymarch
+// step. Per-sample falloff from lightningGlowWorldPos is what keeps the glow spatially localized
+// to the strike instead of lighting every visible cloud pixel on screen regardless of distance.
 CloudMarchResult marchClouds(
-	vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance, vec4 lightningPulseColor, vec2 pixel
+	vec3  worldRay,
+	float t_start,
+	float t_end,
+	vec3  sunDir,
+	vec3  sunRadiance,
+	vec4  lightningPulseColor,
+	vec3  lightningGlowWorldPos,
+	vec2  pixel
 ) {
 	float baseStepSize = 50.0;
 	float t = t_start;
@@ -304,6 +313,14 @@ CloudMarchResult marchClouds(
 				vec3  emissiveGlow = vec3(0.0);
 				float lightningPulse = lightningPulseColor.w;
 				if (lightningPulse > 0.001) {
+					// p_cloud and lightningGlowWorldPos are both flat, uncorrected world
+					// positions (p_cloud = uCameraPosition + worldRay*t; strikes are written the
+					// same way by climate_ca.comp) -- no curvature drop needed for this distance,
+					// unlike lightning.mesh's clip-space rasterization of the bolt itself.
+					float glowDist = length(p_cloud - lightningGlowWorldPos);
+					float glowRadius = max(u_lightningCloudGlowRadius, 1.0);
+					float glowFalloff = exp(-(glowDist * glowDist) / (glowRadius * glowRadius));
+
 					float ridge = weatherSample.a;
 					float wavePos = clamp(1.0 - lightningPulse, 0.0, 1.0);
 					float midHeightEnvelope = exp(-pow((cloudHeightFrac - 0.5) * 4.0, 2.0));
@@ -313,7 +330,7 @@ CloudMarchResult marchClouds(
 					float waveFront = exp(-ridgeDist * ridgeDist * 16.0);
 					float coreGlow = exp(-ridge * 4.0 / max(0.1, lightningPulse));
 					float propagationGlow = (coreGlow * 0.7 + waveFront * 1.3) * lightningPulse * midHeightEnvelope * stagger;
-					emissiveGlow = lightningPulseColor.rgb * propagationGlow;
+					emissiveGlow = lightningPulseColor.rgb * propagationGlow * glowFalloff * u_lightningIntensityScale;
 				}
 
 				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering * u_cloudSunLightScale;
@@ -418,16 +435,40 @@ const ivec2 bayer_offsets[16] = ivec2[](
 			vec3 sunDir = normalize(push.sunDir.xyz);
 			vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
 
-			// Brightest active GPU-driven strike (shaders/lighting.glsl's reserved uLights[]
-			// range, written by lightning_age.comp) -- same per-pixel-once computation as the
-			// former fragment shader's main().
+			// Pick the strike most likely to actually glow for THIS ray, not just the brightest
+			// one anywhere on the planet (that -- one global pulse applied to every pixel
+			// regardless of position -- was the other half of lightning reading as "always
+			// firing": every visible cloud lit up for any live strike). Score = flicker envelope
+			// times distance-to-ray falloff, using each strike's midpoint as a stand-in for its
+			// (short, relative to glowRadius) whole segment. Reads uStrikes[] directly instead of
+			// the reserved light-slot range -- those are for terrain/fog lighting, not this.
 			vec4  lightningPulseColor = vec4(0.0);
-			float lightningScaleInv = 1.0 / max(0.0001, u_lightningFlashIntensity * 50.0);
+			vec3  lightningGlowWorldPos = vec3(0.0);
+			float bestLightningScore = 0.0;
+			float glowRadiusSq = max(u_lightningCloudGlowRadius, 1.0) * max(u_lightningCloudGlowRadius, 1.0);
 			for (uint li = 0u; li < LIGHTNING_MAX_STRIKES; li++) {
-				Light strikeLight = uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[LIGHTNING_LIGHT_SLOT_BASE + li];
-				float strikePulse = strikeLight.intensity * lightningScaleInv;
-				if (strikePulse > lightningPulseColor.w) {
-					lightningPulseColor = vec4(strikeLight.color, strikePulse);
+				if (uStrikes[li].lifetime <= 0.0) {
+					continue;
+				}
+				// originAndSeed is always the cloud-side point for both strike types (a
+				// cloud-to-ground strike's endPos is the ground, well below the cloud shell) --
+				// using it instead of the segment midpoint keeps the glow's position inside the
+				// cloud layer either way.
+				vec3 cloudPoint = uStrikes[li].originAndSeed.xyz;
+
+				vec3  toPoint = cloudPoint - uCameraPosition.xyz;
+				float tClosest = max(dot(toPoint, worldRay), 0.0);
+				vec3  closestOnRay = uCameraPosition.xyz + worldRay * tClosest;
+				float rayDistSq = dot(cloudPoint - closestOnRay, cloudPoint - closestOnRay);
+
+				float envelope = lightningEnvelope(uStrikes[li].lifetime, uStrikes[li].maxLifetime) *
+					uStrikes[li].colorAndPeak.a;
+				float falloff = exp(-rayDistSq / glowRadiusSq);
+				float score = envelope * falloff;
+				if (score > bestLightningScore) {
+					bestLightningScore = score;
+					lightningGlowWorldPos = cloudPoint;
+					lightningPulseColor = vec4(uStrikes[li].colorAndPeak.rgb, envelope);
 				}
 			}
 
@@ -441,7 +482,14 @@ const ivec2 bayer_offsets[16] = ivec2[](
 
 			if (nearVisible) {
 				CloudMarchResult near = marchClouds(
-					worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor, vec2(pixel)
+					worldRay,
+					t_s1,
+					min(t_e1, surfaceDistKM),
+					sunDir,
+					sunRadiance,
+					lightningPulseColor,
+					lightningGlowWorldPos,
+					vec2(pixel)
 				);
 				resultRgb += near.lightEnergy;
 				resultTransmittance *= near.transmittance;
@@ -451,7 +499,14 @@ const ivec2 bayer_offsets[16] = ivec2[](
 
 			if (farVisible) {
 				CloudMarchResult far = marchClouds(
-					worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor, vec2(pixel)
+					worldRay,
+					t_s2,
+					min(t_e2, surfaceDistKM),
+					sunDir,
+					sunRadiance,
+					lightningPulseColor,
+					lightningGlowWorldPos,
+					vec2(pixel)
 				);
 				float resultTransmittanceScalar =
 					(resultTransmittance.r + resultTransmittance.g + resultTransmittance.b) / 3.0;

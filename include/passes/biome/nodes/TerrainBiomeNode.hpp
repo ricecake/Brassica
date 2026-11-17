@@ -49,6 +49,11 @@ namespace brassica {
 		std::uint32_t cellOffset{0};
 		std::uint32_t cellsPerUpdate{constants::Weather::kCellsPerUpdate};
 		std::uint32_t cpuLightsIndex{0};
+		// Real per-frame delta (NodeFrameParams::deltaTime, via TerrainBiomeNode::SetFrameParams)
+		// -- climate_ca.comp's lightning trigger needs this to convert a target strikes-per-
+		// second rate into a per-visit roll chance; everything else in this shader stays
+		// deltaTime-independent (the CA step itself is still a flat per-partial-update pass).
+		float deltaTime{1.0f / 60.0f};
 	};
 
 	// S4: no kPhase -- this node is the sole writer of all seven of its weather/biome keys (six
@@ -66,6 +71,7 @@ namespace brassica {
 		std::uint32_t frameCounter{0};
 		std::uint32_t cellOffset{0};
 		std::uint32_t cellsPerUpdate{constants::Weather::kCellsPerUpdate};
+		float         deltaTime{1.0f / 60.0f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -92,6 +98,7 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			forceRegeneration = p.forceRegeneration;
+			deltaTime = p.deltaTime;
 			++frameCounter;
 		}
 
@@ -202,7 +209,8 @@ namespace brassica {
 						.textureDim = textureDim,
 						.cellOffset = cellOffset,
 						.cellsPerUpdate = cellsToProcess,
-						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>()
+						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
+						.deltaTime = deltaTime
 					},
 					textureDim,
 					cellsToProcess
@@ -238,7 +246,8 @@ namespace brassica {
 						.textureDim = textureDim,
 						.cellOffset = cellOffset,
 						.cellsPerUpdate = cellsToProcess,
-						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>()
+						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
+						.deltaTime = deltaTime
 					},
 					textureDim,
 					cellsToProcess

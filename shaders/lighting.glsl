@@ -100,14 +100,35 @@ uGpuLightsBuffers[];
 // LIGHTNING_MAX_STRIKES) is this reserved range.
 #define LIGHTNING_LIGHT_SLOT_BASE 480u
 
+// LIGHTNING_FLAG_GROUND: cloud-to-ground strike (endPos is the ground point) instead of
+// cloud-to-cloud (endPos is a second cloud-side point). LIGHTNING_FLAG_PENDING_GROUND:
+// climate_ca.comp just claimed this as a ground strike but has no terrain-height source of its
+// own (see its trigger comment) -- endPos.y is a placeholder until lightning_age.comp resolves
+// it via terrain/generation.glsl and clears the bit.
+#define LIGHTNING_FLAG_GROUND 1u
+#define LIGHTNING_FLAG_PENDING_GROUND 2u
+
 struct LightningStrikeSlot {
-	vec4  originAndSeed; // xyz = cloud-side origin world pos, w = PRNG seed
-	vec4  endPos;        // xyz = second cloud-side point, w = unused
+	vec4  originAndSeed; // xyz = flat-world origin, w = PRNG seed
+	vec4  endPos;        // xyz = flat-world end point, w = unused
+	vec4  colorAndPeak;  // rgb = base color, a = per-strike peak brightness
 	float lifetime;
 	float maxLifetime;
-	float _pad0;
-	float _pad1;
+	uint  flags;
+	uint  _pad;
 };
+
+// Shared age -> brightness flicker envelope for a strike-pool slot: fast attack, then a decaying
+//100Hz-ish flicker. lightning_age.comp, lightning.mesh and cloud_raymarch.comp's strike-glow
+// selection all call this instead of each keeping their own copy (they used to drift
+// independently). `lifetime` is the slot's *remaining* countdown (maxLifetime -> 0), so
+// normalizedAge runs 0 (birth) -> 1 (death). Uses the literal 3.14159265, not the PI symbol:
+// this file is included before common.glsl in at least one consumer (cloud_raymarch.comp), so a
+// bare PI reference would be used before its #define is textually visible.
+float lightningEnvelope(float lifetime, float maxLifetime) {
+	float normalizedAge = 1.0 - clamp(lifetime / max(maxLifetime, 0.0001), 0.0, 1.0);
+	return max(0.0, sin(normalizedAge * 3.14159265) * (0.8 + 0.2 * sin(lifetime * 50.0)));
+}
 
 // climate_ca.comp claims a slot (atomicAdd(uStrikeRingCounter, 1u) % LIGHTNING_MAX_STRIKES) and
 // writes a fresh strike when weather conditions trigger one; lightning_age.comp ages every slot
