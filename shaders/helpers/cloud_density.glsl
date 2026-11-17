@@ -59,7 +59,7 @@ float sampleCloudVolume(vec3 worldPos, float distFromCam, uint volumeIndex) {
 	// Distance-based LOD selection -- alligator()'s sharp Worley-cell edges cause GPU branch
 	// divergence without it.
 	float volumeLod = clamp(log2(max(1.0, distFromCam / 2000.0)), 0.0, 4.0);
-	return 10*SAMPLE_3D_LINEAR_LOD(volumeIndex, uvw, volumeLod).r;
+	return SAMPLE_3D_LINEAR_LOD(volumeIndex, uvw, volumeLod).r;
 }
 
 // Wind-driven advection speed for cloud sampling (m/s, XZ plane) -- CloudLightingManager's
