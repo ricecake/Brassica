@@ -8,27 +8,9 @@
 #include "helpers/whittaker.glsl"
 #include "external/lygia/lighting/common/gtaoMultiBounce.glsl"
 
-/**
- * Computes the 1D cluster index for a given world-space position.
- */
-uint getClusterIndex(vec3 frag_pos) {
-	vec4 view_pos = uViewMatrix * vec4(frag_pos, 1.0);
-	float z_val = -view_pos.z;
-
-	float z_near = uNearPlane;
-	float z_far = uFarPlane;
-
-	int z_slice = int(clamp(log(max(z_val, 0.001) / z_near) / log(z_far / z_near) * 24.0, 0.0, 23.0));
-
-	vec4 clip_pos = uProjMatrix * view_pos;
-	vec3 ndc_pos = clip_pos.xyz / max(0.0001, clip_pos.w);
-	vec2 screen_uv = ndc_pos.xy * 0.5 + 0.5;
-
-	int x_slice = int(clamp(screen_uv.x * 16.0, 0.0, 15.0));
-	int y_slice = int(clamp(screen_uv.y * 9.0, 0.0, 8.0));
-
-	return uint(x_slice + y_slice * 16 + z_slice * 16 * 9);
-}
+// getClusterIndex() now lives in lighting.glsl (this file's own #include above already pulls
+// it in) -- shared with shaders/volumetric_froxel_gen.comp, which needs it without this file's
+// heavier PBR/GTAO includes.
 
 /**
  * High-level GLSL helper to evaluate clustered local light contribution with Cook-Torrance PBR BRDF.

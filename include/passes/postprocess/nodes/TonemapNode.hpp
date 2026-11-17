@@ -95,6 +95,7 @@ namespace brassica {
 			r.Read<GBufferDepth>();
 			r.Read<CloudAccumulatedTransmittance>();
 			r.Modify<AutoExposureBuffer>();
+			r.Modify<AutoExposureStateBuffer>();
 			r.Create<BloomTextureMip0>();
 			r.Create<BloomTextureMip1>();
 			r.Create<BloomTextureMip2>();

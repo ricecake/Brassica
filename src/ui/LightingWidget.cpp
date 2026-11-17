@@ -95,7 +95,7 @@ namespace brassica::ui {
 
 						ImGui::Separator();
 						ImGui::Text("Statistics (Live Data):");
-						const LayerDataHost& liveLayer = s_exposureReadback.layers[layerIdx].data;
+						const LayerStateHost& liveLayer = s_exposureStateReadback.states[static_cast<std::size_t>(layerIdx)];
 						ImGui::Text(
 							"Adapted Luma: %.4f | Avg: %.4f",
 							liveLayer.adaptedLuminance,

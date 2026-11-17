@@ -169,4 +169,29 @@ layout(std430, set = 0, binding = 3) readonly buffer ClusterGridBuffer {
 };
 #endif
 
+// Computes the 1D cluster index for a given world-space position (16x9x24 grid, matching
+// cluster_light_assignment.comp's own dispatch dims and include/constants.h's GridX/Y/Z).
+// Moved here from clustered_lighting.glsl (which still gets it transitively via that file's own
+// #include "lighting.glsl") so any shader that just needs to look lights up in uClusters[] --
+// e.g. shaders/volumetric_froxel_gen.comp -- doesn't have to pull in clustered_lighting.glsl's
+// whole PBR/GTAO evaluation machinery just for this one function.
+uint getClusterIndex(vec3 frag_pos) {
+	vec4 view_pos = uViewMatrix * vec4(frag_pos, 1.0);
+	float z_val = -view_pos.z;
+
+	float z_near = uNearPlane;
+	float z_far = uFarPlane;
+
+	int z_slice = int(clamp(log(max(z_val, 0.001) / z_near) / log(z_far / z_near) * 24.0, 0.0, 23.0));
+
+	vec4 clip_pos = uProjMatrix * view_pos;
+	vec3 ndc_pos = clip_pos.xyz / max(0.0001, clip_pos.w);
+	vec2 screen_uv = ndc_pos.xy * 0.5 + 0.5;
+
+	int x_slice = int(clamp(screen_uv.x * 16.0, 0.0, 15.0));
+	int y_slice = int(clamp(screen_uv.y * 9.0, 0.0, 8.0));
+
+	return uint(x_slice + y_slice * 16 + z_slice * 16 * 9);
+}
+
 #endif // BRASSICA_LIGHTING_GLSL

@@ -129,10 +129,14 @@ namespace brassica {
 			r.Read<TerrainWeatherBiomeTexture>();
 			r.Read<TerrainClipmapTexture>();
 			r.Read<TerrainMinMaxTexture>();
-			// shaders/volumetric_froxel_gen.comp loops both light buffers directly for
-			// point/spot lighting, not just through SkyViewLUT/CloudShadowMap.
+			// shaders/volumetric_froxel_gen.comp reads both light buffers for the Light data
+			// itself, indexed via ClusteredLighting's per-cluster lists -- Read<ClusteredLighting>()
+			// gives the real RAW edge against ClusterLightAssignmentNode's Modify<>() (same
+			// pattern as that node's own Read<CpuLightsBuffer>()/Read<GpuLightsBuffer>() against
+			// LightManager's CPU upload and ParticleBehaviorNode/LightningAgeNode's GPU writes).
 			r.Read<CpuLightsBuffer>();
 			r.Read<GpuLightsBuffer>();
+			r.Read<ClusteredLighting>();
 			r.Read<TerrainShadowMap>();
 			// S3: this frame's HiZ, not ReadPrevious -- unlike FoliageNode's genuine chicken-and-
 			// egg case (culling happens before this frame's opaque draws exist), nothing this node

@@ -82,6 +82,34 @@ vec3 froxelCornerRayDir(uint cornerX, uint cornerY, vec3 camRight, vec3 camUp, f
 // the trace once a ray is steep enough is always safe (same "prefer under-culling over a false-
 // black artifact" rule the 4-corner conservatism above already follows) -- terrain overhangs
 // directly above the camera aren't a case this fog-occlusion feature needs to get right.
+// Phase-weighted scattering contribution of one local (point/spot/emissive/flash) light at a
+// froxel sample -- shared by all 4 cluster-bucket loops in main() below so the
+// calculateLightContribution + phase-function pairing can't drift between them.
+vec3 evaluateLocalLightScattering(Light light, vec3 worldPos, vec3 viewRayDir, float effectiveG) {
+	if (light.intensity <= 0.0 || light.type == LIGHT_TYPE_DIRECTIONAL) {
+		return vec3(0.0);
+	}
+
+	vec3 lightPos = light.position;
+	if ((light.flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
+		lightPos += push.cameraPos.xyz;
+	}
+
+	vec3  L;
+	float attenuation;
+	calculateLightContribution(
+		light.type, lightPos, light.direction, light.innerCutoff, light.outerCutoff, light.intensity, worldPos, L,
+		attenuation
+	);
+	if (attenuation <= 0.0) {
+		return vec3(0.0);
+	}
+
+	float cosL = dot(viewRayDir, L);
+	float localPhase = dualHenyeyGreenstein(cosL, effectiveG);
+	return light.color * light.intensity * attenuation * localPhase;
+}
+
 void traceTerrainOcclusionSafe(TerrainOcclusionContext ctx, vec3 origin, vec3 dir, inout float distance) {
 	// EXPERIMENT (2026-11-17, unconfirmed): widened from 0.3 (~72.5 degrees) after a real-hardware
 	// report of dark "pillars" that aren't strongly tied to the camera's overall look angle, each
@@ -150,8 +178,6 @@ void main() {
 	float baseDirectSunScatteringBoost = 1.0 + lowSunFactor * 1.5;
 	float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
 	float cosTheta = dot(viewRayDir, push.sunDir.xyz);
-	uint maxCpuLightsToSample = min(uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].count, 4u);
-	uint maxGpuLightsToSample = min(uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].count, 28u);
 
 	float cascadeRanges[3] = float[3](300.0, 3000.0, 100000.0);
 	const float kExpAlpha = 3.5;
@@ -475,58 +501,45 @@ void main() {
 			vec3 groundBounceScat = (fogScatCoeff + mieScat) * upwellingEnergy * upwellingPhase;
 
 			// --- 5. LOCAL LIGHTS & INTEGRATION ---
-			// Split roughly matching the old shared buffer's effective coverage at this same
-			// 32-light budget (fireflies/lightning are the real motivating case here -- extra
-			// CPU-authored point/spot lights beyond sun/moon, which this loop already skips via
-			// the LIGHT_TYPE_DIRECTIONAL check, are rare): 4 CPU + 28 GPU, same total cost as
-			// before the split.
-			// maxCpuLightsToSample/maxGpuLightsToSample hoisted above the cascade/z loop -- both
-			// are index-invariant buffer-count reads, no reason to re-fetch them 192x per thread.
+			// Cluster-grid lookup (shaders/effects/cluster_light_assignment.comp's output)
+			// instead of a flat 4-CPU/28-GPU scan of the whole light buffer -- that cap meant
+			// fog could only ever see the first 28 GPU lights by buffer index, regardless of
+			// whether they were anywhere near this froxel, so most of the 512-light GPU budget
+			// (fireflies, lightning) was simply invisible to volumetric fog. Mirrors
+			// clustered_lighting.glsl's evaluateClusteredLightContributionPBR exactly: the local
+			// cluster for this sample's own position, plus the global bucket (uClusters[3456])
+			// for large-radius lights that don't fit per-cluster binning -- lightning's flash
+			// lights are exactly this case (radius >> cluster_light_assignment.comp's 500m
+			// global-bucket threshold), so skipping the global bucket here would have made this
+			// still invisible to fog for the one case that most motivated the change.
+			uint    clusterIndex = getClusterIndex(worldPos);
+			Cluster localCluster = uClusters[clusterIndex];
+			Cluster globalCluster = uClusters[3456];
+
 			vec3 localLightScattering = vec3(0.0);
-			for (uint li = 0u; li < maxCpuLightsToSample; ++li) {
-				Light light = uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].lights[li];
-				if (light.intensity <= 0.0) continue;
-				if (light.type == LIGHT_TYPE_DIRECTIONAL) continue;
-
-				vec3 lightPos = light.position;
-				if ((light.flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
-					lightPos += push.cameraPos.xyz;
-				}
-
-				vec3 L;
-				float attenuation;
-				calculateLightContribution(
-					light.type, lightPos, light.direction, light.innerCutoff,
-					light.outerCutoff, light.intensity, worldPos, L, attenuation
+			for (uint li = 0u; li < localCluster.cpuCount; ++li) {
+				uint lightIndex = localCluster.cpuLightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
 				);
-
-				if (attenuation <= 0.0) continue;
-
-				float cosL = dot(viewRayDir, L);
-				float localPhase = dualHenyeyGreenstein(cosL, effectiveG);
-				localLightScattering += light.color * light.intensity * attenuation * localPhase;
 			}
-			for (uint li = 0u; li < maxGpuLightsToSample; ++li) {
-				Light light = uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].lights[li];
-				if (light.intensity <= 0.0) continue;
-
-				vec3 lightPos = light.position;
-				if ((light.flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
-					lightPos += push.cameraPos.xyz;
-				}
-
-				vec3 L;
-				float attenuation;
-				calculateLightContribution(
-					light.type, lightPos, light.direction, light.innerCutoff,
-					light.outerCutoff, light.intensity, worldPos, L, attenuation
+			for (uint li = 0u; li < globalCluster.cpuCount; ++li) {
+				uint lightIndex = globalCluster.cpuLightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
 				);
-
-				if (attenuation <= 0.0) continue;
-
-				float cosL = dot(viewRayDir, L);
-				float localPhase = dualHenyeyGreenstein(cosL, effectiveG);
-				localLightScattering += light.color * light.intensity * attenuation * localPhase;
+			}
+			for (uint li = 0u; li < localCluster.count; ++li) {
+				uint lightIndex = localCluster.lightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
+				);
+			}
+			for (uint li = 0u; li < globalCluster.count; ++li) {
+				uint lightIndex = globalCluster.lightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
+				);
 			}
 
 			// Add the groundBounceScat to the final cell energy

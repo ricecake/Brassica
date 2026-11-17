@@ -128,8 +128,10 @@ namespace brassica {
 		alignas(4) float lightningCloudGlowRadius{4000.0f};
 		// lightningCloudFlashRadius: metres. The cloud-to-cloud FLASH light's radius
 		// (lightning_age.comp) -- see LIGHT_TYPE_FLASH's innerCutoff-as-radius convention in
-		// helpers/lighting.glsl.
-		alignas(4) float lightningCloudFlashRadius{6000.0f};
+		// helpers/lighting.glsl. Matches boidish's own cloud-to-cloud flash radius (500m) --
+		// the FLASH falloff formula barely drops for d << r, so this needs to be a real local
+		// illumination radius, not a glow-radius-sized number.
+		alignas(4) float lightningCloudFlashRadius{500.0f};
 		// lightningIgnoreWeather: debug override -- when nonzero, climate_ca.comp's stormFactor
 		// is forced to 1.0 regardless of actual weather, so strikes can be seen without waiting
 		// for a real storm. GPU equivalent of boidish's LightningWidget "Manual Auto-trigger".
@@ -138,10 +140,9 @@ namespace brassica {
 		// cloud-to-ground instead of cloud-to-cloud (climate_ca.comp).
 		alignas(4) float lightningGroundStrikeChance{0.3f};
 		// lightningGroundFlashRadius: metres. The cloud-to-ground FLASH light's radius, placed
-		// at the resolved ground point instead of the cloud-to-cloud midpoint -- bigger than
-		// lightningCloudFlashRadius since a ground strike's visible illumination radius on
-		// terrain is the whole point of it, not an incidental glow.
-		alignas(4) float lightningGroundFlashRadius{1500.0f};
+		// at the resolved ground point instead of the cloud-to-cloud midpoint. Matches boidish's
+		// own ground-strike flash radius (300m).
+		alignas(4) float lightningGroundFlashRadius{300.0f};
 		// lightningLifetimeScale: multiplies climate_ca.comp's rolled strike duration -- boidish's
 		// Lifetime Multiplier.
 		alignas(4) float lightningLifetimeScale{1.0f};

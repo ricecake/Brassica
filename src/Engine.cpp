@@ -1770,15 +1770,13 @@ namespace brassica {
 			std::memcpy(atmosphereUboMapped[activeFrame], &atmosphere, sizeof(AtmospherePushConstants));
 			vmaFlushAllocation(allocator, atmosphereUboAllocations[activeFrame], 0, sizeof(AtmospherePushConstants));
 		}
-		// Field-by-field, not a bulk memcpy: LayerData interleaves user-tunable fields (exposure,
-		// tone-mapping curve, CDL, white balance, LTM) with fields only bloom_downsample.comp's
-		// update_layer_ae ever writes (histogram, adaptedLuminance, EMAs, autoUchimura*) -- a full
-		// overwrite here would stomp the shader's own accumulated auto-exposure state every frame.
+		// autoExposureBuffers[] is tunables-only now (LayerDataHost no longer holds any of
+		// bloom_downsample.comp's update_layer_ae-owned fields -- see AutoExposureStateBuffer
+		// below for those), so there's nothing left here that a full overwrite could stomp. Kept
+		// as an explicit per-field sync (SyncAutoExposureTunables) rather than a bulk memcpy
+		// anyway -- see that function's own comment.
 		if (autoExposureMapped[activeFrame]) {
 			auto* mappedExposure = static_cast<ExposureDataHost*>(autoExposureMapped[activeFrame]);
-			// Snapshot this slot's current contents before overwriting -- see s_exposureReadback's
-			// comment (AutoExposureData.hpp) for why this is already safe without extra fencing.
-			std::memcpy(&s_exposureReadback, mappedExposure, sizeof(ExposureDataHost));
 			mappedExposure->numLayers = s_exposureData.numLayers;
 			for (std::int32_t i = 0; i < s_exposureData.numLayers; ++i) {
 				SyncAutoExposureTunables(mappedExposure->layers[i].data, s_exposureData.layers[i].data);
@@ -1792,6 +1790,23 @@ namespace brassica {
 				mappedExposure->layers[i].isCloud = s_exposureData.layers[i].isCloud;
 			}
 			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));
+		}
+		// AutoExposureStateBuffer is the single persistent buffer bloom_downsample.comp's
+		// update_layer_ae actually accumulates into (see its own Engine.cpp creation comment) --
+		// read it directly into the debug-display copy every frame. No frame-overlap delay
+		// needed here (unlike the old per-slot s_exposureReadback this replaces): there's only
+		// one real buffer now, so there's no "wait for a slot to cycle back around" to reason
+		// about, just a live read of whatever the GPU wrote last.
+		if (autoExposureStateMapped) {
+			// Invalidate before reading -- unlike every other mapped buffer in this file (CPU
+			// only ever writes those, never reads), this is the one place the CPU reads back
+			// data the GPU wrote, every frame. VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+			// (used to pick this allocation's memory type, same flag LightningStrikePool's
+			// write-only allocation uses) only promises the memory type is good for host
+			// *writes* -- nothing guarantees it's HOST_COHERENT for a GPU-write-then-CPU-read,
+			// so skip relying on whatever coherency the picked memory type happens to have.
+			vmaInvalidateAllocation(allocator, autoExposureStateAllocation, 0, sizeof(AutoExposureStateHost));
+			std::memcpy(&s_exposureStateReadback, autoExposureStateMapped, sizeof(AutoExposureStateHost));
 		}
 		physicalRegistry.RegisterImportedBuffer<AutoExposureBuffer>(
 			autoExposureBuffers[activeFrame],
@@ -2165,7 +2180,7 @@ namespace brassica {
 		// CpuLightsBuffer/GpuLightsBuffer moved to the bindless storage-buffer catalog (binding
 		// 6 of set 1), so every other binding here keeps its original number rather than
 		// cascading a renumber through every shader that hardcodes one of them.
-		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
 			.setBinding(0)
@@ -2208,6 +2223,12 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 8: AutoExposureStateBuffer
+		bindings[7]
+			.setBinding(8)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.setBindings(bindings);
@@ -2215,7 +2236,7 @@ namespace brassica {
 
 		std::array<vk::DescriptorPoolSize, 2> poolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 4 * FRAME_OVERLAP},
-			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 4 * FRAME_OVERLAP}
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 5 * FRAME_OVERLAP}
 		};
 		vk::DescriptorPoolCreateInfo poolInfo{};
 		poolInfo.setPoolSizes(poolSizes);
@@ -2262,6 +2283,64 @@ namespace brassica {
 					.byteSize = sizeof(LightningStrikePoolLayout),
 				},
 				false
+			);
+		}
+
+		// AutoExposureStateBuffer: one persistent allocation, not per-FRAME_OVERLAP-slot --
+		// bloom_downsample.comp's update_layer_ae owns this (adaptedLuminance/stats/EMAs/
+		// autoUchimura*/histogram), and splitting it across FRAME_OVERLAP(=2) separate real
+		// buffers meant two independent, half-frame-rate-sampled EMA sequences interleaving
+		// every displayed frame -- each only ever updated every *other* frame, so they'd diverge
+		// from each other whenever the scene brightness changed between consecutive frames,
+		// visible as flashing/alternating brightness. Worst right at startup, before either
+		// sequence has converged to the real scene value, and during fast swings (lightning)
+		// where the two sequences sample the changing signal differently. Seeded from
+		// AutoExposureStateHost's own field defaults (not zeroed) so the very first frame
+		// doesn't start adaptedLuminance from 0 either -- same reasoning as autoExposureBuffers[i]'s
+		// s_exposureData seed below, just for the half of this data that isn't per-slot anymore.
+		{
+			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = sizeof(AutoExposureStateHost);
+			bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			const auto concurrentFamilies = physicalRegistry.ConcurrentFamilies();
+			if (concurrentFamilies.size() > 1) {
+				bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+				bufferInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(concurrentFamilies.size());
+				bufferInfo.pQueueFamilyIndices = concurrentFamilies.data();
+			}
+			VmaAllocationCreateInfo allocCreateInfo{};
+			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+				VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			VkBuffer          rawBuffer = VK_NULL_HANDLE;
+			VmaAllocationInfo allocResultInfo{};
+			if (vmaCreateBuffer(
+					allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &autoExposureStateAllocation, &allocResultInfo
+				) != VK_SUCCESS) {
+				spdlog::critical("Failed to create AutoExposureStateBuffer with VMA");
+				throw std::runtime_error("Failed to create AutoExposureStateBuffer with VMA");
+			}
+			autoExposureStateBuffer = rawBuffer;
+			autoExposureStateMapped = allocResultInfo.pMappedData;
+			if (autoExposureStateMapped) {
+				AutoExposureStateHost seed{};
+				std::memcpy(autoExposureStateMapped, &seed, sizeof(AutoExposureStateHost));
+			}
+			physicalRegistry.RegisterImportedBuffer<AutoExposureStateBuffer>(
+				autoExposureStateBuffer,
+				graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Buffer,
+					.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer),
+					.byteSize = sizeof(AutoExposureStateHost),
+					// This genuinely is a resource meant to live indefinitely once allocated,
+					// surviving any frame TonemapComputeNode is inactive (ResourceDesc::persistent's
+					// own comment, Execution.hpp) -- unlike LightningStrikePool, which is zeroed
+					// (not meaningfully seeded) at creation, this buffer is seeded with real,
+					// meaningful default values just above, so hasDefinedContents=true is the
+					// accurate statement too.
+					.persistent = true,
+				},
+				true
 			);
 		}
 
@@ -2370,7 +2449,7 @@ namespace brassica {
 			// Binding 2 (formerly LightsBuffer) deliberately absent -- see InitFrameSet's
 			// identical comment. Array positions below no longer match binding numbers 1:1;
 			// each write's own .setDstBinding() call is what actually matters.
-			std::array<vk::DescriptorBufferInfo, 7> bufferDescs{};
+			std::array<vk::DescriptorBufferInfo, 8> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
 			bufferDescs[2].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
@@ -2382,8 +2461,13 @@ namespace brassica {
 				.setBuffer(lightningStrikePoolBuffer)
 				.setOffset(0)
 				.setRange(sizeof(LightningStrikePoolLayout));
+			// Same single buffer for every i -- see autoExposureStateBuffer's member comment.
+			bufferDescs[7]
+				.setBuffer(autoExposureStateBuffer)
+				.setOffset(0)
+				.setRange(sizeof(AutoExposureStateHost));
 
-			std::array<vk::WriteDescriptorSet, 7> writes{};
+			std::array<vk::WriteDescriptorSet, 8> writes{};
 			writes[0]
 				.setDstSet(frameDescriptorSets[i])
 				.setDstBinding(0)
@@ -2419,6 +2503,11 @@ namespace brassica {
 				.setDstBinding(7)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[6]);
+			writes[7]
+				.setDstSet(frameDescriptorSets[i])
+				.setDstBinding(8)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setBufferInfo(bufferDescs[7]);
 
 			device.updateDescriptorSets(writes, nullptr);
 		}
@@ -2466,6 +2555,12 @@ namespace brassica {
 			vmaDestroyBuffer(allocator, lightningStrikePoolBuffer, lightningStrikePoolAllocation);
 			lightningStrikePoolBuffer = nullptr;
 			lightningStrikePoolAllocation = nullptr;
+		}
+		if (autoExposureStateBuffer && autoExposureStateAllocation) {
+			vmaDestroyBuffer(allocator, autoExposureStateBuffer, autoExposureStateAllocation);
+			autoExposureStateBuffer = nullptr;
+			autoExposureStateAllocation = nullptr;
+			autoExposureStateMapped = nullptr;
 		}
 		if (frameDescriptorPool) {
 			device.destroyDescriptorPool(frameDescriptorPool);

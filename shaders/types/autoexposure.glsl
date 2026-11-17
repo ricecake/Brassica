@@ -1,9 +1,19 @@
 #ifndef TYPES_AUTOEXPOSURE_GLSL
 #define TYPES_AUTOEXPOSURE_GLSL
 
-// Auto-exposure layer data for post-processing, tone mapping, and grading
+// Auto-exposure layer data for post-processing, tone mapping, and grading. Tunables only --
+// bloom_downsample.comp's update_layer_ae()-owned accumulator state (adaptedLuminance, stats,
+// EMAs, auto-tuned Uchimura params, histogram) lives in the separate LayerState struct /
+// AutoExposureStateBuffer below instead. They used to live here, in AutoExposureBuffer, which
+// is allocated per-FRAME_OVERLAP-slot (a different real buffer per slot) -- fine for tunables
+// re-synced from the CPU every frame, but wrong for continuously-accumulated GPU state: with
+// FRAME_OVERLAP=2, that state only ever got touched every *other* frame, so there were
+// effectively two independent, half-frame-rate-sampled adaptedLuminance sequences interleaving
+// on screen every displayed frame -- visible as flashing/alternating brightness, worst right at
+// startup (before either sequence converges) and during fast swings (lightning) where the two
+// sequences sample the changing signal differently. See AutoExposureStateBuffer's own comment
+// and Engine.cpp's matching creation-site comment for the fix.
 struct LayerData {
-	float adaptedLuminance;
 	float targetLuminance;
 	float minExposure;
 	float maxExposure;
@@ -17,31 +27,12 @@ struct LayerData {
 	float speedUp;
 	float speedDown;
 
-	// Statistics
-	float minLuma;
-	float maxLuma;
-	float avgLuma;
-	float stdDevLuma;
-
-	// EMAs
-	float emaMinLuma;
-	float emaMaxLuma;
-	float emaAvgLuma;
-	float emaStdDevLuma;
-
 	// Auto-tune settings
 	int   autoTuneEnabled;
 	float minContrast;
 	float maxContrast;
 	float targetBrightness;
 
-	// Auto-calculated Uchimura parameters
-	float autoUchimuraP;
-	float autoUchimuraA;
-	float autoUchimuraM;
-	float autoUchimuraL;
-	float autoUchimuraC;
-	float autoUchimuraB;
 	float exposureTime;
 	float iso;
 
@@ -84,13 +75,44 @@ struct LayerData {
 	// static_assert (AutoExposureData.hpp) for what breaks if this drifts.
 	float _pad0;
 	float _pad1;
-	float _pad2;
+};
+
+// GPU-owned per-layer accumulator state that bloom_downsample.comp's update_layer_ae() reads
+// and writes every frame -- see LayerData's comment above for why this can't live in the
+// per-FRAME_OVERLAP-slot AutoExposureBuffer alongside the tunables. Mirrors LayerStateHost
+// (AutoExposureData.hpp) field-for-field.
+struct LayerState {
+	float adaptedLuminance;
+
+	// Statistics (recomputed fresh from this frame's histogram, no history of their own)
+	float minLuma;
+	float maxLuma;
+	float avgLuma;
+	float stdDevLuma;
+
+	// EMAs
+	float emaMinLuma;
+	float emaMaxLuma;
+	float emaAvgLuma;
+	float emaStdDevLuma;
+
+	// Auto-calculated Uchimura parameters
+	float autoUchimuraP;
+	float autoUchimuraA;
+	float autoUchimuraM;
+	float autoUchimuraL;
+	float autoUchimuraC;
+	float autoUchimuraB;
+
+	// std430 rounds an array-of-structs element stride up to a multiple of 16 -- see
+	// LayerStateHost's static_assert (AutoExposureData.hpp) for what breaks if this drifts.
+	float _pad0;
 
 	uint  histogram[256];
 	// Snapshot of the previous frame's fully-accumulated histogram, written by
 	// bloom_downsample.comp's update_layer_ae right before it zeroes `histogram` for this frame's
 	// accumulation. CPU readback must read this field, not `histogram` -- by the time any readback
-	// can see this buffer slot, `histogram` has already been reset to 0 (see AutoExposureData.hpp's
+	// can see this buffer, `histogram` has already been reset to 0 (see AutoExposureData.hpp's
 	// histogramSnapshot comment).
 	uint  histogramSnapshot[256];
 };
@@ -123,8 +145,24 @@ struct ExposureLayer {
 layout(std430, set = 0, binding = 5) buffer AutoExposureBuffer {
 	ExposureLayer layers[MAX_EXPOSURE_LAYERS];
 	int           numExposureLayers;
+	// Cross-workgroup "last one out" signal for bloom_downsample.comp's single dispatch -- purely
+	// transient within that one dispatch (reset to 0 by its own last workgroup every time), so
+	// unlike LayerState below it's fine to leave per-FRAME_OVERLAP-slot.
 	uint          workgroupCounter;
 };
+
+// One persistent buffer (not per-FRAME_OVERLAP-slot -- see Engine.cpp's AutoExposureStateBuffer
+// creation comment, same single-allocation pattern as LightningStrikePool/ClusteredLighting),
+// indexed the same way as AutoExposureBuffer's layers[] (same index = same logical layer).
+#ifdef AUTOEXPOSURE_STATE_WRITABLE
+layout(std430, set = 0, binding = 8) buffer AutoExposureStateBuffer {
+	LayerState states[MAX_EXPOSURE_LAYERS];
+};
+#else
+layout(std430, set = 0, binding = 8) readonly buffer AutoExposureStateBuffer {
+	LayerState states[MAX_EXPOSURE_LAYERS];
+};
+#endif
 
 // Same weight function cdl_grading.glsl's depth-ranged CdlEntry loop already uses. Callers loop
 // i in 0..numExposureLayers and skip any layer with weight <= 0.0 (an isMain layer with

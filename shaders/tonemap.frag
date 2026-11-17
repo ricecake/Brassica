@@ -133,12 +133,14 @@ vec3 ApplyPurkinjeShift(vec3 exposedLinearColor, float avgLuminance, vec3 scotop
 // run a different tonemap curve. CdlGradingLayers' depth-ranged entries now apply uniformly
 // (every layer runs the same CDL loop) instead of being gated on isSky == 0 the way the old flat
 // per-layer CDL fields were.
-vec3 ApplyExposureLayerChain(ExposureLayer layer, vec3 ltmCorrectedColor, vec3 bloomColor, bool isSkyPixel, float linearZ) {
+vec3 ApplyExposureLayerChain(
+	ExposureLayer layer, LayerState state, vec3 ltmCorrectedColor, vec3 bloomColor, bool isSkyPixel, float linearZ
+) {
 	vec3 result = ltmCorrectedColor;
 
 	// 2. Exposure Application
 	if (layer.data.useAutoExposure != 0) {
-		float autoExposure = layer.data.targetLuminance / max(layer.data.adaptedLuminance, 0.0001);
+		float autoExposure = layer.data.targetLuminance / max(state.adaptedLuminance, 0.0001);
 		autoExposure = clamp(autoExposure, layer.data.minExposure, layer.data.maxExposure);
 		result *= autoExposure;
 	} else {
@@ -150,7 +152,7 @@ vec3 ApplyExposureLayerChain(ExposureLayer layer, vec3 ltmCorrectedColor, vec3 b
 	// unlike the old isSky-indexed LayerData lookups elsewhere in this file, this one isn't a
 	// special case that disappears with the layer generalization.
 	vec3 scotopicTint = isSkyPixel ? vec3(0.15, 0.3, 0.6) : (result * vec3(0.70, 0.80, 0.90));
-	result = ApplyPurkinjeShift(result, layer.data.adaptedLuminance, scotopicTint);
+	result = ApplyPurkinjeShift(result, state.adaptedLuminance, scotopicTint);
 
 	// Accumulate Bloom
 	float activeIntensity = params.intensity > 0.0 ? params.intensity : params.bloomIntensity;
@@ -192,7 +194,7 @@ vec3 ApplyExposureLayerChain(ExposureLayer layer, vec3 ltmCorrectedColor, vec3 b
 		int mode = layer.data.toneMapMode;
 		if (mode == 5) { // Uchimura
 			if (layer.data.autoTuneEnabled != 0) {
-				result = uchimura(result, layer.data.autoUchimuraP, layer.data.autoUchimuraA, layer.data.autoUchimuraM, layer.data.autoUchimuraL, layer.data.autoUchimuraC, layer.data.autoUchimuraB);
+				result = uchimura(result, state.autoUchimuraP, state.autoUchimuraA, state.autoUchimuraM, state.autoUchimuraL, state.autoUchimuraC, state.autoUchimuraB);
 			} else {
 				result = uchimura(result, layer.data.uchimuraP, layer.data.uchimuraA, layer.data.uchimuraM, layer.data.uchimuraL, layer.data.uchimuraC, layer.data.uchimuraB);
 			}
@@ -318,7 +320,7 @@ void main() {
 				continue;
 			}
 
-			float layerAutoExp = layer.data.targetLuminance / max(layer.data.avgLuma, 0.0001);
+			float layerAutoExp = layer.data.targetLuminance / max(states[i].avgLuma, 0.0001);
 			vec3 currentExposure = sceneColor * layerAutoExp;
 			vec3 currentAces = aces(currentExposure);
 			float guidanceLuma = sqrt(max(dot(currentAces, vec3(0.2126, 0.7152, 0.0722)), 0.0));
@@ -348,7 +350,7 @@ void main() {
 			continue;
 		}
 
-		vec3 layerResult = ApplyExposureLayerChain(layer, ltmCorrectedColor, bloomColor, isSkyPixel, linearZ);
+		vec3 layerResult = ApplyExposureLayerChain(layer, states[i], ltmCorrectedColor, bloomColor, isSkyPixel, linearZ);
 		result = anyLayerApplied ? mix(result, layerResult, weight) : layerResult;
 		anyLayerApplied = true;
 	}

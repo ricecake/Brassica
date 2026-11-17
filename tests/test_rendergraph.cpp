@@ -290,6 +290,7 @@ TEST_CASE("Force-all-active compile of the real registered node set is acyclic a
 	graph::Graph frameGraph;
 	frameGraph.Register<graph::Import<Swapchain>>();
 	frameGraph.Register<graph::Import<AutoExposureBuffer>>();
+	frameGraph.Register<graph::Import<AutoExposureStateBuffer>>();
 	// CpuLightsBuffer's real producer is LightManager's own PredefinedBufferNode
 	// (LightManager::RegisterBufferNode) -- same "manager-owned, not part of
 	// EngineNodeRegistry's auto-registered set" category as MaterialBuffer/the Gltf buffers

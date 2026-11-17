@@ -1,5 +1,6 @@
 #version 460
 #include "bindless.glsl"
+#define AUTOEXPOSURE_STATE_WRITABLE
 #include "types/autoexposure.glsl"
 #include "helpers/tonemapping.glsl"
 
@@ -94,7 +95,7 @@ void update_layer_ae(int layerIdx) {
 	// Calculate total weight
 	float totalWeight = 0.0;
 	for (int i = 0; i < 256; i++) {
-		totalWeight += float(layers[layerIdx].data.histogram[i]);
+		totalWeight += float(states[layerIdx].histogram[i]);
 	}
 
 	if (totalWeight > 0.0) {
@@ -109,7 +110,7 @@ void update_layer_ae(int layerIdx) {
 		float maxValidLogLuma = MIN_LOG_LUMA;
 
 		for (int i = 0; i < 256; i++) {
-			float binWeight = float(layers[layerIdx].data.histogram[i]);
+			float binWeight = float(states[layerIdx].histogram[i]);
 			float nextWeightAccum = currentWeightAccum + binWeight;
 
 			// Check if this bin is within our cutoff range
@@ -141,7 +142,7 @@ void update_layer_ae(int layerIdx) {
 			float weightedLogLumaSqSum = 0.0;
 			currentWeightAccum = 0.0;
 			for (int i = 0; i < 256; i++) {
-				float binWeight = float(layers[layerIdx].data.histogram[i]);
+				float binWeight = float(states[layerIdx].histogram[i]);
 				float nextWeightAccum = currentWeightAccum + binWeight;
 				if (nextWeightAccum > lowCutoffWeight && currentWeightAccum < highCutoffWeight) {
 					float validBinWeight = binWeight;
@@ -157,41 +158,41 @@ void update_layer_ae(int layerIdx) {
 			float logStdDev = sqrt(weightedLogLumaSqSum / filteredWeightSum);
 
 			// Update Statistics
-			layers[layerIdx].data.minLuma = exp(minValidLogLuma);
-			layers[layerIdx].data.maxLuma = exp(maxValidLogLuma);
-			layers[layerIdx].data.avgLuma = avgLumaVal;
-			layers[layerIdx].data.stdDevLuma = logStdDev;
+			states[layerIdx].minLuma = exp(minValidLogLuma);
+			states[layerIdx].maxLuma = exp(maxValidLogLuma);
+			states[layerIdx].avgLuma = avgLumaVal;
+			states[layerIdx].stdDevLuma = logStdDev;
 
 			// Update adapted luminance (EMA)
-			float speed = (avgLumaVal > layers[layerIdx].data.adaptedLuminance) ? layers[layerIdx].data.speedUp : layers[layerIdx].data.speedDown;
+			float speed = (avgLumaVal > states[layerIdx].adaptedLuminance) ? layers[layerIdx].data.speedUp : layers[layerIdx].data.speedDown;
 			float adaptation = 1.0 - exp(-push.deltaTime * speed);
-			layers[layerIdx].data.adaptedLuminance += (avgLumaVal - layers[layerIdx].data.adaptedLuminance) * adaptation;
+			states[layerIdx].adaptedLuminance += (avgLumaVal - states[layerIdx].adaptedLuminance) * adaptation;
 
 			// Slow start EMA for statistics
 			float statsSpeed = 0.5; // Slightly slower for stability
 			float statsAdaptation = 1.0 - exp(-push.deltaTime * statsSpeed);
 
-			layers[layerIdx].data.emaMinLuma = mix(layers[layerIdx].data.emaMinLuma, layers[layerIdx].data.minLuma, statsAdaptation);
-			layers[layerIdx].data.emaMaxLuma = mix(layers[layerIdx].data.emaMaxLuma, layers[layerIdx].data.maxLuma, statsAdaptation);
-			layers[layerIdx].data.emaAvgLuma = mix(layers[layerIdx].data.emaAvgLuma, layers[layerIdx].data.avgLuma, statsAdaptation);
-			layers[layerIdx].data.emaStdDevLuma = mix(layers[layerIdx].data.emaStdDevLuma, layers[layerIdx].data.stdDevLuma, statsAdaptation);
+			states[layerIdx].emaMinLuma = mix(states[layerIdx].emaMinLuma, states[layerIdx].minLuma, statsAdaptation);
+			states[layerIdx].emaMaxLuma = mix(states[layerIdx].emaMaxLuma, states[layerIdx].maxLuma, statsAdaptation);
+			states[layerIdx].emaAvgLuma = mix(states[layerIdx].emaAvgLuma, states[layerIdx].avgLuma, statsAdaptation);
+			states[layerIdx].emaStdDevLuma = mix(states[layerIdx].emaStdDevLuma, states[layerIdx].stdDevLuma, statsAdaptation);
 
 			// Auto-tune Tonemapper
 			if (layers[layerIdx].data.autoTuneEnabled != 0) {
 				// Contrast derived from standard deviation
-				layers[layerIdx].data.autoUchimuraA = clamp(layers[layerIdx].data.emaStdDevLuma * 2.0, layers[layerIdx].data.minContrast, layers[layerIdx].data.maxContrast);
+				states[layerIdx].autoUchimuraA = clamp(states[layerIdx].emaStdDevLuma * 2.0, layers[layerIdx].data.minContrast, layers[layerIdx].data.maxContrast);
 
 				// Linear start pegged to adapted luminance
-				layers[layerIdx].data.autoUchimuraM = clamp(layers[layerIdx].data.adaptedLuminance * 0.5, 0.0, 0.5);
+				states[layerIdx].autoUchimuraM = clamp(states[layerIdx].adaptedLuminance * 0.5, 0.0, 0.5);
 
 				// Brightness from difference of max and average
-				float lumaRange = layers[layerIdx].data.emaMaxLuma - layers[layerIdx].data.emaAvgLuma;
-				layers[layerIdx].data.autoUchimuraP = clamp(layers[layerIdx].data.targetBrightness + lumaRange * 0.1, 0.5, 5.0);
+				float lumaRange = states[layerIdx].emaMaxLuma - states[layerIdx].emaAvgLuma;
+				states[layerIdx].autoUchimuraP = clamp(layers[layerIdx].data.targetBrightness + lumaRange * 0.1, 0.5, 5.0);
 
 				// Defaults for other parameters
-				layers[layerIdx].data.autoUchimuraL = 0.4;
-				layers[layerIdx].data.autoUchimuraC = 1.33;
-				layers[layerIdx].data.autoUchimuraB = 0.0;
+				states[layerIdx].autoUchimuraL = 0.4;
+				states[layerIdx].autoUchimuraC = 1.33;
+				states[layerIdx].autoUchimuraB = 0.0;
 			}
 		}
 	}
@@ -200,8 +201,8 @@ void update_layer_ae(int layerIdx) {
 	// reset the working histogram for next frame's accumulation. Must snapshot before resetting --
 	// nothing else ever holds onto this frame's real bin values once they're zeroed below.
 	for (int i = 0; i < 256; i++) {
-		layers[layerIdx].data.histogramSnapshot[i] = layers[layerIdx].data.histogram[i];
-		layers[layerIdx].data.histogram[i] = 0;
+		states[layerIdx].histogramSnapshot[i] = states[layerIdx].histogram[i];
+		states[layerIdx].histogram[i] = 0;
 	}
 }
 
@@ -291,12 +292,12 @@ void main() {
 				}
 
 				// Atomic add to this layer's own histogram bin using effective visibility
-				atomicAdd(layers[li].data.histogram[bin], uint(effectiveWeight * centerWeight * 1024.0));
+				atomicAdd(states[li].histogram[bin], uint(effectiveWeight * centerWeight * 1024.0));
 			}
 
 			// LTM generation for Mip 0
 			if (layers[li].data.ltmEnabled != 0) {
-				float ltmExposure = layers[li].data.targetLuminance / max(layers[li].data.avgLuma, 0.0001);
+				float ltmExposure = layers[li].data.targetLuminance / max(states[li].avgLuma, 0.0001);
 
 				vec3 c1 = centerSample * ltmExposure * exp2(layers[li].data.ltmEvSpread);
 				vec3 c2 = centerSample * ltmExposure;
@@ -348,11 +349,11 @@ void main() {
 			// Exposure for bloom extraction
 			float layerExposure;
 			if (layers[li].data.useAutoExposure != 0) {
-				layerExposure = layers[li].data.targetLuminance / max(layers[li].data.adaptedLuminance, 0.0001);
+				layerExposure = layers[li].data.targetLuminance / max(states[li].adaptedLuminance, 0.0001);
 				layerExposure = clamp(layerExposure, layers[li].data.minExposure, layers[li].data.maxExposure);
 
 				if (layers[li].isSky == 1) {
-					float attenuation = calculateSkyAttenuation(centerSample * layerExposure, layers[li].data.autoUchimuraM, layers[li].data.autoUchimuraL, 1.20);
+					float attenuation = calculateSkyAttenuation(centerSample * layerExposure, states[li].autoUchimuraM, states[li].autoUchimuraL, 1.20);
 					// float mask = smoothstep(-3.14 * 0.125, 0.5 * 1.5707, asin(worldDir.y));
 					// attenuation = mix(attenuation, 1.0, mask);
 					layerExposure *= attenuation;
@@ -361,7 +362,7 @@ void main() {
 			} else {
 				layerExposure = (layers[li].data.iso / 100.0) * (1.0 / (layers[li].data.aperture * layers[li].data.aperture)) * layers[li].data.exposureTime;
 			}
-			float layerDynMaxLuma = mix(10.0, 500.0, smoothstep(0.01, 1000.0, layers[li].data.adaptedLuminance));
+			float layerDynMaxLuma = mix(10.0, 500.0, smoothstep(0.01, 1000.0, states[li].adaptedLuminance));
 
 			exposure += layerExposure * effectiveWeight;
 			dynMaxLuma += layerDynMaxLuma * effectiveWeight;

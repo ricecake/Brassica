@@ -44,8 +44,13 @@ namespace brassica {
 		float cloudGlowRadius{4000.0f};
 		// Metres. The cloud-to-cloud FLASH light's radius (lightning_age.comp) -- was
 		// effectively 0 before (a FLASH/POINT innerCutoff-as-radius field mismatch), so it never
-		// lit anything.
-		float cloudFlashRadius{6000.0f};
+		// lit anything. Matches boidish's own cloud-to-cloud flash radius (lightning_manager.cpp's
+		// Light::CreateFlash(..., 500.0f)) -- helpers/lighting.glsl's FLASH falloff
+		// (1/(1+d/r)^exp, hard cutoff past 2r) barely drops at all for d << r, so this has to be
+		// the real human-scale illumination radius, not a glow-radius-sized number like
+		// cloudGlowRadius above (that was the original mistake here: 6000 read as a near-
+		// uniform, falloff-less ball out to several km, instead of a local flash).
+		float cloudFlashRadius{500.0f};
 		// Debug override: forces stormFactor to 1.0 regardless of real weather, so strikes are
 		// visible without waiting for a storm. GPU equivalent of boidish's LightningWidget
 		// "Manual Auto-trigger".
@@ -55,9 +60,11 @@ namespace brassica {
 		// triggered per-call; this is the GPU-driven equivalent of picking which type a given
 		// automatic trigger becomes.
 		float groundStrikeChance{0.3f};
-		// Metres. The cloud-to-ground FLASH light's radius, placed at the resolved ground point
-		// -- bigger than cloudFlashRadius since lighting up the terrain is the point of it.
-		float groundFlashRadius{1500.0f};
+		// Metres. The cloud-to-ground FLASH light's radius, placed at the resolved ground point.
+		// Matches boidish's own ground-strike flash radius (lightning_manager.cpp's
+		// Light::CreateFlash(..., 300.0f)) -- same falloff-shape reasoning as cloudFlashRadius
+		// above applies here too.
+		float groundFlashRadius{300.0f};
 		// Multiplies the rolled strike duration -- boidish's Lifetime Multiplier.
 		float lifetimeScale{1.0f};
 		// Color variety (climate_ca.comp picks the final color at trigger time -- folk-

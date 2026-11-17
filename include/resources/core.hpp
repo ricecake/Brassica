@@ -76,6 +76,15 @@ namespace brassica {
 	// catalog conversion (Lifetime::Persistent, no Create()) is S7's.
 	struct AutoExposureBuffer: ImportedBuffer {};
 
+	// Frame set binding 8 -- the GPU-owned accumulator half of auto-exposure state
+	// (adaptedLuminance/stats/EMAs/autoUchimura*/histogram), split out of AutoExposureBuffer
+	// into its own single-persistent-allocation buffer (Engine.cpp, same pattern as
+	// LightningStrikePool) because that one is a different real buffer per FRAME_OVERLAP slot --
+	// fine for the tunables that still live there, but wrong for state that has to evolve as one
+	// continuous sequence across frames instead of being split into FRAME_OVERLAP independent,
+	// half-frame-rate-sampled ones.
+	struct AutoExposureStateBuffer: ImportedBuffer {};
+
 	// Split from the old single hybrid LightsBuffer (CPU upload + GPU firefly/lightning writes
 	// landing on top of the same buffer every frame, the "weird round trips" TODO.md names) into
 	// two real, bindless-indexed catalog buffers with no CPU/GPU overlap at all:

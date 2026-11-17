@@ -8,42 +8,45 @@
 
 namespace brassica {
 
+	// Tunables only -- bloom_downsample.comp's update_layer_ae()-owned accumulator state
+	// (adaptedLuminance, stats, EMAs, auto-tuned Uchimura params, histogram) lives in the
+	// separate LayerStateHost below instead. They used to live here, inside AutoExposureBuffer,
+	// which is allocated as a different real buffer per FRAME_OVERLAP slot (Engine.cpp) --
+	// fine for tunables re-synced from the CPU every frame, but wrong for continuously-
+	// accumulated GPU state: with FRAME_OVERLAP=2, that state only ever got touched every
+	// *other* frame, so there were effectively two independent, half-frame-rate-sampled
+	// adaptedLuminance sequences interleaving on screen every displayed frame -- visible as
+	// flashing/alternating brightness, worst right at startup (before either sequence
+	// converges) and during fast swings (lightning) where the two sequences sample the changing
+	// signal differently. See AutoExposureStateHost's own comment and Engine.cpp's matching
+	// creation-site comment for the fix.
 	struct LayerDataHost {
-		float adaptedLuminance{0.3f};
 		float targetLuminance{0.25f};
 		float minExposure{0.01f};
 		float maxExposure{25.0f};
 
-		std::int32_t useAutoExposure{1};
-		float        centerWeightTightness{4.0f};
-		glm::vec2    focusPoint{0.5f, 0.5f};
+		std::int32_t       useAutoExposure{1};
+		float              centerWeightTightness{4.0f};
+		// std430 aligns vec2 to 8 bytes -- without this, a plain glm::vec2 here only guarantees
+		// 4-byte (float) alignment, and whether that accidentally matches std430's own alignment
+		// depends on how many 4-byte fields happen to precede it elsewhere in the struct. This is
+		// exactly the bug that slipped through here: removing adaptedLuminance (this struct's old
+		// first field, moved to LayerStateHost) shifted this field's natural C++ offset from 24
+		// (already 8-aligned, by coincidence, in the old field count) to 20 -- GLSL still pads it
+		// to 24, so every field after this one read 4 bytes off from where the GPU actually put it.
+		// Confirmed via spirv-dis cross-check after a real out-of-bounds-read report on hardware.
+		alignas(8) glm::vec2 focusPoint{0.5f, 0.5f};
 
 		float histogramLowCutoff{0.1f};
 		float histogramHighCutoff{0.95f};
 		float speedUp{3.0f};
 		float speedDown{1.0f};
 
-		float minLuma{0.0f};
-		float maxLuma{0.0f};
-		float avgLuma{0.0f};
-		float stdDevLuma{0.0f};
-
-		float emaMinLuma{0.0f};
-		float emaMaxLuma{0.0f};
-		float emaAvgLuma{0.0f};
-		float emaStdDevLuma{0.0f};
-
 		std::int32_t autoTuneEnabled{1};
 		float        minContrast{0.6f};
 		float        maxContrast{1.3f};
 		float        targetBrightness{1.0f};
 
-		float autoUchimuraP{1.0f};
-		float autoUchimuraA{1.0f};
-		float autoUchimuraM{0.22f};
-		float autoUchimuraL{0.4f};
-		float autoUchimuraC{1.33f};
-		float autoUchimuraB{0.0f};
 		float exposureTime{0.008f}; // 1/125s default
 		float iso{100.0f};
 
@@ -56,10 +59,12 @@ namespace brassica {
 		std::int32_t toneMapMode{5};
 		std::int32_t toneMappingEnabled{1};
 
-		glm::vec4 cdlSlope{1.0f, 1.0f, 1.0f, 0.0f};
-		glm::vec4 cdlOffset{0.0f, 0.0f, 0.0f, 0.0f};
-		glm::vec4 cdlPower{1.0f, 1.0f, 1.0f, 0.0f};
-		float     cdlSaturation{1.0f};
+		// std430 aligns vec4 to 16 bytes -- same coincidental-alignment bug as focusPoint above,
+		// made explicit here instead of left to chance.
+		alignas(16) glm::vec4 cdlSlope{1.0f, 1.0f, 1.0f, 0.0f};
+		alignas(16) glm::vec4 cdlOffset{0.0f, 0.0f, 0.0f, 0.0f};
+		alignas(16) glm::vec4 cdlPower{1.0f, 1.0f, 1.0f, 0.0f};
+		float cdlSaturation{1.0f};
 
 		float whiteTemp{6500.0f};
 		float whiteTint{0.0f};
@@ -80,16 +85,6 @@ namespace brassica {
 		// autoexposure.glsl's matching padding and the static_assert below.
 		float _pad0{0.0f};
 		float _pad1{0.0f};
-		float _pad2{0.0f};
-
-		std::uint32_t histogram[256]{0};
-		// Snapshot of the previous frame's fully-accumulated histogram, written by
-		// bloom_downsample.comp's update_layer_ae right before it zeroes `histogram` for this
-		// frame's accumulation. `histogram` itself is always zero by the time s_exposureReadback's
-		// frame-overlap-delayed copy (below) can observe it, since the reset is the last write to
-		// that field before the buffer slot comes back around -- a settings UI reading live
-		// histogram data must read this field instead.
-		std::uint32_t histogramSnapshot[256]{0};
 	};
 
 	// bloom_downsample.comp indexes `layers[2]` as a std430 array of LayerData; std430 rounds an
@@ -102,6 +97,53 @@ namespace brassica {
 	static_assert(
 		sizeof(LayerDataHost) % 16 == 0,
 		"LayerDataHost size must be a multiple of 16 bytes -- see comment above"
+	);
+
+	// GPU-owned per-layer accumulator state that bloom_downsample.comp's update_layer_ae() reads
+	// and writes every frame -- see LayerDataHost's comment above for why this can't live in the
+	// per-FRAME_OVERLAP-slot AutoExposureBuffer alongside the tunables. Mirrors autoexposure.glsl's
+	// LayerState field-for-field.
+	struct LayerStateHost {
+		float adaptedLuminance{0.3f};
+
+		// Statistics (recomputed fresh from this frame's histogram, no history of their own)
+		float minLuma{0.0f};
+		float maxLuma{0.0f};
+		float avgLuma{0.0f};
+		float stdDevLuma{0.0f};
+
+		// EMAs
+		float emaMinLuma{0.0f};
+		float emaMaxLuma{0.0f};
+		float emaAvgLuma{0.0f};
+		float emaStdDevLuma{0.0f};
+
+		// Auto-calculated Uchimura parameters
+		float autoUchimuraP{1.0f};
+		float autoUchimuraA{1.0f};
+		float autoUchimuraM{0.22f};
+		float autoUchimuraL{0.4f};
+		float autoUchimuraC{1.33f};
+		float autoUchimuraB{0.0f};
+
+		// std430 rounds an array-of-structs element stride up to a multiple of 16 -- see the
+		// static_assert below for what breaks if this drifts (same spirv-dis-confirmed failure
+		// mode as LayerDataHost's own padding comment).
+		float _pad0{0.0f};
+
+		std::uint32_t histogram[256]{0};
+		// Snapshot of the previous frame's fully-accumulated histogram, written by
+		// bloom_downsample.comp's update_layer_ae right before it zeroes `histogram` for this
+		// frame's accumulation. `histogram` itself is always zero by the time
+		// s_exposureStateReadback's copy (below) can observe it, since the reset is the last
+		// write to that field each frame -- a settings UI reading live histogram data must read
+		// this field instead.
+		std::uint32_t histogramSnapshot[256]{0};
+	};
+
+	static_assert(
+		sizeof(LayerStateHost) % 16 == 0,
+		"LayerStateHost size must be a multiple of 16 bytes -- see comment above"
 	);
 
 	// One depth-ranged auto-exposure/tonemap layer. Mirrors cdl_grading.glsl's CdlEntry/
@@ -146,6 +188,14 @@ namespace brassica {
 	);
 
 	constexpr std::size_t kMaxExposureLayers = 8;
+
+	// Host-side mirror of the single persistent AutoExposureStateBuffer (Engine.cpp) -- NOT
+	// allocated per-FRAME_OVERLAP-slot, unlike ExposureDataHost below. Only ever used for the
+	// one-time zero/default seed at buffer creation and for s_exposureStateReadback's debug
+	// display copy; the GPU owns this data every frame after that.
+	struct AutoExposureStateHost {
+		std::array<LayerStateHost, kMaxExposureLayers> states{};
+	};
 
 	struct ExposureDataHost {
 		std::array<ExposureLayerHost, kMaxExposureLayers> layers{};
@@ -201,12 +251,13 @@ namespace brassica {
 		.numLayers = 3,
 	};
 
-	// Copies only the fields QuickSettingsWidget's ImGui sliders expose (see LayerDataHost's
-	// field groups above) from src (s_exposureData, host-side) into dst (the mapped GPU buffer),
-	// deliberately skipping every field bloom_downsample.comp's update_layer_ae owns: statistics
-	// (minLuma/maxLuma/avgLuma/stdDevLuma), the EMAs, autoUchimura*, and histogram. Called every
-	// frame so slider changes take effect without resetting the shader's own accumulated
-	// auto-exposure/auto-tune state.
+	// Copies the fields QuickSettingsWidget's ImGui sliders expose from src (s_exposureData,
+	// host-side) into dst (the mapped GPU buffer) -- an explicit allowlist rather than `dst =
+	// src;` so a future field addition has to be deliberately added here instead of silently
+	// becoming CPU-writable. LayerDataHost itself no longer holds any of bloom_downsample.comp's
+	// update_layer_ae-owned fields at all (those moved to LayerStateHost/AutoExposureStateHost),
+	// so there's nothing left to accidentally stomp here. Called every frame so slider changes
+	// take effect without resetting the shader's own accumulated auto-exposure/auto-tune state.
 	inline void SyncAutoExposureTunables(LayerDataHost& dst, const LayerDataHost& src) {
 		dst.targetLuminance = src.targetLuminance;
 		dst.minExposure = src.minExposure;
@@ -256,15 +307,12 @@ namespace brassica {
 		dst.gamma = src.gamma;
 	}
 
-	// Snapshot of the GPU-owned fields (statistics, EMAs, autoUchimura*, histogram) that
-	// bloom_downsample.comp's update_layer_ae writes -- s_exposureData never reflects these since
-	// SyncAutoExposureTunables deliberately skips them. Engine::DrawFrame populates this every
-	// frame by copying autoExposureMapped[activeFrame]'s current contents just before overwriting
-	// it with this frame's tunables: by construction that memory was last written by the compute
-	// dispatch FRAME_OVERLAP frames ago, and frame-overlap fencing already guarantees that
-	// dispatch has retired by the time its buffer slot comes back around for reuse, so this read
-	// needs no extra synchronization of its own. A settings UI wanting live stats/histogram
-	// display should read from here, not from s_exposureData.
-	inline ExposureDataHost s_exposureReadback{};
+	// Debug-display copy of the single persistent AutoExposureStateBuffer, populated every frame
+	// by Engine::DrawFrame copying autoExposureStateMapped's current contents directly (no
+	// frame-overlap delay needed -- there's only one copy of this buffer now, not a different
+	// real one per FRAME_OVERLAP slot, so there's nothing to wait on cycling back around). A
+	// settings UI wanting live stats/histogram display should read from here, not from
+	// s_exposureData (which only ever holds tunables).
+	inline AutoExposureStateHost s_exposureStateReadback{};
 
 } // namespace brassica

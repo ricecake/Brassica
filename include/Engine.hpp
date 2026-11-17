@@ -414,6 +414,16 @@ namespace brassica {
 		vk::Buffer    lightningStrikePoolBuffer{nullptr};
 		VmaAllocation lightningStrikePoolAllocation{nullptr};
 
+		// AutoExposureStateBuffer (frame set binding 8): same single-persistent-allocation
+		// reasoning as lightningStrikePoolBuffer above -- bloom_downsample.comp's update_layer_ae
+		// owns this (adaptedLuminance/stats/EMAs/autoUchimura*/histogram) and it must evolve as
+		// one continuous sequence across frames, not get split per FRAME_OVERLAP slot the way
+		// autoExposureBuffers[] (now tunables-only) still is. mapped so Engine::DrawFrame can
+		// cheaply copy it into s_exposureStateReadback for the Lighting widget's live display.
+		vk::Buffer    autoExposureStateBuffer{nullptr};
+		VmaAllocation autoExposureStateAllocation{nullptr};
+		void*         autoExposureStateMapped{nullptr};
+
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 
 		void InitFrameSet();
