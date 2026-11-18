@@ -549,14 +549,14 @@ vec2 getEdgePoint(vec2 vA_skew, vec2 vA, vec2 vB_skew, vec2 vB, float lobes) {
     return mix(vA, vB, t);
 }
 
-struct OrganicPlateData {
-    vec2 regionVertex; // The skewed grid coordinate identifying the plate
-    float regionID;    // A 0.0 - 1.0 hash unique to this specific plate
-    float edgeDist;    // The explicit distance to the generated straight-line boundary
-    vec2 regionCenter;
-    vec2 nearestCentroid;
-    vec3 barycentric;
-};
+// struct OrganicPlateData {
+//     vec2 regionVertex; // The skewed grid coordinate identifying the plate
+//     float regionID;    // A 0.0 - 1.0 hash unique to this specific plate
+//     float edgeDist;    // The explicit distance to the generated straight-line boundary
+//     vec2 regionCenter;
+//     vec2 nearestCentroid;
+//     vec3 barycentric;
+// };
 
 // Assumes cross2d(a, b) is defined as (a.x * b.y - a.y * b.x)
 
@@ -569,94 +569,94 @@ int hash3(vec2 v) {
     return (sum % 3 + 3) % 3;
 }
 
-// Assumes cross2d(a, b) is defined as (a.x * b.y - a.y * b.x)
-OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
-    vec2 p = worldPos * scale;
+// // Assumes cross2d(a, b) is defined as (a.x * b.y - a.y * b.x)
+// OrganicPlateData getOrganicPlate(vec2 worldPos, float scale, float lobes) {
+//     vec2 p = worldPos * scale;
 
-    const float F2 = 0.36602540378;
-    const float G2 = 0.21132486540;
+//     const float F2 = 0.36602540378;
+//     const float G2 = 0.21132486540;
 
-    vec2 s = p + (p.x + p.y) * F2;
-    vec2 i = floor(s);
-    vec2 f = s - i;
+//     vec2 s = p + (p.x + p.y) * F2;
+//     vec2 i = floor(s);
+//     vec2 f = s - i;
 
-    vec2 i1 = (f.x > f.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+//     vec2 i1 = (f.x > f.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
 
-    vec2 v0_skew = i;
-    vec2 v1_skew = i + i1;
-    vec2 v2_skew = i + vec2(1.0, 1.0);
+//     vec2 v0_skew = i;
+//     vec2 v1_skew = i + i1;
+//     vec2 v2_skew = i + vec2(1.0, 1.0);
 
-    vec2 v0 = v0_skew - (v0_skew.x + v0_skew.y) * G2;
-    vec2 v1 = v1_skew - (v1_skew.x + v1_skew.y) * G2;
-    vec2 v2 = v2_skew - (v2_skew.x + v2_skew.y) * G2;
+//     vec2 v0 = v0_skew - (v0_skew.x + v0_skew.y) * G2;
+//     vec2 v1 = v1_skew - (v1_skew.x + v1_skew.y) * G2;
+//     vec2 v2 = v2_skew - (v2_skew.x + v2_skew.y) * G2;
 
-    vec2 V_skew[3];
-    vec2 V_cart[3];
+//     vec2 V_skew[3];
+//     vec2 V_cart[3];
 
-    V_skew[hash3(v0_skew)] = v0_skew; V_cart[hash3(v0_skew)] = v0;
-    V_skew[hash3(v1_skew)] = v1_skew; V_cart[hash3(v1_skew)] = v1;
-    V_skew[hash3(v2_skew)] = v2_skew; V_cart[hash3(v2_skew)] = v2;
+//     V_skew[hash3(v0_skew)] = v0_skew; V_cart[hash3(v0_skew)] = v0;
+//     V_skew[hash3(v1_skew)] = v1_skew; V_cart[hash3(v1_skew)] = v1;
+//     V_skew[hash3(v2_skew)] = v2_skew; V_cart[hash3(v2_skew)] = v2;
 
-    vec2 E01 = getEdgePoint(V_skew[0], V_cart[0], V_skew[1], V_cart[1], lobes);
-    vec2 E12 = getEdgePoint(V_skew[1], V_cart[1], V_skew[2], V_cart[2], lobes);
-    vec2 E20 = getEdgePoint(V_skew[2], V_cart[2], V_skew[0], V_cart[0], lobes);
+//     vec2 E01 = getEdgePoint(V_skew[0], V_cart[0], V_skew[1], V_cart[1], lobes);
+//     vec2 E12 = getEdgePoint(V_skew[1], V_cart[1], V_skew[2], V_cart[2], lobes);
+//     vec2 E20 = getEdgePoint(V_skew[2], V_cart[2], V_skew[0], V_cart[0], lobes);
 
-    vec2 center = (E01 + E12 + E20) / 3.0;
+//     vec2 center = (E01 + E12 + E20) / 3.0;
 
-    // Test exactly which of the 4 sub-triangles 'p' is inside
-    bool inC0 = cross2d(E01 - E20, p - E20) * cross2d(E01 - E20, V_cart[0] - E20) >= 0.0;
-    bool inC1 = cross2d(E12 - E01, p - E01) * cross2d(E12 - E01, V_cart[1] - E01) >= 0.0;
-    bool inC2 = cross2d(E20 - E12, p - E12) * cross2d(E20 - E12, V_cart[2] - E12) >= 0.0;
+//     // Test exactly which of the 4 sub-triangles 'p' is inside
+//     bool inC0 = cross2d(E01 - E20, p - E20) * cross2d(E01 - E20, V_cart[0] - E20) >= 0.0;
+//     bool inC1 = cross2d(E12 - E01, p - E01) * cross2d(E12 - E01, V_cart[1] - E01) >= 0.0;
+//     bool inC2 = cross2d(E20 - E12, p - E12) * cross2d(E20 - E12, V_cart[2] - E12) >= 0.0;
 
-    int tri_id = -1;
-    if (inC0) tri_id = 0;
-    else if (inC1) tri_id = 1;
-    else if (inC2) tri_id = 2;
+//     int tri_id = -1;
+//     if (inC0) tri_id = 0;
+//     else if (inC1) tri_id = 1;
+//     else if (inC2) tri_id = 2;
 
-    vec2 pA = E01;
-    vec2 pB = E12;
-    vec2 pC = E20;
+//     vec2 pA = E01;
+//     vec2 pB = E12;
+//     vec2 pC = E20;
 
-    vec2 active_v_skew;
-    vec2 active_v;
+//     vec2 active_v_skew;
+//     vec2 active_v;
 
-    if (tri_id == 0) {
-        pB = V_cart[0];
-        active_v_skew = V_skew[0];
-        active_v = V_cart[0];
-    } else if (tri_id == 1) {
-        pC = V_cart[1];
-        active_v_skew = V_skew[1];
-        active_v = V_cart[1];
-    } else if (tri_id == 2) {
-        pA = V_cart[2];
-        active_v_skew = V_skew[2];
-        active_v = V_cart[2];
-    } else {
-        float d0 = dot(p - V_cart[0], p - V_cart[0]);
-        float d1 = dot(p - V_cart[1], p - V_cart[1]);
-        float d2 = dot(p - V_cart[2], p - V_cart[2]);
-        int closest_id = (d0 < d1 && d0 < d2) ? 0 : ((d1 < d2) ? 1 : 2);
+//     if (tri_id == 0) {
+//         pB = V_cart[0];
+//         active_v_skew = V_skew[0];
+//         active_v = V_cart[0];
+//     } else if (tri_id == 1) {
+//         pC = V_cart[1];
+//         active_v_skew = V_skew[1];
+//         active_v = V_cart[1];
+//     } else if (tri_id == 2) {
+//         pA = V_cart[2];
+//         active_v_skew = V_skew[2];
+//         active_v = V_cart[2];
+//     } else {
+//         float d0 = dot(p - V_cart[0], p - V_cart[0]);
+//         float d1 = dot(p - V_cart[1], p - V_cart[1]);
+//         float d2 = dot(p - V_cart[2], p - V_cart[2]);
+//         int closest_id = (d0 < d1 && d0 < d2) ? 0 : ((d1 < d2) ? 1 : 2);
 
-        active_v_skew = V_skew[closest_id];
-        active_v = V_cart[closest_id];
-    }
+//         active_v_skew = V_skew[closest_id];
+//         active_v = V_cart[closest_id];
+//     }
 
-    OrganicPlateData data;
-    data.regionVertex = active_v_skew;
-    data.regionID = hash21(active_v_skew + 123.456);
-    data.regionCenter = active_v;
-    data.nearestCentroid = center;
+//     OrganicPlateData data;
+//     data.regionVertex = active_v_skew;
+//     data.regionID = hash21(active_v_skew + 123.456);
+//     data.regionCenter = active_v;
+//     data.nearestCentroid = center;
 
-    // Pass the globally stable slots to the corrected barycentric solver
-    data.barycentric = getBarycentric2D(p, pA, pB, pC);
+//     // Pass the globally stable slots to the corrected barycentric solver
+//     data.barycentric = getBarycentric2D(p, pA, pB, pC);
 
-    data.edgeDist = min(sdLine(p, center, E01),
-                    min(sdLine(p, center, E12),
-                        sdLine(p, center, E20)));
+//     data.edgeDist = min(sdLine(p, center, E01),
+//                     min(sdLine(p, center, E12),
+//                         sdLine(p, center, E20)));
 
-    return data;
-}
+//     return data;
+// }
 
 vec3 hash_and_rotate(ivec3 grid_p, vec2 osc, int tile_size) {
     // Perfect tiling using bitmasking

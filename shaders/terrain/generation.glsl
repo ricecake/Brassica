@@ -18,6 +18,14 @@ struct TectonicPlate {
     vec3 velocity;
 };
 
+struct PlateFlow {
+    int mode;        // 0 = channel, 1 = 1-cell pond, 2 = 2-cell mutual pond
+    vec2 targetSkew; // Downhill neighbor (mode 0) or pond partner (mode 2)
+    float plateH;
+    float waterH;
+};
+
+
 const TectonicPlate plates[] = TectonicPlate[](
     TectonicPlate(vec3(-0.10998967, 0.18729015, 0.9761274), -0.2120724, 45.14807, vec3(0.77386445, -0.6001565, 0.20235115)),
     TectonicPlate(vec3(-0.27727792, 0.5709581, 0.77273786), 0.2528148, 58.432438, vec3(0.3304707, -0.69852555, 0.6347056)),
@@ -457,94 +465,6 @@ MountainResult evaluateMountains(
     return result;
 }
 
-struct HydrologyResult {
-    float river_carve;
-    vec3  grad_river_carve;
-    float river_profile;
-    float river_mask;
-    float canyon_carve;
-    vec3  grad_canyon_carve;
-    float canyon_profile;
-    float canyon_mask;
-    float basin_mask;
-    vec3  grad_basin_mask;
-    float lake_water_level;
-    vec3  grad_lake_water_level;
-};
-
-// Region 5: rivers, canyons, and lake basins.
-HydrologyResult evaluateHydrology(
-    vec3  P_geo,
-    float radius_scale,
-    vec3  vel,
-    mat3  J_vel,
-    float warp_strength,
-    float phase,
-    float interior_mask,
-    vec3  grad_interior_mask,
-    float base_h,
-    vec3  grad_base_h,
-    int   riverOctaves,
-    int   canyonOctaves,
-    int   basinOctaves
-) {
-    HydrologyResult result;
-
-    // RIVERS (Inverted zero-crossings warped by velocity)
-    vec3 grad_raw_river;
-    vec3 P_river = P_geo * radius_scale * 2.0 + vel * warp_strength * 1.5;
-    float raw_river = dot_noise_fbm(P_river, riverOctaves, phase + 112.0, grad_raw_river);
-    vec3 grad_river_warped = transpose(mat3(radius_scale * 2.0) + J_vel * warp_strength * 1.5) * grad_raw_river;
-
-    float river_width = 0.035;
-    float t_river = clamp(abs(raw_river) / river_width, 0.0, 1.0);
-    result.river_profile = 1.0 - (t_river * t_river * (3.0 - 2.0 * t_river));
-    float d_river_profile = -6.0 * t_river * (1.0 - t_river) / river_width;
-    vec3 grad_river_profile = d_river_profile * sign(raw_river) * grad_river_warped;
-
-    result.river_mask = interior_mask; // Keep rivers out of the steepest fault lines
-    float river_depth = 0.06;
-    result.river_carve = result.river_profile * result.river_mask * river_depth;
-    result.grad_river_carve = river_depth * (grad_river_profile * result.river_mask + result.river_profile * grad_interior_mask);
-
-    // CANYONS (Inverted zero-crossings masked to high elevation)
-    vec3 grad_raw_canyon;
-    float raw_canyon = dot_noise_fbm(P_geo * radius_scale * 1.5, canyonOctaves, phase + 175.0, grad_raw_canyon);
-    vec3 grad_canyon_warped = grad_raw_canyon * radius_scale * 1.5;
-
-    float canyon_width = 0.015;
-    float t_canyon = clamp(abs(raw_canyon) / canyon_width, 0.0, 1.0);
-    result.canyon_profile = 1.0 - (t_canyon * t_canyon * (3.0 - 2.0 * t_canyon));
-    float d_canyon_profile = -6.0 * t_canyon * (1.0 - t_canyon) / canyon_width;
-    vec3 grad_canyon_profile = d_canyon_profile * sign(raw_canyon) * grad_canyon_warped;
-
-    float t_elev = clamp((base_h - 0.2) / 0.3, 0.0, 1.0);
-    float high_elev_mask = t_elev * t_elev * (3.0 - 2.0 * t_elev);
-    float d_high_elev_mask = 6.0 * t_elev * (1.0 - t_elev) / 0.3;
-    vec3 grad_high_elev_mask = d_high_elev_mask * grad_base_h;
-
-    result.canyon_mask = interior_mask * high_elev_mask;
-    vec3 grad_canyon_mask = grad_interior_mask * high_elev_mask + interior_mask * grad_high_elev_mask;
-
-    float canyon_depth = 0.15;
-    result.canyon_carve = result.canyon_profile * result.canyon_mask * canyon_depth;
-    result.grad_canyon_carve = canyon_depth * (grad_canyon_profile * result.canyon_mask + result.canyon_profile * grad_canyon_mask);
-
-    // LAKE BASINS (Cellular-like structural flattening)
-    vec3 grad_basin_noise;
-    float basin_noise = dot_noise_fbm(P_geo * radius_scale * 1.2, basinOctaves, phase + 200.0, grad_basin_noise);
-
-    float t_basin = clamp((basin_noise - 0.65) / 0.25, 0.0, 1.0);
-    result.basin_mask = t_basin * t_basin * (3.0 - 2.0 * t_basin);
-    float d_basin_mask = 6.0 * t_basin * (1.0 - t_basin) / 0.25;
-    result.grad_basin_mask = d_basin_mask * grad_basin_noise * radius_scale * 1.2;
-
-    result.lake_water_level = base_h - 0.02;
-    result.grad_lake_water_level = grad_base_h;
-
-    return result;
-}
-
 struct ErosionResult {
     float true_height;
     vec2  slope;
@@ -655,39 +575,694 @@ float classifyGeoBiome(
     return clamp(geo_biome, 0.0, 1.0);
 }
 
-// Region 10: water level in normalized height space -- rivers/canyons/lake basins each fill to
-// their own fraction of their own carved depth, highest-coverage mask wins where they overlap.
+// --- Simplex-Hex Hydrology Constants & Helpers ---
+const float HYDRO_F2 = 0.36602540378;
+const float HYDRO_G2 = 0.21132486540;
+
+const vec2 HYDRO_HEX_DIRS[6] = vec2[6](
+    vec2( 1.0,  0.0),
+    vec2( 1.0,  1.0),
+    vec2( 0.0,  1.0),
+    vec2(-1.0,  0.0),
+    vec2(-1.0, -1.0),
+    vec2( 0.0, -1.0)
+);
+
+float hydroCross2d(vec2 a, vec2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+float hydroHash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+int hydroHash3(vec2 v) {
+    int sum = int(round(v.x)) + int(round(v.y));
+    return (sum % 3 + 3) % 3;
+}
+
+vec2 hydroSkewToCart(vec2 v_skew) {
+    return v_skew - (v_skew.x + v_skew.y) * HYDRO_G2;
+}
+
+float hydroSdLine(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+float hydroSmin(float a, float b, float k, out float blendFactor) {
+    blendFactor = clamp(0.5 + 0.5 * (a - b) / max(k, 1e-5), 0.0, 1.0);
+    return mix(a, b, blendFactor) - k * blendFactor * (1.0 - blendFactor);
+}
+
+float hydroGetRadius(vec2 v_skew, vec2 v_cart, vec2 target_cart, float lobes) {
+    vec2 dir = target_cart - v_cart;
+    float theta = atan(dir.y, dir.x);
+    float offset = hydroHash21(v_skew) * 6.2831853;
+    return 0.5 + 0.22 * sin(lobes * theta + offset);
+}
+
+vec2 hydroGetEdgePoint(vec2 vA_skew, vec2 vA, vec2 vB_skew, vec2 vB, float lobes) {
+    float rA = hydroGetRadius(vA_skew, vA, vB, lobes);
+    float rB = hydroGetRadius(vB_skew, vB, vA, lobes);
+    float t = rA / max(rA + rB, 1e-4);
+    return mix(vA, vB, t);
+}
+
+vec3 hydroGetBarycentric2D(vec2 p, vec2 a, vec2 b, vec2 c) {
+    vec2 v0 = b - a;
+    vec2 v1 = c - a;
+    vec2 v2 = p - a;
+    float det = v0.x * v1.y - v1.x * v0.y;
+    if (abs(det) < 1e-5) return vec3(0.3333);
+    float v = (v2.x * v1.y - v1.x * v2.y) / det;
+    float w = (v0.x * v2.y - v2.x * v0.y) / det;
+    return vec3(1.0 - v - w, v, w);
+}
+
+struct OrganicPlateData {
+    vec2 regionVertex;
+    float regionID;
+    float edgeDist;
+    vec2 regionCenter;
+    vec2 nearestCentroid;
+    vec3 barycentric;
+};
+
+OrganicPlateData getOrganicPlate(vec2 xz, float scale, float lobes) {
+    vec2 p = xz * scale;
+    vec2 s = p + (p.x + p.y) * HYDRO_F2;
+    vec2 i = floor(s);
+    vec2 f = s - i;
+    vec2 i1 = (f.x > f.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+
+    vec2 v0_skew = i;
+    vec2 v1_skew = i + i1;
+    vec2 v2_skew = i + vec2(1.0, 1.0);
+
+    vec2 v0 = hydroSkewToCart(v0_skew);
+    vec2 v1 = hydroSkewToCart(v1_skew);
+    vec2 v2 = hydroSkewToCart(v2_skew);
+
+    vec2 V_skew[3];
+    vec2 V_cart[3];
+    V_skew[hydroHash3(v0_skew)] = v0_skew; V_cart[hydroHash3(v0_skew)] = v0;
+    V_skew[hydroHash3(v1_skew)] = v1_skew; V_cart[hydroHash3(v1_skew)] = v1;
+    V_skew[hydroHash3(v2_skew)] = v2_skew; V_cart[hydroHash3(v2_skew)] = v2;
+
+    vec2 E01 = hydroGetEdgePoint(V_skew[0], V_cart[0], V_skew[1], V_cart[1], lobes);
+    vec2 E12 = hydroGetEdgePoint(V_skew[1], V_cart[1], V_skew[2], V_cart[2], lobes);
+    vec2 E20 = hydroGetEdgePoint(V_skew[2], V_cart[2], V_skew[0], V_cart[0], lobes);
+    vec2 center = (E01 + E12 + E20) / 3.0;
+
+    bool inC0 = hydroCross2d(E01 - E20, p - E20) * hydroCross2d(E01 - E20, V_cart[0] - E20) >= 0.0;
+    bool inC1 = hydroCross2d(E12 - E01, p - E01) * hydroCross2d(E12 - E01, V_cart[1] - E01) >= 0.0;
+    bool inC2 = hydroCross2d(E20 - E12, p - E12) * hydroCross2d(E20 - E12, V_cart[2] - E12) >= 0.0;
+
+    int tri_id = -1;
+    if (inC0) tri_id = 0;
+    else if (inC1) tri_id = 1;
+    else if (inC2) tri_id = 2;
+
+    vec2 pA = E01;
+    vec2 pB = E12;
+    vec2 pC = E20;
+    vec3 innerBary = hydroGetBarycentric2D(p, E01, E12, E20);
+
+    vec2 active_v_skew;
+    vec2 active_v;
+    if (tri_id == 0) {
+        pB = V_cart[0];
+        active_v_skew = V_skew[0];
+        active_v = V_cart[0];
+    } else if (tri_id == 1) {
+        pC = V_cart[1];
+        active_v_skew = V_skew[1];
+        active_v = V_cart[1];
+    } else if (tri_id == 2) {
+        pA = V_cart[2];
+        active_v_skew = V_skew[2];
+        active_v = V_cart[2];
+    } else {
+        int closest_id = (innerBary.y <= innerBary.x && innerBary.y <= innerBary.z) ? 0
+                       : ((innerBary.z <= innerBary.x && innerBary.z <= innerBary.y) ? 1 : 2);
+        active_v_skew = V_skew[closest_id];
+        active_v = V_cart[closest_id];
+    }
+
+    OrganicPlateData data;
+    data.regionVertex = active_v_skew;
+    data.regionID = hydroHash21(active_v_skew + 123.456);
+    data.regionCenter = active_v;
+    data.nearestCentroid = center;
+    data.barycentric = hydroGetBarycentric2D(p, pA, pB, pC);
+    data.edgeDist = min(hydroSdLine(p, center, E01),
+                    min(hydroSdLine(p, center, E12),
+                        hydroSdLine(p, center, E20)));
+    return data;
+}
+
+// Scalar-only fast macro elevation lookup (strips Jacobians, Hessians, and analytical gradients)
+float sampleMacroHeightFast(vec2 xz, float phase, float warp_strength, TerrainConfig config) {
+    WrappedTerrainCoord w = wrapTerrainCoordinates(vec3(xz.x, 0.0, xz.y));
+    vec3 p_local = w.p_local;
+
+    mat3 dummyJ;
+    vec3 tectonicWarp = cross_noise_fbm(16.0 * p_local / FAKE_PLANET_RADIUS, 1, 0.0, dummyJ);
+    vec3 p_tectonic = p_local + 20000.0 * tectonicWarp;
+
+    float theta = p_tectonic.x / FAKE_PLANET_RADIUS;
+    float phi   = p_tectonic.z / FAKE_PLANET_RADIUS;
+    float cos_p = cos(phi);
+    vec3 P_geo  = vec3(cos_p * sin(theta), sin(phi), cos_p * cos(theta));
+
+    float k_crumple = 350.0;
+    float max_kd_macro = -1e20;
+    float max_kd_crump = -1e20;
+    for (int i = 0; i < plates.length(); i++) {
+        float d = dot(P_geo, plates[i].seed_dir);
+        max_kd_macro = max(max_kd_macro, plates[i].k * d);
+        max_kd_crump = max(max_kd_crump, k_crumple * d);
+    }
+
+    float sum_w_macro = 0.0, sum_h = 0.0;
+    float sum_w_crump = 0.0, sum_w2_crump = 0.0;
+    vec3 sum_v = vec3(0.0);
+    vec3 grad_w_crump = vec3(0.0);
+    float trace_J_sum_v = 0.0;
+
+    for (int i = 0; i < plates.length(); i++) {
+        vec3 S = plates[i].seed_dir;
+        float d = dot(P_geo, S);
+
+        float w_macro = exp(plates[i].k * d - max_kd_macro);
+        sum_w_macro += w_macro;
+        sum_h += w_macro * plates[i].height;
+
+        float w_crump = exp(k_crumple * d - max_kd_crump);
+        vec3 dw_crump = k_crumple * w_crump * S;
+        sum_w_crump += w_crump;
+        sum_v += w_crump * plates[i].velocity;
+        grad_w_crump += dw_crump;
+        trace_J_sum_v += dot(plates[i].velocity, dw_crump);
+        sum_w2_crump += w_crump * w_crump;
+    }
+
+    float inv_W_macro = 1.0 / sum_w_macro;
+    float base_h = sum_h * inv_W_macro;
+
+    float inv_W_crump = 1.0 / sum_w_crump;
+    vec3 vel = sum_v * inv_W_crump;
+    float I1 = (trace_J_sum_v - dot(vel, grad_w_crump)) * inv_W_crump;
+    base_h += smoothstep(-0.5, -2.0, I1) * 0.4;
+
+    float raw_fault = 1.0 - sum_w2_crump * inv_W_crump * inv_W_crump;
+    float t_fault = clamp(raw_fault / 0.55, 0.0, 1.0);
+    float fault_mask = t_fault * t_fault * (3.0 - 2.0 * t_fault);
+    float interior_mask = 1.0 - fault_mask;
+
+    float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
+    vec3 P_noise = P_geo * radius_scale;
+
+    float continent_h = dot_noise_fbm(P_noise, 2, phase + 32.0) * 0.95;
+    float macro_noise = dot_noise_fbm(P_noise * 0.1, 1, phase + 123.0);
+    float t_macro = clamp((macro_noise + 0.2) / 0.6, 0.0, 1.0);
+    float hill_mult = t_macro * t_macro * (3.0 - 2.0 * t_macro) * 2.5;
+
+    float raw_hills = dot_noise_fbm(P_noise, 1, phase + 89.0);
+    float hill_h = pow(1.0 - abs(raw_hills), 2.0) * interior_mask * hill_mult;
+
+    float raw_ridge = dot_noise_fbm(P_noise + vel * warp_strength, 2, phase + 42.0);
+    float ridge_h = pow(abs(raw_ridge), 3.0) * fault_mask;
+
+    // Smooth max approximation matching smax_quad_deriv(continent_h, hill_h, 0.25)
+    float h_diff = clamp(0.5 + 0.5 * (hill_h - continent_h) / 0.25, 0.0, 1.0);
+    float shelf_x = mix(continent_h, hill_h, h_diff) + 0.25 * h_diff * (1.0 - h_diff);
+
+    return base_h + shelf_x + ridge_h;
+}
+
+float getPlateElevationFast(vec2 v_skew, float scale, float phase, float warp_strength, TerrainConfig config) {
+    vec2 xz = hydroSkewToCart(v_skew) / scale;
+    return sampleMacroHeightFast(xz, phase, warp_strength, config) + 1e-5 * hydroHash21(v_skew);
+}
+
+void findLowestNeighborFast(
+    vec2 v_skew, float scale, float phase, float warp_strength, TerrainConfig config,
+    out vec2 bestN, out float bestH
+) {
+    bestH = 1e9;
+    bestN = v_skew;
+    for (int k = 0; k < 6; ++k) {
+        vec2 n_skew = v_skew + HYDRO_HEX_DIRS[k];
+        float h = getPlateElevationFast(n_skew, scale, phase, warp_strength, config);
+        if (h < bestH) {
+            bestH = h;
+            bestN = n_skew;
+        }
+    }
+}
+
+void considerCandidate(vec2 candSkew, float candH, inout vec2 bestSkew, inout float bestH) {
+    if (candH < bestH) {
+        bestH = candH;
+        bestSkew = candSkew;
+    }
+}
+
+float getBasinEdgeDist(vec2 p, vec2 A_skew, vec2 partner_skew, bool hasPartner, float lobes) {
+    vec2 A_cart = hydroSkewToCart(A_skew);
+    float minDist = 1e9;
+
+    for (int k = 0; k < 6; ++k) {
+        vec2 N0_skew = A_skew + HYDRO_HEX_DIRS[k];
+        vec2 N1_skew = A_skew + HYDRO_HEX_DIRS[(k + 1) % 6];
+        vec2 N0_cart = hydroSkewToCart(N0_skew);
+        vec2 N1_cart = hydroSkewToCart(N1_skew);
+
+        vec2 E0  = hydroGetEdgePoint(A_skew, A_cart, N0_skew, N0_cart, lobes);
+        vec2 E1  = hydroGetEdgePoint(A_skew, A_cart, N1_skew, N1_cart, lobes);
+        vec2 E01 = hydroGetEdgePoint(N0_skew, N0_cart, N1_skew, N1_cart, lobes);
+        vec2 sectorCenter = (E0 + E1 + E01) / 3.0;
+
+        bool skip0 = hasPartner && all(equal(N0_skew, partner_skew));
+        bool skip1 = hasPartner && all(equal(N1_skew, partner_skew));
+
+        if (!skip0) minDist = min(minDist, hydroSdLine(p, sectorCenter, E0));
+        if (!skip1) minDist = min(minDist, hydroSdLine(p, sectorCenter, E1));
+    }
+    return minDist;
+}
+
+vec2 getMeanderWarp(vec2 xz, float warpFreq, float warpAmp) {
+    vec2 q = xz * warpFreq;
+    float wx = sin(q.y + 1.3 * sin(q.x * 0.7 + 2.1)) + 0.5 * cos(q.x * 1.9 - q.y * 1.3);
+    float wy = cos(q.x + 1.3 * cos(q.y * 0.7 - 1.7)) + 0.5 * sin(q.y * 1.9 + q.x * 1.3);
+    return vec2(wx, wy) * (warpAmp * 0.66);
+}
+
+vec3 getSimplexWeights(vec2 f) {
+    if (f.x > f.y) return vec3(1.0 - f.x, f.x - f.y, f.y);
+    return vec3(1.0 - f.y, f.y - f.x, f.x);
+}
+
+float sdSignedFlowPolyline(vec2 p, vec2 A, vec2 E, vec2 B, out float tTotal, out vec2 tangent) {
+    vec2 ae = E - A;
+    float t1 = clamp(dot(p - A, ae) / max(dot(ae, ae), 1e-8), 0.0, 1.0);
+    vec2 c1 = A + ae * t1;
+    float d1 = length(p - c1);
+
+    vec2 eb = B - E;
+    float t2 = clamp(dot(p - E, eb) / max(dot(eb, eb), 1e-8), 0.0, 1.0);
+    vec2 c2 = E + eb * t2;
+    float d2 = length(p - c2);
+
+    vec2 tan1 = ae / max(length(ae), 1e-6);
+    vec2 tan2 = eb / max(length(eb), 1e-6);
+
+    vec2 closest;
+    if (d1 < d2) {
+        tTotal = 0.5 * t1;
+        closest = c1;
+    } else {
+        tTotal = 0.5 + 0.5 * t2;
+        closest = c2;
+    }
+    tangent = normalize(mix(tan1, tan2, smoothstep(0.35, 0.65, tTotal)));
+
+    vec2 normal = vec2(-tangent.y, tangent.x);
+    float side = (dot(p - closest, normal) >= 0.0) ? 1.0 : -1.0;
+    return side * min(d1, d2);
+}
+
+struct MeanderSample {
+    float signedDist;
+    float tTotal;
+    float curvature;
+    vec2 tangent;
+    vec2 gradDir;
+};
+
+MeanderSample evalMeanderPolyline(
+    vec2 p, vec2 f, float scale, vec2 A, vec2 E, vec2 B,
+    float warpFreq, float warpAmp, float maxCheckDist
+) {
+    vec3 w = getSimplexWeights(f);
+    float edgeSymmetric = 3.0 * (w.x * w.y + w.y * w.z + w.z * w.x);
+    float pinMask = edgeSymmetric * edgeSymmetric;
+
+    vec2 pW = p + pinMask * getMeanderWarp(p / scale, warpFreq, warpAmp);
+
+    MeanderSample ms;
+    float d0 = sdSignedFlowPolyline(pW, A, E, B, ms.tTotal, ms.tangent);
+    ms.signedDist = d0;
+    ms.curvature = 0.0;
+    ms.gradDir = vec2(-ms.tangent.y, ms.tangent.x);
+
+    // Skip 4 extra SDF evaluations when well outside the channel bank envelope
+    if (abs(d0) > maxCheckDist * 1.45) {
+        return ms;
+    }
+
+    float eps = 0.008;
+    float dummyT;
+    vec2 dummyTan;
+    float dXp = sdSignedFlowPolyline(pW + vec2(eps, 0.0), A, E, B, dummyT, dummyTan);
+    float dXm = sdSignedFlowPolyline(pW - vec2(eps, 0.0), A, E, B, dummyT, dummyTan);
+    float dYp = sdSignedFlowPolyline(pW + vec2(0.0, eps), A, E, B, dummyT, dummyTan);
+    float dYm = sdSignedFlowPolyline(pW - vec2(0.0, eps), A, E, B, dummyT, dummyTan);
+
+    vec2 grad = vec2(dXp - dXm, dYp - dYm) / (2.0 * eps);
+    float gradLen = max(length(grad), 0.25);
+    float laplacian = (dXp + dXm + dYp + dYm - 4.0 * d0) / (eps * eps);
+
+    ms.signedDist = d0 / gradLen;
+    ms.curvature = clamp(laplacian / gradLen, -4.0, 4.0);
+    ms.gradDir = grad / gradLen;
+    return ms;
+}
+
+float shapeMeanderChannelScalar(
+    float baseHeight,
+    float waterH,
+    float channelDepth,
+    float halfWidth,
+    float bankWidth,
+    float signedDist,
+    float curvature,
+    float cutbankStrength
+) {
+    float absDist = abs(signedDist);
+    if (absDist >= bankWidth) return baseHeight;
+
+    float bankPolarity = clamp(signedDist * curvature * cutbankStrength, -1.0, 1.0);
+    float thalwegOffset = sign(curvature) * abs(bankPolarity) * (0.55 * halfWidth);
+    float distFromThalweg = abs(signedDist - thalwegOffset);
+
+    float wallPower = mix(1.85, 0.45, 0.5 + 0.5 * bankPolarity);
+    float u = clamp(distFromThalweg / max(bankWidth - abs(thalwegOffset), 1e-4), 0.0, 1.0);
+    float shapedU = pow(u, wallPower);
+
+    float localDepth = channelDepth * mix(0.65, 1.35, 0.5 + 0.5 * bankPolarity);
+    float bedH = waterH - localDepth * (1.0 - smoothstep(0.0, 1.0, shapedU));
+
+    float outerBlend = smoothstep(halfWidth, bankWidth, absDist);
+    float targetH = mix(min(bedH, waterH), baseHeight, outerBlend);
+    return min(baseHeight, targetH);
+}
+
+struct HydrologyResult {
+    float carve_delta;
+    vec2  grad_carve_xz;
+    float river_profile;
+    float river_mask;
+    float canyon_profile;
+    float canyon_mask;
+    float basin_mask;
+    float water_surface_h;
+};
+
+// Region 5: Optimized Single-Pass Simplex-Hex Hydrology
+HydrologyResult evaluateHydrology(
+    vec2  p_xz,
+    float macro_h,
+    float interior_mask,
+    float base_h,
+    float phase,
+    float warp_strength,
+    TerrainConfig config
+) {
+    HydrologyResult result;
+    result.carve_delta = 0.0;
+    result.grad_carve_xz = vec2(0.0);
+    result.river_profile = 0.0;
+    result.river_mask = 0.0;
+    result.canyon_profile = 0.0;
+    result.canyon_mask = 0.0;
+    result.basin_mask = 0.0;
+    result.water_surface_h = -1e5;
+
+    // 1. Immediate early exit for ocean floor and major tectonic fault lines
+    float landMask = smoothstep(-0.02, 0.03, macro_h) * interior_mask;
+    if (landMask <= 0.001) {
+        return result;
+    }
+
+    float plate_scale = config.spatial_scale * 16.0;
+    float lobes = 3.0;
+
+    vec2 p = p_xz * plate_scale;
+    vec2 s = p + (p.x + p.y) * HYDRO_F2;
+    vec2 i = floor(s);
+    vec2 f = s - i;
+    bool swapXY = (f.x <= f.y);
+    vec2 i1 = swapXY ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+
+    vec2 V0 = i;
+    vec2 V1 = i + i1;
+    vec2 V2 = i + vec2(1.0, 1.0);
+
+    // 2. Shared 12-vertex simplex neighborhood evaluation (all 3 triangle vertices + 9 unique ring neighbors)
+    float hV0 = getPlateElevationFast(V0, plate_scale, phase, warp_strength, config);
+    float hV1 = getPlateElevationFast(V1, plate_scale, phase, warp_strength, config);
+    float hV2 = getPlateElevationFast(V2, plate_scale, phase, warp_strength, config);
+
+    vec2 N0 = i + (swapXY ? vec2( 1.0,  0.0) : vec2( 0.0,  1.0));
+    vec2 N1 = i + (swapXY ? vec2( 0.0, -1.0) : vec2(-1.0,  0.0));
+    vec2 N2 = i + vec2(-1.0, -1.0);
+    vec2 N3 = i + (swapXY ? vec2(-1.0,  0.0) : vec2( 0.0, -1.0));
+    vec2 N4 = i + (swapXY ? vec2( 0.0,  2.0) : vec2( 2.0,  0.0));
+    vec2 N5 = i + (swapXY ? vec2( 1.0,  2.0) : vec2( 2.0,  1.0));
+    vec2 N6 = i + (swapXY ? vec2(-1.0,  1.0) : vec2( 1.0, -1.0));
+    vec2 N7 = i + vec2( 2.0,  2.0);
+    vec2 N8 = i + (swapXY ? vec2( 2.0,  1.0) : vec2( 1.0,  2.0));
+
+    float hN0 = getPlateElevationFast(N0, plate_scale, phase, warp_strength, config);
+    float hN1 = getPlateElevationFast(N1, plate_scale, phase, warp_strength, config);
+    float hN2 = getPlateElevationFast(N2, plate_scale, phase, warp_strength, config);
+    float hN3 = getPlateElevationFast(N3, plate_scale, phase, warp_strength, config);
+    float hN4 = getPlateElevationFast(N4, plate_scale, phase, warp_strength, config);
+    float hN5 = getPlateElevationFast(N5, plate_scale, phase, warp_strength, config);
+    float hN6 = getPlateElevationFast(N6, plate_scale, phase, warp_strength, config);
+    float hN7 = getPlateElevationFast(N7, plate_scale, phase, warp_strength, config);
+    float hN8 = getPlateElevationFast(N8, plate_scale, phase, warp_strength, config);
+
+    // Resolve steepest-descent neighbor & zero-cost local concavity width for V0, V1, V2
+    vec2 triSkew[3] = vec2[3](V0, V1, V2);
+    float triH[3]   = float[3](hV0, hV1, hV2);
+    vec2 bestN[3];
+    float bestNH[3];
+    float triHalfW[3];
+
+    // V0 neighbors: V1, V2, N0, N1, N2, N3
+    bestN[0] = V1; bestNH[0] = hV1;
+    considerCandidate(V2, hV2, bestN[0], bestNH[0]);
+    considerCandidate(N0, hN0, bestN[0], bestNH[0]);
+    considerCandidate(N1, hN1, bestN[0], bestNH[0]);
+    considerCandidate(N2, hN2, bestN[0], bestNH[0]);
+    considerCandidate(N3, hN3, bestN[0], bestNH[0]);
+    float mean0 = (hV1 + hV2 + hN0 + hN1 + hN2 + hN3) * (1.0 / 6.0);
+    float up0 = 1.0 + 0.45 * (step(hV0, hV1) + step(hV0, hV2) + step(hV0, hN0) + step(hV0, hN1) + step(hV0, hN2) + step(hV0, hN3));
+    triHalfW[0] = 0.045 + 0.030 * (pow(up0 + clamp((mean0 - hV0) * 14.0, 0.0, 4.0), 0.45) - 1.0);
+
+    // V1 neighbors: N4, N5, V2, V0, N3, N6
+    bestN[1] = N4; bestNH[1] = hN4;
+    considerCandidate(N5, hN5, bestN[1], bestNH[1]);
+    considerCandidate(V2, hV2, bestN[1], bestNH[1]);
+    considerCandidate(V0, hV0, bestN[1], bestNH[1]);
+    considerCandidate(N3, hN3, bestN[1], bestNH[1]);
+    considerCandidate(N6, hN6, bestN[1], bestNH[1]);
+    float mean1 = (hN4 + hN5 + hV2 + hV0 + hN3 + hN6) * (1.0 / 6.0);
+    float up1 = 1.0 + 0.45 * (step(hV1, hN4) + step(hV1, hN5) + step(hV1, hV2) + step(hV1, hV0) + step(hV1, hN3) + step(hV1, hN6));
+    triHalfW[1] = 0.045 + 0.030 * (pow(up1 + clamp((mean1 - hV1) * 14.0, 0.0, 4.0), 0.45) - 1.0);
+
+    // V2 neighbors: N5, N7, N8, N0, V0, V1
+    bestN[2] = N5; bestNH[2] = hN5;
+    considerCandidate(N7, hN7, bestN[2], bestNH[2]);
+    considerCandidate(N8, hN8, bestN[2], bestNH[2]);
+    considerCandidate(N0, hN0, bestN[2], bestNH[2]);
+    considerCandidate(V0, hV0, bestN[2], bestNH[2]);
+    considerCandidate(V1, hV1, bestN[2], bestNH[2]);
+    float mean2 = (hN5 + hN7 + hN8 + hN0 + hV0 + hV1) * (1.0 / 6.0);
+    float up2 = 1.0 + 0.45 * (step(hV2, hN5) + step(hV2, hN7) + step(hV2, hN8) + step(hV2, hN0) + step(hV2, hV0) + step(hV2, hV1));
+    triHalfW[2] = 0.045 + 0.030 * (pow(up2 + clamp((mean2 - hV2) * 14.0, 0.0, 4.0), 0.45) - 1.0);
+
+    // 3. Evaluate active channel segments (only when within rough bounding distance)
+    float canyonBlend = smoothstep(0.25, 0.55, base_h);
+    float channelDepth = mix(0.045, 0.135, canyonBlend);
+    float pondDepth = 0.055;
+    float warpFreq = 3.2 * plate_scale;
+    float warpAmp = mix(0.14, 0.06, canyonBlend);
+    float cutbankStrength = mix(0.42, 0.15, canyonBlend);
+
+    float hResult = macro_h;
+    vec2 gradCarveXZ = vec2(0.0);
+    float maxChannelCov = 0.0;
+    float waterSurface = -1e5;
+
+    for (int idx = 0; idx < 3; ++idx) {
+        if (bestNH[idx] >= triH[idx]) continue; // 1-cell pond, no outflow segment
+
+        vec2 A_skew = triSkew[idx];
+        vec2 B_skew = bestN[idx];
+        vec2 A_cart = hydroSkewToCart(A_skew);
+        vec2 B_cart = hydroSkewToCart(B_skew);
+        vec2 E_cart = hydroGetEdgePoint(A_skew, A_cart, B_skew, B_cart, lobes);
+
+        float maxPossibleHalfW = triHalfW[idx] + 0.04;
+        float maxPossibleBankW = maxPossibleHalfW * 2.35;
+        float roughDist = min(hydroSdLine(p, A_cart, E_cart), hydroSdLine(p, E_cart, B_cart));
+        if (roughDist > maxPossibleBankW + warpAmp + 0.04) continue;
+
+        // Check 2-hop target C from B only for segments close to this pixel
+        vec2 C_skew;
+        float hC;
+        findLowestNeighborFast(B_skew, plate_scale, phase, warp_strength, config, C_skew, hC);
+        if (all(equal(C_skew, A_skew))) continue; // 2-cell mutual pond handled in basin pass
+
+        MeanderSample ms = evalMeanderPolyline(
+            p, f, plate_scale, A_cart, E_cart, B_cart, warpFreq, warpAmp, maxPossibleBankW
+        );
+
+        float halfWidth = triHalfW[idx] * mix(1.0, 0.65, canyonBlend);
+        float bankWidth = halfWidth * 2.35;
+
+        if (abs(ms.signedDist) < bankWidth) {
+            // If B is a 1-cell pond, clamp end elevation to B's spill level
+            float endH = (hC >= bestNH[idx]) ? hC : bestNH[idx];
+            float waterH = mix(triH[idx], endH, ms.tTotal);
+
+            // Clamp water surface below the lowest bank outside the meander envelope
+            float maxLateralReach = (bankWidth + warpAmp) / plate_scale;
+            vec2 perpWorld = vec2(-ms.tangent.y, ms.tangent.x) * maxLateralReach;
+            float hLeft  = sampleMacroHeightFast(p_xz + perpWorld, phase, warp_strength, config);
+            float hRight = sampleMacroHeightFast(p_xz - perpWorld, phase, warp_strength, config);
+            waterH = min(waterH, min(hLeft, hRight) - 0.002);
+
+            float carvedH = shapeMeanderChannelScalar(
+                macro_h, waterH, channelDepth, halfWidth, bankWidth, ms.signedDist, ms.curvature, cutbankStrength
+            );
+            float blendedH = mix(macro_h, carvedH, landMask);
+
+            // 1D cross-section derivative * SDF spatial gradient gives 2D bank normal without extra passes
+            float epsD = 0.004;
+            float carvedH_p = shapeMeanderChannelScalar(
+                macro_h, waterH, channelDepth, halfWidth, bankWidth, ms.signedDist + epsD, ms.curvature, cutbankStrength
+            );
+            float dh_dd = ((mix(macro_h, carvedH_p, landMask)) - blendedH) / epsD;
+            vec2 segGradXZ = (dh_dd * plate_scale) * ms.gradDir;
+
+            float sminBlend;
+            hResult = hydroSmin(hResult, blendedH, 0.012, sminBlend);
+            gradCarveXZ = mix(gradCarveXZ, segGradXZ, sminBlend);
+
+            float cov = (1.0 - smoothstep(halfWidth * 0.5, bankWidth, abs(ms.signedDist))) * landMask;
+            maxChannelCov = max(maxChannelCov, cov);
+
+            float effectiveWaterH = mix(waterH, waterH - channelDepth * 0.65, canyonBlend);
+            if (abs(ms.signedDist) < halfWidth * 1.05 && effectiveWaterH > hResult) {
+                waterSurface = max(waterSurface, effectiveWaterH);
+            }
+        }
+    }
+
+    // 4. Pond basin carving for 1-cell and 2-cell local minima
+    OrganicPlateData plate = getOrganicPlate(p_xz, plate_scale, lobes);
+    int activeIdx = 0;
+    if (all(equal(plate.regionVertex, triSkew[1]))) activeIdx = 1;
+    else if (all(equal(plate.regionVertex, triSkew[2]))) activeIdx = 2;
+
+    vec2 activeSkew = triSkew[activeIdx];
+    float activeH = triH[activeIdx];
+    vec2 activeTarget = bestN[activeIdx];
+    float activeTargetH = bestNH[activeIdx];
+
+    int pondMode = 0;
+    float pondSpillH = activeTargetH;
+    if (activeTargetH >= activeH) {
+        pondMode = 1;
+    } else {
+        vec2 partnerTarget;
+        float partnerTargetH;
+        findLowestNeighborFast(activeTarget, plate_scale, phase, warp_strength, config, partnerTarget, partnerTargetH);
+        if (all(equal(partnerTarget, activeSkew))) {
+            pondMode = 2;
+            float spillH = 1e9;
+            for (int k = 0; k < 6; ++k) {
+                vec2 nA = activeSkew + HYDRO_HEX_DIRS[k];
+                if (!all(equal(nA, activeTarget))) {
+                    spillH = min(spillH, getPlateElevationFast(nA, plate_scale, phase, warp_strength, config));
+                }
+                vec2 nB = activeTarget + HYDRO_HEX_DIRS[k];
+                if (!all(equal(nB, activeSkew))) {
+                    spillH = min(spillH, getPlateElevationFast(nB, plate_scale, phase, warp_strength, config));
+                }
+            }
+            pondSpillH = spillH;
+        }
+    }
+
+    if (pondMode != 0) {
+        bool isTwoCell = (pondMode == 2);
+        float edgeDist = getBasinEdgeDist(p, activeSkew, activeTarget, isTwoCell, lobes);
+        float shoreBlend = smoothstep(0.0, 0.28, edgeDist) * landMask;
+        float basinBedH = pondSpillH - pondDepth * shoreBlend;
+        float carvedPondH = mix(macro_h, basinBedH, shoreBlend);
+
+        if (carvedPondH < hResult) {
+            float epsP = 0.015;
+            float edgeDistX = getBasinEdgeDist(p + vec2(epsP, 0.0), activeSkew, activeTarget, isTwoCell, lobes);
+            float edgeDistZ = getBasinEdgeDist(p + vec2(0.0, epsP), activeSkew, activeTarget, isTwoCell, lobes);
+            float sbX = smoothstep(0.0, 0.28, edgeDistX) * landMask;
+            float sbZ = smoothstep(0.0, 0.28, edgeDistZ) * landMask;
+            float hPx = mix(macro_h, pondSpillH - pondDepth * sbX, sbX);
+            float hPz = mix(macro_h, pondSpillH - pondDepth * sbZ, sbZ);
+
+            hResult = carvedPondH;
+            gradCarveXZ = vec2(hPx - carvedPondH, hPz - carvedPondH) * (plate_scale / epsP);
+        }
+        result.basin_mask = shoreBlend;
+
+        if (pondSpillH > hResult) {
+            waterSurface = max(waterSurface, pondSpillH);
+        }
+    }
+
+    result.carve_delta = hResult - macro_h;
+    result.grad_carve_xz = gradCarveXZ;
+    result.river_profile = maxChannelCov * (1.0 - canyonBlend);
+    result.river_mask = interior_mask * (1.0 - canyonBlend);
+    result.canyon_profile = maxChannelCov * canyonBlend;
+    result.canyon_mask = interior_mask * canyonBlend;
+    result.water_surface_h = waterSurface;
+    return result;
+}
+
+// Region 10: Remap flat water_surface_h into world height where wetted
 float calculateLocalWaterLevel(
-    float raw_final_h,
-    float river_carve,
+    float final_h,
+    float water_surface_h,
     float river_profile,
     float river_mask,
-    float canyon_carve,
     float canyon_profile,
     float canyon_mask,
     float basin_mask,
-    float lake_water_level,
     float min_height,
     float max_height
 ) {
-    float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
-    float canyon_water_h = raw_final_h + canyon_carve * 0.05; // Canyons have shallow streams at the bottom
+    float has_water_mask = max(smoothstep(0.05, 0.35, basin_mask),
+                           max(smoothstep(0.05, 0.25, river_profile * river_mask),
+                               smoothstep(0.05, 0.20, canyon_profile * canyon_mask)));
 
-    float local_water_norm = max(
-        lake_water_level * smoothstep(0.1, 0.5, basin_mask),
-        max(
-            river_water_h * smoothstep(0.01, 0.2, river_profile * river_mask),
-            canyon_water_h * smoothstep(0.01, 0.1, canyon_profile * canyon_mask)
-        )
-    );
-
-    float has_water_mask = max(smoothstep(0.1, 0.5, basin_mask),
-                           max(smoothstep(0.01, 0.2, river_profile * river_mask),
-                               smoothstep(0.01, 0.1, canyon_profile * canyon_mask)));
-
-    // Plunge the water level 1000 units underground where there is no water presence
-    return mix(0.0, remap(local_water_norm, 0.0, 1.0, min_height, max_height), has_water_mask);
+    if (water_surface_h <= final_h || has_water_mask <= 0.001) {
+        return min_height - 1000.0;
+    }
+    return mix(min_height - 1000.0, remap(water_surface_h, 0.0, 1.0, min_height, max_height), has_water_mask);
 }
+
 
 // Integrated analytical terrain evaluation with guided erosion filter -- threads the region
 // functions above together in the same order/shape the original monolithic version did.
@@ -726,36 +1301,32 @@ float evaluate_terrain_analytical(
         6
     );
 
-    // 5. Hydrology & Erosion (Rivers, Canyons, Lakes)
+// 5. Simplex-Hex Hydrology (Channels, Canyons, 1/2-Cell Lake Basins)
+    float macro_h = tectonics.base_h + mountains.shelf.x + mountains.ridge_h;
+    vec3 macro_grad_geo = tectonics.grad_base_h + mountains.shelf.yzw + mountains.grad_ridge;
+
     HydrologyResult hydrology = evaluateHydrology(
-        tectonics.P_geo, radius_scale, tectonics.vel, tectonics.J_vel, warp_strength, phase,
-        continentRegion.interior_mask, continentRegion.grad_interior_mask,
-        tectonics.base_h, tectonics.grad_base_h,
-        4, 4, 3
+        p_local.xz, macro_h,
+        continentRegion.interior_mask, tectonics.base_h,
+        phase, warp_strength, config
     );
 
-    // 6. Final Composition
-    float raw_final_h = tectonics.base_h + mountains.shelf.x + mountains.ridge_h - hydrology.river_carve - hydrology.canyon_carve;
-    vec3 raw_final_grad = tectonics.grad_base_h + mountains.shelf.yzw + mountains.grad_ridge - hydrology.grad_river_carve - hydrology.grad_canyon_carve;
-
-    // Apply the lake basin flattening via mix
-    float final_h = mix(raw_final_h, hydrology.lake_water_level, hydrology.basin_mask);
-    vec3 final_grad_geo = mix(raw_final_grad, hydrology.grad_lake_water_level, hydrology.basin_mask)
-        + (hydrology.lake_water_level - raw_final_h) * hydrology.grad_basin_mask;
+    // 6. Final Composition (macro terrain + level-banked hydrology carve)
+    float final_h = macro_h + hydrology.carve_delta;
 
     // 7. Resolve Un-eroded Height and Normal
     float true_height = remap(final_h, 0.0, 1.0, config.min_height, config.max_height);
     float height_amplitude = config.max_height - config.min_height;
 
-    final_grad_geo *= height_amplitude;
-
-    vec3 grad_local = vec3(dot(final_grad_geo, tectonics.dP_dx), 0.0, dot(final_grad_geo, tectonics.dP_dz));
+    vec3 grad_local = vec3(
+        dot(macro_grad_geo, tectonics.dP_dx),
+        0.0,
+        dot(macro_grad_geo, tectonics.dP_dz)
+    ) * height_amplitude;
+    grad_local.xz += hydrology.grad_carve_xz * height_amplitude;
 
     // 8. Integrated Erosion Filter Guided by Structural Generation Fields
-    // Project 3D geocentric velocity into the local 2D plane
     vec2 local_vel = vec2(dot(tectonics.vel, tectonics.dP_dx), dot(tectonics.vel, tectonics.dP_dz));
-
-    // Skew the slope vector so erosion tracks along the fold direction
     vec2 tectonic_skewed_slope = grad_local.xz + local_vel * 0.5;
     vec3 heightAndSlope = vec3(true_height, tectonic_skewed_slope);
 
@@ -774,17 +1345,18 @@ float evaluate_terrain_analytical(
     out_ridge_map = max(mountains.massive_ridge, erosion.ridge_map);
     out_substrate = erosion.substrate;
 
-    // 9. Derive geological biome classification from regional lithology and tectonic/hydrological structure
+    // 9. Geological Biome Classification
     out_biome = classifyGeoBiome(
         tectonics.P_geo, phase, tectonics.fault_mask, tectonics.collision_intensity,
         hydrology.canyon_mask, hydrology.basin_mask, tectonics.base_h, 3
     );
 
-    // 10. Calculate water level in normalized height space
+    // 10. Flat Cross-Sectional Water Level
     out_water_level = calculateLocalWaterLevel(
-        raw_final_h, hydrology.river_carve, hydrology.river_profile, hydrology.river_mask,
-        hydrology.canyon_carve, hydrology.canyon_profile, hydrology.canyon_mask,
-        hydrology.basin_mask, hydrology.lake_water_level,
+        final_h, hydrology.water_surface_h,
+        hydrology.river_profile, hydrology.river_mask,
+        hydrology.canyon_profile, hydrology.canyon_mask,
+        hydrology.basin_mask,
         config.min_height, config.max_height
     );
 
