@@ -685,8 +685,7 @@ float classifyGeoBiome(
     float base_h,
     int   geoBiomeOctaves
 ) {
-    vec3 grad_geo_noise;
-    float raw_geo_noise = dot_noise_fbm(P_geo * 4.5, geoBiomeOctaves, phase + 314.15, grad_geo_noise);
+    float raw_geo_noise = dot_noise_fbm(P_geo * 4.5, geoBiomeOctaves, phase + 314.15);
     float base_geo = clamp(raw_geo_noise * 0.5 + 0.5, 0.0, 1.0);
 
     float fault_factor = clamp(fault_mask * 0.8 + collision_intensity * 0.5, 0.0, 1.0);
@@ -701,48 +700,83 @@ float classifyGeoBiome(
     return clamp(geo_biome, 0.0, 1.0);
 }
 
-// Single-pass scalar macro elevation probe for routing water across Worley sites
+// Single-pass scalar macro elevation probe aligned with evaluateTectonics + Continent + Mountains
 float sampleMacroHeightFast(vec2 xz, float phase, float warp_strength, TerrainConfig config) {
     WrappedTerrainCoord w = wrapTerrainCoordinates(vec3(xz.x, 0.0, xz.y));
     vec3 p_local = w.p_local;
 
-    float theta = p_local.x / FAKE_PLANET_RADIUS;
-    float phi   = p_local.z / FAKE_PLANET_RADIUS;
+    mat3 dummyJ;
+    vec3 tectonicWarp = cross_noise_fbm(16.0 * p_local / FAKE_PLANET_RADIUS, 1, 0.0, dummyJ);
+    vec3 p_tectonic = p_local + 20000.0 * tectonicWarp;
+
+    float theta = p_tectonic.x / FAKE_PLANET_RADIUS;
+    float phi   = p_tectonic.z / FAKE_PLANET_RADIUS;
     float cos_p = cos(phi);
     vec3 P_geo  = vec3(cos_p * sin(theta), sin(phi), cos_p * cos(theta));
 
-    // Single-pass weighted plate elevation (plates[i].k <= 59.19, so k*d - 60.0 never overflows exp)
-    float sum_w_macro = 0.0;
-    float sum_h = 0.0;
-    float sum_w_crump = 0.0;
-    float sum_w2_crump = 0.0;
     const float k_crumple = 350.0;
-
+    float max_kd_macro = -1e20;
+    float max_kd_crump = -1e20;
     for (int i = 0; i < plates.length(); i++) {
         float d = dot(P_geo, plates[i].seed_dir);
-        float w_macro = exp(plates[i].k * d - 60.0);
+        max_kd_macro = max(max_kd_macro, plates[i].k * d);
+        max_kd_crump = max(max_kd_crump, k_crumple * d);
+    }
+
+    float sum_w_macro = 0.0, sum_h = 0.0;
+    float sum_w_crump = 0.0, sum_w2_crump = 0.0;
+    vec3 sum_v = vec3(0.0);
+    vec3 grad_w_crump = vec3(0.0);
+    float trace_J_sum_v = 0.0;
+
+    for (int i = 0; i < plates.length(); i++) {
+        vec3 S = plates[i].seed_dir;
+        float d = dot(P_geo, S);
+
+        float w_macro = exp(plates[i].k * d - max_kd_macro);
         sum_w_macro += w_macro;
         sum_h += w_macro * plates[i].height;
 
-        float w_crump = exp(k_crumple * d - k_crumple);
+        float w_crump = exp(k_crumple * d - max_kd_crump);
+        vec3 dw_crump = k_crumple * w_crump * S;
         sum_w_crump += w_crump;
+        sum_v += w_crump * plates[i].velocity;
+        grad_w_crump += dw_crump;
+        trace_J_sum_v += dot(plates[i].velocity, dw_crump);
         sum_w2_crump += w_crump * w_crump;
     }
 
-    float base_h = sum_h / max(sum_w_macro, 1e-12);
-    float inv_W_crump = 1.0 / max(sum_w_crump, 1e-12);
+    float inv_W_macro = 1.0 / sum_w_macro;
+    float base_h = sum_h * inv_W_macro;
+
+    float inv_W_crump = 1.0 / sum_w_crump;
+    vec3 vel = sum_v * inv_W_crump;
+    float I1 = (trace_J_sum_v - dot(vel, grad_w_crump)) * inv_W_crump;
+    base_h += smoothstep(-0.5, -2.0, I1) * 0.4;
+
     float raw_fault = 1.0 - sum_w2_crump * inv_W_crump * inv_W_crump;
     float t_fault = clamp(raw_fault / 0.55, 0.0, 1.0);
     float fault_mask = t_fault * t_fault * (3.0 - 2.0 * t_fault);
+    float interior_mask = 1.0 - fault_mask;
 
     float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
     vec3 P_noise = P_geo * radius_scale;
 
-    float continent_h = dot_noise_fbm(P_noise, 1, phase + 32.0) * 0.95;
-    float raw_ridge   = dot_noise_fbm(P_noise, 1, phase + 42.0);
-    float ridge_h     = pow(abs(raw_ridge), 3.0) * fault_mask;
+    float continent_h = dot_noise_fbm(P_noise, 2, phase + 32.0) * 0.95;
+    float macro_noise = dot_noise_fbm(P_noise * 0.1, 1, phase + 123.0);
+    float t_macro = clamp((macro_noise + 0.2) / 0.6, 0.0, 1.0);
+    float hill_mult = t_macro * t_macro * (3.0 - 2.0 * t_macro) * 2.5;
 
-    return base_h + continent_h + ridge_h;
+    float raw_hills = dot_noise_fbm(P_noise, 1, phase + 89.0);
+    float hill_h = pow(1.0 - abs(raw_hills), 2.0) * interior_mask * hill_mult;
+
+    float raw_ridge = dot_noise_fbm(P_noise + vel * warp_strength, 2, phase + 42.0);
+    float ridge_h = pow(abs(raw_ridge), 3.0) * fault_mask;
+
+    float h_diff = clamp(0.5 + 0.5 * (hill_h - continent_h) / 0.25, 0.0, 1.0);
+    float shelf_x = mix(continent_h, hill_h, h_diff) + 0.25 * h_diff * (1.0 - h_diff);
+
+    return base_h + shelf_x + ridge_h;
 }
 
 float getWorleySiteElevation(vec2 v_skew, float scale, float phase, float warp_strength, TerrainConfig config) {
@@ -813,36 +847,62 @@ MeanderSample evalMeanderSegment(
     return ms;
 }
 
-float shapeMeanderChannelScalar(
+// Evaluates sculpted valley + wetted channel height so the bed is always recessed below waterH
+float shapeMeanderValleyAndChannel(
     float baseHeight,
     float waterH,
     float channelDepth,
     float halfWidth,
     float bankWidth,
+    float valleyWidth,
     float signedDist,
     float curvature,
-    float cutbankStrength
+    float cutbankStrength,
+    float landMask
 ) {
     float absDist = abs(signedDist);
-    if (absDist >= bankWidth) return baseHeight;
+    if (absDist >= valleyWidth) return baseHeight;
 
+    // 1. Broad, gently sloped valley corridor lowers surrounding ridges toward the river floodplain
+    float floodplainH = min(baseHeight, waterH + channelDepth * 0.20);
+    float valleyWeight = (1.0 - smoothstep(bankWidth * 0.75, valleyWidth, absDist)) * landMask;
+    float valleyH = mix(baseHeight, floodplainH, valleyWeight);
+
+    // 2. Asymmetric cutbank / point-bar channel recessed strictly below waterH
     float bankPolarity = clamp(signedDist * curvature * cutbankStrength, -1.0, 1.0);
-    float thalwegOffset = sign(curvature) * abs(bankPolarity) * (0.55 * halfWidth);
+    float thalwegOffset = sign(curvature) * abs(bankPolarity) * (0.45 * halfWidth);
     float distFromThalweg = abs(signedDist - thalwegOffset);
 
-    float wallPower = mix(1.85, 0.45, 0.5 + 0.5 * bankPolarity);
+    float wallPower = mix(1.65, 0.65, 0.5 + 0.5 * bankPolarity);
     float u = clamp(distFromThalweg / max(bankWidth - abs(thalwegOffset), 1e-4), 0.0, 1.0);
     float shapedU = pow(u, wallPower);
 
-    float localDepth = channelDepth * mix(0.65, 1.35, 0.5 + 0.5 * bankPolarity);
+    float localDepth = channelDepth * mix(0.75, 1.25, 0.5 + 0.5 * bankPolarity);
     float bedH = waterH - localDepth * (1.0 - smoothstep(0.0, 1.0, shapedU));
 
-    float outerBlend = smoothstep(halfWidth, bankWidth, absDist);
-    float targetH = mix(min(bedH, waterH), baseHeight, outerBlend);
-    return min(baseHeight, targetH);
+    // Blend smoothly from the sloped valley floor into the recessed channel bed (never flush)
+    float channelWeight = (1.0 - smoothstep(halfWidth * 0.35, bankWidth, absDist)) * landMask;
+    return mix(valleyH, bedH, channelWeight);
 }
 
-// Region 5: Lazy-Culled Simplex-Worley Hydrology
+// Exterior Voronoi distance for a 1-cell or 2-cell lake basin (suppresses shared border with partner)
+float getWorleyBasinEdgeDist(vec2 p, vec2 p_xz, float plate_scale, vec2 cellSkew, vec2 cellSite, vec2 partnerSkew, bool hasPartner) {
+    vec2 pCell = p + getMeanderWarp(p_xz, 2.1 * plate_scale, 0.085);
+    float minEdgeDist = 1e9;
+
+    for (int k = 0; k < 6; ++k) {
+        vec2 nSkew = cellSkew + HYDRO_HEX_DIRS[k];
+        if (hasPartner && all(equal(nSkew, partnerSkew))) continue;
+
+        vec2 nSite = getWorleySite(nSkew);
+        vec2 bisectorDir = normalize(nSite - cellSite);
+        float dEdge = dot(0.5 * (cellSite + nSite) - pCell, bisectorDir);
+        minEdgeDist = min(minEdgeDist, max(0.0, dEdge));
+    }
+    return minEdgeDist;
+}
+
+// Region 5: Seamless 12-Vertex Simplex-Worley Hydrology
 HydrologyResult evaluateHydrology(
     vec2  p_xz,
     float macro_h,
@@ -872,21 +932,40 @@ HydrologyResult evaluateHydrology(
     vec2 p = p_xz * plate_scale;
     vec2 s = p + (p.x + p.y) * HYDRO_F2;
     vec2 i = floor(s);
-    vec2 f = s - i;
-    vec2 i1 = (f.x > f.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
 
-    vec2 triSkew[3] = vec2[3](i, i + i1, i + vec2(1.0, 1.0));
+    // Full 12-vertex simplex neighborhood eliminates grid-boundary river slicing
+    vec2 candSkew[12] = vec2[12](
+        i,
+        i + vec2( 1.0,  0.0),
+        i + vec2( 0.0,  1.0),
+        i + vec2( 1.0,  1.0),
+        i + vec2(-1.0,  0.0),
+        i + vec2( 0.0, -1.0),
+        i + vec2(-1.0, -1.0),
+        i + vec2( 1.0, -1.0),
+        i + vec2(-1.0,  1.0),
+        i + vec2( 2.0,  1.0),
+        i + vec2( 1.0,  2.0),
+        i + vec2( 2.0,  2.0)
+    );
+
+    // Scale vertical carving physically in world meters so channels don't form 500m cliffs
+    float heightAmp = max(config.max_height - config.min_height, 1.0);
+    float metersToNorm = 1.0 / heightAmp;
 
     float canyonBlend = smoothstep(0.25, 0.55, base_h);
-    float channelDepth = mix(0.045, 0.135, canyonBlend);
-    float pondDepth = 0.055;
+    float baseChannelDepth = mix(16.0, 68.0, canyonBlend) * metersToNorm;
+    float maxValleyDrop    = mix(35.0, 140.0, canyonBlend) * metersToNorm;
+    float pondDepth        = 22.0 * metersToNorm;
+
     float warpFreq = 3.2 * plate_scale;
-    float warpAmp = mix(0.14, 0.06, canyonBlend);
-    float cutbankStrength = mix(0.42, 0.15, canyonBlend);
+    float warpAmp = mix(0.13, 0.06, canyonBlend);
+    float cutbankStrength = mix(0.38, 0.14, canyonBlend);
 
     float maxPossibleHalfW = 0.085;
-    float maxPossibleBankW = maxPossibleHalfW * 2.35;
-    float maxCheckBound = maxPossibleBankW + warpAmp + 0.04;
+    float maxPossibleBankW = maxPossibleHalfW * 3.0;
+    float maxPossibleValleyW = maxPossibleHalfW * 4.8;
+    float maxCheckBound = maxPossibleValleyW + warpAmp + 0.04;
 
     float hResult = macro_h;
     vec2 gradCarveXZ = vec2(0.0);
@@ -894,8 +973,8 @@ HydrologyResult evaluateHydrology(
     float waterSurface = -1e5;
 
     // 2. Lazy channel evaluation: cull geometrically before sampling any terrain heights
-    for (int idx = 0; idx < 3; ++idx) {
-        vec2 A_skew = triSkew[idx];
+    for (int idx = 0; idx < 12; ++idx) {
+        vec2 A_skew = candSkew[idx];
         vec2 P_A = getWorleySite(A_skew);
 
         bool anySpokeNear = false;
@@ -906,9 +985,8 @@ HydrologyResult evaluateHydrology(
                 break;
             }
         }
-        if (!anySpokeNear) continue; // ~85% of pixels exit here with 0 terrain lookups
+        if (!anySpokeNear) continue;
 
-        // Only evaluate heights for vertices whose spoke actually passes near this texel
         float hA = getWorleySiteElevation(A_skew, plate_scale, phase, warp_strength, config);
         vec2 B_skew = A_skew;
         float hB = 1e9;
@@ -926,58 +1004,58 @@ HydrologyResult evaluateHydrology(
             }
         }
 
-        if (hB >= hA) continue; // Local minimum pond
+        if (hB >= hA) continue; // 1-cell pond, no outflow
 
         vec2 P_B = getWorleySite(B_skew);
         if (hydroSdLine(p, P_A, P_B) > maxCheckBound) continue;
 
-        // 2-hop check from B to detect 2-cell mutual ponds or 1-cell pond termini
         vec2 C_skew;
         float hC;
         findLowestWorleyNeighbor(B_skew, plate_scale, phase, warp_strength, config, C_skew, hC);
-        if (all(equal(C_skew, A_skew))) continue; // 2-cell mutual pond handled in step 3
 
         ringMean *= (1.0 / 6.0);
         float valleyConcavity = clamp((ringMean - hA) * 14.0, 0.0, 4.0);
         float rawHalfW = 0.045 + 0.030 * (pow(upstreamCount + valleyConcavity, 0.45) - 1.0);
-        float halfWidth = rawHalfW * mix(1.0, 0.65, canyonBlend);
-        float bankWidth = halfWidth * 2.35;
+        float halfWidth = rawHalfW * mix(1.0, 0.72, canyonBlend);
+        float bankWidth = halfWidth * 3.0;
+        float valleyWidth = halfWidth * 4.8;
 
-        MeanderSample ms = evalMeanderSegment(p, p_xz, P_A, P_B, warpFreq, warpAmp, bankWidth);
+        MeanderSample ms = evalMeanderSegment(p, p_xz, P_A, P_B, warpFreq, warpAmp, valleyWidth);
 
-        if (abs(ms.signedDist) < bankWidth) {
-            float endH = (hC >= hB) ? hC : hB;
-            float waterH = mix(hA, endH, ms.tTotal);
+        if (abs(ms.signedDist) < valleyWidth) {
+            bool isSinkB = (hC >= hB) || all(equal(C_skew, A_skew));
+            float endH = (hC >= hB) ? hC : (all(equal(C_skew, A_skew)) ? hA : hB);
+            float rawWaterH = mix(hA, endH, ms.tTotal);
 
-            // Clamp water surface below the lowest bank outside the meander envelope
-            float maxLateralReach = (bankWidth + warpAmp) / plate_scale;
-            vec2 perpWorld = vec2(-ms.tangent.y, ms.tangent.x) * maxLateralReach;
-            float hLeft  = sampleMacroHeightFast(p_xz + perpWorld, phase, warp_strength, config);
-            float hRight = sampleMacroHeightFast(p_xz - perpWorld, phase, warp_strength, config);
-            waterH = min(waterH, min(hLeft, hRight) - 0.002);
+            // Anchor water surface smoothly to local terrain so it never cuts 500m cliffs or sits above banks
+            float waterH = clamp(rawWaterH, macro_h - maxValleyDrop, macro_h - 1.5 * metersToNorm);
 
-            float carvedH = shapeMeanderChannelScalar(
-                macro_h, waterH, channelDepth, halfWidth, bankWidth, ms.signedDist, ms.curvature, cutbankStrength
+            // Smoothly taper channel incision into lake depth when entering a sink cell B
+            float sinkTaper = isSinkB ? mix(1.0, pondDepth / max(baseChannelDepth, 1e-6), smoothstep(0.55, 1.0, ms.tTotal)) : 1.0;
+            float channelDepth = baseChannelDepth * sinkTaper;
+
+            float blendedH = shapeMeanderValleyAndChannel(
+                macro_h, waterH, channelDepth, halfWidth, bankWidth, valleyWidth,
+                ms.signedDist, ms.curvature, cutbankStrength, landMask
             );
-            float blendedH = mix(macro_h, carvedH, landMask);
 
             float epsD = 0.004;
-            float carvedH_p = shapeMeanderChannelScalar(
-                macro_h, waterH, channelDepth, halfWidth, bankWidth, ms.signedDist + epsD, ms.curvature, cutbankStrength
+            float blendedH_p = shapeMeanderValleyAndChannel(
+                macro_h, waterH, channelDepth, halfWidth, bankWidth, valleyWidth,
+                ms.signedDist + epsD, ms.curvature, cutbankStrength, landMask
             );
-            float dh_dd = ((mix(macro_h, carvedH_p, landMask)) - blendedH) / epsD;
+            float dh_dd = (blendedH_p - blendedH) / epsD;
             vec2 segGradXZ = (dh_dd * plate_scale) * ms.gradDir;
 
             float sminBlend;
-            hResult = hydroSmin(hResult, blendedH, 0.012, sminBlend);
+            hResult = hydroSmin(hResult, blendedH, 4.0 * metersToNorm, sminBlend);
             gradCarveXZ = mix(gradCarveXZ, segGradXZ, sminBlend);
 
-            float cov = (1.0 - smoothstep(halfWidth * 0.5, bankWidth, abs(ms.signedDist))) * landMask;
+            float cov = (1.0 - smoothstep(halfWidth * 0.4, bankWidth, abs(ms.signedDist))) * landMask;
             maxChannelCov = max(maxChannelCov, cov);
 
-            float effectiveWaterH = mix(waterH, waterH - channelDepth * 0.65, canyonBlend);
-            if (abs(ms.signedDist) < halfWidth * 1.05 && effectiveWaterH > hResult) {
-                waterSurface = max(waterSurface, effectiveWaterH);
+            if (abs(ms.signedDist) < bankWidth && waterH > hResult) {
+                waterSurface = max(waterSurface, waterH);
             }
         }
     }
@@ -996,7 +1074,7 @@ HydrologyResult evaluateHydrology(
         float hN = getWorleySiteElevation(n_skew, plate_scale, phase, warp_strength, config);
         if (hN < hActive) {
             lowerCount++;
-            if (lowerCount >= 2) break; // Cannot be a 1-cell pond or flooded 2-cell mutual pond
+            if (lowerCount >= 2) break;
         }
         if (hN < lowestNH) {
             lowestNH = hN;
@@ -1030,43 +1108,41 @@ HydrologyResult evaluateHydrology(
     }
 
     if (pondMode != 0 && pondSpillH > hActive) {
-        // For 2-cell mutual ponds, suppress the shared internal edge by measuring distance to F3
-        float edgeDist = worley.edgeDist;
-        if (pondMode == 2 && all(equal(worley.secondSkew, lowestN))) {
-            vec2 extDir = normalize(worley.thirdSite - worley.cellSite);
-            vec2 pCell = p + getMeanderWarp(p_xz, 2.1 * plate_scale, 0.085);
-            edgeDist = max(0.0, dot(0.5 * (worley.cellSite + worley.thirdSite) - pCell, extDir));
-        }
+        bool isTwoCell = (pondMode == 2);
+        float edgeDist = getWorleyBasinEdgeDist(p, p_xz, plate_scale, activeSkew, worley.cellSite, lowestN, isTwoCell);
 
-        float shoreBlend = smoothstep(0.0, 0.24, edgeDist) * landMask;
-        float basinBedH = pondSpillH - pondDepth * shoreBlend;
+        float clampedSpillH = clamp(pondSpillH, macro_h - maxValleyDrop, macro_h + 4.0 * metersToNorm);
+        float shoreBlend = smoothstep(0.0, 0.30, edgeDist) * landMask;
+        float basinBedH = clampedSpillH - pondDepth * shoreBlend;
         float carvedPondH = mix(macro_h, basinBedH, shoreBlend);
 
-        if (carvedPondH < hResult) {
+        float sminBlend;
+        float prevH = hResult;
+        hResult = hydroSmin(hResult, carvedPondH, 4.0 * metersToNorm, sminBlend);
+        if (carvedPondH < prevH + 4.0 * metersToNorm) {
             vec2 shoreDir = normalize(worley.cellSite - worley.secondSite);
             float dShore_dx = shoreDir.x * plate_scale;
             float dShore_dz = shoreDir.y * plate_scale;
-            float dBlend = (edgeDist > 0.0 && edgeDist < 0.24)
-                ? (6.0 * (edgeDist / 0.24) * (1.0 - edgeDist / 0.24) / 0.24) * landMask
+            float dBlend = (edgeDist > 0.0 && edgeDist < 0.30)
+                ? (6.0 * (edgeDist / 0.30) * (1.0 - edgeDist / 0.30) / 0.30) * landMask
                 : 0.0;
-            float dH_dBlend = (pondSpillH - 2.0 * pondDepth * shoreBlend) - macro_h;
-
-            hResult = carvedPondH;
-            gradCarveXZ = vec2(dShore_dx, dShore_dz) * (dH_dBlend * dBlend);
+            float dH_dBlend = (clampedSpillH - 2.0 * pondDepth * shoreBlend) - macro_h;
+            vec2 pondGrad = vec2(dShore_dx, dShore_dz) * (dH_dBlend * dBlend);
+            gradCarveXZ = mix(gradCarveXZ, pondGrad, sminBlend);
         }
         result.basin_mask = shoreBlend;
 
-        if (pondSpillH > hResult) {
-            waterSurface = max(waterSurface, pondSpillH);
+        if (clampedSpillH > hResult) {
+            waterSurface = max(waterSurface, clampedSpillH);
         }
     }
 
     result.carve_delta = hResult - macro_h;
     result.grad_carve_xz = gradCarveXZ;
     result.river_profile = maxChannelCov * (1.0 - canyonBlend);
-    result.river_mask = interior_mask * (1.0 - canyonBlend);
+    result.river_mask = interior_mask;
     result.canyon_profile = maxChannelCov * canyonBlend;
-    result.canyon_mask = interior_mask * canyonBlend;
+    result.canyon_mask = interior_mask;
     result.water_surface_h = waterSurface;
     return result;
 }
@@ -1083,14 +1159,14 @@ float calculateLocalWaterLevel(
     float min_height,
     float max_height
 ) {
-    float has_water_mask = max(smoothstep(0.05, 0.35, basin_mask),
-                           max(smoothstep(0.05, 0.25, river_profile * river_mask),
-                               smoothstep(0.05, 0.20, canyon_profile * canyon_mask)));
+    float has_water_mask = max(smoothstep(0.04, 0.25, basin_mask),
+                           max(smoothstep(0.04, 0.20, river_profile * river_mask),
+                               smoothstep(0.04, 0.18, canyon_profile * canyon_mask)));
 
-    if (water_surface_h <= final_h || has_water_mask <= 0.001) {
+    if (water_surface_h <= final_h || has_water_mask <= 0.01) {
         return min_height - 1000.0;
     }
-    return mix(min_height - 1000.0, remap(water_surface_h, 0.0, 1.0, min_height, max_height), has_water_mask);
+    return remap(water_surface_h, 0.0, 1.0, min_height, max_height);
 }
 
 
