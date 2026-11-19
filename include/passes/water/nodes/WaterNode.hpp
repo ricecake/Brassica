@@ -49,6 +49,7 @@ namespace brassica {
 		std::uint32_t skyViewIndex{0};
 		std::uint32_t cpuLightsIndex{0};
 		std::uint32_t gpuLightsIndex{0};
+		std::uint32_t biomeIndex{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
@@ -144,6 +145,7 @@ namespace brassica {
 			r.Modify<HdrColor>();
 			r.After<DeferredNode>();
 			r.Before<CirrusNode>();
+			r.Read<TerrainBiomeTexture>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -156,6 +158,7 @@ namespace brassica {
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>();
 			push.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
+			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};

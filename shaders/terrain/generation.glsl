@@ -458,21 +458,25 @@ MountainResult evaluateMountains(
 }
 
 struct HydrologyResult {
-    float river_carve;
-    vec3  grad_river_carve;
+    float river_bed_h;
+    vec3  grad_river_bed_h;
+    float river_water_h;
     float river_profile;
     float river_mask;
-    float canyon_carve;
-    vec3  grad_canyon_carve;
+
+    float canyon_bed_h;
+    vec3  grad_canyon_bed_h;
+    float canyon_water_h;
     float canyon_profile;
     float canyon_mask;
+
     float basin_mask;
     vec3  grad_basin_mask;
     float lake_water_level;
     vec3  grad_lake_water_level;
 };
 
-// Region 5: rivers, canyons, and lake basins.
+// Region 5: rivers, canyons, and lake basins with cross-sectionally flat centerline projection.
 HydrologyResult evaluateHydrology(
     vec3  P_geo,
     float radius_scale,
@@ -484,13 +488,15 @@ HydrologyResult evaluateHydrology(
     vec3  grad_interior_mask,
     float base_h,
     vec3  grad_base_h,
+    float macro_h,
+    vec3  macro_grad_geo,
     int   riverOctaves,
     int   canyonOctaves,
     int   basinOctaves
 ) {
     HydrologyResult result;
 
-    // RIVERS (Inverted zero-crossings warped by velocity)
+    // 1. RIVERS (Zero-crossings warped by plate velocity)
     vec3 grad_raw_river;
     vec3 P_river = P_geo * radius_scale * 2.0 + vel * warp_strength * 1.5;
     float raw_river = dot_noise_fbm(P_river, riverOctaves, phase + 112.0, grad_raw_river);
@@ -499,48 +505,80 @@ HydrologyResult evaluateHydrology(
     float river_width = 0.035;
     float t_river = clamp(abs(raw_river) / river_width, 0.0, 1.0);
     result.river_profile = 1.0 - (t_river * t_river * (3.0 - 2.0 * t_river));
-    float d_river_profile = -6.0 * t_river * (1.0 - t_river) / river_width;
-    vec3 grad_river_profile = d_river_profile * sign(raw_river) * grad_river_warped;
+    result.river_mask = interior_mask;
 
-    result.river_mask = interior_mask; // Keep rivers out of the steepest fault lines
-    float river_depth = 0.06;
-    result.river_carve = result.river_profile * result.river_mask * river_depth;
-    result.grad_river_carve = river_depth * (grad_river_profile * result.river_mask + result.river_profile * grad_interior_mask);
+    // Project macro_h onto nearest raw_river == 0 centerline (removes cross-slope)
+    float river_grad_sq = max(dot(grad_river_warped, grad_river_warped), 1e-8);
+    vec3 delta_P_river = -(raw_river / river_grad_sq) * grad_river_warped;
+    float max_river_step = 0.05 / max(radius_scale, 1e-4);
+    float r_step_len = length(delta_P_river);
+    if (r_step_len > max_river_step) {
+        delta_P_river *= max_river_step / r_step_len;
+    }
 
-    // CANYONS (Inverted zero-crossings masked to high elevation)
+    float river_center_h = macro_h + dot(macro_grad_geo, delta_P_river);
+    vec3 n_river = grad_river_warped * inversesqrt(river_grad_sq);
+    vec3 grad_river_center_h = macro_grad_geo - n_river * dot(macro_grad_geo, n_river);
+
+    float river_depth = 0.035;
+    result.river_bed_h = river_center_h - river_depth;
+    result.grad_river_bed_h = grad_river_center_h;
+    result.river_water_h = river_center_h - river_depth * 0.25;
+
+    // 2. CANYONS (Zero-crossings masked to high elevation)
     vec3 grad_raw_canyon;
     float raw_canyon = dot_noise_fbm(P_geo * radius_scale * 1.5, canyonOctaves, phase + 175.0, grad_raw_canyon);
     vec3 grad_canyon_warped = grad_raw_canyon * radius_scale * 1.5;
 
-    float canyon_width = 0.015;
+    float canyon_width = 0.018;
     float t_canyon = clamp(abs(raw_canyon) / canyon_width, 0.0, 1.0);
     result.canyon_profile = 1.0 - (t_canyon * t_canyon * (3.0 - 2.0 * t_canyon));
-    float d_canyon_profile = -6.0 * t_canyon * (1.0 - t_canyon) / canyon_width;
-    vec3 grad_canyon_profile = d_canyon_profile * sign(raw_canyon) * grad_canyon_warped;
 
     float t_elev = clamp((base_h - 0.2) / 0.3, 0.0, 1.0);
     float high_elev_mask = t_elev * t_elev * (3.0 - 2.0 * t_elev);
-    float d_high_elev_mask = 6.0 * t_elev * (1.0 - t_elev) / 0.3;
-    vec3 grad_high_elev_mask = d_high_elev_mask * grad_base_h;
-
     result.canyon_mask = interior_mask * high_elev_mask;
-    vec3 grad_canyon_mask = grad_interior_mask * high_elev_mask + interior_mask * grad_high_elev_mask;
 
-    float canyon_depth = 0.15;
-    result.canyon_carve = result.canyon_profile * result.canyon_mask * canyon_depth;
-    result.grad_canyon_carve = canyon_depth * (grad_canyon_profile * result.canyon_mask + result.canyon_profile * grad_canyon_mask);
+    float canyon_grad_sq = max(dot(grad_canyon_warped, grad_canyon_warped), 1e-8);
+    vec3 delta_P_canyon = -(raw_canyon / canyon_grad_sq) * grad_canyon_warped;
+    float max_canyon_step = 0.03 / max(radius_scale, 1e-4);
+    float c_step_len = length(delta_P_canyon);
+    if (c_step_len > max_canyon_step) {
+        delta_P_canyon *= max_canyon_step / c_step_len;
+    }
 
-    // LAKE BASINS (Cellular-like structural flattening)
+    float canyon_center_h = macro_h + dot(macro_grad_geo, delta_P_canyon);
+    vec3 n_canyon = grad_canyon_warped * inversesqrt(canyon_grad_sq);
+    vec3 grad_canyon_center_h = macro_grad_geo - n_canyon * dot(macro_grad_geo, n_canyon);
+
+    float canyon_depth = 0.09;
+    result.canyon_bed_h = canyon_center_h - canyon_depth;
+    result.grad_canyon_bed_h = grad_canyon_center_h;
+    result.canyon_water_h = canyon_center_h - canyon_depth * 0.80;
+
+    // 3. LAKE BASINS (Project onto basin_noise == 0.65 shoreline contour for level lakes)
     vec3 grad_basin_noise;
     float basin_noise = dot_noise_fbm(P_geo * radius_scale * 1.2, basinOctaves, phase + 200.0, grad_basin_noise);
+    vec3 grad_basin_geo = grad_basin_noise * radius_scale * 1.2;
 
     float t_basin = clamp((basin_noise - 0.65) / 0.25, 0.0, 1.0);
     result.basin_mask = t_basin * t_basin * (3.0 - 2.0 * t_basin);
     float d_basin_mask = 6.0 * t_basin * (1.0 - t_basin) / 0.25;
-    result.grad_basin_mask = d_basin_mask * grad_basin_noise * radius_scale * 1.2;
+    result.grad_basin_mask = d_basin_mask * grad_basin_geo;
 
-    result.lake_water_level = base_h - 0.02;
-    result.grad_lake_water_level = grad_base_h;
+    float basin_grad_sq = max(dot(grad_basin_geo, grad_basin_geo), 1e-8);
+    vec3 delta_P_basin = ((0.65 - basin_noise) / basin_grad_sq) * grad_basin_geo;
+    float max_basin_step = 0.15 / max(radius_scale, 1e-4);
+    float b_step_len = length(delta_P_basin);
+    if (b_step_len > max_basin_step) {
+        delta_P_basin *= max_basin_step / b_step_len;
+    }
+
+    float lake_shore_h = macro_h + dot(macro_grad_geo, delta_P_basin);
+    vec3 n_basin = grad_basin_geo * inversesqrt(basin_grad_sq);
+    vec3 grad_lake_shore_h = macro_grad_geo - n_basin * dot(macro_grad_geo, n_basin);
+
+    result.lake_water_level = lake_shore_h - 0.015;
+    result.grad_lake_water_level = grad_lake_shore_h;
 
     return result;
 }
@@ -584,7 +622,7 @@ ErosionResult applyErosion(
                                 max(river_profile * river_mask,
                                     canyon_profile * canyon_mask));
 
-    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3)) * (1.0 - hydrology_protection);
+    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3));// * (1.0 - hydrology_protection);
 
     // Gully carving weight is sharper in steep mountain fault zones and canyon walls
     float erosion_gully_weight = mix(0.40, 0.70, clamp01(collision_intensity + canyon_mask * 0.5));
@@ -602,18 +640,18 @@ ErosionResult applyErosion(
         p_xz,
         heightAndSlope,
         erosionFadeTarget,
-        7*erosion_strength,
-        2*erosion_gully_weight,
+        1*erosion_strength,
+        20*erosion_gully_weight,
         erosion_detail,
         erosion_rounding,            // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
         vec4(1.25, 1.25, 5.8, 1.5),  // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
         assumedSlopeDir,
-        5*erosion_scale,
+        50*erosion_scale,
         erosionOctaves,
         2.3,                         // lacunarity
         0.52,                        // gain
-        10.0,                        // cellScale
-        0.5,                         // normalization
+        1.0,                        // cellScale
+        0.0,                         // normalization
         ridgeMapVal,
         substrateVal,
         debugVal
@@ -657,36 +695,27 @@ float classifyGeoBiome(
 
 // Region 10: water level in normalized height space -- rivers/canyons/lake basins each fill to
 // their own fraction of their own carved depth, highest-coverage mask wins where they overlap.
+// Region 10: Unscaled flat water surface elevation inside wetted corridors
 float calculateLocalWaterLevel(
-    float raw_final_h,
-    float river_carve,
-    float river_profile,
-    float river_mask,
-    float canyon_carve,
-    float canyon_profile,
-    float canyon_mask,
-    float basin_mask,
-    float lake_water_level,
+    float final_h,
+    HydrologyResult hydrology,
     float min_height,
     float max_height
 ) {
-    float river_water_h = raw_final_h + river_carve * 0.85; // Rivers fill to 85% of carved depth
-    float canyon_water_h = raw_final_h + canyon_carve * 0.05; // Canyons have shallow streams at the bottom
+    float river_cov  = hydrology.river_profile * hydrology.river_mask;
+    float canyon_cov = hydrology.canyon_profile * hydrology.canyon_mask;
+    float basin_cov  = hydrology.basin_mask;
 
-    float local_water_norm = max(
-        lake_water_level * smoothstep(0.1, 0.5, basin_mask),
-        max(
-            river_water_h * smoothstep(0.01, 0.2, river_profile * river_mask),
-            canyon_water_h * smoothstep(0.01, 0.1, canyon_profile * canyon_mask)
-        )
-    );
+    float local_water_norm = -1e5;
+    if (river_cov  > 0.02) local_water_norm = max(local_water_norm, hydrology.river_water_h);
+    if (canyon_cov > 0.02) local_water_norm = max(local_water_norm, hydrology.canyon_water_h);
+    if (basin_cov  > 0.05) local_water_norm = max(local_water_norm, hydrology.lake_water_level);
 
-    float has_water_mask = max(smoothstep(0.1, 0.5, basin_mask),
-                           max(smoothstep(0.01, 0.2, river_profile * river_mask),
-                               smoothstep(0.01, 0.1, canyon_profile * canyon_mask)));
-
-    // Plunge the water level 1000 units underground where there is no water presence
-    return mix(0.0, remap(local_water_norm, 0.0, 1.0, min_height, max_height), has_water_mask);
+    // if (local_water_norm <= final_h) {
+        // return mix(final_h);
+    // }
+    local_water_norm = max(0.0, mix((0.95*final_h), local_water_norm, smoothstep(0.95*final_h, final_h, local_water_norm)));
+    return remap(local_water_norm, 0.0, 1.0, min_height, max_height);
 }
 
 // Integrated analytical terrain evaluation with guided erosion filter -- threads the region
@@ -726,22 +755,31 @@ float evaluate_terrain_analytical(
         6
     );
 
-    // 5. Hydrology & Erosion (Rivers, Canyons, Lakes)
+    // 5. Hydrology (Rivers, Canyons, Lakes)
+    float macro_h = tectonics.base_h + mountains.shelf.x + mountains.ridge_h;
+    vec3 macro_grad_geo = tectonics.grad_base_h + mountains.shelf.yzw + mountains.grad_ridge;
+
     HydrologyResult hydrology = evaluateHydrology(
         tectonics.P_geo, radius_scale, tectonics.vel, tectonics.J_vel, warp_strength, phase,
         continentRegion.interior_mask, continentRegion.grad_interior_mask,
         tectonics.base_h, tectonics.grad_base_h,
+        macro_h, macro_grad_geo,
         4, 4, 3
     );
 
-    // 6. Final Composition
-    float raw_final_h = tectonics.base_h + mountains.shelf.x + mountains.ridge_h - hydrology.river_carve - hydrology.canyon_carve;
-    vec3 raw_final_grad = tectonics.grad_base_h + mountains.shelf.yzw + mountains.grad_ridge - hydrology.grad_river_carve - hydrology.grad_canyon_carve;
+    // 6. Final Composition (blend toward cross-sectionally flat beds rather than subtracting)
+    float river_w = hydrology.river_profile * hydrology.river_mask;
+    float h_after_river = mix(macro_h, hydrology.river_bed_h, river_w);
+    vec3 grad_after_river = mix(macro_grad_geo, hydrology.grad_river_bed_h, river_w);
 
-    // Apply the lake basin flattening via mix
-    float final_h = mix(raw_final_h, hydrology.lake_water_level, hydrology.basin_mask);
+    float canyon_w = hydrology.canyon_profile * hydrology.canyon_mask;
+    float raw_final_h = mix(h_after_river, hydrology.canyon_bed_h, canyon_w);
+    vec3 raw_final_grad = mix(grad_after_river, hydrology.grad_canyon_bed_h, canyon_w);
+
+    float lake_bed_h = hydrology.lake_water_level - 0.025;
+    float final_h = mix(raw_final_h, lake_bed_h, hydrology.basin_mask);
     vec3 final_grad_geo = mix(raw_final_grad, hydrology.grad_lake_water_level, hydrology.basin_mask)
-        + (hydrology.lake_water_level - raw_final_h) * hydrology.grad_basin_mask;
+        + (lake_bed_h - raw_final_h) * hydrology.grad_basin_mask;
 
     // 7. Resolve Un-eroded Height and Normal
     float true_height = remap(final_h, 0.0, 1.0, config.min_height, config.max_height);
@@ -782,9 +820,7 @@ float evaluate_terrain_analytical(
 
     // 10. Calculate water level in normalized height space
     out_water_level = calculateLocalWaterLevel(
-        raw_final_h, hydrology.river_carve, hydrology.river_profile, hydrology.river_mask,
-        hydrology.canyon_carve, hydrology.canyon_profile, hydrology.canyon_mask,
-        hydrology.basin_mask, hydrology.lake_water_level,
+        final_h, hydrology,
         config.min_height, config.max_height
     );
 

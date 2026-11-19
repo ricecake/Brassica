@@ -19,6 +19,9 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  cpuLightsIndex;
+	uint  gpuLightsIndex;
+	uint biomeIndex;
 }
 params;
 
@@ -35,6 +38,15 @@ layout(location = 1) out vec3 outNormal[];
 float getWaterRingScale(float ring) {
 	return pow(2.0, ring);
 }
+
+float getWaterSurfaceHeight(vec2 worldXZ, uint ringLevel) {
+	if (params.biomeIndex == 0u || params.biomeIndex == 0xFFFFFFFFu) {
+		return 100.0;
+	}
+	uint sampleLOD = min(ringLevel, params.gridParams.x - 1u);
+	return sampleTerrainBiome(params.biomeIndex, worldXZ, sampleLOD, params.gridParams.w).g;
+}
+
 
 // Samples underlying terrain height from TerrainMinMaxTexture
 float getTerrainBedHeight(vec2 worldXZ, uint ringLevel) {
@@ -78,7 +90,7 @@ vec3 calculatePhasorOffsetAndNormal(vec2 uv, float time, float distToCam, float 
 	vec3 waveF_3D  = waveDir3D;
 
 	// Water depth at this vertex
-	float waterDepth = max(0.0, params.waterLevel - hC);
+	float waterDepth = max(0.0, getWaterSurfaceHeight(uv, uint(ringLevel)) - hC);
 	float shallowFactor = 1.0 - smoothstep(0.0, 30.0, waterDepth);
 	float speed = mix(1.2, 0.6, shallowFactor); // Waves slow down in shallower water
 
@@ -235,7 +247,7 @@ void main() {
 	float distSq = dot(relMorphedXZ, relMorphedXZ);
 	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
 
-	vec3 relWorldPos = vec3(relMorphedXZ.x, params.waterLevel - uCameraPosition.y, relMorphedXZ.y) + waveOffset - vec3(0.0, dropOff, 0.0);
+	vec3 relWorldPos = vec3(relMorphedXZ.x, getWaterSurfaceHeight(worldXZ, ringLevel) - uCameraPosition.y, relMorphedXZ.y) + waveOffset - vec3(0.0, dropOff, 0.0);
 
 	vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 	gl_MeshVerticesEXT[vertexIndex].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
