@@ -334,7 +334,7 @@ void main() {
 			float weatherMoisture  = weatherSample.b; // Moisture content [0..1]
 
 			// Total precipitation intensity factor (high moisture + cloud coverage)
-			float precipFactor = smoothstep(0.35, 0.8, weatherMoisture) * smoothstep(0.2, 0.6, weatherCoverage);
+			float precipFactor = smoothstep(0.35, 0.9, weatherMoisture) * smoothstep(0.2, 0.6, weatherCoverage);
 
 			// Rain/snow originates from the cloud layer -- structurally contain it there instead
 			// of relying only on the independent camera-altitude fade a few lines down (which
@@ -358,7 +358,7 @@ void main() {
 			// Weather-dependent fog adjustments
 			float fogBase = u_fogBaseHeight;
 			float fogFalloff = u_fogHeightFalloff * mix(1.0, 0.8, clamp(weatherMoisture * 0.6 + weatherCoverage * 0.4, precipFactor, 1.0));
-			float baseDensity =  u_fogDensity * (0.25 + 0.125 * weatherMoisture + 0.8 * weatherCoverage);
+			float baseDensity =  u_fogDensity * (0.125 + 0.125 * weatherMoisture + 0.8 * weatherCoverage);
 
 			// Rain increases fog density; snow blizzards and flurries increase density even further (whiteout conditions)
 			float densityMult = mix(baseDensity, mix(2.5, 3.2, snowFraction), precipFactor);
@@ -371,7 +371,7 @@ void main() {
 				noise = noiseCuttoff*dot_noise_fbm((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), 3, 0.25*uTime);
 				// noise = noiseCuttoff*dnoise((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), vec3(1,0,0), 0.25*uTime);
 			}
-			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff)  * clamp(0.5+0.5*(noise), 0.125, 1.0);
+			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff)  * clamp(0.5+0.5*(noise), 0.125, 0.850);
 			// density *= (1.0 - smoothstep(4500, 10000, uCameraPosition.y));
 
 			// Atmospheric Rayleigh and Mie scattering coefficients

@@ -157,7 +157,8 @@ CloudMarchResult marchClouds(
 	// horizonAmbient/ambientTop below still get recomputed every step since they fold in the
 	// per-step groundUpwelling term.
 	vec3 skyAmbient = getApproximateSkyAmbient(sunDir, sunRadiance);
-	vec3 groundAmbientBase = getApproximateGroundAmbient(sunRadiance);
+	vec3 groundAmbientBase = getApproximateGroundAmbient(sunDir, sunRadiance);
+	vec3 horizonAmbient = getApproximateHorizonAmbient(sunDir, normalize(-worldRay), sunRadiance);
 
 	for (int iter = 0; iter < kMaxIterations && t < t_end; iter++) {
 		vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
@@ -199,13 +200,13 @@ CloudMarchResult marchClouds(
 			// convention (atmosphere_lowres.comp/helpers/clouds.glsl), applied to this specific
 			// noise call rather than ported line-for-line -- boidish's own doCheap hooks around
 			// this exact warp are dead/commented out in its current source.
-			bool doCheap = (t >= mix(t_start, t_end, 0.5)) || all(lessThan(cloudTransmittance, vec3(0.705)));
+			bool doCheap = false;//(t >= mix(t_start, t_end, 0.5)) || all(lessThan(cloudTransmittance, vec3(0.5)));
 			vec3 curlOffset = vec3(0.0);
 			if (!doCheap) {
 				mat3 grad;
-				cross_noise_fbm(advectedPos/(prevDensity+5000), 4, uTime*0.05, grad);
+				cross_noise_fbm(advectedPos/(prevDensity+2500), 4, uTime*0.1, grad);
 				vec3 cross_curl = get_curl(grad);
-				curlOffset = 200.0*grad*cross_curl * (smoothstep(0.0, 0.75, cloudHeightFrac));
+				curlOffset = 500.0*cross_curl;// * (smoothstep(0.0, 0.75, cloudHeightFrac));
 			}
 
 			float baseDensity = sampleCloudVolume(advectedPos+curlOffset, distFromCam, push.volumeIndex);
@@ -300,8 +301,10 @@ CloudMarchResult marchClouds(
 				vec3 powder = vec3(1.0) - vec3(1.0) / (vec3(1.0) + (25.0 * stepDensity * u_ambientBeerPowderScale));
 
 				vec3 groundAmbient = groundAmbientBase + groundUpwelling;
-				vec3 horizonAmbient = getApproximateHorizonAmbient(sunDir, sunRadiance, skyAmbient, groundAmbient);
+				// vec3 horizonAmbient = getApproximateHorizonAmbient(sunDir, sunRadiance, skyAmbient, groundAmbient);
 				vec3 ambientTop = mix(skyAmbient, horizonAmbient, 0.4);
+				groundAmbient = mix(groundAmbient, horizonAmbient, 0.4);
+				// vec3 ambientTop = groundAmbientBase + groundUpwelling + skyAmbient + horizonAmbient;
 
 				vec3 upwardOD = stepDensity * clamp(cloudHeightFrac, 0.0, 1.0) * 15000.0;
 				vec3 downwardOD = stepDensity * clamp(1.0 - cloudHeightFrac, 0.0, 1.0) * 15000.0;

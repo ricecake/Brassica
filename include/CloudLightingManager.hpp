@@ -62,7 +62,7 @@ namespace brassica {
 		// extinction formula is its own adaptation, not boidish's verbatim, so boidish's tuned
 		// defaults have no particular reason to look right here; this way the port doesn't
 		// silently change today's look, and the slider is there once someone wants to dial it in.
-		glm::vec3 cloudColor{1.0f, 1.0f, 1.0f};
+		glm::vec3 cloudColor{0.95f, 0.95f, 1.0f};
 		// Per-channel extinction: rgbExtinction = cloudExtinctionColor * cloudExtinctionScale,
 		// multiplied into marchClouds()'s density->optical-depth->transmittance chain. Same
 		// no-op-default reasoning as cloudColor -- boidish's own default (0.372) would silently
@@ -73,7 +73,7 @@ namespace brassica {
 		// glow. boidish also multiplies by a per-sample albedo from calculateCloudDensity(),
 		// which Brassica's live density function has no equivalent of -- flat-uniform-only.
 		// Same no-op-default reasoning as cloudColor/cloudExtinctionScale.
-		glm::vec3 cloudAlbedo{1.0f, 1.0f, 1.0f};
+		glm::vec3 cloudAlbedo{0.95f, 0.95f, 1.0f};
 
 		auto GetReflection() const {
 			return std::make_tuple(
