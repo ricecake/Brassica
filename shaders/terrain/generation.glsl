@@ -70,6 +70,7 @@ const TectonicPlate plates[] = TectonicPlate[](
  */
 vec4 ErosionFilter(
 	in vec2   p,
+    float texelSize,
 	vec3      heightAndSlope,
 	float     fadeTarget,
 	float     strength,
@@ -94,7 +95,10 @@ vec4 ErosionFilter(
 	scale *= 100.0;
 
 	vec3  inputHeightAndSlope = heightAndSlope;
-	float freq = 1.0 / (scale * cellScale);
+    float wavelength = scale * cellScale;
+	float freq = 1.0 / wavelength;
+    float fadeFreqStart = 1.0 / (4.0 * texelSize);
+    float fadeFreqEnd = 1.0 / (2.0 * texelSize);
 	float slopeLength = max(length(heightAndSlope.yz), 1e-10);
 	float magnitude = 0.0;
 	float roundingMult = 1.0;
@@ -108,6 +112,7 @@ vec4 ErosionFilter(
 	vec2 gullySlope = mix(heightAndSlope.yz, heightAndSlope.yz / slopeLength * assumedSlope.x, assumedSlope.y);
 
 	for (int i = 0; i < octaves; i++) {
+        if (freq > fadeFreqEnd) break;
 		vec4 phacelle = PhacelleNoise(p * freq, safe_normalize(gullySlope), cellScale, 0.25, normalization);
 		phacelle.zw *= -freq;
 		float sloping = abs(phacelle.y);
@@ -129,7 +134,7 @@ vec4 ErosionFilter(
 		float newRidgeMapMask = ease_out(sloping * onset.w);
 		ridgeMapCombiMask = ridgeMapCombiMask * newRidgeMapMask;
 
-		strength *= gain;
+		strength *= gain * smoothstep(fadeFreqStart, fadeFreqEnd, freq);
 		freq *= lacunarity;
 		roundingMult *= rounding.w;
 	}
@@ -597,6 +602,7 @@ struct ErosionResult {
 // - Lake basins buffer towards flat sediment deposition (+0.3)
 ErosionResult applyErosion(
     vec2  p_xz,
+    float texelSize,
     vec3  heightAndSlope, // x = true_height pre-erosion, yz = slope pre-erosion
     float fault_mask,
     float collision_intensity,
@@ -629,7 +635,7 @@ ErosionResult applyErosion(
     // Detail restriction and spatial scale adjust according to ridge features
     float erosion_detail = mix(1.2, 1.8, clamp01(collision_intensity + canyon_mask));
 
-    float erosion_scale = mix(0.12, 0.22, fault_mask);
+    float erosion_scale = mix(0.35, 0.55, fault_mask);
     vec4 erosion_rounding = vec4(mix(5.0, 10.0, t_macro), mix(0.25, 0.0, t_macro), 0.1, 2.0);
 
     float ridgeMapVal = 0.0;
@@ -638,6 +644,7 @@ ErosionResult applyErosion(
 
     vec4 erosionDelta = ErosionFilter(
         p_xz,
+        texelSize,
         heightAndSlope,
         erosionFadeTarget,
         1*erosion_strength,
@@ -649,7 +656,7 @@ ErosionResult applyErosion(
         50*erosion_scale,
         erosionOctaves,
         2.3,                         // lacunarity
-        0.52,                        // gain
+        0.42,                        // Alternatively, need to clamp wavelength to 6-8M
         1.0,                        // cellScale
         0.0,                         // normalization
         ridgeMapVal,
@@ -718,12 +725,154 @@ float calculateLocalWaterLevel(
     return remap(local_water_norm, 0.0, 1.0, min_height, max_height);
 }
 
+struct MicroDetailResult {
+    float height_delta;
+    vec2  slope_delta;
+};
+
+// Evaluates band-limited mesostructure (wavelengths ~24m down to ~1.5m at LOD 0).
+// Uses P_geo to avoid float32 precision loss at planetary coordinates, and modulates
+// character using existing substrate, ridge, and hydrology fields.
+MicroDetailResult evaluateMicroDetail(
+    vec3  P_geo,
+    vec3  dP_dx,
+    vec3  dP_dz,
+    float texelSize,
+    float phase,
+    float ridge_map,
+    float substrate,
+    float wetness_mask // max(river_w, max(canyon_w, basin_mask))
+) {
+    MicroDetailResult res = MicroDetailResult(0.0, vec2(0.0));
+
+    float minCleanWavelength = texelSize * 2.5;
+
+    // Start at ~24m wavelength (on a 600km sphere: 600000 / 24 = 25000 cycles/rad)
+    float wavelength = 24.0;
+    if (wavelength <= minCleanWavelength) {
+        return res;
+    }
+
+    // Rock/exposed areas (high ridge_map or negative substrate) get sharper, higher-relief
+    // micro-facets; depositional plains (positive substrate) get gentle soil undulation.
+    float rockiness = clamp01(max(ridge_map, -substrate * 0.7));
+    float baseAmp = mix(0.18, 0.65, rockiness) * (1.0 - wetness_mask * 0.85);
+
+    float amp = baseAmp;
+    const int MAX_MICRO_OCTAVES = 5; // 24m -> 12m -> 6m -> 3m -> 1.5m
+
+    for (int i = 0; i < MAX_MICRO_OCTAVES; i++) {
+        float texelsPerCycle = wavelength / texelSize;
+        if (texelsPerCycle <= 2.5) break;
+
+        // Smooth Nyquist roll-off; spatially constant per LOD so d(lodFade)/dx == 0
+        float lodFade = smoothstep(2.5, 4.5, texelsPerCycle);
+
+        float freqGeo = FAKE_PLANET_RADIUS / wavelength;
+        vec3 pSample = P_geo * freqGeo + vec3(phase * 13.7 + float(i) * 31.1);
+
+        // noised() returns vec4(noise, dN/dx, dN/dy, dN/dz)
+        vec4 n = noised(pSample);
+
+        // Sharp ridge-like creases for rock vs smooth rolling mounds for soil
+        float billow = n.x;
+        vec3 gradBillow = n.yzw;
+
+        float crease = 1.0 - abs(n.x);
+        // Smooth sign around 0 to keep derivatives continuous
+        float softSign = n.x * inversesqrt(n.x * n.x + 1e-4);
+        vec3 gradCrease = -softSign * n.yzw;
+
+        float h = mix(billow, crease - 0.5, rockiness);
+        vec3 gradGeo = mix(gradBillow, gradCrease, rockiness) * freqGeo;
+
+        float w = amp * lodFade;
+        res.height_delta += h * w;
+        res.slope_delta += vec2(dot(gradGeo, dP_dx), dot(gradGeo, dP_dz)) * w;
+
+        wavelength *= 0.5;
+        amp *= 0.48; // Slightly below 0.5 so slope energy stays bounded
+    }
+
+    return res;
+}
+
+MicroDetailResult evaluateMicroDetail(
+    vec2  p_xz,
+    float world_y,
+    vec2  macro_slope,
+    float texel_size,
+    float ridge_map,
+    float substrate,
+    float water_level
+) {
+    MicroDetailResult res = MicroDetailResult(0.0, vec2(0.0));
+
+    // Base wavelength 24m -> ~1.1m over 5 octaves at lacunarity 2.15
+    float wavelength = 24.0;
+    float min_wavelength = 2.0 * texel_size;
+    if (wavelength <= min_wavelength) {
+        return res;
+    }
+
+    float slope_mag = length(macro_slope);
+    // Eroded rock & ridges get higher relief + strata; depositional plains stay subtle
+    float rockiness = clamp01(max(ridge_map, -substrate * 0.5 + 0.5) * 0.6 + slope_mag * 0.8);
+    float submergence = smoothstep(water_level - 1.5, water_level + 0.5, world_y);
+
+    // Base amplitude in meters (~0.35m on craggy rock, ~0.04m on flat soil/underwater)
+    float amp = mix(0.04, 0.35, rockiness) * mix(0.3, 1.0, submergence);
+    float strata_stretch = mix(0.2, 2.5, rockiness); // compresses vertical frequency for rock layers
+
+    const int MICRO_OCTAVES = 5;
+    const float LACUNARITY = 2.15;
+    const float GAIN = 0.44; // keep LACUNARITY * GAIN < 1.0 so normals don't blow up
+
+    for (int i = 0; i < MICRO_OCTAVES; i++) {
+        if (wavelength <= min_wavelength) {
+            break;
+        }
+
+        // Smooth Nyquist fade between 4x and 2x vertex spacing
+        float nyquist_fade = smoothstep(min_wavelength, 2.0 * min_wavelength, wavelength);
+        float w = amp * nyquist_fade;
+        float freq = 1.0 / wavelength;
+
+        vec3 q = vec3(p_xz.x, world_y * strata_stretch, p_xz.y) * freq;
+        vec4 n = noised(q); // n.x = [-1, 1], n.yzw = d/dq
+
+        // Ridged shaping on rocky terrain, smooth undulations on soil
+        float ridge_val = 1.0 - abs(n.x);
+        float ridge_deriv_scale = -sign(n.x);
+        float shaped_val = mix(n.x, ridge_val * 2.0 - 1.0, rockiness * 0.7);
+        float deriv_mult = mix(1.0, 2.0 * ridge_deriv_scale, rockiness * 0.7);
+
+        // Chain rule including vertical strata term (dq.y/dx = dH/dx * strata_stretch * freq)
+        vec3 dn_dq = n.yzw * deriv_mult * freq;
+        vec2 dH_dxz = vec2(
+            dn_dq.x + dn_dq.y * strata_stretch * macro_slope.x,
+            dn_dq.z + dn_dq.y * strata_stretch * macro_slope.y
+        );
+
+        res.height_delta += shaped_val * w;
+        res.slope_delta  += dH_dxz * w;
+
+        wavelength /= LACUNARITY;
+        amp *= GAIN;
+    }
+
+    return res;
+}
+
+
 // Integrated analytical terrain evaluation with guided erosion filter -- threads the region
 // functions above together in the same order/shape the original monolithic version did.
 float evaluate_terrain_analytical(
     vec3 p_local,
     float phase,
     float warp_strength,
+    float lod,
+    float texelSize,
     TerrainConfig config,
     out vec3 out_normal,
     out float out_water_level,
@@ -743,7 +892,7 @@ float evaluate_terrain_analytical(
     vec3 P_noise = tectonics.P_geo * radius_scale;
 
     ContinentResult continentRegion = evaluateContinentAndBiomeRegions(
-        P_noise, radius_scale, phase, tectonics.fault_mask, tectonics.grad_fault, 5, 3, 4
+        P_noise, radius_scale, phase, tectonics.fault_mask, tectonics.grad_fault, 5, 3, 10
     );
 
     // 4. Mountains
@@ -798,7 +947,7 @@ float evaluate_terrain_analytical(
     vec3 heightAndSlope = vec3(true_height, tectonic_skewed_slope);
 
     ErosionResult erosion = applyErosion(
-        p_local.xz, heightAndSlope,
+        p_local.xz, texelSize, heightAndSlope,
         tectonics.fault_mask, tectonics.collision_intensity,
         hydrology.river_profile, hydrology.river_mask,
         hydrology.canyon_profile, hydrology.canyon_mask,
@@ -807,8 +956,21 @@ float evaluate_terrain_analytical(
         8
     );
 
-    true_height = erosion.true_height;
-    out_normal = normalize(vec3(-erosion.slope.x, 1.0, wrapped.poleFlipped ? erosion.slope.y : -erosion.slope.y));
+    float wetness_mask = clamp01(max(river_w, max(canyon_w, hydrology.basin_mask)));
+    MicroDetailResult micro = evaluateMicroDetail(
+        tectonics.P_geo, tectonics.dP_dx, tectonics.dP_dz,
+        texelSize, phase,
+        max(mountains.massive_ridge, erosion.ridge_map),
+        erosion.substrate,
+        wetness_mask
+    );
+
+    true_height = erosion.true_height + micro.height_delta;
+    vec2 final_slope = erosion.slope + micro.slope_delta;
+    out_normal = normalize(vec3(-final_slope.x, 1.0, wrapped.poleFlipped ? final_slope.y : -final_slope.y));
+
+    // true_height = erosion.true_height;
+    // out_normal = normalize(vec3(-erosion.slope.x, 1.0, wrapped.poleFlipped ? erosion.slope.y : -erosion.slope.y));
     out_ridge_map = max(mountains.massive_ridge, erosion.ridge_map);
     out_substrate = erosion.substrate;
 
@@ -832,6 +994,8 @@ float evaluate_terrain_analytical(
     vec3 p_local,
     float phase,
     float warp_strength,
+    float lod,
+    float texelSize,
     TerrainConfig config,
     out vec3 out_normal,
     out float out_water_level,
@@ -839,7 +1003,7 @@ float evaluate_terrain_analytical(
     out float out_substrate
 ) {
     float dummyBiome;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, out_ridge_map, out_substrate, dummyBiome);
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, lod, texelSize, config, out_normal, out_water_level, out_ridge_map, out_substrate, dummyBiome);
 }
 
 // Overload for callers requesting out_ridge_map
@@ -847,6 +1011,8 @@ float evaluate_terrain_analytical(
     vec3 p_local,
     float phase,
     float warp_strength,
+    float lod,
+    float texelSize,
     TerrainConfig config,
     out vec3 out_normal,
     out float out_water_level,
@@ -854,7 +1020,7 @@ float evaluate_terrain_analytical(
 ) {
     float dummySubstrate;
     float dummyBiome;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, out_ridge_map, dummySubstrate, dummyBiome);
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, lod, texelSize, config, out_normal, out_water_level, out_ridge_map, dummySubstrate, dummyBiome);
 }
 
 // Overload for callers requesting out_water_level
@@ -862,6 +1028,8 @@ float evaluate_terrain_analytical(
     vec3 p_local,
     float phase,
     float warp_strength,
+    float lod,
+    float texelSize,
     TerrainConfig config,
     out vec3 out_normal,
     out float out_water_level
@@ -869,7 +1037,7 @@ float evaluate_terrain_analytical(
     float dummyRidgeMap;
     float dummySubstrate;
     float dummyBiome;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, out_water_level, dummyRidgeMap, dummySubstrate, dummyBiome);
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, lod, texelSize, config, out_normal, out_water_level, dummyRidgeMap, dummySubstrate, dummyBiome);
 }
 
 // Overload for callers requesting only out_normal
@@ -877,6 +1045,8 @@ float evaluate_terrain_analytical(
     vec3 p_local,
     float phase,
     float warp_strength,
+    float lod,
+    float texelSize,
     TerrainConfig config,
     out vec3 out_normal
 ) {
@@ -884,5 +1054,5 @@ float evaluate_terrain_analytical(
     float dummyRidgeMap;
     float dummySubstrate;
     float dummyBiome;
-    return evaluate_terrain_analytical(p_local, phase, warp_strength, config, out_normal, dummyWaterLevel, dummyRidgeMap, dummySubstrate, dummyBiome);
+    return evaluate_terrain_analytical(p_local, phase, warp_strength, lod, texelSize, config, out_normal, dummyWaterLevel, dummyRidgeMap, dummySubstrate, dummyBiome);
 }
