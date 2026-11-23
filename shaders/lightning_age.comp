@@ -38,7 +38,7 @@ void main() {
 		TerrainConfig con = TerrainConfig(0.00001, -500.0, 2000.0, 0.14, 0.5);
 		vec3           p = vec3(uStrikes[slot].endPos.x, 0.0, uStrikes[slot].endPos.z);
 		vec3           normal = vec3(0.0, 1.0, 0.0);
-		float          groundHeight = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal);
+		float          groundHeight = evaluate_terrain_analytical(p, 0.1, 0.75, 1, 16, con, normal);
 		uStrikes[slot].endPos.y = max(groundHeight, u_waterLevel);
 		uStrikes[slot].flags &= ~LIGHTNING_FLAG_PENDING_GROUND;
 	}

@@ -31,7 +31,7 @@ void main() {
 	float ridgeMap;
 	float substrate;
 	TerrainConfig con = TerrainConfig(0.00001, -100.0, 1000.0, 0.14, 0.5);
-	float rawElevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, con, terrainNormal, waterLevel, ridgeMap, substrate);
+	float rawElevation = evaluate_terrain_analytical(worldP, 0.1, 0.75, 1.0, 16.0, con, terrainNormal, waterLevel, ridgeMap, substrate);
 
 	// Normalize elevation (0.0 = ocean/sea level, 1.0 = max mountain peak)
 	float elevation = clamp(rawElevation * 0.001, 0.0, 1.0);

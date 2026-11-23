@@ -53,7 +53,8 @@ void main() {
 
 	// Around line 46 in terrain_gen.comp
 	float baseMeshletSize = 32.0;
-	float meshletSize = baseMeshletSize * getLODScale(float(lod));
+	float loddy = getLODScale(float(lod));
+	float meshletSize = baseMeshletSize * loddy;
 
 	// Replace the old texelSize snap:
 	// vec2 centerWorldPos = floor(uCameraPosition.xz / texelSize) * texelSize;
@@ -72,7 +73,7 @@ void main() {
 	float substrate = 0.0;
 	vec3 normal = vec3(0.0, 1.0, 0.0);
 
-	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, lod, texelSize, con, normal, waterLevel, ridgeMap, substrate, biome);
 
 	float h_swap_x = subgroupQuadSwapHorizontal(h);
 	float h_swap_y = subgroupQuadSwapVertical(h);

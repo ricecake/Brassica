@@ -156,7 +156,7 @@ namespace brassica {
 				cameraPosition = ServiceLocator::Instance().Get<CameraData>()->position;
 			}
 
-			constexpr float kTileSize = 16.0f; // FoliagePushConstants' own default baseTileSize
+			constexpr float kTileSize = 32.0f; // FoliagePushConstants' own default baseTileSize
 			std::vector<std::uint32_t> freedBlockBases;
 			std::vector<DecorGenerateEntry> toGenerate = allocator.UpdateAllocation(cameraPosition, kTileSize, freedBlockBases);
 

@@ -22,6 +22,7 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  skyViewIndex;
 	uint  cpuLightsIndex;
 	uint  gpuLightsIndex;
+	uint  biomeIndex;
 } params;
 
 void main() {

@@ -58,7 +58,7 @@ namespace brassica {
 	// boundary churn -- roughly a 70-unit radius, in the same ballpark as the existing foliage
 	// LOD falloff range (lodBaseRange=20). Not an arbitrary number: DecorChunkAllocator's own
 	// candidate generation targets this same 9x9 coverage.
-	inline constexpr std::uint32_t kDecorMaxActiveChunks = 96u;
+	inline constexpr std::uint32_t kDecorMaxActiveChunks = 256u;
 	inline constexpr std::uint32_t kDecorCapacity = kDecorInstancesPerChunk * kDecorMaxActiveChunks;
 	inline constexpr std::uint32_t kDecorSlotBase = kManualInstanceCapacity;
 	inline constexpr std::uint32_t kModelInstanceCapacity = kManualInstanceCapacity + kDecorCapacity;

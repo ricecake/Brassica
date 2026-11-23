@@ -29,6 +29,7 @@ params;
 shared uint meshletCount;
 
 void main() {
+	// return;
 	uint threadID = gl_LocalInvocationID.x;
 
 	if (threadID == 0) {

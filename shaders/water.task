@@ -20,6 +20,9 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  cpuLightsIndex;
+	uint  gpuLightsIndex;
+	uint  biomeIndex;
 }
 params;
 
@@ -36,6 +39,14 @@ float getWaterRingScale(float ring) {
 
 shared uint meshletCount;
 
+float getWaterSurfaceHeight(vec2 worldXZ, uint ringLevel) {
+	if (params.biomeIndex == 0u || params.biomeIndex == 0xFFFFFFFFu) {
+		return 100.0;
+	}
+	uint sampleLOD = min(ringLevel, params.gridParams.x - 1u);
+	return sampleTerrainBiome(params.biomeIndex, worldXZ, 6, params.gridParams.w).y;
+}
+
 void main() {
 	uint threadID = gl_LocalInvocationID.x;
 	if (threadID == 0) {
@@ -45,8 +56,9 @@ void main() {
 
 	uint meshletID = gl_WorkGroupID.x * 32 + threadID;
 
-	bool visible = false;
+	bool visible = true;
 	uint ringLevel = 0;
+	float waterSurface = params.waterLevel;
 
 	if (meshletID < params.gridParams.z) {
 		uint meshletsPerRow = params.gridParams.y;
@@ -73,7 +85,7 @@ void main() {
 
 		vec3 relMinB = vec3(
 			relCameraSnap.x + (float(col) - float(meshletsPerRow) * 0.5) * meshletSize,
-			params.waterLevel - maxWaveAmp - uCameraPosition.y,
+			getWaterSurfaceHeight(cameraSnap, ringLevel) - maxWaveAmp - uCameraPosition.y,
 			relCameraSnap.y + (float(row) - float(meshletsPerRow) * 0.5) * meshletSize
 		);
 		vec3 relMaxB = relMinB + vec3(meshletSize, 2.0 * maxWaveAmp, meshletSize);
@@ -85,7 +97,7 @@ void main() {
 		mat4 viewRel = mat4(mat3(uViewMatrix));
 		mat4 viewProjRel = uProjMatrix * viewRel;
 
-		visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(50.0, 100.0, 50.0), -100.0);
+		visible = true;//isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(50.0, 100.0, 50.0), -100.0);
 
 		if (visible && ringLevel > 0) {
 			float prevMeshletSize = baseMeshletSize * getWaterRingScale(float(ringLevel - 1)) * angleCompression;
@@ -98,7 +110,7 @@ void main() {
 			bool insideZ = relMinB.z >= prevRelSnap.y - prevExtent && relMaxB.z <= prevRelSnap.y + prevExtent;
 
 			if (insideX && insideZ) {
-				visible = false;
+				visible = true;
 			}
 		}
 
@@ -124,8 +136,8 @@ void main() {
 			}
 
 			float dryLandMargin = 50.0;
-			if (tileMinHeight > params.waterLevel + maxWaveAmp + dryLandMargin) {
-				visible = false;
+			if (tileMinHeight > getWaterSurfaceHeight(worldMinXZ, 5) + maxWaveAmp + dryLandMargin) {
+				visible = true;
 			}
 		}
 
@@ -134,7 +146,7 @@ void main() {
 		if (visible) {
 			vec2  closestXZ = clamp(vec2(0.0), relMinB.xz, relMaxB.xz);
 			float tileDist = length(closestXZ);
-			float camAltitude = uCameraPosition.y - params.waterLevel;
+			float camAltitude = uCameraPosition.y - getWaterSurfaceHeight(closestXZ, ringLevel);
 			float slack = meshletSize * 4.0 + 500.0;
 			if (isBeyondHorizon(tileDist, maxWaveAmp, camAltitude, slack)) {
 				visible = false;
