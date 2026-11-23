@@ -19,6 +19,11 @@
 
 namespace brassica {
 
+	struct ClusterLightAssignmentPushConstants {
+		std::uint32_t cpuLightsIndex{0};
+		std::uint32_t gpuLightsIndex{0};
+	};
+
 	struct ClusterLightAssignmentNode: render::NodeRegistrar<ClusterLightAssignmentNode> {
 		render::PipelineLibrary* pipelineLibrary = nullptr;
 		ComputeShader            compShader;
@@ -44,16 +49,19 @@ namespace brassica {
 			// same reasoning as LightsBuffer's own Modify<>() just below: a real producer-node
 			// write against an already-imported key is Modify, not Create.
 			r.Modify<ClusteredLighting>();
-			// uLights/uLightCount (shaders/lighting.glsl, set 0 binding 2) is now a real graph
-			// key (LightsBuffer, ResourceKeys.hpp) -- this Read<>() is a genuine RAW edge against
-			// ParticleBehaviorNode's Modify<LightsBuffer>() (its firefly particles write real
-			// dynamic lights on top of the CPU's own per-frame write), replacing the manual
-			// After<ParticleBehaviorNode>() relation this used to need instead.
-			r.Read<LightsBuffer>();
+			// Read<>() of both gives this a real RAW edge against LightManager's CPU upload node
+			// and against ParticleBehaviorNode/LightningAgeNode's GPU writes, replacing the
+			// manual After<ParticleBehaviorNode>() relation this used to need instead.
+			r.Read<CpuLightsBuffer>();
+			r.Read<GpuLightsBuffer>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
-			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, compShader);
+			ClusterLightAssignmentPushConstants push{
+				.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
+				.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>(),
+			};
+			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, compShader, push);
 			if (!resolved.pipeline) {
 				return;
 			}

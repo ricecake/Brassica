@@ -35,18 +35,23 @@ namespace brassica {
 
 	// Draws every active LightningStrikePool slot as camera-facing quad geometry (lightning.task
 	// plots the polyline and culls dead slots; lightning.mesh builds the quads; lightning.frag
-	// is a flat flicker-tinted unlit output). Before<CloudCompositeNode>(): strikes are cloud-to-
-	// cloud only (v1 scope, see climate_ca.comp's trigger comment), so drawing before the cloud
-	// composite lets its transmittance attenuate the bolt by whatever cloud density sits between
-	// it and the camera -- the physically-motivated side of "embedded in the cloud layer,"
-	// rather than always rendering fully bright on top. (CloudRenderNode itself is a compute
-	// pass now and never touches HdrColor -- CloudCompositeNode does the attenuating blend.)
+	// is a flat flicker-tinted unlit output). Before<CloudCompositeNode>(): drawing before the
+	// cloud composite lets its transmittance attenuate the bolt by whatever cloud density sits
+	// between it and the camera -- the physically-motivated side of "embedded in the cloud
+	// layer," rather than always rendering fully bright on top. This was always exactly right
+	// for cloud-to-cloud strikes (fully inside the shell); for cloud-to-ground strikes it's a
+	// known approximation now that LIGHTNING_FLAG_GROUND exists -- the bolt's lower, below-cloud
+	// segment gets the same cloud attenuation as its upper one, even though physically only the
+	// portion actually inside the cloud should. Not worth a second draw pass/ordering split for
+	// what reads as a subtle brightness difference on a strike that's only visible for a few
+	// frames anyway. (CloudRenderNode itself is a compute pass now and never touches HdrColor --
+	// CloudCompositeNode does the attenuating blend.)
 	struct LightningRenderNode: render::NodeRegistrar<LightningRenderNode> {
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
 			.depthWrite = false,
-			.enableBlend = true,
+			.blendMode = render::BlendMode::AlphaBlend,
 		};
 
 		render::PipelineLibrary*     pipelineLibrary = nullptr;
@@ -85,7 +90,9 @@ namespace brassica {
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<LightningStrikePool>();
-			r.Read<GBufferDepth>();
+			// AsAttachment(): same fix as WaterNode's identical comment -- kPipelineState.
+			// depthTest=true needs a real depth attachment bound to test against.
+			r.Read<GBufferDepth>().AsAttachment();
 			r.Modify<HdrColor>();
 			r.After<LightningAgeNode>();
 			r.Before<CloudCompositeNode>();
@@ -104,7 +111,7 @@ namespace brassica {
                 colorFormats,
                 push,
                 vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT,
-                vk::Format::eD32Sfloat
+                vk::Format::eD32SfloatS8Uint
             );
 			if (!resolved.pipeline) {
 				return;

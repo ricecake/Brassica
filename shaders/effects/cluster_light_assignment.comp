@@ -1,10 +1,16 @@
 #version 460 core
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout(local_size_x = 16, local_size_y = 9, local_size_z = 1) in;
 
 #define CLUSTER_GRID_WRITABLE
 #include "../bindless.glsl"
 #include "../lighting.glsl"
+
+layout(push_constant) uniform ClusterLightAssignmentPushConstants {
+	uint cpuLightsIndex;
+	uint gpuLightsIndex;
+} push;
 
 void main() {
 	uvec3 clusterID = gl_GlobalInvocationID;
@@ -44,40 +50,69 @@ void main() {
 
 	const float GLOBAL_LIGHT_RADIUS_THRESHOLD = 500.0;
 
-	// Populate global lights bucket at uClusters[3456]
+	uint cpuCount = uCpuLightsBuffers[nonuniformEXT(push.cpuLightsIndex)].count;
+	uint gpuCount = uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].count;
+
+	// Populate global lights bucket at uClusters[3456] -- CPU and GPU lights each get their own
+	// small/large list (ClusterGPU's cpuLightIndices/cpuCount vs. lightIndices/count), rather
+	// than one shared list with a buffer-tag bit on each index: CPU lights beyond sun/moon
+	// (indices 0/1, handled by clustered_lighting.glsl's own directional fast path, never
+	// entering this loop) are rare, so a small separate list avoids a bit-tagging dereference
+	// scattered across every consumer for a size difference this lopsided.
 	if (clusterID == uvec3(0, 0, 0)) {
-		uint global_count = 0;
-		uint total_lights = min(uLightCount, 1024u);
-		for (uint i = 2; i < total_lights; ++i) {
-			if (uLights[i].intensity <= 0.0) continue;
+		uint globalCpuCount = 0;
+		uint totalCpuLights = min(cpuCount, 1024u);
+		for (uint i = 2; i < totalCpuLights; ++i) {
+			Light light = uCpuLightsBuffers[nonuniformEXT(push.cpuLightsIndex)].lights[i];
+			if (light.intensity <= 0.0) continue;
 
 			float radius = 0.0;
-			if (uLights[i].type == LIGHT_TYPE_POINT) {
-				if (uLights[i].outerCutoff > 0.0) {
-					radius = uLights[i].outerCutoff * exposureScale;
-				} else {
-					radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0 * exposureScale;
-				}
-			} else if (uLights[i].type == LIGHT_TYPE_SPOT || uLights[i].type == LIGHT_TYPE_EMISSIVE) {
-				radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0;
-				if (uLights[i].type == LIGHT_TYPE_EMISSIVE) {
-					radius += uLights[i].innerCutoff;
-				}
+			if (light.type == LIGHT_TYPE_POINT) {
+				radius = light.outerCutoff > 0.0 ? light.outerCutoff * exposureScale
+				                                 : sqrt(max(0.1, light.intensity)) * 100.0 * exposureScale;
+			} else if (light.type == LIGHT_TYPE_SPOT || light.type == LIGHT_TYPE_EMISSIVE) {
+				radius = sqrt(max(0.1, light.intensity)) * 100.0;
+				if (light.type == LIGHT_TYPE_EMISSIVE) radius += light.innerCutoff;
 				radius *= exposureScale;
-			} else if (uLights[i].type == LIGHT_TYPE_FLASH) {
-				radius = 2.0 * uLights[i].innerCutoff * exposureScale;
+			} else if (light.type == LIGHT_TYPE_FLASH) {
+				radius = 2.0 * light.innerCutoff * exposureScale;
 			} else {
 				continue;
 			}
 
-			if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD) {
-				if (global_count < 64) {
-					uClusters[3456].lightIndices[global_count] = uint(i);
-					global_count++;
-				}
+			if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD && globalCpuCount < 8) {
+				uClusters[3456].cpuLightIndices[globalCpuCount] = i;
+				globalCpuCount++;
 			}
 		}
-		uClusters[3456].count = global_count;
+		uClusters[3456].cpuCount = globalCpuCount;
+
+		uint globalGpuCount = 0;
+		uint totalGpuLights = min(gpuCount, 1024u);
+		for (uint i = 0; i < totalGpuLights; ++i) {
+			Light light = uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[i];
+			if (light.intensity <= 0.0) continue;
+
+			float radius = 0.0;
+			if (light.type == LIGHT_TYPE_POINT) {
+				radius = light.outerCutoff > 0.0 ? light.outerCutoff * exposureScale
+				                                 : sqrt(max(0.1, light.intensity)) * 100.0 * exposureScale;
+			} else if (light.type == LIGHT_TYPE_SPOT || light.type == LIGHT_TYPE_EMISSIVE) {
+				radius = sqrt(max(0.1, light.intensity)) * 100.0;
+				if (light.type == LIGHT_TYPE_EMISSIVE) radius += light.innerCutoff;
+				radius *= exposureScale;
+			} else if (light.type == LIGHT_TYPE_FLASH) {
+				radius = 2.0 * light.innerCutoff * exposureScale;
+			} else {
+				continue;
+			}
+
+			if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD && globalGpuCount < 64) {
+				uClusters[3456].lightIndices[globalGpuCount] = i;
+				globalGpuCount++;
+			}
+		}
+		uClusters[3456].count = globalGpuCount;
 	}
 
 	groupMemoryBarrier();
@@ -95,47 +130,39 @@ void main() {
 		max(zNearSlice, zFarSlice)
 	);
 
-	uint local_count = 0;
-	uint local_light_indices[64];
+	uint cluster_index = clusterID.x + clusterID.y * 16 + clusterID.z * 16 * 9;
 
-	// Iterate through local lights (indices starting from 2, index 0 and 1 are reserved for global directional lights)
-	uint total_lights = min(uLightCount, 1024u);
-	for (uint i = 2; i < total_lights; ++i) {
-		if (uLights[i].intensity <= 0.0) continue;
+	// CPU local lights (rare beyond sun/moon, indices 0/1 skipped -- same reasoning as the
+	// global bucket above).
+	uint localCpuCount = 0;
+	uint localCpuIndices[8];
+	uint totalCpuLights = min(cpuCount, 1024u);
+	for (uint i = 2; i < totalCpuLights; ++i) {
+		Light light = uCpuLightsBuffers[nonuniformEXT(push.cpuLightsIndex)].lights[i];
+		if (light.intensity <= 0.0) continue;
 
-		vec3 light_pos = uLights[i].position;
-		if ((uLights[i].flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
+		vec3 light_pos = light.position;
+		if ((light.flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
 			light_pos += uCameraPosition.xyz;
 		}
-
-		// Project to View Space
 		vec4 light_view_pos = uViewMatrix * vec4(light_pos, 1.0);
 
-		// Determine light radius of influence
 		float radius = 0.0;
-		if (uLights[i].type == LIGHT_TYPE_POINT) {
-			if (uLights[i].outerCutoff > 0.0) {
-				radius = uLights[i].outerCutoff * exposureScale;
-			} else {
-				radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0 * exposureScale;
-			}
-		} else if (uLights[i].type == LIGHT_TYPE_SPOT || uLights[i].type == LIGHT_TYPE_EMISSIVE) {
-			radius = sqrt(max(0.1, uLights[i].intensity)) * 100.0;
-			if (uLights[i].type == LIGHT_TYPE_EMISSIVE) {
-				radius += uLights[i].innerCutoff;
-			}
+		if (light.type == LIGHT_TYPE_POINT) {
+			radius = light.outerCutoff > 0.0 ? light.outerCutoff * exposureScale
+			                                 : sqrt(max(0.1, light.intensity)) * 100.0 * exposureScale;
+		} else if (light.type == LIGHT_TYPE_SPOT || light.type == LIGHT_TYPE_EMISSIVE) {
+			radius = sqrt(max(0.1, light.intensity)) * 100.0;
+			if (light.type == LIGHT_TYPE_EMISSIVE) radius += light.innerCutoff;
 			radius *= exposureScale;
-		} else if (uLights[i].type == LIGHT_TYPE_FLASH) {
-			radius = 2.0 * uLights[i].innerCutoff * exposureScale;
+		} else if (light.type == LIGHT_TYPE_FLASH) {
+			radius = 2.0 * light.innerCutoff * exposureScale;
 		} else {
 			continue;
 		}
 
-		if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD) {
-			continue;
-		}
+		if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD) continue;
 
-		// Sphere-AABB intersection test in view space
 		float dist_sq = 0.0;
 		for (int d = 0; d < 3; ++d) {
 			float v = light_view_pos[d];
@@ -146,15 +173,61 @@ void main() {
 			}
 		}
 
-		if (dist_sq <= radius * radius) {
-			if (local_count < 64) {
-				local_light_indices[local_count] = uint(i);
-				local_count++;
-			}
+		if (dist_sq <= radius * radius && localCpuCount < 8) {
+			localCpuIndices[localCpuCount] = i;
+			localCpuCount++;
 		}
 	}
+	uClusters[cluster_index].cpuCount = localCpuCount;
+	for (uint i = 0; i < localCpuCount; ++i) {
+		uClusters[cluster_index].cpuLightIndices[i] = localCpuIndices[i];
+	}
 
-	uint cluster_index = clusterID.x + clusterID.y * 16 + clusterID.z * 16 * 9;
+	// GPU local lights (fireflies/lightning) -- same AABB test, same 64-slot cap as before.
+	uint local_count = 0;
+	uint local_light_indices[64];
+	uint totalGpuLights = min(gpuCount, 1024u);
+	for (uint i = 0; i < totalGpuLights; ++i) {
+		Light light = uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[i];
+		if (light.intensity <= 0.0) continue;
+
+		vec3 light_pos = light.position;
+		if ((light.flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
+			light_pos += uCameraPosition.xyz;
+		}
+		vec4 light_view_pos = uViewMatrix * vec4(light_pos, 1.0);
+
+		float radius = 0.0;
+		if (light.type == LIGHT_TYPE_POINT) {
+			radius = light.outerCutoff > 0.0 ? light.outerCutoff * exposureScale
+			                                 : sqrt(max(0.1, light.intensity)) * 100.0 * exposureScale;
+		} else if (light.type == LIGHT_TYPE_SPOT || light.type == LIGHT_TYPE_EMISSIVE) {
+			radius = sqrt(max(0.1, light.intensity)) * 100.0;
+			if (light.type == LIGHT_TYPE_EMISSIVE) radius += light.innerCutoff;
+			radius *= exposureScale;
+		} else if (light.type == LIGHT_TYPE_FLASH) {
+			radius = 2.0 * light.innerCutoff * exposureScale;
+		} else {
+			continue;
+		}
+
+		if (radius >= GLOBAL_LIGHT_RADIUS_THRESHOLD) continue;
+
+		float dist_sq = 0.0;
+		for (int d = 0; d < 3; ++d) {
+			float v = light_view_pos[d];
+			if (v < aabbMin[d]) {
+				dist_sq += (aabbMin[d] - v) * (aabbMin[d] - v);
+			} else if (v > aabbMax[d]) {
+				dist_sq += (v - aabbMax[d]) * (v - aabbMax[d]);
+			}
+		}
+
+		if (dist_sq <= radius * radius && local_count < 64) {
+			local_light_indices[local_count] = i;
+			local_count++;
+		}
+	}
 	uClusters[cluster_index].count = local_count;
 	for (uint i = 0; i < local_count; ++i) {
 		uClusters[cluster_index].lightIndices[i] = local_light_indices[i];

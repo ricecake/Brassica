@@ -21,12 +21,61 @@ namespace brassica::render {
 		}
 	};
 
+	// Selects a per-attachment blend configuration -- see BlendConfigFor below for what each
+	// mode actually resolves to. Extend by adding an enumerator here and a case in
+	// BlendConfigFor, not by growing GraphicsPipelineState with more blend-related bools.
+	enum class BlendMode : std::uint8_t {
+		Opaque,     // blend disabled, broadcast to every color attachment
+		AlphaBlend, // standard eSrcAlpha/eOneMinusSrcAlpha, broadcast to every color attachment
+		WeightedOit // McGuire weighted-blended OIT: [0]=accum (additive), [1]=revealage
+	};
+
+	struct BlendAttachmentConfig {
+		bool            blendEnable = false;
+		vk::BlendFactor srcColorBlendFactor = vk::BlendFactor::eOne;
+		vk::BlendFactor dstColorBlendFactor = vk::BlendFactor::eZero;
+		vk::BlendOp     colorBlendOp = vk::BlendOp::eAdd;
+		vk::BlendFactor srcAlphaBlendFactor = vk::BlendFactor::eOne;
+		vk::BlendFactor dstAlphaBlendFactor = vk::BlendFactor::eZero;
+		vk::BlendOp     alphaBlendOp = vk::BlendOp::eAdd;
+	};
+
+	// Returns the per-attachment blend config(s) for a mode. A single-entry result is
+	// broadcast to every color attachment a pipeline declares; a multi-entry result (today,
+	// only WeightedOit) must match the pipeline's color attachment count exactly, in
+	// declaration order -- see PipelineLibrary::Build's consumption of this.
+	[[nodiscard]] std::span<const BlendAttachmentConfig> BlendConfigFor(BlendMode mode);
+
+	// Selects a fixed-function stencil configuration -- see StencilConfigFor below. The stencil
+	// *reference* value is deliberately not part of this (or GraphicsPipelineState at all): it's
+	// dynamic state (vk::DynamicState::eStencilReference, set per-draw via BindGraphics's
+	// stencilReference parameter), so one pipeline per mode serves every reference value a pass
+	// wants to write or test against -- no new pipeline per stencil value.
+	enum class StencilMode : std::uint8_t {
+		Disabled,
+		Write,       // passOp=eReplace, compareOp=eAlways -- unconditionally stamp the reference
+		TestEqual,   // compareOp=eEqual, never writes
+		TestNotEqual // compareOp=eNotEqual, never writes
+	};
+
+	struct StencilConfig {
+		vk::StencilOp failOp = vk::StencilOp::eKeep;
+		vk::StencilOp passOp = vk::StencilOp::eKeep;
+		vk::StencilOp depthFailOp = vk::StencilOp::eKeep;
+		vk::CompareOp compareOp = vk::CompareOp::eAlways;
+		std::uint32_t compareMask = 0xFF;
+		std::uint32_t writeMask = 0xFF;
+	};
+
+	[[nodiscard]] const StencilConfig& StencilConfigFor(StencilMode mode);
+
 	struct GraphicsPipelineState {
 		vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
 		bool              depthTest = false;
 		bool              depthWrite = false;
 		vk::CompareOp     depthCompareOp = vk::CompareOp::eLess;
-		bool              enableBlend = false;
+		BlendMode         blendMode = BlendMode::Opaque;
+		StencilMode       stencilMode = StencilMode::Disabled;
 
 		bool enableShadingRate = false;
 	};

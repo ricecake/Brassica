@@ -6,6 +6,7 @@
 #include "graph/Execution.hpp"
 #include "graph/SetupBuilder.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -20,7 +21,8 @@ namespace brassica {
 	struct ParticleBehaviorNode;
 
 	struct LightningAgePushConstants {
-		float deltaTime{0.016f};
+		float         deltaTime{0.016f};
+		std::uint32_t gpuLightsIndex{0};
 	};
 
 	// Ages every shaders/lighting.glsl LightningStrikePool slot and writes its reserved
@@ -45,22 +47,18 @@ namespace brassica {
 
 		void Destroy(vk::Device device) { ageShader.Destroy(device); }
 
-		// push.deltaTime stays at its hardcoded 60fps-assumption default -- matches
-		// ParticleSystemNode's own identical approach (its deltaTime member is never updated
-		// from SetFrameParams either); no node in this codebase threads a real measured delta
-		// through NodeFrameParams today, so this isn't a new imprecision.
-		void SetFrameParams(const render::NodeFrameParams&) {}
+		void SetFrameParams(const render::NodeFrameParams& p) { push.deltaTime = p.deltaTime; }
 
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Modify<LightningStrikePool>();
-			r.Modify<LightsBuffer>();
-			// Both this node and ParticleBehaviorNode's firefly particles Modify<LightsBuffer>()
+			r.Modify<GpuLightsBuffer>();
+			// Both this node and ParticleBehaviorNode's firefly particles Modify<GpuLightsBuffer>()
 			// with no natural read-based ordering between them -- same ambiguity as the
 			// LightningStrikePool one above, same fix. Functionally commutative (this node only
-			// ever touches its own reserved light-slot entries; particles only ever grow
-			// uLightCount via atomicMax and claim slots above that), so the direction is
-			// arbitrary -- picked to match declaration order.
+			// ever touches its own reserved light-slot entries; particles only ever atomic-claim
+			// slots below that reserved range), so the direction is arbitrary -- picked to match
+			// declaration order.
 			r.After<ParticleBehaviorNode>();
 			// climate_ca.comp's trigger-write (TerrainBiomeNode) and this node's aging both
 			// Modify<LightningStrikePool>() with no natural read-based ordering between them --
@@ -70,6 +68,7 @@ namespace brassica {
 		}
 
 		void Execute(graph::NodeContext& ctx) {
+			push.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
 			render::ResolvedPipeline resolved = render::BindCompute(ctx, *pipelineLibrary, ageShader, push);
 			if (!resolved.pipeline) {
 				return;

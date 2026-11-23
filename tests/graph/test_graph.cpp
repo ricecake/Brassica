@@ -27,7 +27,6 @@
 #include <entt/entity/registry.hpp>
 #include "passes/lighting/ILightManager.hpp"
 #include "passes/lighting/LightManager.hpp"
-#include "passes/lighting/LightningManager.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
 #include "ServiceLocator.hpp"
@@ -691,7 +690,9 @@ TEST_CASE("ToDot exports phase clusters and labels") {
 TEST_CASE("Lighting structs alignment and size layout") {
 	CHECK(sizeof(brassica::LightingUBO) == 1360);
 	CHECK(sizeof(brassica::LightGPU) == 64);
-	CHECK(sizeof(brassica::ClusterGPU) == 272);
+	// 272 -> 320 when ClusterGPU split lightIndices into separate CPU (8-slot) and GPU (64-slot)
+	// lists (passes/lighting/Light.hpp), part of the CPU/GPU light buffer split.
+	CHECK(sizeof(brassica::ClusterGPU) == 320);
 	CHECK(brassica::TOTAL_CLUSTERS == 3457);
 }
 
@@ -726,7 +727,7 @@ TEST_CASE("LightManager day/night cycle and behaviors") {
 	CHECK(ubo.numLights == 3);
 	CHECK(ubo.dayTime >= 0.0f);
 
-	brassica::LightsSSBOData ssbo = mgr.GetLightsSSBOData();
+	brassica::CpuLightsSSBOData ssbo = mgr.GetCpuLightsSSBOData();
 	CHECK(ssbo.count == 3);
 	CHECK(ssbo.lights[2].type == brassica::POINT_LIGHT);
 
@@ -743,27 +744,6 @@ TEST_CASE("LightManager day/night cycle and behaviors") {
 	CHECK(mgr.GetLights().size() == 3);
 	mgr.RemoveLight(morseId);
 	CHECK(mgr.GetLights().size() == 2);
-}
-
-TEST_CASE("LightningManager strike generation and flash light updates") {
-	brassica::LightManager lightMgr;
-	brassica::LightningManager lightningMgr;
-
-	CHECK(lightningMgr.GetActiveStrikes().empty());
-
-	lightningMgr.TriggerStrike(
-		brassica::LightningType::BOLT,
-		glm::vec3(0.0f, 500.0f, 0.0f),
-		glm::vec3(10.0f, 0.0f, 10.0f),
-		glm::vec3(0.8f, 0.9f, 1.0f),
-		lightMgr
-	);
-
-	CHECK(lightningMgr.GetActiveStrikes().size() == 1);
-	CHECK(lightMgr.GetLights().size() == 3);
-
-	lightningMgr.Update(0.1f, 0.1f, lightMgr);
-	CHECK(lightningMgr.GetGlobalPulse() > 0.0f);
 }
 
 namespace {
@@ -1641,6 +1621,59 @@ TEST_CASE("A phase's keystone is a true sink: After<keystone>() lands after ever
 	CHECK(RelStageOf(result, other) < RelStageOf(result, keystone));
 	CHECK(RelStageOf(result, keystone) < RelStageOf(result, after));
 	CHECK(RelStageOf(result, other) < RelStageOf(result, after));
+}
+
+namespace {
+
+	struct VrsLikeMap: DummyDesc {};
+
+	// Mirrors ShadingRateComputeNode's own real shape: a plain Read of the resource it also
+	// writes, on Compute.
+	struct VrsComputeReaderNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Compute);
+			r.Read<VrsLikeMap>();
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+	// Mirrors TerrainNode/ModelRenderNode/EntityNode/DeferredNode's own real shape: a Graphics
+	// Read tagged ShadingRateTexelSize(), wanting the FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR
+	// role -- a different VkImageLayout than VrsComputeReaderNode's plain Compute read of the
+	// exact same key wants.
+	struct VrsGraphicsReaderNode {
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<VrsLikeMap>().ShadingRateTexelSize({8, 8});
+		}
+
+		void Execute(NodeContext&) {}
+	};
+
+} // namespace
+
+// Regression test for the real-hardware cross-domain VRS layout conflict: two plain reads of
+// the same key never get an edge from anything else in CompileRelational (no write is involved
+// at all), so with nothing else ordering these two, they'd land in the same stage -- which is
+// exactly what happened for ShadingRateMap before the layoutTagFor-based RAR edge existed.
+TEST_CASE("CompileRelational: a ShadingRateTexelSize()-tagged read never co-stages with an untagged read of the same key") {
+	Graph graph;
+	graph.Register<VrsComputeReaderNode>();
+	graph.Register<VrsGraphicsReaderNode>();
+
+	RelationalResult result = CompileRelationalFromGraph(graph, FrameContext{});
+	REQUIRE(result.ok);
+	CHECK(result.ambiguities.empty()); // never a reported ambiguity -- always a real, silent edge
+
+	std::size_t computeReader = IndexOfNamed(graph.Nodes(), "VrsComputeReaderNode");
+	std::size_t graphicsReader = IndexOfNamed(graph.Nodes(), "VrsGraphicsReaderNode");
+
+	CHECK(RelStageOf(result, computeReader) != RelStageOf(result, graphicsReader));
+	// Deterministic tie-break, by descriptor name ("VrsComputeReaderNode" < "VrsGraphicsReaderNode"):
+	// pins down *which* order this resolves to, not just that the two differ, so a future change
+	// to the tie-break rule shows up here instead of silently flipping only in the real engine.
+	CHECK(RelStageOf(result, computeReader) < RelStageOf(result, graphicsReader));
 }
 
 namespace {

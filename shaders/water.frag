@@ -20,6 +20,8 @@ layout(push_constant) uniform WaterPushConstants {
 	uint  minMaxIndex;
 	uint  gMaterialIndex;
 	uint  skyViewIndex;
+	uint  cpuLightsIndex;
+	uint  gpuLightsIndex;
 } params;
 
 void main() {
@@ -147,7 +149,8 @@ void main() {
 	// their existing defaults, unrelated to this fix.
 	vec3 shineColor = isAboveWater
 		? evaluateClusteredLightContributionPBR(
-			absWaterPos, waveNormal, waterMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams
+			absWaterPos, waveNormal, waterMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams,
+			params.cpuLightsIndex, params.gpuLightsIndex
 		  ).color
 		: vec3(0.0);
 
@@ -173,8 +176,12 @@ void main() {
 		vec3 skyColor = sampleSkyView(params.skyViewIndex, skyReflectDir);
 
 		if (reflectDir.y < 0.0) {
-			vec3 ambientGround = getSpatialAmbientSH(absWaterPos, waveNormal);
-			skyColor = mix(skyColor, ambientGround, clamp(-reflectDir.y * 2.0, 0.0, 1.0));
+			// Instead of collapsing into a near-zero black void, blend smoothly with shallow horizon sky and ambient water
+			vec3 horizonReflect = normalize(vec3(reflectDir.x, 0.05, reflectDir.z));
+			vec3 horizonSky = sampleSkyView(params.skyViewIndex, horizonReflect);
+			vec3 ambientGround = max(getSpatialAmbientSH(absWaterPos, waveNormal), baseTint * 0.25);
+			vec3 downwardReflection = mix(horizonSky, ambientGround, 0.5);
+			skyColor = mix(skyColor, downwardReflection, clamp(-reflectDir.y * 2.0, 0.0, 1.0));
 		}
 
 		surfaceReflectionColor = skyColor;
@@ -197,7 +204,8 @@ void main() {
 	vec3 foamBaseColor = vec3(0.92, 0.96, 1.0);
 	Material foamMaterial = Material(foamBaseColor, 0.85, 0.0, 1.0, 0.0, 0.0);
 	vec3 litFoam = evaluateClusteredLightContributionPBR(
-		absWaterPos, waveNormal, foamMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams
+		absWaterPos, waveNormal, foamMaterial, 0u, 0u, 0u, vec2(0.5), 0.0, params.minMaxIndex, params.gridParams,
+		params.cpuLightsIndex, params.gpuLightsIndex
 	).color;
 	vec3 foamColor = max(litFoam, uAmbientLight.rgb * foamBaseColor);
 

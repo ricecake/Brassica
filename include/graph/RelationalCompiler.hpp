@@ -29,16 +29,21 @@ namespace brassica::graph {
 	constexpr std::size_t kMaxRelationalNodes = 256;
 	using ReachSet = std::bitset<kMaxRelationalNodes>;
 
-	enum class RelEdgeKind : std::uint8_t { Order, RAW, WAR, WAW };
+	// RAR ("read-after-read," loosely): two plain reads of the same key that need different
+	// image layouts (one asAttachment/shadingRateAttachment-tagged, the other not) -- not a data
+	// hazard the way RAW/WAR/WAW are, but still needs a real ordering edge so leveling never
+	// co-stages them; see the per-key loop below for where this gets synthesized.
+	enum class RelEdgeKind : std::uint8_t { Order, RAW, WAR, WAW, RAR };
 
 	struct RelEdge {
 		std::size_t from;
 		std::size_t to;
 		RelEdgeKind kind;
 		std::string reason; // human-readable provenance, for cycle diagnostics
-		ResourceId  key = nullptr; // non-null only for RAW/WAR/WAW edges -- what SynthesizeBarrier
-		                           // needs; an Order edge (phase marker, explicit relation) is
-		                           // pure scheduling constraint and barriers nothing by itself.
+		ResourceId  key = nullptr; // non-null only for RAW/WAR/WAW/RAR edges -- what
+		                           // SynthesizeBarrier needs; an Order edge (phase marker,
+		                           // explicit relation) is pure scheduling constraint and
+		                           // barriers nothing by itself.
 	};
 
 	struct Ambiguity {
@@ -123,6 +128,28 @@ namespace brassica::graph {
 			for (const ResourceRealization& r : recipes[node].realizations) {
 				if (r.key == key) {
 					return r.anyOrder;
+				}
+			}
+			return false;
+		};
+
+		// shadingRateAttachment for this node's realization of this key -- see its own comment,
+		// Execution.hpp. Deliberately NOT asAttachment too, even though that's the same shape of
+		// "I want a non-default image layout" marker: asAttachment's only real key (GBufferDepth)
+		// already has real writers, so its readers already get correctly separated by the RAW
+		// edges below -- generalizing this rule to asAttachment as well, which this file's history
+		// briefly did, synthesized a *wrong-direction* edge between e.g. TonemapNode and WaterNode
+		// (alphabetical tie-break has no idea GBufferDepth's real intended order already runs the
+		// other way) that won the race against the correct HdrColor-based RAW edge and got cloud/
+		// tonemap ordering backwards on real hardware. shadingRateAttachment's only key
+		// (History<ShadingRateMap>) has zero writers -- nothing else ever orders its readers at
+		// all, so this rule is the only thing that can, and can never race a "real" edge that
+		// doesn't exist. Same legacy-node default as anyOrderFor above: untagged unless a
+		// realization explicitly says otherwise.
+		auto layoutTagFor = [&](std::size_t node, ResourceId key) {
+			for (const ResourceRealization& r : recipes[node].realizations) {
+				if (r.key == key) {
+					return r.shadingRateAttachment;
 				}
 			}
 			return false;
@@ -545,6 +572,47 @@ namespace brassica::graph {
 					result.ambiguities.push_back(Ambiguity{key, writers[a], writers[b]});
 				}
 			}
+
+			// Two plain reads of the same key never get an edge from anything above (there's no
+			// write involved at all), so leveling has no reason not to co-stage them -- fine for
+			// an ordinary resource, where every reader wants the same layout regardless of domain
+			// or stage, but wrong whenever one reader is shadingRateAttachment-tagged and the
+			// other isn't: those two want genuinely different VkImageLayouts for the same physical
+			// image (see layoutTagFor's own comment -- and its comment on why this check is
+			// deliberately narrower than "any layout-intent marker," not just shadingRateAttachment
+			// specifically), and PhysicalExecutionBackend builds one combined acquire barrier per
+			// *stage*, not per node-pair within it -- a real, confirmed-on-real-hardware
+			// cross-domain layout conflict (ShadingRateMap's Compute write-side reader vs its
+			// Graphics ShadingRateTexelSize()-tagged readers landing in the same stage with no
+			// edge forcing them apart). Unlike the writer-pairwise loop above, an undecided pair
+			// here is never a real ambiguity needing AnyOrder()-style author opt-in: two reads
+			// never race on *data*, only on which layout the image should be in while each one
+			// runs, and any deterministic order resolves that safely -- so this always synthesizes
+			// a real edge instead of ever reporting one.
+			for (std::size_t a = 0; a < readers.size(); ++a) {
+				for (std::size_t b = a + 1; b < readers.size(); ++b) {
+					if (layoutTagFor(readers[a], key) == layoutTagFor(readers[b], key)) {
+						continue; // same layout tag -- these two want the same layout, no conflict
+					}
+					if (precedes(readers[a], readers[b])) {
+						recordImpliedEdge(readers[a], readers[b], RelEdgeKind::RAR, key, "layout-conflicting reads already ordered");
+						continue;
+					}
+					if (precedes(readers[b], readers[a])) {
+						recordImpliedEdge(readers[b], readers[a], RelEdgeKind::RAR, key, "layout-conflicting reads already ordered");
+						continue;
+					}
+					const bool aFirst = descriptors[readers[a]].name < descriptors[readers[b]].name;
+					addResourceEdge(
+						aFirst ? readers[a] : readers[b],
+						aFirst ? readers[b] : readers[a],
+						RelEdgeKind::RAR,
+						key,
+						"layout-conflicting reads: deterministic tie-break"
+					);
+				}
+			}
+
 			for (std::size_t reader : readers) {
 				// Among writers that already precede this reader, "the last writer" is the one not
 				// itself preceded (within this subset) by another such writer -- well-defined once

@@ -88,4 +88,100 @@ namespace brassica {
 		static constexpr std::uint32_t kMipIndex = 0;
 	};
 
+	// Sky/Cloud LTM pyramid slots -- the unsuffixed Ltm*/Main keys above used to be the one
+	// shared pyramid every exposure layer box-filtered into together, which let a ground texel
+	// near a long horizon get pulled toward Sky's exposure ratio for several mip levels (the
+	// "more sky in frame brightens the ground" bug). Giving isMain/isSky/isCloud (the 3 hard-
+	// classification kinds exposureLayerWeight already special-cases everywhere else) their own
+	// independent pyramid, blended only at tonemap.frag's final per-pixel step, closes that --
+	// same separation the per-layer histogram/avgLuma path already had. Any other generic depth-
+	// ranged custom layer still falls back to the Main slot above, same as before.
+	struct LtmExpTextureMip0Sky: ScreenMipImage2D<LtmExpTextureMip0Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 0;
+	};
+
+	struct LtmExpTextureMip1Sky: ScreenMipImage2D<LtmExpTextureMip1Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 1;
+	};
+
+	struct LtmExpTextureMip2Sky: ScreenMipImage2D<LtmExpTextureMip2Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 2;
+	};
+
+	struct LtmExpTextureMip3Sky: ScreenMipImage2D<LtmExpTextureMip3Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 3;
+	};
+
+	struct LtmExpTextureMip4Sky: ScreenMipImage2D<LtmExpTextureMip4Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 4;
+	};
+
+	struct LtmWgtTextureMip0Sky: ScreenMipImage2D<LtmWgtTextureMip0Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 0;
+	};
+
+	struct LtmWgtTextureMip1Sky: ScreenMipImage2D<LtmWgtTextureMip1Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 1;
+	};
+
+	struct LtmWgtTextureMip2Sky: ScreenMipImage2D<LtmWgtTextureMip2Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 2;
+	};
+
+	struct LtmWgtTextureMip3Sky: ScreenMipImage2D<LtmWgtTextureMip3Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 3;
+	};
+
+	struct LtmWgtTextureMip4Sky: ScreenMipImage2D<LtmWgtTextureMip4Sky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 4;
+	};
+
+	struct LtmFusedTextureSky: ScreenMipImage2D<LtmFusedTextureSky>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 0;
+	};
+
+	struct LtmExpTextureMip0Cloud: ScreenMipImage2D<LtmExpTextureMip0Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 0;
+	};
+
+	struct LtmExpTextureMip1Cloud: ScreenMipImage2D<LtmExpTextureMip1Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 1;
+	};
+
+	struct LtmExpTextureMip2Cloud: ScreenMipImage2D<LtmExpTextureMip2Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 2;
+	};
+
+	struct LtmExpTextureMip3Cloud: ScreenMipImage2D<LtmExpTextureMip3Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 3;
+	};
+
+	struct LtmExpTextureMip4Cloud: ScreenMipImage2D<LtmExpTextureMip4Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 4;
+	};
+
+	struct LtmWgtTextureMip0Cloud: ScreenMipImage2D<LtmWgtTextureMip0Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 0;
+	};
+
+	struct LtmWgtTextureMip1Cloud: ScreenMipImage2D<LtmWgtTextureMip1Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 1;
+	};
+
+	struct LtmWgtTextureMip2Cloud: ScreenMipImage2D<LtmWgtTextureMip2Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 2;
+	};
+
+	struct LtmWgtTextureMip3Cloud: ScreenMipImage2D<LtmWgtTextureMip3Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 3;
+	};
+
+	struct LtmWgtTextureMip4Cloud: ScreenMipImage2D<LtmWgtTextureMip4Cloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 4;
+	};
+
+	struct LtmFusedTextureCloud: ScreenMipImage2D<LtmFusedTextureCloud>, detail::TonemapMipShape {
+		static constexpr std::uint32_t kMipIndex = 0;
+	};
+
 } // namespace brassica

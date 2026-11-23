@@ -1,6 +1,13 @@
 #ifndef HELPERS_TONEMAPPING_GLSL
 #define HELPERS_TONEMAPPING_GLSL
 
+// Shared by tonemap.frag and bloom_downsample.comp -- both need a pixel's linear-space depth to
+// weight exposure layers (autoexposure.glsl's ExposureLayer) against targetDepth/falloffWidth.
+float linearizeDepth(float depth, float nearPlane, float farPlane) {
+	float z = depth * 2.0 - 1.0;
+	return (2.0 * nearPlane * farPlane) / (farPlane + nearPlane - z * (farPlane - nearPlane));
+}
+
 // ACES Filmic Tone Mapping Curve (Narkowicz 2015)
 vec3 aces(vec3 x) {
 	const float a = 2.51;

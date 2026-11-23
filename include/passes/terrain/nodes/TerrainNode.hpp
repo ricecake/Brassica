@@ -12,15 +12,13 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
+#include "passes/scene/resources.hpp"
 #include "resources.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "ServiceLocator.hpp"
-#include "passes/terrain/ITerrainManager.hpp"
-#include "passes/terrain/TerrainAccelerationStructure.hpp"
 
 namespace brassica {
 
@@ -52,38 +50,37 @@ namespace brassica {
 	// Replaces TerrainPass: no per-node descriptor set (UpdateClipmapDescriptor and its set-1
 	// layout/pool are gone), no push-constant/descriptor mismatch between task and mesh stages --
 	// every sampled input is a bindless index, resolved through NodeContext::Index<K>() below.
-	// The BLAS/TLAS build stays entirely out-of-band, unchanged, now owned by
-	// TerrainAccelerationStructure (terrain/TerrainAccelerationStructure.hpp) rather than a
-	// class that also used to own a pipeline.
 	//
 	// Like GradientNode/DeferredNode, reconstructed fresh every frame -- pipelineLibrary/
 	// taskShader/meshShader/fragShader point at Engine-owned, persistent state, and
 	// ResolveCached makes re-resolving the same request every frame a cache hit.
 	struct TerrainNode: render::NodeRegistrar<TerrainNode> {
 		// Matches TerrainPass::InitPipeline's old hardcoded state exactly (depth test/write on,
-		// eLess, eBack culling). enableShadingRate stays false, matching TerrainPass's existing
-		// VRS-ignoring behavior -- the old hand-rolled pipeline never chained the VRS pNext at
-		// all, so this is a deliberately pixel-identical port; flipping it to honor the mesh
-		// shader's own per-primitive gl_PrimitiveShadingRateEXT writes is a separate,
+		// eLess, eBack culling), plus attachment-only VRS (ShadingRateComputeNode) -- Terrain's
+		// LOD shading is exactly the per-pixel-expensive work VRS exists to coarsen, per its own
+		// design comment. This is the attachment-image story only (combinerOps[1] in
+		// PipelineLibrary.cpp); honoring the mesh shader's own per-primitive
+		// gl_PrimitiveShadingRateEXT writes (combinerOps[0], gated behind the still-disabled
+		// primitiveFragmentShadingRateMeshShader feature, Engine.cpp) is a separate,
 		// separately-validated follow-up.
 		static constexpr render::GraphicsPipelineState kPipelineState{
 			.cullMode = vk::CullModeFlagBits::eBack,
 			.depthTest = true,
 			.depthWrite = true,
 			.depthCompareOp = vk::CompareOp::eLess,
-			.enableShadingRate = false,
+			.enableShadingRate = true,
 		};
 
-		render::PipelineLibrary*      pipelineLibrary = nullptr;
-		TaskShader                    taskShader;
-		MeshShader                    meshShader;
-		FragmentShader                fragShader;
-		TerrainAccelerationStructure* terrainAS = nullptr;
-		TerrainPushConstants          push{};
+		render::PipelineLibrary*     pipelineLibrary = nullptr;
+		TaskShader                   taskShader;
+		MeshShader                   meshShader;
+		FragmentShader               fragShader;
+		const DispatchLoaderDynamic* dls = nullptr;
+		TerrainPushConstants         push{};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			terrainAS = services.terrainAS;
+			dls = services.dispatchLoader;
 			if (!taskShader.CompileTaskFromFile(services.device, "shaders/terrain.task") ||
 			    !meshShader.CompileMeshFromFile(services.device, "shaders/terrain.mesh") ||
 			    !fragShader.CompileFragmentFromFile(services.device, "shaders/terrain.frag")) {
@@ -130,6 +127,9 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.ReadPrevious<ShadingRateMap>().ShadingRateTexelSize(
+				{s_shadingRateTileWidth, s_shadingRateTileHeight}
+			);
 		}
 
 		void Execute(graph::NodeContext& ctx) {
@@ -160,7 +160,7 @@ namespace brassica {
 				push,
 				vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT |
 					vk::ShaderStageFlagBits::eFragment,
-				vk::Format::eD32Sfloat
+				vk::Format::eD32SfloatS8Uint
 			);
 			if (!resolved.pipeline) {
 				return;
@@ -168,8 +168,8 @@ namespace brassica {
 
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 			uint32_t          taskGroupCount = (push.gridParams.z + 31) / 32;
-			if (terrainAS && terrainAS->GetDls().vkCmdDrawMeshTasksEXT) {
-				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, terrainAS->GetDls());
+			if (dls && dls->vkCmdDrawMeshTasksEXT) {
+				vkCmd.drawMeshTasksEXT(taskGroupCount, 1, 1, *dls);
 			}
 		}
 	};

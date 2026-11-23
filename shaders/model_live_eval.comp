@@ -1,0 +1,116 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "common.glsl"
+#include "helpers/wind.glsl"
+#include "model_instance.glsl"
+
+// Stage 4: one thread per live instance (the plan's own starting point -- "the thread layout is
+// measured here" is an open tuning question, not resolved by this first version), walking that
+// instance's own joints serially in topological order and writing global*inverseBind into
+// ModelLivePaletteBuffer[liveSlot*kModelLiveMaxJointCount + joint]. Dispatched indirectly, sized
+// by ModelLiveFinalizeNode's ceil(rawLiveCount/64) -- see ModelLiveIndirectArgsBuffer's own
+// comment for why that divide is a separate node rather than hand-rolled here.
+layout(push_constant) uniform ModelLiveEvalPushConstants {
+	uint instanceBufIdx;
+	uint modelDescBufIdx;
+	uint skeletonBufIdx;
+	uint liveListBufIdx;
+	uint liveIndirectArgsBufIdx;
+	uint livePaletteBufIdx;
+}
+push;
+
+// Stateless analytic wind (the plan's own decision). Reuses the engine's single shared
+// prevailing-wind model (helpers/wind.glsl) instead of inventing a parallel one, fed a real
+// per-instance latitude derived from world position -- world +Z = +latitude (north), world
+// +X = +longitude (east), origin at the equator/prime-meridian (confirmed via
+// src/ui/QuickSettingsWidget.cpp's HUD lat/lon readout and climate_ca.comp/
+// climate_weather.comp's shared world<->weather-UV mapping, both independently corroborating
+// the same unnegated sign -- src/lighting/LightManager.cpp's sun-angle computation uses the
+// opposite sign, a real discrepancy in the existing codebase that this does NOT follow).
+// getPrevailingWind expects lat normalized to [-1, 1] (-1 = south pole, 1 = north pole); dividing
+// the true radians value by PI/2 converts "arc length / radius" into that range.
+float WorldPosToNormalizedLatitude(vec3 worldPos) {
+	return clamp((2.0 / PI) * worldPos.z / FAKE_PLANET_RADIUS, -1.0, 1.0);
+}
+
+const float kModelWindStrength = 0.6; // radians, bend angle at rigidity=0, gust=1
+const float kModelWindGustHz = 0.35;
+const float kModelSeedBendStrength = 0.25; // radians, max static per-instance asymmetry
+const float kTwoPi = 6.28318530718;
+
+float Gust(uint timeMs, uint seed) {
+	float phase = pcg_hash(seed) * kTwoPi;
+	return 0.5 + 0.5 * sin(float(timeMs) * 0.001 * (kTwoPi * kModelWindGustHz) + phase);
+}
+
+vec4 AxisAngleToQuat(vec3 axis, float angle) {
+	float halfAngle = angle * 0.5;
+	return vec4(axis * sin(halfAngle), cos(halfAngle));
+}
+
+// Degenerate (near-parallel) cross products fall back to a fixed axis rather than normalizing a
+// near-zero vector -- avoids NaN when localWind/seedAxisRaw happens to align with restUpAxis.
+vec3 SafeBendAxis(vec3 restUpAxis, vec3 localDir) {
+	vec3  axis = cross(restUpAxis, localDir);
+	float len = length(axis);
+	return (len > 1e-4) ? (axis / len) : vec3(1.0, 0.0, 0.0);
+}
+
+void main() {
+	uint i = gl_GlobalInvocationID.x;
+	if (i >= uModelLiveIndirectArgsBuffers[nonuniformEXT(push.liveIndirectArgsBufIdx)].rawLiveCount) {
+		return;
+	}
+
+	uint instanceIndex = uModelLiveListBuffers[nonuniformEXT(push.liveListBufIdx)].instanceIndex[i];
+	ModelInstance  inst = uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[instanceIndex];
+	ModelDescEntry desc = uModelDescBuffers[nonuniformEXT(push.modelDescBufIdx)].entries[inst.modelIndex];
+
+	vec2 prevailing = getPrevailingWind(WorldPosToNormalizedLatitude(inst.position));
+	vec3 worldWindDir =
+		(length(prevailing) > 1e-4) ? normalize(vec3(prevailing.x, 0.0, prevailing.y)) : vec3(1.0, 0.0, 0.0);
+	// Converted into the instance's own local space once per instance, not per joint (the
+	// plan's own phrase).
+	vec3  localWind = InverseRotateByQuat(inst.rotation, worldWindDir);
+	float gustVal = Gust(uTimeMs, inst.seed);
+
+	// Sized to the fixed pool stride, not desc.jointCount -- GLSL arrays can't be dynamically
+	// sized, so every invocation reserves the full kModelLiveMaxJointCount slots regardless of
+	// how many this particular model actually uses (3, for the only live-capable model so far).
+	// A known tuning cost the plan's own "thread layout is measured here" leaves open, not
+	// something this first version optimizes away.
+	mat4          globalXform[kModelLiveMaxJointCount];
+	uint          jointCount = min(desc.jointCount, kModelLiveMaxJointCount);
+	uint          liveSlot = i;
+	uint          paletteBase = liveSlot * kModelLiveMaxJointCount;
+
+	for (uint j = 0u; j < jointCount; ++j) {
+		ModelSkeletonJoint sj = uModelSkeletonBuffers[nonuniformEXT(push.skeletonBufIdx)].joints[desc.skeletonBase + j];
+
+		vec3  windAxis = SafeBendAxis(sj.restUpAxis, localWind);
+		float windAngle = kModelWindStrength * (1.0 - sj.rigidity) * gustVal;
+		vec4  windBend = AxisAngleToQuat(windAxis, windAngle);
+
+		// Static per-instance, per-joint asymmetry -- same rigidity damping as windBend, a
+		// deliberate interpretation (the plan states this damping explicitly only for windBend)
+		// since a rigid branch shouldn't exhibit a large structural offset either.
+		uint  seedHash = inst.seed * 2654435761u + j * 97u;
+		vec3  seedAxisRaw = vec3(pcg_hash(seedHash) - 0.5, 0.0, pcg_hash(seedHash ^ 0x9e3779b9u) - 0.5);
+		vec3  seedAxis = SafeBendAxis(sj.restUpAxis, seedAxisRaw);
+		float seedAngle =
+			kModelSeedBendStrength * (1.0 - sj.rigidity) * (pcg_hash(seedHash ^ 0x85ebca6bu) * 2.0 - 1.0);
+		vec4 seedBend = AxisAngleToQuat(seedAxis, seedAngle);
+
+		vec4 localRotation = QuatMul(QuatMul(sj.restRotation, seedBend), windBend);
+
+		mat4 parentGlobal = (sj.parentIndex == kModelNoSkeletonSentinel) ? mat4(1.0) : globalXform[sj.parentIndex];
+		globalXform[j] = parentGlobal * QuatTranslationScaleToMat4(sj.restTranslation, localRotation, sj.restScale);
+
+		mat4 skin = globalXform[j] * sj.inverseBind;
+		uModelLivePaletteBuffers[nonuniformEXT(push.livePaletteBufIdx)].matrices[paletteBase + j] = skin;
+	}
+}

@@ -28,6 +28,12 @@ namespace brassica {
 		float exposure{1.0f};
 
 		float contrast{1.0f};
+		// saturation/cdlSaturation/cdlSlope/cdlOffset/cdlPower below are no longer read by
+		// tonemap.frag: they fed the old isSky==1 flat-CDL/saturation branch, which
+		// CdlGradingLayers (CdlGradingData.hpp) now applies uniformly to every pixel instead.
+		// Kept as inert padding rather than removed outright -- same reasoning as the `exposure`
+		// field's own comment below (deleting a scalar here shifts every field after it in C++
+		// with no compensating padding, while GLSL silently reinserts it).
 		float saturation{1.0f};
 		float temperature{0.0f};
 		float tint{0.0f};
@@ -60,14 +66,30 @@ namespace brassica {
 
 		// Same reasoning as bloomEnabled just above -- appended after it, another trailing
 		// scalar with nothing after it needing bigger alignment. Count of enabled entries in
-		// CdlGradingLayers (cdl_grading.glsl, frameSet binding 6) to iterate for scene (isSky == 0)
-		// depth-based grading.
+		// CdlGradingLayers (cdl_grading.glsl, frameSet binding 6) to iterate for depth-based
+		// grading, applied uniformly to every pixel regardless of which exposure layer is active.
 		std::int32_t numCdlEntries{1};
+
+		// Bindless index into CloudAccumulatedTransmittance -- sampled directly (a plain texture,
+		// no stencil involved) so the Cloud exposure layer's weight can be the real local cloud
+		// opacity instead of a hard binary classification. See BloomPushConstants.hpp's identical
+		// field for the full reasoning.
+		std::uint32_t cloudTransmittanceIndex{0};
+
+		// Sky/Cloud LTM pyramid slots, appended last (same reasoning as every other trailing
+		// field's comment above). ltmFusedIndex/ltmExpMipIndex above are now specifically Main's
+		// slot; the guided-upsample block blends across whichever of these three a given pixel's
+		// active layers actually use, same per-layer weighted blend every other value in this
+		// shader already does.
+		std::uint32_t ltmFusedSkyIndex{0};
+		std::uint32_t ltmExpMipSkyIndex{0};
+		std::uint32_t ltmFusedCloudIndex{0};
+		std::uint32_t ltmExpMipCloudIndex{0};
 	};
 
 	static_assert(
-		sizeof(TonemapPushConstants) == 152,
-		"TonemapPushConstants size must be 152 bytes -- must match tonemap.frag's push_constant block exactly"
+		sizeof(TonemapPushConstants) == 172,
+		"TonemapPushConstants size must be 172 bytes -- must match tonemap.frag's push_constant block exactly"
 	);
 
 	inline TonemapPushConstants s_tonemapPush{};

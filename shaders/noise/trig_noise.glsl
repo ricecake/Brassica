@@ -18,8 +18,9 @@ float dnoise(vec3 p, vec3 dir, float phase) {
 	vec3 axis = cross(p, dir);
 	float pwS = poly_wave(phase);
 	float pwC = poly_wave(phase - 0.25);
-	vec3 b = p * pwC + cross(axis, p)*pwS + axis*(dot(axis, p))*(1,0 - pwC);
-	return dot(poly_wave(p+fract(phase)), poly_wave(dir+floor(phase)));
+	vec3 b = p * pwC + cross(axis, p)*pwS + axis*(dot(axis, p))*(1.0 - pwC);
+	return dot(poly_wave(p+fract(phase)), poly_wave(dir+b));
+	// return dot(poly_wave(p), poly_wave(dir+floor(phase)));
 }
 
 mat3 rotate_offsets(vec3 dir) {
@@ -37,6 +38,23 @@ mat3 rotate_offsets(vec3 dir) {
 const vec3 base_offset_1 = vec3(1.0, 1.3, 1.7);
 const vec3 base_offset_2 = vec3(1.1, 0.7, 1.5);
 
+float dnoise_fbm(vec3 p, vec3 dir, int oct, float phase) {
+	float val = 0.0;
+	float amp = 1.0;
+	float freq = 1.0;
+	float max_amp = 0.0;
+	mat3 rot = rotate_offsets(cross(dir, dir.yzx));
+	vec3 rotDir = dir;
+	for (int i = 0; i < max(0, oct); i++) {
+		val += amp * dnoise(p * freq, rotDir * freq, phase * freq);
+		max_amp += amp;
+		amp *= 0.5;
+		freq *= 2.0;
+		rotDir *= rot;
+	}
+	return val / max_amp;
+
+}
 
 float dot_noise(vec3 p, float phase) {
 	vec3 rotated_p1 = GOLD * p;

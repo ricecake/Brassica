@@ -36,7 +36,7 @@ namespace brassica {
 			.cullMode = vk::CullModeFlagBits::eNone,
 			.depthTest = true,
 			.depthWrite = true,
-			.enableBlend = true,
+			.blendMode = render::BlendMode::AlphaBlend,
 			.enableShadingRate = false,
 		};
 
@@ -45,7 +45,7 @@ namespace brassica {
 		FragmentShader                  fragShader;
 		const DispatchLoaderDynamic*    dls = nullptr;
 		vk::Format                      swapchainFormat = vk::Format::eUndefined;
-		vk::Format                      depthFormat = vk::Format::eD32Sfloat;
+		vk::Format                      depthFormat = vk::Format::eD32SfloatS8Uint;
 		detail::ParticleDescriptorSet   descriptorSet{};
 		detail::ParticleDescriptorCache descriptorCache{};
 		vk::Buffer                      indirectBuffer;

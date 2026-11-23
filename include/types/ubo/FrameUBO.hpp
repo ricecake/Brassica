@@ -33,8 +33,15 @@ namespace brassica {
 		// volumetric reprojection, etc.) without threading its own copy through per-node push
 		// constants.
 		glm::mat4 previousViewProjMatrix{1.0f};
+
+		// Milliseconds since Engine startup (glfwGetTime()'s double, not the lossy float `time`
+		// above) -- model-instance startTime/clip comparisons need this: float32 `time` loses
+		// sub-frame precision after about an hour of uptime, and that error would compound into
+		// visible animation jitter/drift once compared against a stored startTimeMs. Wraps at
+		// ~49.7 days; comparisons use unsigned subtraction, which is exact across the wrap.
+		std::uint32_t timeMs{0};
 	};
 
-	static_assert(sizeof(FrameUBO) == 512, "FrameUBO struct size must be 512 bytes");
+	static_assert(sizeof(FrameUBO) == 528, "FrameUBO struct size must be 528 bytes");
 
 } // namespace brassica

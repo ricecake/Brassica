@@ -118,7 +118,8 @@ namespace brassica::graph {
 						mb.dstDomain,
 						tex->GetDesc().usageMask ? vk::ImageUsageFlags(tex->GetDesc().usageMask)
 												 : vk::ImageUsageFlags{},
-						static_cast<vk::Format>(tex->GetDesc().formatCode)
+						static_cast<vk::Format>(tex->GetDesc().formatCode),
+						mb.asAttachment
 					);
 				} else if (buf) {
 					derived = DeriveBufferState(
@@ -435,6 +436,12 @@ namespace brassica::graph {
 					desc.usageMask ? vk::ImageUsageFlags(desc.usageMask) : vk::ImageUsageFlags{};
 				const vk::Format format = static_cast<vk::Format>(desc.formatCode);
 
+				// asAttachment deliberately not threaded through here (ImageReleaseGroup only
+				// dedups by ExecutionDomain, not per-mb asAttachment) -- a Read+AsAttachment
+				// consumer mixed into this group just makes allAgree false more often than
+				// strictly necessary, costing a redundant transition, not a correctness bug:
+				// DispatchAcquire's own per-mb derivation (with the real asAttachment bit) is
+				// still what actually transitions the resource right before that consumer runs.
 				const vk::ImageLayout agreedLayout =
 					DeriveImageState(AccessKind::Read, group.consumerDomains.front(), usage, format).layout;
 				vk::AccessFlags2 dstAccess{};

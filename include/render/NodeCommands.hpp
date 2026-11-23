@@ -150,7 +150,8 @@ namespace brassica::render {
 		const PushT&                     push,
 		vk::ShaderStageFlags             pushStage,
 		vk::Format                       depthFormat = vk::Format::eUndefined,
-		ExtraSets                        extra = {}
+		ExtraSets                        extra = {},
+		std::uint32_t                    stencilReference = 0
 	) {
 		detail::CombinedSets sets = detail::CombineSets(ctx, extra);
 
@@ -185,6 +186,11 @@ namespace brassica::render {
 			viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
 		vkCmd.setViewport(0, viewport);
 		vkCmd.setScissor(0, vk::Rect2D{{0, 0}, extent});
+		// Always set, even when state.stencilMode == Disabled: eStencilReference is declared as
+		// dynamic state on every pipeline PipelineLibrary builds (not just ones with stencil
+		// enabled), so leaving it unset here would be a validation error regardless of whether
+		// this particular draw's stencil test is active.
+		vkCmd.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, stencilReference);
 
 		vkCmd.pushConstants(resolved.layout, pushStage, 0, sizeof(PushT), &push);
 		return resolved;

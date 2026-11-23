@@ -51,11 +51,12 @@ namespace brassica {
 		}
 	};
 
-	// Scene (isSky == 0) depth-based multi-layer CDL grading, uploaded to the CdlGradingLayers
-	// SSBO (cdl_grading.glsl, frameSet binding 6) every frame -- read-only from the GPU's
-	// perspective, so unlike ExposureDataHost there's no shader-owned state to avoid stomping.
-	// Defaults to a single enabled isMain entry with an identity CDL, so behavior is unchanged
-	// until something (a future settings UI) actually edits an entry.
+	// Depth-based multi-layer CDL grading, applied uniformly to every pixel regardless of which
+	// ExposureLayer (AutoExposureData.hpp) is active, uploaded to the CdlGradingLayers SSBO
+	// (cdl_grading.glsl, frameSet binding 6) every frame -- read-only from the GPU's perspective,
+	// so unlike ExposureDataHost there's no shader-owned state to avoid stomping. Defaults to a
+	// single enabled isMain entry with an identity CDL, so behavior is unchanged until something
+	// (the Lighting widget's Color Grading section) actually edits an entry.
 	inline CdlGradingLayersHost s_cdlGradingLayers{
 		.entries = {CdlEntryHost{.isMain = 1}},
 		.numEntries = 1,

@@ -8,6 +8,7 @@
 
 #include "vulkan/vulkan.hpp"
 
+#include "VulkanCompat.hpp"
 #include "ArgparseManager.hpp"
 #include "AtmosphereManager.hpp"
 #include "audio/AudioManager.hpp"
@@ -22,7 +23,11 @@
 #include "InputHandler.hpp"
 #include "passes/lighting/LightManager.hpp"
 #include "passes/lighting/LightningManager.hpp"
+#include "passes/model/DecorAccelerationStructure.hpp"
 #include "passes/model/GltfModelManager.hpp"
+#include "passes/model/ModelInstanceManager.hpp"
+#include "passes/model/ModelRegistry.hpp"
+#include "passes/model/ProceduralArchetypeCatalog.hpp"
 #include "passes/particle/ParticleManager.hpp"
 #include "passes/AllNodes.hpp"
 #include "passes/material/MaterialManager.hpp"
@@ -32,7 +37,7 @@
 #include "ShaderWatcher.hpp"
 #include "SystemHandler.hpp"
 #include "TaskScheduler.h"
-#include "passes/terrain/TerrainAccelerationStructure.hpp"
+#include "TextureDumpService.hpp"
 #include "passes/terrain/TerrainManager.hpp"
 #include "types/AtmospherePushConstants.hpp"
 #include "types/CameraData.hpp"
@@ -339,6 +344,15 @@ namespace brassica {
 		MaterialManager   materialManager;
 		ParticleManager   particleManager;
 		GltfModelManager  gltfModelManager;
+		ModelRegistry     modelRegistry;
+		DecorAccelerationStructure decorAS;
+		ModelInstanceManager modelInstanceManager;
+		TextureDumpService   textureDumpService;
+		// Populated from RegisterProceduralArchetypes()'s return value -- Stage 5.2's
+		// DecorPopulationNode needs these base model indices and queries them via ServiceLocator
+		// (ProceduralArchetypeCatalog.hpp), same pattern as modelRegistry/modelInstanceManager
+		// below.
+		ProceduralArchetypeIndices proceduralArchetypeIndices;
 		AtmosphereManager         atmosphereManager;
 		VolumetricLightingManager volumetricLightingManager;
 		CloudLightingManager      cloudLightingManager;
@@ -350,7 +364,10 @@ namespace brassica {
 		// fields here are untouched by that and keep their derived defaults.
 		AtmospherePushConstants atmosphere{};
 
-		TerrainAccelerationStructure terrainAS;
+		// Loaded once in Init() via dls.init(instance, device) -- the shared source of every
+		// dynamically-loaded extension function pointer (e.g. vkCmdDrawMeshTasksEXT) handed to
+		// nodes through NodeServices::dispatchLoader, not owned by any one feature.
+		DispatchLoaderDynamic dls;
 
 		TerrainManager terrainManager;
 
@@ -360,7 +377,9 @@ namespace brassica {
 		// Vulkan Memory Allocator
 		VmaAllocator allocator{VK_NULL_HANDLE};
 
-		// Frame set (set 0): persistent engine-wide bindings for FrameUBO, LightingUBO, LightsBuffer, ClusterGridBuffer
+		// Frame set (set 0): persistent engine-wide bindings for FrameUBO, LightingUBO, ClusterGridBuffer
+		// (CpuLightsBuffer/GpuLightsBuffer moved to the bindless catalog, binding 6 -- see
+		// resources/core.hpp's comment on the split)
 		vk::DescriptorSetLayout frameSetLayout{nullptr};
 		vk::DescriptorPool      frameDescriptorPool{nullptr};
 
@@ -375,10 +394,6 @@ namespace brassica {
 		vk::Buffer    atmosphereUboBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation atmosphereUboAllocations[FRAME_OVERLAP]{nullptr, nullptr};
 		void*         atmosphereUboMapped[FRAME_OVERLAP]{nullptr, nullptr};
-
-		vk::Buffer    lightsSSBOBuffers[FRAME_OVERLAP]{nullptr, nullptr};
-		VmaAllocation lightsSSBOAllocations[FRAME_OVERLAP]{nullptr, nullptr};
-		void*         lightsSSBOMapped[FRAME_OVERLAP]{nullptr, nullptr};
 
 		vk::Buffer    clusterGridBuffers[FRAME_OVERLAP]{nullptr, nullptr};
 		VmaAllocation clusterGridAllocations[FRAME_OVERLAP]{nullptr, nullptr};
@@ -398,6 +413,16 @@ namespace brassica {
 		// binding 7 at this same buffer.
 		vk::Buffer    lightningStrikePoolBuffer{nullptr};
 		VmaAllocation lightningStrikePoolAllocation{nullptr};
+
+		// AutoExposureStateBuffer (frame set binding 8): same single-persistent-allocation
+		// reasoning as lightningStrikePoolBuffer above -- bloom_downsample.comp's update_layer_ae
+		// owns this (adaptedLuminance/stats/EMAs/autoUchimura*/histogram) and it must evolve as
+		// one continuous sequence across frames, not get split per FRAME_OVERLAP slot the way
+		// autoExposureBuffers[] (now tunables-only) still is. mapped so Engine::DrawFrame can
+		// cheaply copy it into s_exposureStateReadback for the Lighting widget's live display.
+		vk::Buffer    autoExposureStateBuffer{nullptr};
+		VmaAllocation autoExposureStateAllocation{nullptr};
+		void*         autoExposureStateMapped{nullptr};
 
 		vk::DescriptorSet frameDescriptorSets[FRAME_OVERLAP]{nullptr, nullptr};
 

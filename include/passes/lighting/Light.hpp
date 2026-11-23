@@ -39,21 +39,48 @@ namespace brassica {
 
 	static_assert(sizeof(LightGPU) == 64, "LightGPU size must be 64 bytes");
 
-	constexpr uint32_t MAX_LIGHTS = brassica::constants::Class::Lighting::MaxLights;
+	constexpr uint32_t MAX_CPU_LIGHTS = brassica::constants::Class::Lighting::MaxCpuLights;
+	constexpr uint32_t MAX_GPU_LIGHTS = brassica::constants::Class::Lighting::MaxGpuLights;
+	// GPU lights at [0, GPU_LIGHT_DYNAMIC_CAPACITY) are atomic-claimed (fireflies, any particle
+	// index); [GPU_LIGHT_DYNAMIC_CAPACITY, MAX_GPU_LIGHTS) is lightning's static per-strike
+	// range (shaders/lighting.glsl's LIGHTNING_LIGHT_SLOT_BASE).
+	constexpr uint32_t GPU_LIGHT_DYNAMIC_CAPACITY = brassica::constants::Class::Lighting::GpuLightDynamicCapacity;
 
-	struct alignas(16) LightsSSBOData {
+	// CPU-authored only: sun/moon (always indices 0/1) plus whatever LightManager::AddLight
+	// adds. Uploaded via LightManager's own PredefinedBufferNode, only when dirty -- see
+	// LightManager::RegisterBufferNode. Never written by any shader.
+	struct alignas(16) CpuLightsSSBOData {
 		uint32_t count{0};
 		uint32_t padding[3]{0, 0, 0};
-		LightGPU lights[MAX_LIGHTS];
+		LightGPU lights[MAX_CPU_LIGHTS];
 	};
 
+	// GPU-authored only: zeroed and re-counted fresh every frame by GpuLightsResetNode before
+	// ParticleBehaviorNode (fireflies, atomic-claimed slots) and LightningAgeNode (static
+	// reserved slots) write into it. Never touched by the CPU upload at all -- this is the fix
+	// for the "weird round trips" the old shared buffer had (see TODO.md).
+	struct alignas(16) GpuLightsSSBOData {
+		uint32_t count{0};              // fixed to MAX_GPU_LIGHTS by the reset pass
+		uint32_t dynamicClaimCounter{0}; // atomicAdd'd by fireflies claiming a slot
+		uint32_t padding[2]{0, 0};
+		LightGPU lights[MAX_GPU_LIGHTS];
+	};
+
+	// cpuLightIndices/cpuCount are a small, separate list from the existing GPU-oriented
+	// lightIndices/count -- CPU-authored extra lights (beyond sun/moon, which bypass clustering
+	// entirely via clustered_lighting.glsl's own directional fast path) are rare, so 8 slots is
+	// generous without doubling this struct's size the way sharing one 64-slot list between two
+	// buffers via index-tagging would have avoided, at the cost of a bit-tagging dereference
+	// scattered across every consumer -- not worth it for a list this size difference.
 	struct alignas(16) ClusterGPU {
 		uint32_t count{0};
 		uint32_t lightIndices[64]{0};
+		uint32_t cpuCount{0};
+		uint32_t cpuLightIndices[8]{0};
 		uint32_t padding[3]{0, 0, 0};
-	}; // Total: 272 bytes
+	}; // Total: 308 bytes, rounded to 320 by alignas(16)
 
-	static_assert(sizeof(ClusterGPU) == 272, "ClusterGPU size must be 272 bytes");
+	static_assert(sizeof(ClusterGPU) == 320, "ClusterGPU size must be 320 bytes");
 
 	constexpr uint32_t TOTAL_CLUSTERS = brassica::constants::Class::Lighting::TotalClusters; // 3457 clusters
 

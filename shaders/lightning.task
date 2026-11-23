@@ -13,6 +13,7 @@ struct LightningTaskPayload {
 	vec3  points[17];
 	float lifetime;
 	float maxLifetime;
+	vec4  colorAndPeak;
 };
 
 taskPayloadSharedEXT LightningTaskPayload OUT;
@@ -32,7 +33,9 @@ vec3 randomPerp(vec3 dir, uint seed) {
 // indirection). Plots this frame's bolt polyline via iterative midpoint displacement (GLSL has
 // no function recursion) seeded from the slot's stored seed, so the shape is stable across the
 // strike's whole lifetime even though it's recomputed every frame -- 17 points of pure ALU, no
-// loops over other data, cheap regardless. v1 scope: trunk only, no branch segments.
+// loops over other data, cheap regardless. Trunk only, no branch segments -- works unchanged
+// for cloud-to-ground strikes too, since this only ever interpolates between whatever two
+// points originAndSeed/endPos hold, regardless of what they mean for a given strike's type.
 void main() {
 	uint slot = gl_WorkGroupID.x;
 	if (slot >= LIGHTNING_MAX_STRIKES || uStrikes[slot].lifetime <= 0.0) {
@@ -74,6 +77,7 @@ void main() {
 
 	OUT.lifetime = uStrikes[slot].lifetime;
 	OUT.maxLifetime = uStrikes[slot].maxLifetime;
+	OUT.colorAndPeak = uStrikes[slot].colorAndPeak;
 
 	EmitMeshTasksEXT(1, 1, 1);
 }

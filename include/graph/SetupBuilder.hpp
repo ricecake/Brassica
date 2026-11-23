@@ -57,6 +57,9 @@ namespace brassica::graph {
 
 			AccessHandle& ShadingRateTexelSize(std::array<std::uint32_t, 2> size) {
 				m_builder.m_realizations[m_index].shadingRateTexelSize = size;
+				// See ResourceRealization::shadingRateAttachment's own comment -- this call is
+				// the only signal that a plain size-field default wasn't enough to carry.
+				m_builder.m_realizations[m_index].shadingRateAttachment = true;
 				return *this;
 			}
 
@@ -74,6 +77,15 @@ namespace brassica::graph {
 			// own write" to look for).
 			AccessHandle& Required() {
 				m_builder.m_realizations[m_index].required = true;
+				return *this;
+			}
+
+			// Binds this Read as a real read-only depth/stencil attachment (depth/stencil test
+			// against it) instead of a sampled descriptor -- see
+			// ResourceRealization::asAttachment's own comment. Only meaningful on a Read of a
+			// Depth-role resource.
+			AccessHandle& AsAttachment() {
+				m_builder.m_realizations[m_index].asAttachment = true;
 				return *this;
 			}
 

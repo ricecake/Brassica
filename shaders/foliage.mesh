@@ -7,8 +7,6 @@ layout(triangles, max_vertices = 128, max_primitives = 128) out;
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
-#include "foliage_archetype.glsl"
-#include "foliage_instance.glsl"
 
 layout(push_constant) uniform FoliagePushConstants {
 	uvec4 gridParams; // x = numLODs, y = tilesPerRow, z = totalTiles, w = textureDim
@@ -37,11 +35,6 @@ layout(push_constant) uniform FoliagePushConstants {
 	uint  terrainNumLevels;
 	uint  foliageFlags; // bit 0: terrain occlusion culling
 	uint  hizIndex; // unused here -- HiZ occlusion is task-shader-only; keeps layout matching foliage.task
-	// Appended, not interleaved -- see feedback_push_constant_struct_editing. foliage.task's own
-	// copy of this struct is deliberately NOT updated to match: it never touches these, and the
-	// shared fields above stay at identical offsets in both either way.
-	FoliageInstanceRef     instanceBuf;
-	FoliageIndirectArgsRef indirectArgsBuf;
 }
 params;
 
@@ -431,86 +424,6 @@ void emitFernItem(
 	pCount += 48u;
 }
 
-void emitRockItem(
-	vec3 basePos, float angle, uint itemSeed, inout uint vCount, inout uint pCount
-) {
-	float rockScale = (0.5 + pcg_hash(itemSeed + 2u) * 0.9) * params.lengthMultiplier;
-	vec3  rockSize = vec3(
-		 rockScale * (0.85 + pcg_hash(itemSeed + 3u) * 0.5) * params.widthMultiplier,
-		 rockScale * (0.60 + pcg_hash(itemSeed + 5u) * 0.5),
-		 rockScale * (0.85 + pcg_hash(itemSeed + 6u) * 0.5) * params.widthMultiplier
-	);
-	vec4 rockColor = vec4(
-		0.38 + pcg_hash(itemSeed + 7u) * 0.12,
-		0.36 + pcg_hash(itemSeed + 8u) * 0.10,
-		0.34 + pcg_hash(itemSeed + 9u) * 0.10,
-		1.0
-	);
-
-	uint vBase = vCount;
-	vec3 center = basePos + vec3(0.0, rockSize.y * 0.5, 0.0);
-
-	// High fidelity 3D boulder mesh (14 vertices: top, bottom, 2 staggered horizontal 6-vertex rings)
-	vec3 boulderVerts[14];
-	boulderVerts[0] = center + vec3(0.0, rockSize.y * 0.55, 0.0);  // Top vertex
-	boulderVerts[13] = center - vec3(0.0, rockSize.y * 0.45, 0.0); // Bottom vertex
-
-	for (uint i = 0u; i < 6u; ++i) {
-		float a1 = float(i) * (TAU / 6.0) + angle;
-		float r1 = 0.5;
-		vec3  disp1 = vec3(
-			(pcg_hash(itemSeed + 10u + i) * 0.3 - 0.15) * rockSize.x,
-			(pcg_hash(itemSeed + 20u + i) * 0.2 - 0.10) * rockSize.y,
-			(pcg_hash(itemSeed + 30u + i) * 0.3 - 0.15) * rockSize.z
-		);
-		boulderVerts[1 + i] = center + vec3(cos(a1) * rockSize.x * r1, rockSize.y * 0.2, sin(a1) * rockSize.z * r1) + disp1;
-
-		float a2 = float(i) * (TAU / 6.0) + angle + (TAU / 12.0);
-		float r2 = 0.45;
-		vec3  disp2 = vec3(
-			(pcg_hash(itemSeed + 40u + i) * 0.3 - 0.15) * rockSize.x,
-			(pcg_hash(itemSeed + 50u + i) * 0.2 - 0.10) * rockSize.y,
-			(pcg_hash(itemSeed + 60u + i) * 0.3 - 0.15) * rockSize.z
-		);
-		boulderVerts[7 + i] = center + vec3(cos(a2) * rockSize.x * r2, -rockSize.y * 0.25, sin(a2) * rockSize.z * r2) + disp2;
-	}
-
-	for (uint i = 0u; i < 14u; ++i) {
-		vec3 vPos = boulderVerts[i];
-		vec3 viewP = mat3(uViewMatrix) * vPos;
-		gl_MeshVerticesEXT[vBase + i].gl_Position = uProjMatrix * vec4(viewP, 1.0);
-		outWorldPos[vBase + i] = vPos + uCameraPosition.xyz;
-		outNormal[vBase + i] = normalize(vPos - center + vec3(0.0, 0.1, 0.0));
-		outUV[vBase + i] = vec2(0.5, 0.5);
-		outColor[vBase + i] = mix(rockColor, vec4(0.25, 0.32, 0.20, 1.0), (i > 6u) ? 0.25 : 0.0); // subtle moss tint near base
-		outMaterialType[vBase + i] = 3u;
-		outFade[vBase + i] = 1.0;
-	}
-
-	uint pBase = pCount;
-	// 20 triangular facets forming full 3D closed boulder topology
-	for (uint i = 0u; i < 6u; ++i) {
-		uint nextI = (i + 1u) % 6u;
-		// Top cap triangles
-		gl_PrimitiveTriangleIndicesEXT[pBase + i] = uvec3(vBase, vBase + 1u + i, vBase + 1u + nextI);
-		// Middle band triangles
-		gl_PrimitiveTriangleIndicesEXT[pBase + 6u + i * 2u] = uvec3(vBase + 1u + i, vBase + 7u + i, vBase + 1u + nextI);
-		gl_PrimitiveTriangleIndicesEXT[pBase + 6u + i * 2u + 1u] = uvec3(vBase + 1u + nextI, vBase + 7u + i, vBase + 7u + nextI);
-		// Bottom cap triangles
-		gl_PrimitiveTriangleIndicesEXT[pBase + 18u + i] = uvec3(vBase + 13u, vBase + 7u + nextI, vBase + 7u + i);
-	}
-
-	vCount += 14u;
-	pCount += 20u;
-}
-
-// emitSphereBlob/emitBushItem/emitPalmTreeItem/emitPineTreeItem/emitDeciduousTreeItem/
-// emitCactusItem moved to foliage_emit.glsl, shared with foliage_bake.mesh (the only caller
-// left of emitBushItem/emitTreeItem's own former sub-functions now that the cutover below
-// routes tree/bush through the archetype render pass instead) -- unchanged behavior, this
-// file's own params/output arrays are exactly what those functions already expected.
-#include "foliage_emit.glsl"
-
 void main() {
 	uint clumpGlobalIdx = gl_WorkGroupID.x;
 	uint tileIdx = clumpGlobalIdx >> 4u;
@@ -610,11 +523,16 @@ void main() {
 		vec2 itemWorldXZ = clumpCenterWorld + offset;
 		vec2 itemRelXZ = clumpCenterRel + offset;
 
-		uint foliageType = 0u; // 0 Grass, 1 Fern, 2 Flower, 3 Rock, 4 Seaweed, 5 Bush
+		uint foliageType = 0u; // 0 Grass, 1 Fern, 2 Flower, 4 Seaweed
 
+		// Rock/bush/tree are gone from this live path entirely (Stage 5.2's DecorPopulationNode
+		// persistently populates real ManifoldRockAsset/ManifoldBranchingTreeAsset model instances
+		// instead) -- see the plan's Stage 5.1 cleanup note. Underwater used to be a 75/25 seaweed/
+		// rock split; with rock's live slot gone there's no remaining non-plant underwater filler,
+		// so underwater clumps are seaweed unconditionally now -- a real, communicated side effect
+		// of this cleanup, not a silent change to seaweed's own behavior.
 		if (isUnderwater) {
-			float underwaterChoice = pcg_hash(itemSeed + 4u);
-			foliageType = (underwaterChoice < 0.75) ? 4u : 3u;
+			foliageType = 4u;
 		} else {
 			float sel = pcg_hash(itemSeed + 4u);
 			float cumulative = params.flowerRatio * bHWDF.w;
@@ -625,38 +543,15 @@ void main() {
 				if (sel < cumulative) {
 					foliageType = 1u;
 				} else {
-					cumulative += params.rockRatio;
-					if (sel < cumulative) {
-						foliageType = 3u;
-					} else {
-						cumulative += params.seaweedRatio;
-						if (sel < cumulative) {
-							foliageType = 4u;
-						} else {
-							cumulative += params.bushRatio;
-						if (sel < cumulative) {
-							foliageType = 5u;
-						} else {
-							cumulative += params.treeRatio;
-							foliageType = (sel < cumulative) ? 6u : 0u;
-						}
-						}
-					}
+					cumulative += params.seaweedRatio;
+					foliageType = (sel < cumulative) ? 4u : 0u;
 				}
 			}
 		}
 
 		uint itemVerts;
 		uint itemPrims;
-		if (foliageType == 3u) {
-			itemVerts = 14u;
-			itemPrims = 20u;
-		} else if (foliageType == 5u || foliageType == 6u) {
-			// Archetype-rendered now (FoliageArchetypeRenderNode) -- no live geometry emitted
-			// below, so no vertex/primitive budget to reserve for it here either.
-			itemVerts = 0u;
-			itemPrims = 0u;
-		} else if (foliageType == 1u) {
+		if (foliageType == 1u) {
 			itemVerts = 60u;
 			itemPrims = 48u;
 		} else if (foliageType == 2u) {
@@ -679,45 +574,13 @@ void main() {
 		float widthScale = bHWDF.y * fade;
 		vec3  sway = vec3(windStrength, 0.0, windStrength);
 
-		// Collects a palette-archetype instance record -- FoliageArchetypeRenderNode draws it
-		// from here on, so there's no live geometry emitted below for these two types anymore.
-		// Same seed/position/type decisions above feed both the collection and (for every other
-		// type) the live emit call, so there's no separate pass re-deriving "is this a
-		// tree/bush, and where" that could drift from what actually gets drawn.
-		if (foliageType == 5u || foliageType == 6u) {
-			uint archetypeSlot;
-			if (foliageType == 6u) {
-				uint treeSubtype = getWhittakerTreeType(biomeIdx, temp, moisture);
-				uint variant = uint(pcg_hash(itemSeed + 777u) * float(kFoliageTreeVariantsPerSubtype));
-				archetypeSlot = foliageTreeArchetypeSlot(treeSubtype, variant);
-			} else {
-				uint variant = uint(pcg_hash(itemSeed + 777u) * float(kFoliageBushArchetypeCount));
-				archetypeSlot = foliageBushArchetypeSlot(variant);
-			}
-
-			uint writeIdx = atomicAdd(params.indirectArgsBuf.args.groupCountX, 1u);
-			if (writeIdx < kFoliageInstanceCapacity) {
-				FoliageInstanceData inst;
-				inst.relPosition = basePos;
-				inst.rotationAngle = angle;
-				inst.fade = fade;
-				inst.archetypeSlot = archetypeSlot;
-				params.instanceBuf.instances[writeIdx] = inst;
-			}
-		}
-
-		if (foliageType == 3u) {
-			emitRockItem(basePos, angle, itemSeed, vCount, pCount);
-		} else if (foliageType == 1u) {
+		if (foliageType == 1u) {
 			emitFernItem(
 				basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorTop, bColorBottom, fade,
 				vCount, pCount
 			);
 		} else if (foliageType == 2u) {
 			emitFlowerItem(basePos, heightScale, widthScale, angle, sway, itemSeed, terrainNormal, bColorBottom, fade, vCount, pCount);
-		} else if (foliageType == 5u || foliageType == 6u) {
-			// Archetype-rendered -- the instance record was already collected above; nothing to
-			// emit here.
 		} else {
 			emitBladeItem(
 				basePos, heightScale, widthScale, foliageType, angle, distToCam, sway, params.windTime, itemWorldXZ,

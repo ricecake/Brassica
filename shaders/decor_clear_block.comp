@@ -1,0 +1,22 @@
+#version 460
+
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "model_instance.glsl"
+
+// Stage 5.2: DecorChunkAllocator frees a chunk's block when it ages out of range (past the
+// grace period) -- clearing just the alive bit is enough, matching ModelCullNode's own
+// (inst.flags & kModelInstanceAliveBit) == 0 dead-check. No separate validity buffer needed the
+// way boidish's decor_manager.cpp uses (block_validity_ssbo_, to avoid zeroing 64KB per type on
+// every eviction) -- ModelInstance.flags already serves that role here.
+layout(push_constant) uniform DecorClearPushConstants {
+	uint blockBaseSlot;
+	uint instanceBufIdx;
+}
+push;
+
+void main() {
+	uint slot = push.blockBaseSlot + gl_LocalInvocationID.x;
+	uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[slot].flags = 0u;
+}

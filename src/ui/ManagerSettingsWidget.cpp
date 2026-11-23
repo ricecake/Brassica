@@ -10,6 +10,7 @@
 #include "IManager.hpp"
 #include "imgui.h"
 #include "passes/lighting/ILightManager.hpp"
+#include "passes/lighting/LightningManager.hpp"
 #include "passes/particle/IParticleManager.hpp"
 #include "ServiceLocator.hpp"
 #include "passes/terrain/ITerrainManager.hpp"
@@ -61,6 +62,9 @@ namespace brassica::ui {
 			}
 			if (ServiceLocator::Instance().Has<CloudLightingManager>()) {
 				managers.push_back(ServiceLocator::Instance().Get<CloudLightingManager>().get());
+			}
+			if (ServiceLocator::Instance().Has<LightningManager>()) {
+				managers.push_back(ServiceLocator::Instance().Get<LightningManager>().get());
 			}
 
 			for (auto* mgr : managers) {

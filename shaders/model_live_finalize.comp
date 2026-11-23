@@ -1,0 +1,24 @@
+#version 460
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "model_instance.glsl"
+
+// Stage 4: ModelLiveEvalNode's own dispatch is a plain many-threads-per-workgroup compute pass
+// (local_size_x = 64, one thread per live instance -- see model_live_eval.comp), unlike
+// ModelIndirectArgsBuffer's one-workgroup-per-entry draw, so its indirect groupCountX needs a
+// real ceil(rawLiveCount/64) divide, not rawLiveCount itself. A single-thread dispatch between
+// ModelCullNode (writes rawLiveCount) and ModelLiveEvalNode (consumes groupCountX) so the
+// generic graph machinery inserts the barrier between them -- not a hand-rolled intra-node one.
+layout(push_constant) uniform ModelLiveFinalizePushConstants {
+	uint liveIndirectArgsBufIdx;
+}
+push;
+
+void main() {
+	uint raw = uModelLiveIndirectArgsBuffers[nonuniformEXT(push.liveIndirectArgsBufIdx)].rawLiveCount;
+	uModelLiveIndirectArgsBuffers[nonuniformEXT(push.liveIndirectArgsBufIdx)].groupCountX = (raw + 63u) / 64u;
+	uModelLiveIndirectArgsBuffers[nonuniformEXT(push.liveIndirectArgsBufIdx)].groupCountY = 1u;
+	uModelLiveIndirectArgsBuffers[nonuniformEXT(push.liveIndirectArgsBufIdx)].groupCountZ = 1u;
+}

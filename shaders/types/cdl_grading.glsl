@@ -1,8 +1,9 @@
 #ifndef TYPES_CDL_GRADING_GLSL
 #define TYPES_CDL_GRADING_GLSL
 
-// One depth-scoped ASC CDL grading layer for the scene (isSky == 0 in tonemap.frag). isMain
-// entries always apply at full weight; every other entry blends in based on how close its
+// One depth-scoped ASC CDL grading layer, applied uniformly to every pixel in tonemap.frag
+// (once per active ExposureLayer, autoexposure.glsl, before that layer's own tonemap curve).
+// isMain entries always apply at full weight; every other entry blends in based on how close its
 // targetDepth is to the pixel's linearized depth, falling off over falloffWidth at falloffRate.
 struct CdlEntry {
 	vec4  cdlSlope;

@@ -6,6 +6,8 @@
 #include "lighting.glsl"
 #include "helpers/lighting.glsl"
 #include "helpers/cloud_shadow.glsl"
+#include "helpers/cloud_density.glsl"
+#include "helpers/tonemapping.glsl"
 #include "terrain.glsl"
 #include "atmosphere/common.glsl"
 
@@ -17,12 +19,16 @@ layout(push_constant) uniform VolumetricFroxelGenPushConstants {
 	vec4  camUp;       // xyz = camera up vector, w = aspect
 	vec4  sunDir;      // xyz = sun direction, w = sun intensity
 	vec4  sunColor;    // rgb = sun color/radiance, w = phase anisotropy g
-	uvec4 indices0;    // x = scat0|scat1, y = scat2|ext0, z = ext1|ext2, w = noise|skyView
-	// x = clipmap|minMax, y = cloudShadow|weatherBiome, z = shadowMap|gridTextureDim, w = unused
-	// (previously held a bit-cast float mieHumidityBoost; that and fogParams's density/falloff/
-	// base now come from u_mieHumidityBoost/u_fogDensity/u_fogHeightFalloff/u_fogBaseHeight on
-	// the shared AtmosphereUBO, atmosphere/common.glsl).
+	uvec4 indices0;    // x = scat0|scat1, y = scat2|ext0, z = ext1|ext2, w = numTerrainLevels|skyView
+	// x = clipmap|minMax, y = cloudShadow|weatherBiome, z = shadowMap|gridTextureDim,
+	// w = cpuLightsIndex|gpuLightsIndex (previously fully unused -- had held a bit-cast float
+	// mieHumidityBoost; that and fogParams's density/falloff/base now come from
+	// u_mieHumidityBoost/u_fogDensity/u_fogHeightFalloff/u_fogBaseHeight on the shared
+	// AtmosphereUBO, atmosphere/common.glsl).
 	uvec4 indices1;
+	// x = hizIndex (bindless sampled index for HiZTexture, S3's early-occlusion skip); y/z/w
+	// reserved, unpacked here instead of indices0/1 since those are already fully packed.
+	uvec4 indices2;
 } push;
 
 uint unpackLow16(uint val) {
@@ -56,6 +62,72 @@ float calculateVolumetricTerrainShadow(vec3 worldPos, vec3 lightDir, uint shadow
 	return mix(0.15, 1.0, softVal);
 }
 
+// Ray direction through one CORNER of a froxel column's frustum slice (cornerX/cornerY in
+// [0..128]/[0..96], the edges of the 128x96 column grid -- not a column's own center the way
+// viewRayDir below is). Same projection formula as viewRayDir, just evaluated without the
+// center's +0.5 offset.
+vec3 froxelCornerRayDir(uint cornerX, uint cornerY, vec3 camRight, vec3 camUp, float tanHalfFov, float aspect, vec3 camForward) {
+	float ndcX = (float(cornerX) / 128.0) * 2.0 - 1.0;
+	float ndcY = 1.0 - (float(cornerY) / 96.0) * 2.0;
+	return normalize(ndcX * aspect * tanHalfFov * camRight + ndcY * tanHalfFov * camUp + camForward);
+}
+
+// isDirectionOccludedByTerrain's cell/layer DDA steps horizontally (XZ) -- for a near-vertical
+// ray (small dir.xz), that DDA's own per-axis "exit" math degenerates toward "never exits this
+// cell/layer," collapsing the whole trace into one giant step whose gMin ends up ~= the ray's
+// own origin height, compared against the origin's immediate local terrain cell -- a false HIT
+// is then plausible from ordinary nearby terrain roughness alone, even with open sky directly
+// ahead. Confirmed via real-hardware report: isolated "pillars" (single froxel columns) reading
+// fully occluded while looking up near the ground, worse the steeper the look angle. Skipping
+// the trace once a ray is steep enough is always safe (same "prefer under-culling over a false-
+// black artifact" rule the 4-corner conservatism above already follows) -- terrain overhangs
+// directly above the camera aren't a case this fog-occlusion feature needs to get right.
+// Phase-weighted scattering contribution of one local (point/spot/emissive/flash) light at a
+// froxel sample -- shared by all 4 cluster-bucket loops in main() below so the
+// calculateLightContribution + phase-function pairing can't drift between them.
+vec3 evaluateLocalLightScattering(Light light, vec3 worldPos, vec3 viewRayDir, float effectiveG) {
+	if (light.intensity <= 0.0 || light.type == LIGHT_TYPE_DIRECTIONAL) {
+		return vec3(0.0);
+	}
+
+	vec3 lightPos = light.position;
+	if ((light.flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
+		lightPos += push.cameraPos.xyz;
+	}
+
+	vec3  L;
+	float attenuation;
+	calculateLightContribution(
+		light.type, lightPos, light.direction, light.innerCutoff, light.outerCutoff, light.intensity, worldPos, L,
+		attenuation
+	);
+	if (attenuation <= 0.0) {
+		return vec3(0.0);
+	}
+
+	float cosL = dot(viewRayDir, L);
+	float localPhase = dualHenyeyGreenstein(cosL, effectiveG);
+	return light.color * light.intensity * attenuation * localPhase;
+}
+
+void traceTerrainOcclusionSafe(TerrainOcclusionContext ctx, vec3 origin, vec3 dir, inout float distance) {
+	// EXPERIMENT (2026-11-17, unconfirmed): widened from 0.3 (~72.5 degrees) after a real-hardware
+	// report of dark "pillars" that aren't strongly tied to the camera's overall look angle, each
+	// fixed to one spot while the camera stays within a small area and vanishing/reappearing
+	// elsewhere once it moves far enough -- consistent with this same degenerate-first-step false
+	// HIT, just triggered by a ray that isn't quite steep enough for the old threshold to skip,
+	// against whatever local terrain roughness happens to be nearby right now (hence "fixed" per
+	// camera position, since it's that nearby cell's own data, and it moving on once the camera's
+	// local terrain cell changes). Confirm on real hardware before trusting this value; if pillars
+	// persist, the root fix likely needs to bound terrainMarchStep's own first step near the
+	// origin instead of widening this skip further.
+	const float kMinHorizontalComponent = 0.5; // ~60 degrees above/below horizontal
+	if (length(dir.xz) < kMinHorizontalComponent) {
+		return;
+	}
+	isDirectionOccludedByTerrain(ctx, origin, dir, distance);
+}
+
 void main() {
 	uvec2 xy = gl_GlobalInvocationID.xy;
 	if (xy.x >= 128 || xy.y >= 96) return;
@@ -66,13 +138,17 @@ void main() {
 	uint ext0  = unpackHigh16(push.indices0.y);
 	uint ext1  = unpackLow16(push.indices0.z);
 	uint ext2  = unpackHigh16(push.indices0.z);
+	uint numTerrainLevels = unpackLow16(push.indices0.w);
 	uint skyViewIndex    = unpackHigh16(push.indices0.w);
-	uint clipmapIndex      = unpackLow16(push.indices1.x);
+	uint hizIndex = push.indices2.x;
+	uint clipMapIndex    = unpackLow16(push.indices1.x);
 	uint minMaxIndex       = unpackHigh16(push.indices1.x);
 	uint cloudShadowIndex  = unpackLow16(push.indices1.y);
 	uint weatherBiomeIndex = unpackHigh16(push.indices1.y);
 	uint shadowMapIndex    = unpackLow16(push.indices1.z);
 	uint gridTextureDim    = unpackHigh16(push.indices1.z);
+	uint cpuLightsIndex    = unpackLow16(push.indices1.w);
+	uint gpuLightsIndex    = unpackHigh16(push.indices1.w);
 
 	uint cascadeScatteringIdx[3] = uint[3](scat0, scat1, scat2);
 	uint cascadeExtinctionIdx[3] = uint[3](ext0, ext1, ext2);
@@ -91,8 +167,92 @@ void main() {
 		push.camForward.xyz
 	);
 
+	// Loop-invariant across every cascade/z-slice below (128x96x64x3 = ~2.4M voxels engine-wide,
+	// 192 iterations per thread here): each of these depends only on push.*/viewRayDir, both
+	// fixed for the whole thread, so there's no reason to recompute them per voxel. Mirrors the
+	// camRight hoist above, just extended consistently -- these were the stragglers still inside
+	// the loop.
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+	float sunElevation = max(0.0, push.sunDir.y);
+	float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
+	float baseDirectSunScatteringBoost = 1.0 + lowSunFactor * 1.5;
+	float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
+	float cosTheta = dot(viewRayDir, push.sunDir.xyz);
+
 	float cascadeRanges[3] = float[3](300.0, 3000.0, 100000.0);
 	const float kExpAlpha = 3.5;
+
+	// Conservative "furthest this column can possibly need to march" distance, computed once per
+	// column (cascade-independent -- it's a property of the ray itself) rather than per-voxel.
+	// Two independent sources, combined by taking the nearer: a real hierarchical ray/terrain
+	// trace (same traceTerrainOcclusion machinery foliage/decor shadows already use -- far more
+	// precise than a flat min-height threshold, and cheap since it runs once per column, not once
+	// per voxel), and a HiZ min-depth query over this column's own screen-space footprint
+	// (catches everything else already in the GBuffer this frame -- foliage, models, water --
+	// that the terrain-only trace can't see). Neither test can see what's beyond the farthest
+	// cascade, so both start from that bound.
+	//
+	// DEBUG TOGGLES (temporary, for isolating the all-black-below-cloud-layer report -- see
+	// their own comments below for current status). Both at 0 reproduces the pre-S3 behavior
+	// (opaqueDist always == farthest cascade, no early-exit).
+#define DEBUG_VOLUMETRIC_TERRAIN_OCCLUSION 1
+	// Confirmed via real-hardware A/B test to be the source of a full-screen-black regression --
+	// suspected cause is HiZTexture (Lifetime::History) read via a plain Read<>()/ctx.Index<>()
+	// in the SAME frame as its producer, which RelationalCompiler.hpp's zero-init-if-no-active-
+	// writer-precedes-this-read check exempts for Persistent/External lifetimes but not History
+	// (see its hasActiveWriterPreceding comment) -- plausible, not yet confirmed with a GPU
+	// capture. Disabled pending that; re-enable to test once fixed.
+#define DEBUG_VOLUMETRIC_HIZ_OCCLUSION 0
+	float opaqueDist = cascadeRanges[2];
+	{
+#if DEBUG_VOLUMETRIC_TERRAIN_OCCLUSION
+		TerrainOcclusionContext terrainOccCtx =
+			makeTerrainOcclusionContext(minMaxIndex, gridTextureDim, numTerrainLevels, 0.0);
+
+		// Conservative: trace all 4 corners of this column's own frustum slice, not just its
+		// center ray (viewRayDir) -- a froxel column is a wide wedge (1/128 x 1/96 of the whole
+		// screen), and a single center-ray hit on a terrain feature at one edge of that wedge
+		// was marking the ENTIRE column opaque even where most of its footprint is actually
+		// open, producing blocky false-occlusion artifacts. Taking the FARTHEST of the 4 corner
+		// hits (a corner that doesn't hit at all leaves its distance at the full cascade range,
+		// via isDirectionOccludedByTerrain's own "leaves hitDistance untouched on a miss"
+		// contract) means the column is only ever marked occluded where its whole footprint
+		// genuinely is -- 4x the trace cost per column, still far cheaper than per-voxel.
+		vec3 corner00 = froxelCornerRayDir(xy.x, xy.y, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+		vec3 corner10 = froxelCornerRayDir(xy.x + 1u, xy.y, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+		vec3 corner01 = froxelCornerRayDir(xy.x, xy.y + 1u, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+		vec3 corner11 = froxelCornerRayDir(xy.x + 1u, xy.y + 1u, camRight, push.camUp.xyz, tanHalfFov, aspect, push.camForward.xyz);
+
+		float terrainDist00 = cascadeRanges[2];
+		float terrainDist10 = cascadeRanges[2];
+		float terrainDist01 = cascadeRanges[2];
+		float terrainDist11 = cascadeRanges[2];
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner00, terrainDist00);
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner10, terrainDist10);
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner01, terrainDist01);
+		traceTerrainOcclusionSafe(terrainOccCtx, push.cameraPos.xyz, corner11, terrainDist11);
+
+		float terrainDist = max(max(terrainDist00, terrainDist10), max(terrainDist01, terrainDist11));
+		opaqueDist = min(opaqueDist, terrainDist);
+#endif
+
+#if DEBUG_VOLUMETRIC_HIZ_OCCLUSION
+		// This column's own screen-space footprint -- a direct 1/128 x 1/96 slice of the full
+		// UV range, independent of resolution (same raster grid both the froxel dispatch and
+		// every other screen-space pass in this engine share), not something that needs
+		// projecting through camForward/tanHalfFov/aspect the way viewRayDir above does.
+		vec2 colUVMin = vec2(float(xy.x) / 128.0, float(xy.y) / 96.0);
+		vec2 colUVMax = vec2(float(xy.x + 1u) / 128.0, float(xy.y + 1u) / 96.0);
+		float minNdcDepth = sampleMinDepthInRect(colUVMin, colUVMax, hizIndex);
+		if (minNdcDepth < 1.0) {
+			float linearZ = linearizeDepth(minNdcDepth, uNearPlane, uFarPlane);
+			float forwardComponent = dot(viewRayDir, push.camForward.xyz);
+			if (forwardComponent > 1e-4) {
+				opaqueDist = min(opaqueDist, linearZ / forwardComponent);
+			}
+		}
+#endif
+	}
 
 	for (int c = 0; c < 3; ++c) {
 		uint scatIdx = cascadeScatteringIdx[c];
@@ -103,7 +263,11 @@ void main() {
 
 		vec3 accumulatedScattering = vec3(0.0);
 		vec3 accumulatedTransmittance = vec3(1.0);
-		bool hasOccluded = false;
+		// Latches true the first voxel that's either past opaqueDist (real terrain/HiZ-visible
+		// geometry, computed once per column above) or already fully extinct from accumulated
+		// in-scattering density -- both mean nothing farther along this column can be seen.
+		// dist only increases with z, so once true it stays true for the rest of this cascade.
+		bool columnOpaque = false;
 
 		// float jitter = InterleavedGradientNoise(vec2(xy), int(uFrameIndex));
 
@@ -122,8 +286,44 @@ void main() {
 
 			vec3 worldPos = push.cameraPos.xyz + viewRayDir * dist;
 
-			// Sample weather map at worldPos XZ
-			float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+			// distNear, not the voxel's center (dist) -- with exponential Z-sizing, a far voxel
+			// can span thousands of metres, and killing it as soon as its CENTER crosses
+			// opaqueDist discards its entire near half, which can still be legitimately visible
+			// well before the real occluder. Comparing the near edge only ever kills a voxel
+			// once its whole span, including the nearest point, is actually past it.
+			if (!columnOpaque && distNear >= opaqueDist) {
+				// Past real geometry (terrain trace or HiZ) -- there's no fog volume left to
+				// render beyond an opaque surface, so the correct sentinel is "nothing here"
+				// (transmittance 1, the same no-fog-contribution value cloud_composite.frag's own
+				// sampleFroxelCascade already returns on its early-outs), not "fully opaque"
+				// (transmittance 0). Clamping to 0 here was painting an extra, unearned coat of
+				// black fog directly onto the terrain's own already-lit color right at the
+				// occlusion boundary -- visible as a dark band that shifts with that boundary's
+				// own frame-to-frame jitter.
+				columnOpaque = true;
+				accumulatedTransmittance = vec3(1.0);
+			} else if (!columnOpaque && dot(accumulatedTransmittance, vec3(0.3333)) < 0.05) {
+				// The fog itself has already attenuated nearly everything behind it -- a real
+				// physical result of accumulation, not a boundary artifact. Round down to exactly
+				// 0 purely to skip the remaining voxels' work; unlike the geometry case above,
+				// this one's sentinel value is correct as "fully opaque" already.
+				columnOpaque = true;
+				accumulatedTransmittance = vec3(0.0);
+			}
+
+			if (columnOpaque) {
+				// Past a known real surface (terrain trace or HiZ) or already fully extinct --
+				// skip every bit of the expensive weather/density/lighting work below for the
+				// rest of this cascade. Still write every voxel every frame (never leave a texel
+				// unwritten) so there's no uninitialized-read risk downstream; the written value
+				// is just frozen at "nothing more visible from here on."
+				imageStore(uImages3DGenericWrite[nonuniformEXT(scatIdx)], vox, vec4(accumulatedScattering, 0.0));
+				imageStore(uImages3DGenericWrite[nonuniformEXT(extIdx)], vox, vec4(accumulatedTransmittance, 1.0));
+				continue;
+			}
+
+			// Sample weather map at worldPos XZ (worldExtent hoisted above the cascade/z loop --
+			// a pure constant, no reason to recompute it 192x per thread)
 			vec2 weatherUV = fract((worldPos.xz / worldExtent) + 0.5);
 			vec4 weatherSample = vec4(0.0);
 			if (weatherBiomeIndex > 0u && weatherBiomeIndex != 0xFFFFu) {
@@ -133,16 +333,35 @@ void main() {
 			float weatherType      = weatherSample.g; // Weather type [0..1]
 			float weatherMoisture  = weatherSample.b; // Moisture content [0..1]
 
-			// Determine rain intensity factor (high moisture + cloud coverage)
-			float rainFactor = smoothstep(0.35, 0.8, weatherMoisture) * smoothstep(0.2, 0.6, weatherCoverage);
+			// Total precipitation intensity factor (high moisture + cloud coverage)
+			float precipFactor = smoothstep(0.35, 0.8, weatherMoisture) * smoothstep(0.2, 0.6, weatherCoverage);
+
+			// Rain/snow originates from the cloud layer -- structurally contain it there instead
+			// of relying only on the independent camera-altitude fade a few lines down (which
+			// fades by the CAMERA's altitude, not this voxel's, and was the real reason
+			// precipitation tint could read as leaking above the cloud deck when viewed from
+			// above it). Fades out across the cloud band itself rather than a hard cutoff, to
+			// avoid a visible seam at the boundary.
+			precipFactor *= 1.0 - smoothstep(CLOUD_LAYER_BOTTOM, CLOUD_LAYER_TOP, worldPos.y);
+
+			// Determine temperature and snow conditions:
+			// weatherType reflects normalized temperature / instability [0..1]
+			// Temperature decreases with altitude (adiabatic lapse rate: ~25C per 5000m)
+			float altitudeLapse = (max(0.0, worldPos.y) / 5000.0) * 0.25;
+			float effectiveTemp = clamp(weatherType - altitudeLapse, 0.0, 1.0);
+
+			// Snow transitions below 0.35, fully snowy below 0.20
+			float snowFraction = 1.0 - smoothstep(0.20, 0.35, effectiveTemp);
+			float rainFactor = precipFactor * (1.0 - snowFraction);
+			float snowFactor = precipFactor * snowFraction;
 
 			// Weather-dependent fog adjustments
 			float fogBase = u_fogBaseHeight;
-			float fogFalloff = u_fogHeightFalloff * mix(1.0, 0.8, clamp(weatherMoisture * 0.6 + weatherCoverage * 0.4, rainFactor, 1.0));
+			float fogFalloff = u_fogHeightFalloff * mix(1.0, 0.8, clamp(weatherMoisture * 0.6 + weatherCoverage * 0.4, precipFactor, 1.0));
 			float baseDensity =  u_fogDensity * (0.25 + 0.125 * weatherMoisture + 0.8 * weatherCoverage);
 
-			// Rain increases fog density
-			float densityMult = mix(1.0, 2.5, rainFactor);
+			// Rain increases fog density; snow blizzards and flurries increase density even further (whiteout conditions)
+			float densityMult = mix(baseDensity, mix(2.5, 3.2, snowFraction), precipFactor);
 
 			float heightDiff = max(0.0, worldPos.y - fogBase);
 
@@ -150,20 +369,10 @@ void main() {
 			float noise = 1.0;
 			if (noiseCuttoff > 0.0) {
 				noise = noiseCuttoff*dot_noise_fbm((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), 3, 0.25*uTime);
+				// noise = noiseCuttoff*dnoise((worldPos)*mix(0.0005, 0.025, 1.0-smoothstep(500, 1000, dist)), vec3(1,0,0), 0.25*uTime);
 			}
 			float density = baseDensity * densityMult * exp(-fogFalloff * heightDiff)  * clamp(0.5+0.5*(noise), 0.125, 1.0);
-			density *= (1.0 - smoothstep(4500, 10000, uCameraPosition.y));
-
-			// Rain optical properties: neutral spectral scattering
-			// Rain and moisture optical properties
-			vec3 baseScatteringCoeff = vec3(0.92, 0.95, 1.0);
-			vec3 rainScatteringCoeff = vec3(0.98, 0.99, 1.0);
-			vec3 fogScatCoeff = density * mix(baseScatteringCoeff, rainScatteringCoeff, rainFactor);
-
-			// FIX: Force ALL moisture to strictly conserve energy.
-			// Remove the arbitrary 1.8 multiplier and ensure albedo == 1.0 everywhere.
-			vec3 fogExtCoeff = fogScatCoeff;
-			float emissivity = 0.01 * density;
+			// density *= (1.0 - smoothstep(4500, 10000, uCameraPosition.y));
 
 			// Atmospheric Rayleigh and Mie scattering coefficients
 			float heightM = max(0.0, worldPos.y);
@@ -171,26 +380,66 @@ void main() {
 			vec3 rayleighScat = vec3(5.8e-6, 1.35e-5, 3.31e-5) * rayleighDensity;
 			vec3 rayleighExt = rayleighScat;
 
-			// Humidity (weatherMoisture, already sampled above for rain density/tint) boosts
-			// mie scattering/extinction -- real atmospheric haze/mist thickens with moisture.
-			// Volumetric-lighting reinterpretation of boidish's humidity-to-mie coupling: that
-			// coupling was originally scoped for aerial_perspective.glsl, which turned out to
-			// have zero callers anywhere in the pipeline (unwired scaffolding), so it's applied
-			// here instead, in the live fog system that already has the moisture sample in scope.
 			float humidityFactor = 1.0 + weatherMoisture * u_mieHumidityBoost;
 			float mieDensity = exp(-heightM / 1200.0);
 			vec3 mieScat = vec3(3.996e-6) * mieDensity * humidityFactor;
 			vec3 mieExt = vec3(3.996e-6 + 4.4e-6) * mieDensity * humidityFactor;
 
+			// Optical properties: base air haze, rain droplets, and crystalline snow
+			vec3 baseScatteringCoeff = vec3(0.92, 0.95, 1.0);
+			vec3 rainScatteringCoeff = vec3(0.98, 0.99, 1.0);
+			vec3 snowScatteringCoeff = vec3(1.0, 1.0, 1.0); // Pure white, neutral crystalline scattering
+			vec3 precipScatteringCoeff = mix(rainScatteringCoeff, snowScatteringCoeff, snowFraction);
+			vec3 fogScatCoeff = density * mix(baseScatteringCoeff, precipScatteringCoeff, precipFactor);
+
+			// Force ALL moisture to strictly conserve energy (albedo == 1.0 everywhere in air)
+			vec3 fogExtCoeff = fogScatCoeff;
+			float emissivity = 0.01 * density;
+
 			vec3 totalScatCoeff = fogScatCoeff + rayleighScat + mieScat;
 			vec3 totalExtCoeff = fogExtCoeff + rayleighExt + mieExt;
 
-			// Low sun elevation godray boost and anisotropy
-			float sunElevation = max(0.0, push.sunDir.y);
-			float lowSunFactor = 1.0 - smoothstep(0.0, 0.45, sunElevation);
-			float directSunScatteringBoost = 1.0 + lowSunFactor * 1.5;
-			float sunAnisotropyG = mix(push.sunColor.w, 0.82, lowSunFactor * 0.7);
-			float effectiveG = mix(sunAnisotropyG, 0.88, rainFactor);
+			// Low sun elevation godray boost and anisotropy -- sunElevation/lowSunFactor/
+			// sunAnisotropyG hoisted above the cascade/z loop (push.sunDir/push.sunColor-only,
+			// invariant per thread); directSunScatteringBoost still needs its own per-voxel copy
+			// since the underwater branch below conditionally overwrites it.
+			float directSunScatteringBoost = baseDirectSunScatteringBoost;
+			float rainG = mix(sunAnisotropyG, 0.88, rainFactor);
+			float effectiveG = mix(rainG, 0.72, snowFactor);
+
+			// Underwater optical transition: realistic water scattering & extinction
+			// Interpreted underwater as a diffuse, uniform fog like a fine particle cloud
+			float waterSubmersionDepth = u_waterLevel - worldPos.y;
+			float waterFactor = clamp(waterSubmersionDepth / max(0.1, u_waterBlendDepth), 0.0, 1.0);
+			float waterSunAttenuation = 1.0;
+
+			if (waterFactor > 0.0 && uCameraPosition.y < 0.0) {
+				// Base water coefficients per metre: calibrated for stable in-scatter / visibility balance
+				vec3 wScatBase = vec3(0.015, 0.035, 0.045) * u_waterScale;
+				vec3 wExtBase  = vec3(0.060, 0.020, 0.008) * u_waterScale;
+
+				// Fine uniform particle cloud: subtle low-frequency variation without turbulent air noise
+				float fineParticleMod = 0.95 + 0.05 * dot_noise(worldPos * 0.04, 0.05 * uTime);
+				vec3 waterScat = wScatBase * fineParticleMod;
+				vec3 waterExt  = wExtBase * fineParticleMod;
+
+				// Water phase function: strong forward scattering (for pointed godrays) mixed with uniform diffuse backscattering
+				float waterAnisotropyG = 0.88; // Fine suspended particulate forward scattering
+				effectiveG = mix(effectiveG, waterAnisotropyG, waterFactor);
+
+				// Water column sun attenuation down from water surface
+				if (waterSubmersionDepth > 0.0) {
+					float pathThroughWater = waterSubmersionDepth / max(0.08, push.sunDir.y);
+					waterSunAttenuation = exp(-wExtBase.g * pathThroughWater);
+				}
+
+				// Pointedly emphasize godrays underwater: forward scattering shafts
+				directSunScatteringBoost = mix(directSunScatteringBoost, 2.5, waterFactor);
+
+				totalScatCoeff = mix(totalScatCoeff, waterScat, waterFactor);
+				totalExtCoeff  = mix(totalExtCoeff, waterExt, waterFactor);
+				emissivity     = mix(emissivity, 0.0, waterFactor);
+			}
 
 			float shadowTerm = calculateVolumetricTerrainShadow(worldPos, push.sunDir.xyz, shadowMapIndex, gridTextureDim);
 
@@ -199,23 +448,21 @@ void main() {
 			float cloudTransmittance = 1.0;
 
 			if (cloudShadowIndex > 0u && cloudShadowIndex != 0xFFFFu && push.sunDir.y > 0.001) {
-				cloudShadowData = sampleCloudShadow(cloudShadowIndex, clipmapIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
+				cloudShadowData = sampleCloudShadow(cloudShadowIndex, worldPos, push.sunDir.xyz, push.cameraPos.xyz, 320000.0);
 				// Emphasize cloud shadow contrast
 				cloudTransmittance = pow(clamp(cloudShadowData.a, 0.0, 1.0), 1.8);
 				shadowTerm *= cloudTransmittance;
 			}
 
-			// --- 2. DIRECT SUN SCATTERING ---
-			float cosTheta = dot(viewRayDir, push.sunDir.xyz);
-			float rayleighPhase = (3.0 / (16.0 * PI)) * (1.0 + cosTheta * cosTheta);
-
+			// --- 2. DIRECT SUN SCATTERING --- (cosTheta hoisted above the cascade/z loop --
+			// viewRayDir/sunDir-only, invariant per thread)
 			float miePhase = dualHenyeyGreenstein(cosTheta, effectiveG);
 			float msPhase = dualHenyeyGreenstein(cosTheta, effectiveG * 0.15);
-			float msWeight = clamp(weatherMoisture * 1.5 + rainFactor, 0.15, 1.5);
+			float msWeight = clamp(weatherMoisture * 1.5 + rainFactor + snowFactor * 1.8, 0.15, 2.2);
 			float finalMiePhase = miePhase + (msPhase * msWeight);
 
-			vec3 sunScat = push.sunColor.rgb * push.sunDir.w * shadowTerm * directSunScatteringBoost;
-			vec3 directSun = (fogScatCoeff * finalMiePhase + rayleighScat * rayleighPhase + mieScat * finalMiePhase) * sunScat;
+			vec3 sunScat = push.sunColor.rgb * push.sunDir.w * shadowTerm * directSunScatteringBoost * waterSunAttenuation;
+			vec3 directSun = (totalScatCoeff * finalMiePhase) * sunScat;
 
 			// --- 3. CLOUD IRRADIANCE & SKY AMBIENT ---
 			vec3 skyAmbient = vec3(0.20, 0.35, 0.55) * max(0.2, push.sunDir.y) + vec3(0.05, 0.08, 0.12);
@@ -235,14 +482,16 @@ void main() {
 			vec3 cloudTint = push.sunColor.rgb * push.sunDir.w * max(0.0, push.sunDir.y);
 			skyAmbient += cloudTint * (diffusedTransmittance * powder) * 0.6;
 
-			float ambientMSBoost = 1.0 + clamp(weatherMoisture + rainFactor * 1.2, 0.0, 1.5);
+			float ambientMSBoost = 1.0 + clamp(weatherMoisture + rainFactor * 1.2 + snowFactor * 1.8, 0.0, 2.0);
 			skyAmbient *= ambientMSBoost;
 			vec3 ambientScat = (fogScatCoeff + mieScat) * skyAmbient + (rayleighScat * length(skyAmbient));
 
 			// --- 4. UPWELLING GROUND BOUNCE ---
 			// Sun hits the terrain and bounces back UP into the fog.
 			// When looking down from the air, this creates highly-visible forward scattering.
-			vec3 averageTerrainAlbedo = vec3(0.18, 0.16, 0.12);
+			// Snowy ground has significantly higher albedo than bare earth / moist vegetation.
+			float groundSnowFactor = clamp(snowFraction * 1.2 + (1.0 - smoothstep(0.15, 0.35, effectiveTemp)), 0.0, 1.0);
+			vec3 averageTerrainAlbedo = mix(vec3(0.18, 0.16, 0.12), vec3(0.85, 0.88, 0.92), groundSnowFactor);
 			vec3 upwellingEnergy = push.sunColor.rgb * push.sunDir.w * max(0.0, push.sunDir.y) * shadowTerm * averageTerrainAlbedo;
 
 			// The light source is the ground (Vector to light points straight DOWN)
@@ -252,35 +501,62 @@ void main() {
 			vec3 groundBounceScat = (fogScatCoeff + mieScat) * upwellingEnergy * upwellingPhase;
 
 			// --- 5. LOCAL LIGHTS & INTEGRATION ---
+			// Cluster-grid lookup (shaders/effects/cluster_light_assignment.comp's output)
+			// instead of a flat 4-CPU/28-GPU scan of the whole light buffer -- that cap meant
+			// fog could only ever see the first 28 GPU lights by buffer index, regardless of
+			// whether they were anywhere near this froxel, so most of the 512-light GPU budget
+			// (fireflies, lightning) was simply invisible to volumetric fog. Mirrors
+			// clustered_lighting.glsl's evaluateClusteredLightContributionPBR exactly: the local
+			// cluster for this sample's own position, plus the global bucket (uClusters[3456])
+			// for large-radius lights that don't fit per-cluster binning -- lightning's flash
+			// lights are exactly this case (radius >> cluster_light_assignment.comp's 500m
+			// global-bucket threshold), so skipping the global bucket here would have made this
+			// still invisible to fog for the one case that most motivated the change.
+			uint    clusterIndex = getClusterIndex(worldPos);
+			Cluster localCluster = uClusters[clusterIndex];
+			Cluster globalCluster = uClusters[3456];
+
 			vec3 localLightScattering = vec3(0.0);
-			uint maxLightsToSample = min(uLightCount, 32u);
-			for (uint li = 0u; li < maxLightsToSample; ++li) {
-				if (uLights[li].intensity <= 0.0) continue;
-				if (uLights[li].type == LIGHT_TYPE_DIRECTIONAL) continue;
-
-				vec3 lightPos = uLights[li].position;
-				if ((uLights[li].flags & LIGHT_FLAG_CAMERA_RELATIVE) != 0) {
-					lightPos += push.cameraPos.xyz;
-				}
-
-				vec3 L;
-				float attenuation;
-				calculateLightContribution(
-					uLights[li].type, lightPos, uLights[li].direction, uLights[li].innerCutoff,
-					uLights[li].outerCutoff, uLights[li].intensity, worldPos, L, attenuation
+			for (uint li = 0u; li < localCluster.cpuCount; ++li) {
+				uint lightIndex = localCluster.cpuLightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
 				);
-
-				if (attenuation <= 0.0) continue;
-
-				float cosL = dot(viewRayDir, L);
-				float localPhase = dualHenyeyGreenstein(cosL, effectiveG);
-				localLightScattering += uLights[li].color * uLights[li].intensity * attenuation * localPhase;
+			}
+			for (uint li = 0u; li < globalCluster.cpuCount; ++li) {
+				uint lightIndex = globalCluster.cpuLightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uCpuLightsBuffers[nonuniformEXT(cpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
+				);
+			}
+			for (uint li = 0u; li < localCluster.count; ++li) {
+				uint lightIndex = localCluster.lightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
+				);
+			}
+			for (uint li = 0u; li < globalCluster.count; ++li) {
+				uint lightIndex = globalCluster.lightIndices[li];
+				localLightScattering += evaluateLocalLightScattering(
+					uGpuLightsBuffers[nonuniformEXT(gpuLightsIndex)].lights[lightIndex], worldPos, viewRayDir, effectiveG
+				);
 			}
 
 			// Add the groundBounceScat to the final cell energy
 			vec3 cellScattering = directSun + ambientScat + groundBounceScat + localLightScattering + vec3(emissivity);//*vec3(0,100000,0);
 
-			vec3 sliceTransmittance = exp(-totalExtCoeff * voxelSizeZ);
+			// Smoothly fade this voxel's own contribution over whatever fraction of its span is
+			// still before opaqueDist, instead of letting the hard columnOpaque cutoff above
+			// apply all-or-nothing at voxel granularity -- the boundary voxel straddling the
+			// terrain hit otherwise either contributes its full width or (next iteration) gets
+			// discarded entirely, either way a hard, visibly black edge once exponential Z-
+			// sizing makes that voxel wide. Self-scales with voxel width, so this is always
+			// "fade over this one voxel," not a fixed-distance fade that's invisible near the
+			// camera and huge far away.
+			float visibleFraction = clamp((opaqueDist - distNear) / voxelSizeZ, 0.0, 1.0);
+			float effectiveVoxelSizeZ = voxelSizeZ * visibleFraction;
+
+			vec3 sliceTransmittance = exp(-totalExtCoeff * effectiveVoxelSizeZ);
 			vec3 integratedScattering = cellScattering * (vec3(1.0) - sliceTransmittance) / max(vec3(1e-7), totalExtCoeff);
 
 			accumulatedScattering += integratedScattering * accumulatedTransmittance;

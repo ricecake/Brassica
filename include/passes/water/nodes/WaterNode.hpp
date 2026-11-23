@@ -14,6 +14,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -46,18 +47,16 @@ namespace brassica {
 		std::uint32_t minMaxIndex{0};
 		std::uint32_t gMaterialIndex{0};
 		std::uint32_t skyViewIndex{0};
+		std::uint32_t cpuLightsIndex{0};
+		std::uint32_t gpuLightsIndex{0};
 	};
 
 	// Authored fresh, not ported from anything -- the acceptance test for the whole Node/Pass
 	// unification: no descriptor set, no pipeline layout boilerplate, no positional
 	// pipeline-creation call. Just a resource contract, a phase, a pipeline-state literal, and
 	// two shaders.
-	//
-	// The first real consumer of GraphicsPipelineState::enableBlend outside a synthetic test --
-	// everything ported before this (Gradient/Deferred/Terrain) opaquely overwrites its target,
-	// so this is what actually proves the blend-state plumbing works for something real.
 	struct WaterNode: render::NodeRegistrar<WaterNode> {
-		// S4: no kPhase -- After<VolumetricRenderNode>()/Before<CirrusNode>() (below) place it in
+		// S4: no kPhase -- After<DeferredNode>()/Before<CirrusNode>() (below) place it in
 		// the HdrColor writer chain as real edges instead. (The old SubPhase::WaterRender's own
 		// history -- fixing a prior collision with ParticleSystemNode's Phase::Late -- is moot now
 		// that ordering doesn't come from a phase number at all.)
@@ -125,18 +124,23 @@ namespace brassica {
 		// Read<>, not Modify<> -- despite depthTest=true, this node never writes depth, so it's
 		// not a writer-pairwise participant on any GBuffer key at all.
 		//
-		// After<VolumetricRenderNode>()/Before<CirrusNode>() (S4) close the two gaps in the
-		// HdrColor writer chain that previously relied on phase-int ordering alone -- see
-		// VolumetricRenderNode.hpp's identical comment.
+		// After<DeferredNode>()/Before<CirrusNode>() (S4) close the two gaps in the HdrColor
+		// writer chain that previously relied on phase-int ordering alone.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<GBufferPosition>();
 			r.Read<GBufferAlbedo>();
 			r.Read<GBufferNormal>();
 			r.Read<GBufferMaterial>();
-			r.Read<GBufferDepth>();
+			// AsAttachment(): this node's kPipelineState.depthTest=true means it genuinely
+			// depth-tests against GBufferDepth -- without binding it as a real (read-only)
+			// depth attachment, that test had nothing to test against (see
+			// ResourceRealization::asAttachment's comment for the bug this fixes).
+			r.Read<GBufferDepth>().AsAttachment();
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<SkyViewLUT>();
+			r.Read<CpuLightsBuffer>();
+			r.Read<GpuLightsBuffer>();
 			r.Modify<HdrColor>();
 			r.After<DeferredNode>();
 			r.Before<CirrusNode>();
@@ -150,6 +154,8 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.gMaterialIndex = ctx.Index<GBufferMaterial>();
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
+			push.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>();
+			push.gpuLightsIndex = ctx.BufferIndex<GpuLightsBuffer>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 1>      colorFormats{vk::Format::eR16G16B16A16Sfloat};
@@ -162,7 +168,7 @@ namespace brassica {
                 push,
                 vk::ShaderStageFlagBits::eTaskEXT | vk::ShaderStageFlagBits::eMeshEXT |
                     vk::ShaderStageFlagBits::eFragment,
-                vk::Format::eD32Sfloat
+                vk::Format::eD32SfloatS8Uint
             );
 			if (!resolved.pipeline) {
 				return;

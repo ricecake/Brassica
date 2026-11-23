@@ -24,7 +24,8 @@ layout(push_constant) uniform ClimateCAPushConstants {
 	uint textureDim;            // Texture grid dimension (e.g. 2048)
 	uint cellOffset;            // Row offset for partial update
 	uint cellsPerUpdate;        // Number of rows in partial update
-	uint pad;
+	uint cpuLightsIndex;        // Bindless index into CpuLightsBuffer -- sun direction only
+	float deltaTime;            // Real per-frame delta (TerrainBiomeNode::SetFrameParams)
 } push;
 
 struct Cell1 {
@@ -45,9 +46,9 @@ struct Cell2 {
 const float MAX_TEMP = 35.0;        // Celsius at Equator sea-level
 const float MIN_TEMP = -20.0;       // Celsius at Pole
 const float LAPSE_RATE = 25.0;      // Temp drop per 1.0 elevation unit
-const float CONDENSATION_RATE = 0.05;
+const float CONDENSATION_RATE = 0.125;
 const float DIFFUSION_RATE = 0.15;   // How fast groundwater spreads
-const float BASE_EVAPORATION = 0.025;
+const float BASE_EVAPORATION = 0.0125;
 
 void main() {
 	ivec2 pos = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + push.cellOffset);
@@ -67,14 +68,39 @@ void main() {
 
 	// 1. LATITUDE & TEMPERATURE
 	float lat = (float(pos.y) / float(dim)) * 2.0 - 1.0;
-	vec3 lightDir = normalize(-uLights[0].direction);
+	vec3 lightDir = normalize(-uCpuLightsBuffers[nonuniformEXT(push.cpuLightsIndex)].lights[0].direction);
 	float dayFactor = dot(lightDir, vec3(0, 1, 0));
 	float tempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(lat)) - (me1.elevation * LAPSE_RATE);
 
 	// 2. POSITIONAL WIND VECTOR -- shared helpers/wind.glsl model, so the CA's own advection and
 	// the visual flow derived from it below agree instead of each inventing its own circulation.
-	vec2  prevailingWind = getPrevailingWind(lat);
-	ivec2 windDir = getDiscretizedWindOffset(prevailingWind, vec3(pos.x, 0.0, pos.y), uTime);
+// 2. POSITIONAL WIND VECTOR
+	vec2 prevailingWind = getPrevailingWind(lat);
+
+	// Create a slow-moving, large-scale noise vector to act as high/low pressure systems
+	vec2 stormOffset = vec2(uTime * 0.002, uTime * 0.001);
+	float pNoiseX = dot_noise_fbm(vec3(pos.x, pos.y, 0.0) * 0.004 + vec3(stormOffset, 0.0), 2, 0.0);
+	float pNoiseY = dot_noise_fbm(vec3(pos.x + 500.0, pos.y - 500.0, 0.0) * 0.004 + vec3(stormOffset, 0.0), 2, 0.0);
+	vec2 pressureDeflection = vec2(pNoiseX * 2.0 - 1.0, pNoiseY * 2.0 - 1.0);
+
+	// A third sample at the same storm-scale frequency/drift as the two above, but a different
+	// spatial offset so it isn't correlated with wind direction -- used below as a large-scale,
+	// slowly-moving bias on cloud coverage (low pressure -> more coverage, high pressure ->
+	// less), so whole regions can swing toward genuinely clear or overcast instead of coverage
+	// only ever varying pixel-to-pixel within a fairly narrow band. dot_noise_fbm's output is
+	// already roughly zero-mean (unlike pNoiseX/Y above, this is used directly, not remapped as
+	// if it were [0,1]). Visual coverage derivation only -- never read back into the CA's own
+	// physical state (airMoisture/rain/etc.), so it has no knock-on effect on biomes or
+	// vegetation.
+	float pressureAnomaly = dot_noise_fbm(vec3(pos.x + 1000.0, pos.y + 1000.0, 0.0) * 0.004 + vec3(stormOffset, 0.0), 2, 0.0);
+
+	// Blend prevailing wind with the pressure systems (adjust 0.6 / 0.4 mix to tune the "swirliness")
+	vec2 dynamicWind = prevailingWind * 0.6 + pressureDeflection * 0.4;
+
+	// Keep the original wind magnitude to preserve your advection pacing
+	dynamicWind = normalize(dynamicWind) * max(length(prevailingWind), 0.1);
+
+	ivec2 windDir = getDiscretizedWindOffset(dynamicWind, vec3(pos.x, 0.0, pos.y), uTime);
 
 	// 3. ADVECTION, GROUND WATER LEVEL & CONDENSATION
 	ivec2 upwindPos = pos - windDir;
@@ -83,8 +109,13 @@ void main() {
 	vec4 upwind1Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx1)], wrappedUpwind);
 	float incomingAir = upwind1Data.g;
 
+	float upwindLat = (float(wrappedUpwind.y) / float(dim)) * 2.0 - 1.0;
+	// Calculate the temperature of the air blowing into this cell
+	float upwindTempC = 10.0 * dayFactor + mix(MAX_TEMP, MIN_TEMP, abs(upwindLat)) - (upwind1Data.r * LAPSE_RATE);
+
 	if (upwind1Data.r <= 0.02 || me1.elevation <= 0.02) {
-		incomingAir = max(incomingAir, 0.85);
+		upwindTempC = min(upwindTempC, abs(upwindTempC - tempC)/2);
+		incomingAir = max(incomingAir, mix(0.1, 0.5, smoothstep(5.0, 40.0, upwindTempC)));
 	}
 
 	// Evaporation boost from closeness of groundwater level to elevation (shallow water table)
@@ -95,14 +126,22 @@ void main() {
 
 	float elevationDelta = me1.elevation - upwind1Data.r;
 
+	// Frontal Lift: Positive if cold air is moving into warm air (a cold front)
+	// Cold air acts like a wedge, lifting warm, moist air and forcing condensation
+	float frontalLift = max(0.0, tempC - upwindTempC);
+
 	// Aerosol CCN effect increases condensation / rain likelihood for a given air moisture
 	float ccnBoost = 1.0 + clamp(me2.aerosol, 0.0, 2.0) * 1.5;
 
 	float rain = 0.0;
 	if (elevationDelta > 0.0) {
-		rain = min(incomingAir, pow(elevationDelta, 1.2) * CONDENSATION_RATE * ccnBoost);
+		// Orographic (terrain) lift
+		rain = min(incomingAir, pow(elevationDelta, 1.4) * CONDENSATION_RATE * ccnBoost);
+	} else if (frontalLift > 1.5) {
+		// Frontal lift: Sharp temp drop squeezes moisture out into a storm band
+		rain = min(incomingAir, frontalLift * 0.04 * ccnBoost);
 	} else if (incomingAir > 0.6) {
-		// Convective condensation from high humidity & aerosol
+		// Convective (ambient humidity) condensation
 		rain = (incomingAir - 0.6) * 0.15 * ccnBoost;
 	}
 
@@ -234,7 +273,18 @@ void main() {
 	// -------------------------------------------------------------
 
 	// 1. Calculate the stable macro-climate coverage probability
-	float baseCoverage = clamp(next1.airMoisture * 0.8 + rain * 2.0, 0.0, 1.0);
+	float frontCoverageBoost = smoothstep(1.0, 3.5, frontalLift) * 0.4;
+	// pressureAnomaly (computed above, alongside the wind deflection noise) biases this
+	// regionally and over time -- without it, baseCoverage is driven almost entirely by
+	// airMoisture/rain, which rarely swing far enough to produce a genuinely clear or overcast
+	// sky; this is what lets a passing high- or low-pressure system actually do that.
+	const float kPressureCoverageInfluence = 0.5;
+	float baseCoverage = clamp(
+		next1.airMoisture * 0.8 + rain * 2.0 + frontCoverageBoost + pressureAnomaly * kPressureCoverageInfluence,
+		0.0,
+		1.0
+	);
+	// Boost macro-climate cloud coverage heavily along active weather fronts
 
 	// 2. Flowing coordinates, using the same prevailingWind computed above for the CA's own
 	// advection -- previously recomputed an entire second hadley/ferrel/polar blend here that
@@ -253,8 +303,16 @@ void main() {
 	// Thresholding noise against a coverage-dependent cutoff with a soft margin graduates the
 	// edge instead; the detail noise perturbs the cutoff itself for a wispier, less uniform
 	// boundary rather than a perfectly smooth one.
-	const float kCoverageSoftness = 1.0;
-	float coverageThreshold = mix(1.0, -1.0, baseCoverage);
+	//
+	// kCoverageSoftness was 1.0 -- close to double texturedNoise's actual standard deviation
+	// (measured ~0.6 via a CPU replica of this exact fbm, for both cloudNoise+detailNoise*0.3's
+	// real octave/domain-warp structure, not guessed). At that width the smoothstep's input
+	// range nearly spans the noise's whole plausible range for almost any baseCoverage, so
+	// cloudCoverage almost never actually saturates to 0 or 1 -- it just graduates, which read as
+	// a sky that's always "partly cloudy" and never genuinely clear or overcast. Narrowed to
+	// roughly that measured sigma so the noise's own spread can carry a cell past either edge.
+	const float kCoverageSoftness = 0.5;
+	float coverageThreshold = mix(1.0, 0.0, baseCoverage);
 	float texturedNoise = cloudNoise + detailNoise * 0.3;
 	float cloudCoverage = smoothstep(
 		coverageThreshold - kCoverageSoftness,
@@ -262,41 +320,130 @@ void main() {
 		texturedNoise
 	);
 
-	float weatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0);
+	// Base weather type dictated by general temperature
+	float baseWeatherType = clamp((tempC + 20.0) / 55.0, 0.0, 1.0);
+
+	// Override weather type to intense/convective if caught in an active cold front that is raining
+	float activeFrontIntensity = smoothstep(1.5, 4.0, frontalLift) * (rain > 0.01 ? 1.0 : 0.0);
+
+	float weatherType = mix(baseWeatherType, 1.0, activeFrontIntensity);
 	float moistureContent = clamp(next1.groundwater, 0.0, 1.0);
-	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC), 0.0, 1.0);
+	float lightningPropensity = clamp(cloudCoverage * smoothstep(20.0, 35.0, tempC) + activeFrontIntensity * 0.125, 0.0, 1.0);
 
 	// Lightning trigger (shaders/lighting.glsl's LightningStrikePool). Cloud-to-cloud strikes
-	// only for v1: both endpoints stay within the cloud shell (5000-20000m, matching
-	// cloud_render.frag's intersectCloudShell call) rather than needing a ground endpoint --
-	// this CA's own `elevation` is an abstract [0,1] climate-simulation quantity with no
-	// verified conversion to the terrain mesh's actual world-space height, so a ground strike
-	// would need a real height source this cell doesn't have.
+	// keep both endpoints inside the cloud shell (5000-20000m, matching cloud_render.frag's
+	// intersectCloudShell call); cloud-to-ground strikes get a real ground endpoint, but this
+	// CA's own `elevation` is an abstract [0,1] climate-simulation quantity with no verified
+	// conversion to the terrain mesh's actual world-space height, so this cell can't resolve it
+	// itself -- it writes a placeholder endPos.y and LIGHTNING_FLAG_PENDING_GROUND, and
+	// lightning_age.comp (which does have a real height source, terrain/generation.glsl) fills
+	// in the real height before anything renders.
+	//
+	// Rate derivation (this is what made lightning read as "always firing"): the old chance was
+	// a flat per-cell-per-visit 0.0005 with no camera gating, and this partial-update dispatch
+	// visits ~textureDim*cellsPerUpdate cells (~1M) every single frame -- tens to hundreds of
+	// expected strikes per frame, cycling the 32-slot ring so fast every slot was always lit.
+	// Fixed two ways: (1) only cells within lightningSpawnRadius of the camera can trigger at
+	// all; (2) the per-visit chance is derived from a target strikes-per-km^2-per-second rate
+	// instead of a flat per-cell constant, so the *total* expected rate over the gated area is
+	// independent of cellAreaM2/sweepFrames/deltaTime (they're only here to convert that target
+	// rate into "how likely is THIS cell's THIS visit" -- see the cancellation: strikes/sec =
+	// circleArea * stormFactor * frequencyScale * kBaseStrikesPerM2PerSec, which is what
+	// kBaseStrikesPerM2PerSec below was picked to make come out to roughly one strike every few
+	// seconds under a full nearby storm (stormFactor~1, frequencyScale=1) -- a guess to tune
+	// against the real thing on hardware, not a measured constant.
 	{
-		uint strikeSeed =
-			hashUint(uint(pos.x) * 73856093u ^ uint(pos.y) * 19349663u ^ uFrameIndex * 83492791u);
-		float strikeRoll = pcg_hash(strikeSeed);
-		// No per-frame deltaTime is threaded into this shader -- the partial-row-band dispatch
-		// (full map every 4 frames) already paces this naturally, so this is a flat per-cell-
-		// per-dispatch chance rather than a deltaTime-scaled rate.
-		float strikeChance = lightningPropensity * u_lightningFrequencyScale * 0.0005;
-		if (strikeRoll < strikeChance) {
-			uint slot = atomicAdd(uStrikeRingCounter, 1u) % LIGHTNING_MAX_STRIKES;
+		vec2  worldExtentXZ = vec2(2.0 * FAKE_PLANET_RADIUS * PI);
+		vec2  cellUV = (vec2(pos) + 0.5) / float(dim);
+		vec2  worldXZ = (cellUV - 0.5) * worldExtentXZ;
+		float distFromCam = length(worldXZ - uCameraPosition.xz);
 
-			vec2 worldExtentXZ = vec2(2.0 * FAKE_PLANET_RADIUS * PI);
-			vec2 cellUV = (vec2(pos) + 0.5) / float(dim);
-			vec2 worldXZ = (cellUV - 0.5) * worldExtentXZ;
+		if (distFromCam <= u_lightningSpawnRadius) {
+			uint strikeSeed =
+				hashUint(uint(pos.x) * 73856093u ^ uint(pos.y) * 19349663u ^ uFrameIndex * 83492791u);
+			float strikeRoll = pcg_hash(strikeSeed);
 
-			float originSeed = pcg_hash(strikeSeed ^ 0x9E3779B9u);
-			vec2  endOffset =
-				(vec2(pcg_hash(strikeSeed ^ 0x1u), pcg_hash(strikeSeed ^ 0x2u)) * 2.0 - 1.0) * 400.0;
-			float lifetimeRoll = pcg_hash(strikeSeed ^ 0x3u);
-			float strikeMaxLifetime = mix(0.2, 0.5, lifetimeRoll);
+			float stormFactor = u_lightningIgnoreWeather != 0u
+				? 1.0
+				: smoothstep(u_lightningStormThreshold, 1.0, lightningPropensity);
 
-			uStrikes[slot].originAndSeed = vec4(worldXZ.x, 8000.0, worldXZ.y, originSeed);
-			uStrikes[slot].endPos = vec4(worldXZ.x + endOffset.x, 11000.0, worldXZ.y + endOffset.y, 0.0);
-			uStrikes[slot].lifetime = strikeMaxLifetime;
-			uStrikes[slot].maxLifetime = strikeMaxLifetime;
+			const float kBaseStrikesPerM2PerSec = 2.0e-11; // ~2.0e-5 per km^2 per sec
+			float       cellSize = worldExtentXZ.x / float(dim);
+			float       cellAreaM2 = cellSize * cellSize;
+			float       sweepFrames = float(push.textureDim) / float(push.cellsPerUpdate);
+
+			float strikeChance = stormFactor * u_lightningFrequencyScale * kBaseStrikesPerM2PerSec *
+				cellAreaM2 * push.deltaTime * sweepFrames;
+
+			if (strikeRoll < strikeChance) {
+				uint slot = atomicAdd(uStrikeRingCounter, 1u) % LIGHTNING_MAX_STRIKES;
+
+				// Don't clobber a strike that's still visibly alive -- let it finish instead of
+				// snapping an existing flash to a brand new position.
+				if (uStrikes[slot].lifetime <= 0.0) {
+					float originSeed = pcg_hash(strikeSeed ^ 0x9E3779B9u);
+					// Jitter within the cell instead of always sitting exactly on its centre --
+					// otherwise every strike visibly snaps to the coverage texture's ~1.8km grid.
+					vec2 cellJitter =
+						(vec2(pcg_hash(strikeSeed ^ 0x4u), pcg_hash(strikeSeed ^ 0x5u)) - 0.5) * cellSize;
+					vec2 origin = worldXZ + cellJitter;
+
+					bool isGround = pcg_hash(strikeSeed ^ 0x6u) < u_lightningGroundStrikeChance;
+
+					float lifetimeRoll = pcg_hash(strikeSeed ^ 0x3u);
+					// Cloud-to-ground is a quick, sharp flash; cloud-to-cloud lingers and
+					// flickers longer -- boidish's own two lifetime ranges for these cases.
+					float strikeMaxLifetime =
+						(isGround ? mix(0.2, 0.5, lifetimeRoll) : mix(0.8, 1.5, lifetimeRoll)) *
+						u_lightningLifetimeScale;
+
+					uint  flags = 0u;
+					float originY;
+					vec3  endPos;
+					if (isGround) {
+						flags = LIGHTNING_FLAG_GROUND | LIGHTNING_FLAG_PENDING_GROUND;
+						// Cloud base, not the shell's upper reaches -- a ground strike starts
+						// low in the cloud, closer to where it's actually descending from.
+						originY = mix(5000.0, 7000.0, pcg_hash(strikeSeed ^ 0x7u));
+						// Ground XZ offset is wider than cloud-to-cloud's -- a longer vertical
+						// drop gives more room for horizontal drift before it hits the ground.
+						// endPos.y is a placeholder (LIGHTNING_FLAG_PENDING_GROUND) until
+						// lightning_age.comp resolves the real terrain height below.
+						vec2 groundOffset =
+							(vec2(pcg_hash(strikeSeed ^ 0x1u), pcg_hash(strikeSeed ^ 0x2u)) * 2.0 - 1.0) * 800.0;
+						endPos = vec3(origin.x + groundOffset.x, 0.0, origin.y + groundOffset.y);
+					} else {
+						originY = 8000.0;
+						vec2 endOffset =
+							(vec2(pcg_hash(strikeSeed ^ 0x1u), pcg_hash(strikeSeed ^ 0x2u)) * 2.0 - 1.0) * 400.0;
+						endPos = vec3(origin.x + endOffset.x, 11000.0, origin.y + endOffset.y);
+					}
+
+					// Color variety: folk-meteorology color associations, not a physically
+					// modeled effect. Blend the base color toward a humid violet (wet air/rain)
+					// and a dusty amber (dust/smoke aerosol), then jitter brightness per-channel
+					// so strikes don't all look identical even under the same weather --
+					// jittering brightness instead of blending toward literal random noise
+					// keeps the result looking like lightning instead of static.
+					float humidFactor = clamp(next1.airMoisture + rain, 0.0, 1.0);
+					float dustyFactor = clamp(next2.aerosol, 0.0, 1.0);
+					vec3  strikeColor = mix(u_lightningBaseColor, u_lightningHumidColor, humidFactor);
+					strikeColor = mix(strikeColor, u_lightningDustyColor, dustyFactor);
+
+					vec3 brightnessJitter = (vec3(
+						pcg_hash(strikeSeed ^ 0x8u), pcg_hash(strikeSeed ^ 0x9u), pcg_hash(strikeSeed ^ 0xAu)
+					) - 0.5) * 2.0; // -1..1 per channel
+					strikeColor = clamp(strikeColor * (1.0 + brightnessJitter * u_lightningColorVariance * 0.3), 0.0, 2.0);
+
+					float peak = mix(0.7, 1.3, pcg_hash(strikeSeed ^ 0xBu));
+					uStrikes[slot].colorAndPeak = vec4(strikeColor, peak);
+					uStrikes[slot].originAndSeed = vec4(origin.x, originY, origin.y, originSeed);
+					uStrikes[slot].endPos = vec4(endPos, 0.0);
+					uStrikes[slot].lifetime = strikeMaxLifetime;
+					uStrikes[slot].maxLifetime = strikeMaxLifetime;
+					uStrikes[slot].flags = flags;
+				}
+			}
 		}
 	}
 

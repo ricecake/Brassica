@@ -9,14 +9,28 @@ const uint UNBOUND_TEXTURE_ID = 0xFFFFFFFFu;
  * @brief GLSL MaterialData matching std430 C++ MaterialData struct layout.
  */
 struct MaterialData {
-	uvec4 texture_ids;        // x: albedo, y: normal, z: occlusion/roughness/metallic, w: emission
-	vec4  color_tint_offset;  // x: color tint offset, y: roughness, z: metallic, w: emission strength
-	uint  shading_bitmask;    // shading control flow bitmask
-	vec4  uv_scale_offset;    // xy: uv scale, zw: uv offset
-	vec4  palette[4];         // four vec3s for cosine color palette
-	vec4  base_color_factor;  // RGBA base-color multiply (glTF baseColorFactor) -- see MaterialData.hpp
-	vec4  emissive_factor;    // RGB emissive multiply (glTF emissiveFactor) -- see MaterialData.hpp
+	uvec4 texture_ids;         // x: albedo, y: normal, z: occlusion/roughness/metallic, w: emission
+	vec4  color_tint_offset;   // x: color tint offset, y: roughness, z: metallic, w: emission strength
+	uint  material_role;       // procedural shading role; see MATERIAL_ROLE_* below
+	float noise_scale;         // world-space noise frequency multiplier for the role's noise fn
+	float noise_warp;          // domain-warp strength applied before the role's noise fn evaluates
+	float noise_sharpness;     // cell/edge crispness produced by the role's noise fn
+	vec4  uv_scale_offset;     // xy: uv scale, zw: uv offset
+	vec4  palette[4];          // four vec3s for cosine color palette
+	vec4  base_color_factor;   // RGBA base-color multiply (glTF baseColorFactor) -- see MaterialData.hpp
+	vec4  emissive_factor;     // RGB emissive multiply (glTF emissiveFactor) -- see MaterialData.hpp
+	vec4  procedural_shading;  // x: macro/procedural normal blend strength; yzw: role-specific tuning
 };
+
+// Mirrors brassica::MaterialRole (MaterialData.hpp). Standard (0) must stay the default so every
+// already-registered material (glTF imports, bark/rock/flower/etc.) renders through the
+// untouched PBR path unless explicitly opted into a procedural role.
+const uint MATERIAL_ROLE_STANDARD = 0u;
+const uint MATERIAL_ROLE_PROCEDURAL_LEAF = 1u;
+const uint MATERIAL_ROLE_PROCEDURAL_BARK = 2u;
+const uint MATERIAL_ROLE_PROCEDURAL_ROCK = 3u;
+const uint MATERIAL_ROLE_PROCEDURAL_NEEDLE = 4u;
+const uint MATERIAL_ROLE_PROCEDURAL_CACTUS = 5u;
 
 // Binding 6: the generic bindless storage-buffer catalog (PhysicalRegistry::
 // AssignAndWriteBindlessBufferIndex, storageBufferBinding) -- every buffer with eStorageBuffer

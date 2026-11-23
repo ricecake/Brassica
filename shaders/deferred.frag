@@ -16,7 +16,6 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  gAlbedoIndex;
 	uint  backgroundIndex;
 	uint  clipmapIndex;
-	uint  tlasIndex;
 	uint  gDepthIndex;
 	uint  minMaxIndex;
 	uint  biomeIndex;
@@ -28,6 +27,9 @@ layout(push_constant) uniform DeferredPushConstants {
 	uint  debugVisualizeGTAO;
 	uint  cloudShadowIndex;
 	uint  shadowMapIndex;
+	uint  cpuLightsIndex;
+	uint  gpuLightsIndex;
+	uint  decorTlasIndex;
 }
 
 params;
@@ -91,6 +93,32 @@ bool checkTerrainAABBIntersection(vec3 rayOrigin, vec3 rayDir, float camDistToSh
 	return false;
 }
 
+// Decor (trees/bushes/rocks) shadow occlusion test against DecorTLAS -- model-shadows Stage 3,
+// this engine's first real rayQuery consumer. Occlusion-only (no any-hit shader, no distance
+// needed): every BLAS geometry in DecorTLAS is built eOpaque (DecorAccelerationStructure.cpp),
+// so gl_RayFlagsOpaqueEXT lets every candidate auto-commit with no app-side confirmation loop
+// body needed, same as gl_RayFlagsTerminateOnFirstHitEXT short-circuiting traversal on the first
+// one. Returns 1.0 (unoccluded) or 0.0 (occluded) -- a hard shadow for this stage; no penumbra
+// softening yet, unlike terrain's raySoftShadow.
+float evaluateDecorShadow(vec3 rayOrigin, vec3 rayDir, uint tlasIndex) {
+	rayQueryEXT rq;
+	rayQueryInitializeEXT(
+		rq,
+		uTLAS[nonuniformEXT(tlasIndex)],
+		gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+		0xFF,
+		rayOrigin,
+		0.01,
+		rayDir,
+		10000.0
+	);
+
+	while (rayQueryProceedEXT(rq)) {
+	}
+
+	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+}
+
 void main() {
 	vec4  albedo = SAMPLE_NEAREST(params.gAlbedoIndex, inUV);
 	vec4  normalSample = SAMPLE_NEAREST(params.gNormalIndex, inUV);
@@ -136,10 +164,13 @@ void main() {
 			inUV,
 			params.aoDirectInfluence,
 			params.minMaxIndex,
-			params.gridParams
+			params.gridParams,
+			params.cpuLightsIndex,
+			params.gpuLightsIndex
 		).color;
 
-		if (uLights[0].intensity > 0.0) {
+		Light sunLight = uCpuLightsBuffers[nonuniformEXT(params.cpuLightsIndex)].lights[0];
+		if (sunLight.intensity > 0.0) {
 			TerrainOcclusionContext occCtx = makeTerrainOcclusionContext(
 				params.minMaxIndex,
 				params.gridParams.w,
@@ -147,7 +178,7 @@ void main() {
 				0.0
 			);
 
-			vec3 lightDir = normalize(-uLights[0].direction);
+			vec3 lightDir = normalize(-sunLight.direction);
 
 			// Sample smooth geometric terrain clipmap normal for coherent origin biasing and light angle evaluation
 			vec3 geoNorm = norm;
@@ -184,14 +215,21 @@ void main() {
 
 				// Combine ray soft shadow with facing-away grazing angle transition for continuous C0 soft shadow
 				shadowMask = min(raySoftShadow, softNdotL);
+
+				// Decor (trees/bushes/rocks) occlusion -- independent hard-shadow term, combined
+				// the same way raySoftShadow/softNdotL already are (min(), not cloud's
+				// multiplicative blend: these are all "the darkest occluder wins" terms, not
+				// stacked semi-transparent attenuation layers).
+				float decorShadow = evaluateDecorShadow(rayOrigin, lightDir, params.decorTlasIndex);
+				shadowMask = min(shadowMask, decorShadow);
 			}
 
 			if (params.cloudShadowIndex > 0u && lightDir.y > 0.001) {
-				vec4 cloudShadowData = sampleCloudShadow(params.cloudShadowIndex, params.clipmapIndex, pos, lightDir, uCameraPosition.xyz, 320000.0);
+				vec4 cloudShadowData = sampleCloudShadow(params.cloudShadowIndex, pos, lightDir, uCameraPosition.xyz, 320000.0);
 				shadowMask *= cloudShadowData.a;
 			}
 
-			float shadowStrength = 0.5*clamp(uLights[0].intensity, 0.0, 1.0);
+			float shadowStrength = 0.5*clamp(sunLight.intensity, 0.0, 1.0);
 			hdrColor *= mix(1.0, shadowMask, shadowStrength);
 		}
 	}

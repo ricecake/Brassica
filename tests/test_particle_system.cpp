@@ -378,38 +378,27 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 			std::memset(frameAllocResultInfo.pMappedData, 0, sizeof(FrameUBO));
 		}
 
-		VkBufferCreateInfo lightsBufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-		lightsBufferInfo.size = 256 * 128; // LightsBuffer capacity
-		lightsBufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-		VmaAllocationCreateInfo lightsAllocCreateInfo{};
-		lightsAllocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
-		VkBuffer      lightsBuffer = VK_NULL_HANDLE;
-		VmaAllocation lightsAllocation = nullptr;
-		vmaCreateBuffer(
-			device.GetAllocator(),
-			&lightsBufferInfo,
-			&lightsAllocCreateInfo,
-			&lightsBuffer,
-			&lightsAllocation,
-			nullptr
-		);
-
+		// No more LightsBuffer frame-set binding to wire up here -- CpuLightsBuffer/
+		// GpuLightsBuffer moved to the bindless storage-buffer catalog (binding 6 below), not
+		// frame set binding 2. ParticleBehaviorNode's fireflies now reach GpuLightsBuffer purely
+		// through that bindless index, provisioned the real way via the registry below.
 		vk::DescriptorBufferInfo frameBufferDescInfo{frameUboBuffer, 0, sizeof(FrameUBO)};
-		vk::DescriptorBufferInfo lightsBufferDescInfo{lightsBuffer, 0, VK_WHOLE_SIZE};
-		std::array<vk::WriteDescriptorSet, 2> frameWrites{};
-		frameWrites[0]
-			.setDstSet(frameSet)
+		vk::WriteDescriptorSet   frameWrite{};
+		frameWrite.setDstSet(frameSet)
 			.setDstBinding(0)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setBufferInfo(frameBufferDescInfo);
-		frameWrites[1]
-			.setDstSet(frameSet)
-			.setDstBinding(2)
-			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-			.setBufferInfo(lightsBufferDescInfo);
-		vkDevice.updateDescriptorSets(frameWrites, nullptr);
+		vkDevice.updateDescriptorSets(frameWrite, nullptr);
 
-		std::array<vk::DescriptorSetLayoutBinding, 3> globalLayoutBindings{};
+		// Binding 6: the generic bindless storage-buffer catalog (storageBufferBinding,
+		// PhysicalRegistry::AssignAndWriteBindlessBufferIndex) -- needed now that
+		// ParticleBehaviorNode's fireflies claim a slot in GpuLightsBuffer through it
+		// (shaders/particle_behavior.comp's GPU_LIGHTS_BUFFER_WRITABLE path). Every other
+		// eStorageBuffer-usage buffer this test provisions (ParticleBuffer, etc.) auto-registers
+		// into this same arena regardless of whether anything reads it back by index -- see the
+		// standing bindless-storage-buffer-arena note -- so this binding must exist and have
+		// headroom for all of them, not just GpuLightsBuffer.
+		std::array<vk::DescriptorSetLayoutBinding, 4> globalLayoutBindings{};
 		globalLayoutBindings[0]
 			.setBinding(0)
 			.setDescriptorType(vk::DescriptorType::eSampledImage)
@@ -428,26 +417,33 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 			.setDescriptorType(vk::DescriptorType::eSampler)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		globalLayoutBindings[3]
+			.setBinding(6)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(16)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 3> globalBindingFlags{
+		std::array<vk::DescriptorBindingFlags, 4> globalBindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo globalBindingFlagsInfo{};
 		globalBindingFlagsInfo.setBindingFlags(globalBindingFlags);
 
 		vk::DescriptorSetLayoutCreateInfo globalLayoutInfo{};
-		globalLayoutInfo.setBindingCount(3);
+		globalLayoutInfo.setBindingCount(4);
 		globalLayoutInfo.setBindings(globalLayoutBindings);
 		globalLayoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool);
 		globalLayoutInfo.pNext = &globalBindingFlagsInfo;
 		vk::DescriptorSetLayout globalLayout = vkDevice.createDescriptorSetLayout(globalLayoutInfo);
 
-		std::array<vk::DescriptorPoolSize, 3> globalPoolSizes{
+		std::array<vk::DescriptorPoolSize, 4> globalPoolSizes{
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1},
+			vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16},
 		};
 		vk::DescriptorPoolCreateInfo globalPoolInfo{};
 		globalPoolInfo.setPoolSizes(globalPoolSizes);
@@ -483,6 +479,7 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 				.layout = globalLayout,
 				.sampledImage2DBinding = 0,
 				.samplerBinding = 2,
+				.storageBufferBinding = 6,
 				.frameSet = frameSet,
 				.frameSetLayout = frameLayout,
 			}
@@ -580,9 +577,6 @@ TEST_CASE("ParticleResetNode refreshes the particle descriptor set before any di
 		vkDevice.destroyDescriptorSetLayout(globalLayout);
 		if (frameUboBuffer && frameUboAllocation) {
 			vmaDestroyBuffer(device.GetAllocator(), frameUboBuffer, frameUboAllocation);
-		}
-		if (lightsBuffer && lightsAllocation) {
-			vmaDestroyBuffer(device.GetAllocator(), lightsBuffer, lightsAllocation);
 		}
 		vkDevice.destroyDescriptorPool(framePool);
 		vkDevice.destroyDescriptorSetLayout(frameLayout);

@@ -72,7 +72,7 @@ void main() {
 			// 	lodLevel,
 			// 	params.gridParams.w
 			// );
-			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, centerXZ, lodLevel, 0, params.gridParams.w);
+			vec2 minMax = sampleTerrainMinMaxMip(params.minMaxIndex, centerXZ, lodLevel, 5, params.gridParams.w);
 			relMinB.y = minMax.x - 100.0 - uCameraPosition.y;
 			relMaxB.y = minMax.y + 100.0 - uCameraPosition.y;
 		}

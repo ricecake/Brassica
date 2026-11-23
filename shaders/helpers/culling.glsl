@@ -168,4 +168,51 @@ bool isAABBOccludedByHiZ(vec3 relMinB, vec3 relMaxB, mat4 viewProjRel, uint hizI
 	return (maxSceneDepth + depthSlack) < aabbMinDepth;
 }
 
+// Conservative "nearest possible real surface" query over a screen-space UV rect -- the min-
+// depth counterpart to isAABBOccludedByHiZ's occlusion test above (same mip-selection shape,
+// reused), but answering a different question: not "is this AABB occluded," just "what's the
+// closest any real geometry gets within this rect," so a caller marching a ray through that
+// rect's footprint knows how far it can go before it's guaranteed to have passed real geometry
+// for at least part of that footprint. Returns 1.0 (far-plane sentinel) if hizIndex is invalid.
+float sampleMinDepthInRect(vec2 minUV, vec2 maxUV, uint hizIndex) {
+	if (hizIndex == 0u) {
+		return 1.0;
+	}
+
+	minUV = clamp(minUV, vec2(0.0), vec2(1.0));
+	maxUV = clamp(maxUV, vec2(0.0), vec2(1.0));
+	if (minUV.x >= maxUV.x || minUV.y >= maxUV.y) {
+		return 1.0;
+	}
+
+	ivec2 hizTexSize = textureSize(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]),
+		0
+	);
+	if (hizTexSize.x <= 0 || hizTexSize.y <= 0) {
+		return 1.0;
+	}
+
+	vec2 sizeInPixels = (maxUV - minUV) * vec2(hizTexSize);
+	float maxDim = max(sizeInPixels.x, sizeInPixels.y);
+	float mipLevel = ceil(log2(max(maxDim, 1.0)));
+	int maxMip = textureQueryLevels(
+		sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP])
+	) - 1;
+	mipLevel = clamp(mipLevel, 0.0, float(max(maxMip, 0)));
+
+	vec2 uv00 = minUV;
+	vec2 uv10 = vec2(maxUV.x, minUV.y);
+	vec2 uv01 = vec2(minUV.x, maxUV.y);
+	vec2 uv11 = maxUV;
+
+	vec2 d00 = textureLod(sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uv00, mipLevel).rg;
+	vec2 d10 = textureLod(sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uv10, mipLevel).rg;
+	vec2 d01 = textureLod(sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uv01, mipLevel).rg;
+	vec2 d11 = textureLod(sampler2D(uTextures2D[nonuniformEXT(hizIndex)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uv11, mipLevel).rg;
+
+	// .r channel = minDepth (nearest real surface in that mip texel's footprint).
+	return min(min(d00.x, d10.x), min(d01.x, d11.x));
+}
+
 #endif // BRASSICA_CULLING_GLSL

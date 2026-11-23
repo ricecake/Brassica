@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "constants.h"
 #include "graph/ResourceKey.hpp"
 
 #ifdef MemoryBarrier
@@ -157,6 +158,18 @@ namespace brassica::graph {
 		ResourceId key = nullptr;
 		AccessKind access = AccessKind::Read;
 
+		// Set via AccessHandle::AsAttachment() on a Read access to a Depth-role resource --
+		// without this, DynamicRenderingWrapper::Begin (PhysicalExecutionBackend.hpp) treats any
+		// plain Read as sampled-only and never attaches it, which silently breaks a pass that
+		// means to depth/stencil-test against it (depthTest=true with nothing bound to test
+		// against is not an error, just a no-op test -- this is exactly the bug WaterNode/
+		// LightningRenderNode shipped with). A Read+AsAttachment realization binds as a
+		// read-only depth/stencil attachment instead: loadOp=eLoad (this pass didn't produce the
+		// contents), storeOp=eNone, layout eDepthStencilReadOnlyOptimal -- see DeriveImageState's
+		// matching branch (ResourceState.hpp). Meaningless on anything but a Depth-role Read;
+		// unused bit on every other realization.
+		bool asAttachment = false;
+
 		// Used only when this realization becomes a color attachment with loadOp=eClear (see
 		// DynamicRenderingWrapper::Begin, PhysicalExecutionBackend.hpp). Defaults to opaque
 		// black, matching what every current color target except the G-buffer wants. The
@@ -170,10 +183,31 @@ namespace brassica::graph {
 		// Used only when this realization's AttachmentRole (ResourceState.hpp) is ShadingRate --
 		// VkRenderingFragmentShadingRateAttachmentInfoKHR::shadingRateAttachmentTexelSize, which
 		// has no principled default this layer could pick on its own (it's a per-device minimum,
-		// see ShadingRateAttachmentDesc's comment, PhysicalResource.hpp). 16x16 matches the most
-		// common reported minimum; a node targeting a device with a different minimum must set
-		// this explicitly.
-		std::array<std::uint32_t, 2> shadingRateTexelSize{16, 16};
+		// see ShadingRateAttachmentDesc's comment, PhysicalResource.hpp). Defaults to
+		// constants::Class::ShadingRate::TileWidth/TileHeight, the same tile size
+		// ShadingRateComputeNode writes -- matches the most common reported device minimum; a
+		// node targeting a device with a different minimum must set this explicitly.
+		std::array<std::uint32_t, 2> shadingRateTexelSize{
+			constants::Class::ShadingRate::TileWidth,
+			constants::Class::ShadingRate::TileHeight
+		};
+
+		// Set via AccessHandle::ShadingRateTexelSize() -- unlike shadingRateTexelSize above (a
+		// size parameter with an always-nonzero default, so its value alone can never say whether
+		// the setter was actually called), this is a plain intent marker: "this Read wants the
+		// Graphics-only FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR role," the same shape
+		// asAttachment already has for a depth-role Read. CompileRelational (RelationalCompiler.hpp)
+		// is the only reader -- the real role/layout decision for execution still comes from
+		// AttachmentRoleFor's catalog usage/format check (ResourceState.hpp), which this field
+		// never touches; it exists solely so the compiler can tell "a Graphics read that wants the
+		// FSR-attachment layout" apart from "a plain Compute/Graphics read of the same key that
+		// doesn't," without needing the catalog access (usage/format) it doesn't have. Without
+		// this, a plain Compute read (ShadingRateComputeNode's own ReadPrevious<ShadingRateMap>(),
+		// needing eGeneral) and a tagged Graphics read of the same History<ShadingRateMap> key
+		// (needing eFragmentShadingRateAttachmentOptimalKHR) could land in the same schedule
+		// stage with no edge between them -- two plain reads never get one otherwise -- producing
+		// a real cross-domain layout conflict confirmed on real hardware.
+		bool shadingRateAttachment = false;
 
 		// Set via AccessHandle::AnyOrder() -- the author is asserting that a conflicting write
 		// against this exact key from another AnyOrder() access needs no relation, because the
@@ -244,6 +278,12 @@ namespace brassica::graph {
 		// implementations already existed (test fixtures, mainly), and none of them need to grow a
 		// buffer-bindless arena just to keep compiling.
 		virtual std::uint32_t BufferIndexOf(ResourceId) const { return 0u; }
+
+		// The stencil-only-aspect analogue of IndexOf, for a texture registered with a real
+		// stencil component and eSampled usage (PhysicalRegistry.hpp's AssignAndWriteBindlessIndices,
+		// stencilImage2DBinding). Non-pure, defaulted to 0, same reasoning as BufferIndexOf: added
+		// after other ResourceServices implementations already existed.
+		virtual std::uint32_t StencilIndexOf(ResourceId) const { return 0u; }
 
 		virtual void WaitIdle() {}
 
@@ -404,6 +444,12 @@ namespace brassica::graph {
 			return resources ? resources->BufferIndexOf(IdOf<K>()) : 0u;
 		}
 
+		template <typename K>
+		[[nodiscard]] std::uint32_t StencilIndex() const {
+			CheckDeclared<K>("StencilIndex");
+			return resources ? resources->StencilIndexOf(IdOf<K>()) : 0u;
+		}
+
 		// Writes sizeBytes into K's current-frame slot via fn(std::span<std::byte>), then
 		// finalizes the write (a real copy command for Staged, a flush for Mapped). A no-op if
 		// K isn't host-writable (HostAccess::None) or resources is null -- fn is simply never
@@ -473,6 +519,13 @@ namespace brassica::graph {
 		std::uint32_t   newLayout = 0;
 		ExecutionDomain srcDomain = ExecutionDomain::Graphics;
 		ExecutionDomain dstDomain = ExecutionDomain::Graphics;
+
+		// Carried from ResourceRealization::asAttachment so DeriveImageState's call sites (see
+		// its own asAttachment parameter) can derive a read-only depth/stencil attachment layout
+		// instead of a sampled one -- see ResourceRealization::asAttachment's comment for why
+		// this distinction exists.
+		bool asAttachment = false;
+
 		// No srcQueueFamily/dstQueueFamily (removed, design plan's S4): under
 		// VK_SHARING_MODE_CONCURRENT (what every multi-queue-touched resource now uses,
 		// PhysicalResource.hpp), a barrier's queue family fields must both be
@@ -515,6 +568,13 @@ namespace brassica::graph {
 			if (it->access != b.access) {
 				it->access = AccessKind::ReadWrite;
 			}
+			// OR, not overwrite: the edge-derived entry (Graph::SynthesizeBarrier) and the
+			// self-entry (PhysicalExecutionBackend/MultiQueueExecutionBackend's per-realization
+			// loop) for the same (resource, srcDomain, dstDomain) key land in this same merge --
+			// only the self-entry carries the real per-realization asAttachment bit, so whichever
+			// of the two is added first must not have its true value clobbered by the other's
+			// default-false.
+			it->asAttachment = it->asAttachment || b.asAttachment;
 		}
 
 		[[nodiscard]] std::span<const MemoryBarrier> Items() const { return m_items; }

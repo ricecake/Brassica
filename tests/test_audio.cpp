@@ -46,7 +46,10 @@ namespace brassica {
 		CHECK(mgrState.enableSpeedWoosh == true);
 
 		auto reflection = mgrState.GetReflection();
-		CHECK(std::tuple_size<decltype(reflection)>::value == 24);
+		// 24 -> 25: resynced to the real count after rebasing the model-work branch onto main
+		// (2026-11-10) picked up a field main's own lineage added to AudioManagerState since this
+		// test's hardcoded count was last updated.
+		CHECK(std::tuple_size<decltype(reflection)>::value == 25);
 
 		ConfigManager config("TestApp");
 		config.Initialize();

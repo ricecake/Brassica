@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <glm/glm.hpp>
 
 namespace brassica {
@@ -86,11 +88,12 @@ namespace brassica {
 		// that term. Defaults to a no-op (1,1,1), not boidish's own 0.85, for the same reason as
 		// cloudColor above.
 		alignas(16) glm::vec3 cloudAlbedo{1.0f, 1.0f, 1.0f};
-		// GPU-driven lightning (shaders/climate_ca.comp's trigger, shaders/lightning_age.comp's
-		// reserved-light-slot write) -- lightningFrequencyScale multiplies the per-cell trigger
-		// probability; lightningFlashIntensity scales the reserved uLights[] range's intensity.
+		// GPU-driven lightning (LightningManager; shaders/climate_ca.comp's trigger,
+		// shaders/lightning_age.comp's reserved-light-slot write) -- lightningFrequencyScale
+		// multiplies the per-cell trigger probability; lightningIntensityScale scales bolt
+		// brightness, the reserved uLights[] range's intensity, and cloud glow strength together.
 		alignas(4) float lightningFrequencyScale{1.0f};
-		alignas(4) float lightningFlashIntensity{1.0f};
+		alignas(4) float lightningIntensityScale{1.0f};
 		// Sun aureole (shared by SkyBackgroundNode's sky.frag) -- previously hardcoded
 		// push.sunDirAndAureole.w = 0.5f in SkyBackgroundNode::SetFrameParams, no UI at all.
 		alignas(4) float sunAureoleStrength{0.5f};
@@ -106,6 +109,53 @@ namespace brassica {
 		alignas(4) float fogHeightFalloff{0.003f};
 		alignas(4) float fogBaseHeight{0.0f};
 		alignas(4) float mieHumidityBoost{5.0f};
+
+		// More GPU-driven lightning settings (LightningManager) -- appended here rather than
+		// next to lightningFrequencyScale/lightningIntensityScale above (push-constant-struct-
+		// editing convention: always append new fields at the end, never insert mid-struct).
+		// lightningSpawnRadius: climate_ca.comp only rolls a strike for cells within this many
+		// metres of the camera's XZ position -- strikes used to spawn planet-wide, in cells the
+		// camera could never see, which was most of why lightning read as "always firing"
+		// (shaders/climate_ca.comp's trigger comment has the full rate derivation).
+		alignas(4) float lightningSpawnRadius{60000.0f};
+		// lightningStormThreshold: climate_ca.comp's stormFactor is
+		// smoothstep(lightningStormThreshold, 1.0, lightningPropensity) -- how convective a cell
+		// needs to be before it can trigger at all, on top of the base rate.
+		alignas(4) float lightningStormThreshold{0.35f};
+		// lightningCloudGlowRadius: metres. cloud_raymarch.comp's per-strike glow now falls off
+		// with distance from the strike (exp(-(d/radius)^2)) instead of lighting every visible
+		// cloud pixel on screen regardless of where the strike actually is.
+		alignas(4) float lightningCloudGlowRadius{4000.0f};
+		// lightningCloudFlashRadius: metres. The cloud-to-cloud FLASH light's radius
+		// (lightning_age.comp) -- see LIGHT_TYPE_FLASH's innerCutoff-as-radius convention in
+		// helpers/lighting.glsl. Matches boidish's own cloud-to-cloud flash radius (500m) --
+		// the FLASH falloff formula barely drops for d << r, so this needs to be a real local
+		// illumination radius, not a glow-radius-sized number.
+		alignas(4) float lightningCloudFlashRadius{500.0f};
+		// lightningIgnoreWeather: debug override -- when nonzero, climate_ca.comp's stormFactor
+		// is forced to 1.0 regardless of actual weather, so strikes can be seen without waiting
+		// for a real storm. GPU equivalent of boidish's LightningWidget "Manual Auto-trigger".
+		alignas(4) std::uint32_t lightningIgnoreWeather{0};
+		// lightningGroundStrikeChance: fraction (0..1) of triggered strikes that become
+		// cloud-to-ground instead of cloud-to-cloud (climate_ca.comp).
+		alignas(4) float lightningGroundStrikeChance{0.3f};
+		// lightningGroundFlashRadius: metres. The cloud-to-ground FLASH light's radius, placed
+		// at the resolved ground point instead of the cloud-to-cloud midpoint. Matches boidish's
+		// own ground-strike flash radius (300m).
+		alignas(4) float lightningGroundFlashRadius{300.0f};
+		// lightningLifetimeScale: multiplies climate_ca.comp's rolled strike duration -- boidish's
+		// Lifetime Multiplier.
+		alignas(4) float lightningLifetimeScale{1.0f};
+		// Color variety (climate_ca.comp picks the final color at trigger time, not physically
+		// modeled -- folk-meteorology color associations for artistic effect). Base is the
+		// existing blue-white; humid/dusty are blend targets driven by that cell's own
+		// airMoisture+rain and aerosol, respectively.
+		alignas(16) glm::vec3 lightningBaseColor{0.8f, 0.85f, 1.0f};
+		alignas(16) glm::vec3 lightningHumidColor{0.75f, 0.7f, 1.0f};
+		alignas(16) glm::vec3 lightningDustyColor{1.0f, 0.85f, 0.6f};
+		// 0..1. Per-strike brightness jitter strength on top of the weather-driven color above
+		// (not a blend toward literal random noise -- that reads as broken rather than varied).
+		alignas(4) float lightningColorVariance{0.15f};
 	};
 
 } // namespace brassica

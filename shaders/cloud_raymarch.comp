@@ -6,6 +6,7 @@
 #include "atmosphere/common.glsl"
 #include "helpers/octahedral.glsl"
 #include "helpers/cloud_shadow.glsl"
+#include "helpers/cloud_density.glsl"
 #include "helpers/ambient.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 #include "common.glsl"
@@ -27,7 +28,6 @@ layout(push_constant) uniform CloudRaymarchPushConstants {
 	uint  skyViewIndex;
 	uint  weatherBiomeIndex;
 	uint  cloudShadowIndex;
-	uint  clipmapIndex;
 	uint  volumeIndex; // sampled bindless index for CloudDetailVolume
 	uint  colorStorageIdx;
 	uint  transmittanceStorageIdx;
@@ -38,78 +38,13 @@ layout(push_constant) uniform CloudRaymarchPushConstants {
 	float deltaTime;
 } push;
 
-// Wind-driven advection speed for cloud sampling (m/s, XZ plane). Independent of the global
-// Hadley/Ferrel prevailing-wind model (helpers/wind.glsl) by design -- this is a dedicated
-// artist control for cloud drift, matching boidish's own separate cloudFlowSpeed/Direction
-// knobs rather than tying cloud motion to the same large-scale circulation that drives the CA
-// weather sim. The *10.0 and the shear formula are boidish's own
-// getCloudWindSpeed/getCloud3DNoiseAdvectionSpeed constants verbatim (not re-derived or
-// re-scaled -- "wind speed in m/s" is a physical quantity independent of this engine's planet
-// radius or cloud altitude, so boidish's tuning carries over directly): cloudFlowSpeed=0.25
-// (both engines' default) means ~2.5 m/s, a gentle breeze. `h` is normalized
-// height-in-cloud-band [0,1]; higher clouds shear ahead of/behind lower ones.
-vec3 getCloudAdvectionSpeed(float h) {
-	vec2  flowDir = vec2(cos(u_cloudFlowDirection), sin(u_cloudFlowDirection));
-	float shear = 1.0 - (h * h) * u_cloudFlowHeightScale;
-	return vec3(flowDir.x, 0.0, flowDir.y) * u_cloudFlowSpeed * shear * 10.0;
-}
-
 vec4 sampleCloudShadow(vec3 p) {
-	return sampleCloudShadow(push.cloudShadowIndex, push.clipmapIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
+	return sampleCloudShadow(push.cloudShadowIndex, p, push.sunDir.xyz, uCameraPosition.xyz, 320000.0);
 }
 
 vec3 getTransmittance(float r, float mu) {
 	vec2 uv = transmittanceToUV(r, mu);
 	return SAMPLE_LINEAR(push.transmittanceLUTIndex, uv).rgb;
-}
-
-float heightFraction(vec3 worldPos, float distFromCam) {
-	float distSq = distFromCam * distFromCam;
-	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-	float adjustedY = worldPos.y + dropOff;
-
-	return (adjustedY - 5000.0) / 15000.0;
-}
-
-// Define height gradients for different cloud types:
-// vec4(bottom_fade_start, bottom_fade_end, top_fade_start, top_fade_end)
-const vec4 stratusGrad       = vec4(0.0, 0.1, 0.2, 0.3);
-const vec4 stratocumulusGrad = vec4(0.0, 0.1, 0.5, 0.7);
-const vec4 cumulusGrad       = vec4(0.0, 0.1, 0.8, 1.0);
-
-float GetDensityHeightGradientForPoint(float heightFraction, float cloudType) {
-    float stratus = max(0.0, 1.0 - cloudType * 2.0);
-    float stratocumulus = 1.0 - abs(cloudType - 0.5) * 2.0;
-    float cumulus = max(0.0, (cloudType - 0.5) * 2.0);
-
-    vec4 cloudGradient = stratusGrad * stratus +
-                         stratocumulusGrad * stratocumulus +
-                         cumulusGrad * cumulus;
-
-    return smoothstep(cloudGradient.x, cloudGradient.y, heightFraction) -
-           smoothstep(cloudGradient.z, cloudGradient.w, heightFraction);
-}
-
-// Single tileable detail volume (CloudDetailVolume, period CLOUD_VOLUME_PERIOD, all 3 axes) --
-// replaces the former 3-cascade camera-distance blend. Vertical floor/ceiling shaping is the
-// same curved-altitude gate the old cascades used; distFromCam only feeds that curvature.
-float sampleCloudVolume(vec3 worldPos, float distFromCam) {
-	float distSq = distFromCam * distFromCam;
-	float dropOff = distSq / (2.0 * FAKE_PLANET_RADIUS);
-	float adjustedY = worldPos.y + dropOff;
-
-	float uv_y = (adjustedY - 5000.0) / 15000.0;
-
-	// Fixes the vertical streaks (Screenshot 3) by preventing Y-axis wrapping
-	if (uv_y < 0.0 || uv_y > 1.0) return 0.0;
-
-	vec3 uvw = fract(worldPos / CLOUD_VOLUME_PERIOD);
-	uvw.y = fract(uv_y);
-
-	// Distance-based LOD selection -- see cloud_shadow_gen.comp's identical sampleCloudVolume
-	// for why (alligator()'s sharp Worley-cell edges cause GPU branch divergence otherwise).
-	float volumeLod = clamp(log2(max(1.0, distFromCam / 2000.0)), 0.0, 4.0);
-	return SAMPLE_3D_LINEAR_LOD(push.volumeIndex, uvw, volumeLod).r;
 }
 
 // Bifurcated step sizing, ported from boidish's atmosphere_lowres.comp
@@ -160,10 +95,20 @@ struct CloudMarchResult {
 	float totalWeight;
 };
 
-// lightningPulseColor: rgb = brightest active strike's color, w = its normalized flicker
-// envelope -- computed once per pixel in main() (see there for why), not per raymarch step.
+// lightningPulseColor: rgb = the selected strike's color, w = its flicker envelope;
+// lightningGlowWorldPos: that same strike's (flat) world position -- both picked once per pixel
+// in main() by the strike most visible along this ray (see there for why), not per raymarch
+// step. Per-sample falloff from lightningGlowWorldPos is what keeps the glow spatially localized
+// to the strike instead of lighting every visible cloud pixel on screen regardless of distance.
 CloudMarchResult marchClouds(
-	vec3 worldRay, float t_start, float t_end, vec3 sunDir, vec3 sunRadiance, vec4 lightningPulseColor, vec2 pixel
+	vec3  worldRay,
+	float t_start,
+	float t_end,
+	vec3  sunDir,
+	vec3  sunRadiance,
+	vec4  lightningPulseColor,
+	vec3  lightningGlowWorldPos,
+	vec2  pixel
 ) {
 	float baseStepSize = 50.0;
 	float t = t_start;
@@ -174,6 +119,14 @@ CloudMarchResult marchClouds(
 	vec3  cloudTransmittance = vec3(1.0);
 	vec3  lightEnergy = vec3(0.0);
 	float prevDensity = 0.0;
+	// Actual distance since the last sample whose density was folded into prevDensity -- NOT the
+	// same as "the step about to be taken" (nextStep). The bifurcated step-sizer below rewinds t
+	// by -cheapStep on cloud entry so the boundary gets resampled at fine resolution; without
+	// tracking the real traveled distance, the resampled point (zero actual width since the last
+	// integrated sample) got integrated a second time using the *upcoming* step width as a stand-
+	// in, double-counting optical depth right at cloud edges. Ported from boidish's own t_prev
+	// guard (atmosphere_lowres.comp:621-622,681-682), which Brassica's port had dropped.
+	float tPrev = t;
 	float weightedDistSum = 0.0;
 	float totalWeight = 0.0;
 	float accumulatedOpticalDepth = 0.0;
@@ -183,7 +136,30 @@ CloudMarchResult marchClouds(
 	const float kCheapStepMult = 3.0; // boidish's own tuned value (atmosphere_lowres.comp:608)
 	const int kEscapeThreshold = 3;
 
-	while (t < t_end) {
+	// Safety cap against pathological cases (a near-horizon ray staying at the fine 50m step for
+	// a very long segment) -- boidish's own atmosphere_lowres.comp uses the same 1000 as a
+	// worst-case bound, not a typical step count; this loop normally exits via t < t_end long
+	// before reaching it.
+	const int kMaxIterations = 100000;
+
+	// Weather texels are kilometres wide, so re-sampling the weather map every single ~50m step
+	// is more precision than it has any use for -- cache it and only refresh every 48m along the
+	// ray (boidish's weatherUpdateInterval, atmosphere_lowres.comp).
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * 3.14159265359;
+	vec4  weatherSample = vec4(0.0);
+	float weatherCoverage = 0.0;
+	float weatherType = 0.0;
+	float weatherMoisture = 0.0;
+	float lastWeatherT = -1e9;
+	const float kWeatherUpdateInterval = 48.0;
+
+	// Step-invariant halves of the ambient terms (both only depend on sunDir/sunRadiance) --
+	// horizonAmbient/ambientTop below still get recomputed every step since they fold in the
+	// per-step groundUpwelling term.
+	vec3 skyAmbient = getApproximateSkyAmbient(sunDir, sunRadiance);
+	vec3 groundAmbientBase = getApproximateGroundAmbient(sunRadiance);
+
+	for (int iter = 0; iter < kMaxIterations && t < t_end; iter++) {
 		vec3 p_cloud = uCameraPosition.xyz + worldRay * t;
 		float distFromCam = t;
 
@@ -191,18 +167,20 @@ CloudMarchResult marchClouds(
 		vec3 toPlanetCenter = p_cloud - planetCenter;
 		float r_world = length(toPlanetCenter);
 		vec3 surfaceDir = normalize(toPlanetCenter);
-		float worldExtent = 2.0 * FAKE_PLANET_RADIUS * 3.14159265359;
-		vec2 weatherUV = fract((p_cloud.xz / worldExtent) + 0.5);
-		vec4 weatherSample = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV);
-		float weatherCoverage = weatherSample.r;
-		float weatherType = weatherSample.g;
-		float weatherMoisture = weatherSample.b;
+
+		if (abs(t - lastWeatherT) >= kWeatherUpdateInterval) {
+			vec2 weatherUV = fract((p_cloud.xz / worldExtent) + 0.5);
+			weatherSample = SAMPLE_LINEAR(push.weatherBiomeIndex, weatherUV);
+			weatherCoverage = weatherSample.r;
+			weatherType = weatherSample.g;
+			weatherMoisture = weatherSample.b;
+			lastWeatherT = t;
+		}
 
 		float density = 0.0;
 		float cloudHeightFrac = 0.0;
 		if (weatherCoverage > 0.01) {
 			cloudHeightFrac = heightFraction(p_cloud, distFromCam);
-			weatherCoverage = pow(weatherCoverage, remapClamp(cloudHeightFrac, 0.7, 0.8, 1.0, mix(1.0, 0.5, weatherType)));
 
 			// Wind advection applies to the fine detail volume only, not the weather-coverage
 			// lookup above: the weather map already has its own emergent motion (the CA sim's
@@ -214,50 +192,28 @@ CloudMarchResult marchClouds(
 			vec3 advection = getCloudAdvectionSpeed(clamp(cloudHeightFrac, 0.0, 1.0));
 			vec3  advectedPos = p_cloud - advection * uTime;
 
-			// all(lessThan(cloudTransmittance, vec3(0.05)))
-			float progress = smoothstep(0.015, 1.0, max(max(cloudTransmittance.r, cloudTransmittance.g), cloudTransmittance.b));
-			mat3 grad;
-			vec3 crNoise = cross_noise_fbm(advectedPos/(prevDensity+750), 3, uTime*0.05, grad);
-			vec3 cross_curl = get_curl(grad);
+			// Curl-noise detail warp -- skipped once this step's contribution to the final
+			// pixel is already small, either because the ray is past the segment's midpoint or
+			// because accumulated transmittance has already dropped: the fine turbulence it adds
+			// isn't visible through that much attenuation anyway. Mirrors boidish's doCheap
+			// convention (atmosphere_lowres.comp/helpers/clouds.glsl), applied to this specific
+			// noise call rather than ported line-for-line -- boidish's own doCheap hooks around
+			// this exact warp are dead/commented out in its current source.
+			bool doCheap = (t >= mix(t_start, t_end, 0.5)) || all(lessThan(cloudTransmittance, vec3(0.705)));
+			vec3 curlOffset = vec3(0.0);
+			if (!doCheap) {
+				mat3 grad;
+				cross_noise_fbm(advectedPos/(prevDensity+5000), 4, uTime*0.05, grad);
+				vec3 cross_curl = get_curl(grad);
+				curlOffset = 200.0*grad*cross_curl * (smoothstep(0.0, 0.75, cloudHeightFrac));
+			}
 
+			float baseDensity = sampleCloudVolume(advectedPos+curlOffset, distFromCam, push.volumeIndex);
 
-			float baseDensity = sampleCloudVolume(advectedPos+50*grad*cross_curl, distFromCam);
-			// float baseDensity = weatherCoverage * sampleCloudCascades(p_cloud+100*progress*crNoise, distFromCam);
-			// float density = 1.0 * baseDensity * (0.5 + 1.5 * weatherMoisture);
-
-			// float dtNoise = dot_noise_fbm((p_cloud+25*progress*cross_curl)/750, 4, 0.05*uTime);
-			// density = remapClamp(baseDensity, abs(dtNoise/4.0), 1, 0.0, 1);
-			// density = 2*smoothstep(0.15, 0.85, density);
-
-
-			// baseDensity = remapClamp(baseDensity, abs(dot_noise_fbm(advectedPos*0.000125, 3, 0.01*uTime)), 1, 0, 1);
-			float heightGradient = GetDensityHeightGradientForPoint(cloudHeightFrac, weatherType);
-
-			// Anvil spreading (boidish's calculateCloudDensity): strong convective
-			// (cumulus-weighted) clouds flatten out near their top instead of tapering to a
-			// point -- the classic cumulonimbus silhouette. weatherType doubles as boidish's
-			// "type" axis here (0=stratus/1=cumulus, same semantic already sampled above), so
-			// this needs no new baked per-type/height texture.
-			float cumulusWeight = clamp(weatherType * 2.0 - 1.0, 0.0, 1.0); // >0 only in the cumulus half
-			float anvilFactor = mix(1.0, 0.25, cumulusWeight * smoothstep(0.6, 0.9, cloudHeightFrac));
-			float coverageThreshold = pow(1.0 - weatherCoverage, remapClamp(cloudHeightFrac, 0.6, 0.9, 1.0, anvilFactor));
-
-			// Remap-based coverage erosion (boidish's calculateCloudDensity), not the old plain
-			// multiply: treats coverageThreshold as a floor the shaped noise must clear before
-			// any density survives, then ramps 0..1 above it. Gives crisp, billowy edges with
-			// noise-driven boundary detail instead of the old multiply's uniformly-dimmed,
-			// hazier look -- this is the single biggest shape difference from boidish's
-			// reference, and the main thing this whole rework was chasing.
-			float shapedNoise = remapClamp(baseDensity * heightGradient, coverageThreshold, 1, 0.0, 1.0);
-			density = shapedNoise * (0.5 + 1.5 * weatherMoisture);
-
-			// if(progress > 0) {
-				float dtNoise = progress*dot_noise_fbm((advectedPos+50*advection*progress*cross_curl)/1500, 4, 0.05*uTime);
-				// float dtNoise = dot_noise_fbm((advectedPos/1500)+(cross_curl)/150, 5, 0.05*uTime);
-				density = remapClamp(baseDensity, abs(dtNoise/4.0), 1, 0.0, 1);
-			// }
-			// density = smoothstep(0.15, 0.5, density);
-
+			// Shaping (height gradient, anvil spreading, coverage-threshold erosion) and the
+			// moisture scale all live in helpers/cloud_density.glsl, shared with
+			// cloud_shadow_gen.comp so shadows match what's actually rendered here.
+			density = cloudShapeDensity(baseDensity, cloudHeightFrac, weatherCoverage, weatherType, weatherMoisture);
 		}
 
 		float nextStep =
@@ -270,20 +226,16 @@ CloudMarchResult marchClouds(
 
 		if (!inCloud) {
 			prevDensity = density;
+			tPrev = t;
 			t += nextStep;
 			continue;
 		}
 
 		{
-			float stepSize = nextStep;
+			float stepSize = t - tPrev;
+			if (stepSize > 0.0) {
 			if (density > 0.0) {
-				float typeFactor = mix(1.2, 0.7, clamp(weatherType, 0.0, 1.0));
-				float bottomMoistureProfile = clamp(1.0 - smoothstep(0.0, 0.85, cloudHeightFrac), 0.1, 1.0);
-				bottomMoistureProfile *= bottomMoistureProfile;
-				float baseExtinction = max(
-					0.0, (0.005 + 0.02 * weatherMoisture) * typeFactor * (0.6 + 0.8 * bottomMoistureProfile)
-				);
-				vec3 rgbExtinction = baseExtinction * u_cloudExtinctionColor * u_cloudExtinctionScale;
+				vec3 rgbExtinction = cloudExtinctionCoefficient(cloudHeightFrac, weatherType, weatherMoisture);
 				float averageDensity = (prevDensity + density) * 0.5;
 
 				vec3  stepDensity = averageDensity * rgbExtinction;
@@ -347,8 +299,7 @@ CloudMarchResult marchClouds(
 
 				vec3 powder = vec3(1.0) - vec3(1.0) / (vec3(1.0) + (25.0 * stepDensity * u_ambientBeerPowderScale));
 
-				vec3 skyAmbient = getApproximateSkyAmbient(sunDir, sunRadiance);
-				vec3 groundAmbient = getApproximateGroundAmbient(sunRadiance) + groundUpwelling;
+				vec3 groundAmbient = groundAmbientBase + groundUpwelling;
 				vec3 horizonAmbient = getApproximateHorizonAmbient(sunDir, sunRadiance, skyAmbient, groundAmbient);
 				vec3 ambientTop = mix(skyAmbient, horizonAmbient, 0.4);
 
@@ -362,6 +313,14 @@ CloudMarchResult marchClouds(
 				vec3  emissiveGlow = vec3(0.0);
 				float lightningPulse = lightningPulseColor.w;
 				if (lightningPulse > 0.001) {
+					// p_cloud and lightningGlowWorldPos are both flat, uncorrected world
+					// positions (p_cloud = uCameraPosition + worldRay*t; strikes are written the
+					// same way by climate_ca.comp) -- no curvature drop needed for this distance,
+					// unlike lightning.mesh's clip-space rasterization of the bolt itself.
+					float glowDist = length(p_cloud - lightningGlowWorldPos);
+					float glowRadius = max(u_lightningCloudGlowRadius, 1.0);
+					float glowFalloff = exp(-(glowDist * glowDist) / (glowRadius * glowRadius));
+
 					float ridge = weatherSample.a;
 					float wavePos = clamp(1.0 - lightningPulse, 0.0, 1.0);
 					float midHeightEnvelope = exp(-pow((cloudHeightFrac - 0.5) * 4.0, 2.0));
@@ -371,7 +330,7 @@ CloudMarchResult marchClouds(
 					float waveFront = exp(-ridgeDist * ridgeDist * 16.0);
 					float coreGlow = exp(-ridge * 4.0 / max(0.1, lightningPulse));
 					float propagationGlow = (coreGlow * 0.7 + waveFront * 1.3) * lightningPulse * midHeightEnvelope * stagger;
-					emissiveGlow = lightningPulseColor.rgb * propagationGlow;
+					emissiveGlow = lightningPulseColor.rgb * propagationGlow * glowFalloff * u_lightningIntensityScale;
 				}
 
 				vec3 directLight = sunRadiance * atmosphereTransmittance * msScattering * u_cloudSunLightScale;
@@ -400,6 +359,8 @@ CloudMarchResult marchClouds(
 				}
 			}
 			prevDensity = density;
+			tPrev = t;
+			}
 		}
 
 		t += nextStep;
@@ -466,22 +427,48 @@ const ivec2 bayer_offsets[16] = ivec2[](
 		vec3 viewDir = viewRay4.xyz / viewRay4.w;
 		vec3 worldRay = normalize((uInvViewMatrix * vec4(viewDir, 0.0)).xyz);
 
-		float cloudAlt = 5000.0;
 		float t_s1, t_e1, t_s2, t_e2;
-		bool intersection = intersectCloudShell(uCameraPosition.xyz, worldRay, FAKE_PLANET_RADIUS, cloudAlt, 15000, t_s1, t_e1, t_s2, t_e2);
+		bool intersection = intersectCloudShell(
+			uCameraPosition.xyz, worldRay, FAKE_PLANET_RADIUS, CLOUD_LAYER_BOTTOM, CLOUD_LAYER_THICKNESS, t_s1, t_e1, t_s2, t_e2
+		);
 		if (intersection) {
 			vec3 sunDir = normalize(push.sunDir.xyz);
 			vec3 sunRadiance = push.sunRadianceAndSkyExp.xyz;
 
-			// Brightest active GPU-driven strike (shaders/lighting.glsl's reserved uLights[]
-			// range, written by lightning_age.comp) -- same per-pixel-once computation as the
-			// former fragment shader's main().
+			// Pick the strike most likely to actually glow for THIS ray, not just the brightest
+			// one anywhere on the planet (that -- one global pulse applied to every pixel
+			// regardless of position -- was the other half of lightning reading as "always
+			// firing": every visible cloud lit up for any live strike). Score = flicker envelope
+			// times distance-to-ray falloff, using each strike's midpoint as a stand-in for its
+			// (short, relative to glowRadius) whole segment. Reads uStrikes[] directly instead of
+			// the reserved light-slot range -- those are for terrain/fog lighting, not this.
 			vec4  lightningPulseColor = vec4(0.0);
-			float lightningScaleInv = 1.0 / max(0.0001, u_lightningFlashIntensity * 50.0);
+			vec3  lightningGlowWorldPos = vec3(0.0);
+			float bestLightningScore = 0.0;
+			float glowRadiusSq = max(u_lightningCloudGlowRadius, 1.0) * max(u_lightningCloudGlowRadius, 1.0);
 			for (uint li = 0u; li < LIGHTNING_MAX_STRIKES; li++) {
-				float strikePulse = uLights[LIGHTNING_LIGHT_SLOT_BASE + li].intensity * lightningScaleInv;
-				if (strikePulse > lightningPulseColor.w) {
-					lightningPulseColor = vec4(uLights[LIGHTNING_LIGHT_SLOT_BASE + li].color, strikePulse);
+				if (uStrikes[li].lifetime <= 0.0) {
+					continue;
+				}
+				// originAndSeed is always the cloud-side point for both strike types (a
+				// cloud-to-ground strike's endPos is the ground, well below the cloud shell) --
+				// using it instead of the segment midpoint keeps the glow's position inside the
+				// cloud layer either way.
+				vec3 cloudPoint = uStrikes[li].originAndSeed.xyz;
+
+				vec3  toPoint = cloudPoint - uCameraPosition.xyz;
+				float tClosest = max(dot(toPoint, worldRay), 0.0);
+				vec3  closestOnRay = uCameraPosition.xyz + worldRay * tClosest;
+				float rayDistSq = dot(cloudPoint - closestOnRay, cloudPoint - closestOnRay);
+
+				float envelope = lightningEnvelope(uStrikes[li].lifetime, uStrikes[li].maxLifetime) *
+					uStrikes[li].colorAndPeak.a;
+				float falloff = exp(-rayDistSq / glowRadiusSq);
+				float score = envelope * falloff;
+				if (score > bestLightningScore) {
+					bestLightningScore = score;
+					lightningGlowWorldPos = cloudPoint;
+					lightningPulseColor = vec4(uStrikes[li].colorAndPeak.rgb, envelope);
 				}
 			}
 
@@ -490,9 +477,19 @@ const ivec2 bayer_offsets[16] = ivec2[](
 			float resultWeightedDistSum = 0.0;
 			float resultTotalWeight = 0.0;
 
-			if (t_s1 < t_e1 && t_s1 < surfaceDistKM) {
+			bool nearVisible = t_s1 < t_e1 && t_s1 < surfaceDistKM;
+			bool farVisible = t_s2 < t_e2 && t_s2 < surfaceDistKM;
+
+			if (nearVisible) {
 				CloudMarchResult near = marchClouds(
-					worldRay, t_s1, min(t_e1, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor, vec2(pixel)
+					worldRay,
+					t_s1,
+					min(t_e1, surfaceDistKM),
+					sunDir,
+					sunRadiance,
+					lightningPulseColor,
+					lightningGlowWorldPos,
+					vec2(pixel)
 				);
 				resultRgb += near.lightEnergy;
 				resultTransmittance *= near.transmittance;
@@ -500,9 +497,16 @@ const ivec2 bayer_offsets[16] = ivec2[](
 				resultTotalWeight += near.totalWeight;
 			}
 
-			if (t_s2 < t_e2 && t_s2 < surfaceDistKM) {
+			if (farVisible) {
 				CloudMarchResult far = marchClouds(
-					worldRay, t_s2, min(t_e2, surfaceDistKM), sunDir, sunRadiance, lightningPulseColor, vec2(pixel)
+					worldRay,
+					t_s2,
+					min(t_e2, surfaceDistKM),
+					sunDir,
+					sunRadiance,
+					lightningPulseColor,
+					lightningGlowWorldPos,
+					vec2(pixel)
 				);
 				float resultTransmittanceScalar =
 					(resultTransmittance.r + resultTransmittance.g + resultTransmittance.b) / 3.0;
@@ -514,6 +518,18 @@ const ivec2 bayer_offsets[16] = ivec2[](
 
 			cloudRgb = resultRgb;
 			cloudTransmittance = resultTransmittance;
+
+			// A real surface blocks every part of the cloud shell this ray could otherwise see --
+			// e.g. foliage/decor/terrain below the cloud base. Mark it distinctly from "no cloud
+			// shell intersection at all" (cloudDepth's 1e9 default) so CloudTemporalNode can tell
+			// "confirmed no cloud here, ever, as long as this surface stays" apart from "open sky,
+			// no cloud found this frame" -- conflating the two is what let a thin/dithered
+			// foreground object's silhouette pixel inherit a neighboring sky sample's real cloud
+			// result (jagged edges with no matching cloud, and spurious transmittance variation
+			// feeding false god rays downstream in the froxel pass).
+			if (hasSurface && !nearVisible && !farVisible) {
+				cloudDepth = -1.0;
+			}
 
 			if (resultTotalWeight > 1e-5) {
 				cloudDepth = resultWeightedDistSum / resultTotalWeight;

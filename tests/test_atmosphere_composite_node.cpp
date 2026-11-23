@@ -12,8 +12,8 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "MinimalDevice.hpp"
 #include "passes/atmosphere/nodes/AtmosphereLUTNode.hpp"
+#include "passes/clouds/nodes/CloudCompositeNode.hpp"
 #include "passes/volumetrics/nodes/VolumetricFroxelGenNode.hpp"
-#include "passes/volumetrics/nodes/VolumetricRenderNode.hpp"
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "types/ubo/FrameUBO.hpp"
@@ -23,8 +23,8 @@ using namespace brassica;
 
 namespace {
 
-	// Stands in for TerrainNode + DeferredNode + CloudRenderNode: writes the G-buffer inputs
-	// VolumetricRenderNode reads and the HdrColor target it modifies.
+	// Stands in for TerrainNode + DeferredNode: writes the G-buffer inputs CloudCompositeNode
+	// reads and the HdrColor target it modifies.
 	struct FakeSceneProducer {
 		float     albedoAlpha = 0.0f;
 		glm::vec3 relPos{0.0f};
@@ -295,7 +295,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("Unified VolumetricRenderNode executes cleanly in render graph with no validation errors") {
+TEST_CASE("Merged CloudCompositeNode (cloud + volumetric fog) executes cleanly in render graph with no validation errors") {
 	brassica::testing::MinimalDevice device;
 	if (!device.IsValid()) {
 		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
@@ -339,26 +339,32 @@ TEST_CASE("Unified VolumetricRenderNode executes cleanly in render graph with no
 		VolumetricFroxelGenNode froxelGenNode;
 		froxelGenNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 
-		VolumetricRenderNode volumetricRenderNode;
-		volumetricRenderNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
+		CloudCompositeNode cloudCompositeNode;
+		cloudCompositeNode.Init(render::NodeServices{.device = vkDevice, .pipelineLibrary = &pipelineLibrary, .physicalRegistry = &registry});
 		Shader::ClearConstants();
 
 		graph::Graph graph;
 		graph.Register<FakeSceneProducer>(FakeSceneProducer{});
-		// VolumetricFroxelGenNode reads these real production keys (terrain occlusion, cloud
-		// shadow, lights), but nothing else in this minimal graph produces them -- same category
-		// as test_rendergraph.cpp's own FoliageBiomeTableTexture import.
+		// VolumetricFroxelGenNode/CloudCompositeNode read these real production keys (terrain
+		// occlusion, cloud shadow, lights, HiZ, the cloud raymarch's own accumulated output), but
+		// nothing else in this minimal graph produces them -- same category as
+		// test_rendergraph.cpp's own FoliageBiomeTableTexture import.
 		graph.Register<graph::Import<CloudShadowMap>>();
 		graph.Register<graph::Import<TerrainWeatherBiomeTexture>>();
 		graph.Register<graph::Import<TerrainClipmapTexture>>();
 		graph.Register<graph::Import<TerrainMinMaxTexture>>();
-		graph.Register<graph::Import<LightsBuffer>>();
+		graph.Register<graph::Import<CpuLightsBuffer>>();
+		graph.Register<graph::Import<GpuLightsBuffer>>();
 		graph.Register<graph::Import<TerrainShadowMap>>();
+		graph.Register<graph::Import<HiZTexture>>();
+		graph.Register<graph::Import<CloudAccumulatedColor>>();
+		graph.Register<graph::Import<CloudAccumulatedTransmittance>>();
+		graph.Register<graph::Import<CloudMoments>>();
 		graph.RegisterRef(transNode);
 		graph.RegisterRef(multiNode);
 		graph.RegisterRef(skyNode);
 		graph.RegisterRef(froxelGenNode);
-		graph.RegisterRef(volumetricRenderNode);
+		graph.RegisterRef(cloudCompositeNode);
 
 		graph::FrameContext ctx{.width = 64, .height = 64};
 
@@ -376,7 +382,7 @@ TEST_CASE("Unified VolumetricRenderNode executes cleanly in render graph with no
 		device.GetQueue().waitIdle();
 
 		pipelineLibrary.Reset();
-		volumetricRenderNode.Destroy(vkDevice);
+		cloudCompositeNode.Destroy(vkDevice);
 		froxelGenNode.Destroy(vkDevice);
 		skyNode.Destroy(vkDevice);
 		multiNode.Destroy(vkDevice);

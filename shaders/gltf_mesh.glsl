@@ -1,8 +1,7 @@
 #ifndef BRASSICA_GLTF_MESH_GLSL
 #define BRASSICA_GLTF_MESH_GLSL
 
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_buffer_reference2 : require
+#include "bindless.glsl"
 
 // GPU-driven static (Stage 1) GLTF mesh data: vertices pre-gathered per meshlet by
 // GltfModel's CPU-side loader (fastgltf parse + meshopt_buildMeshlets), not sampled by
@@ -42,16 +41,21 @@ struct GltfMeshlet {
 	uint  materialIndex;
 };
 
-layout(buffer_reference, std430) buffer GltfVertexRef {
+// Binding 6 aliases (see material_system.glsl's own comment on this binding) -- each buffer is
+// eStorageBuffer-usage and already auto-registered by PhysicalRegistry::AssignAndWriteBindlessBufferIndex,
+// so ctx.BufferIndex<K>() is all the C++ side needs; no device-address plumbing.
+layout(set = 1, binding = 6, std430) readonly buffer GltfVertexBufferArray {
 	GltfVertex vertices[];
-};
+}
+uGltfVertexBuffers[];
 
 // meshlet_vertices from meshopt_buildMeshlets: for each meshlet's local vertex index, which
 // *gathered* GltfVertex to use (GltfModel's loader already re-gathers per-meshlet, so this is a
 // dense local range, not an index back into some larger un-gathered vertex pool).
-layout(buffer_reference, std430) buffer GltfMeshletVertexRef {
+layout(set = 1, binding = 6, std430) readonly buffer GltfMeshletVertexBufferArray {
 	uint indices[];
-};
+}
+uGltfMeshletVertexBuffers[];
 
 // meshlet_triangles from meshopt_buildMeshlets is natively an 8-bit micro-index buffer, 3 per
 // triangle, local to whichever meshlet owns them -- but reading individual bytes from a buffer in
@@ -60,21 +64,14 @@ layout(buffer_reference, std430) buffer GltfMeshletVertexRef {
 // Engine.cpp). GltfModel's loader repacks 4 micro-indices per uint instead (same bytes, just
 // addressed a word at a time): byteIndex = meshlet.triangleOffset*3 + triangleLocal*3 + corner;
 // word = indices[byteIndex >> 2]; value = (word >> ((byteIndex & 3) * 8)) & 0xFFu.
-layout(buffer_reference, std430) buffer GltfMeshletTriangleRef {
+layout(set = 1, binding = 6, std430) readonly buffer GltfMeshletTriangleBufferArray {
 	uint indices[];
-};
+}
+uGltfMeshletTriangleBuffers[];
 
-layout(buffer_reference, std430) buffer GltfMeshletDescRef {
+layout(set = 1, binding = 6, std430) readonly buffer GltfMeshletBufferArray {
 	GltfMeshlet meshlets[];
-};
-
-// Stage 4 (GPU skinning): one mat4 per joint, in skin-joint order (GltfModel::EvaluatePose's own
-// output order -- the CPU side recomputes and re-uploads this whole buffer every frame as the
-// current animation plays; see GltfModelManager::UpdatePose). Indexed directly by GltfVertex's
-// own joints (JOINTS_0) -- a non-skinned vertex's zero-filled joints/weights never actually reach
-// this array (gltf_render.mesh checks the weight sum before indexing it at all).
-layout(buffer_reference, std430) buffer GltfJointMatrixRef {
-	mat4 matrices[];
-};
+}
+uGltfMeshletBuffers[];
 
 #endif // BRASSICA_GLTF_MESH_GLSL

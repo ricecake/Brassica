@@ -94,7 +94,7 @@ namespace brassica {
 		// justified omitting it is gone. Before<CloudCompositeNode>() reproduces the schedule
 		// order S0 recorded (Cirrus before Cloud) for these two same-phase HdrColor writers.
 		// After<WaterNode>() (S4) is the other half of WaterNode's new Before<CirrusNode>() --
-		// see VolumetricRenderNode.hpp's identical comment on why this chain needs real edges.
+		// see WaterNode.hpp's identical comment on why this chain needs real edges.
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Graphics);
 			r.Read<GBufferPosition>();
@@ -135,6 +135,6 @@ namespace brassica {
 		}
 	};
 
-	BRASSICA_REGISTER_NODE(CirrusNode);
+	// BRASSICA_REGISTER_NODE(CirrusNode);
 
 } // namespace brassica

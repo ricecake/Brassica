@@ -2,7 +2,7 @@ BUILD_DIR = build
 CONFIG = RelWithDebInfo
 APP = sandbox
 
-.PHONY: all clean format run clean-build test profile setup-deps graph-test graph-check
+.PHONY: all clean format run clean-build test profile setup-deps graph-test graph-check shader-check
 
 all:
 	@cmake -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG)
@@ -68,3 +68,18 @@ graph-test:
 	@cmake -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG)
 	@cmake --build $(BUILD_DIR) --target test_graph
 	@cd $(BUILD_DIR) && ctest -R test_graph --output-on-failure
+
+# Standalone GLSL syntax check for one shader, without launching the engine (useful on a dev
+# machine with no capable GPU). Brassica shaders aren't plain GLSL -- Shader::LoadFromFile does
+# its own #include flattening and [[CONSTANT_NAME]] substitution before handing the result to
+# shaderc, so glslc directly on the source fails even on an unmodified, working shader. Usage:
+# make shader-check SHADER=shaders/cloud_raymarch.comp STAGE=comp
+# Requires build/bin/shaderResolver and build/bin/glslc, i.e. `make all` at least once already.
+# Ignore a resolver warning about an unresolved [[NAME]] tag specifically -- a known false
+# positive from a comment in bindless.glsl that the resolver's naive text-scan misreads as a tag.
+shader-check:
+	@mkdir -p $(BUILD_DIR)/shader_check
+	@$(BUILD_DIR)/bin/shaderResolver $(SHADER) $(BUILD_DIR)/shader_check
+	@$(BUILD_DIR)/bin/glslc -fshader-stage=$(STAGE) --target-env=vulkan1.3 \
+		-o $(BUILD_DIR)/shader_check/out.spv \
+		$(BUILD_DIR)/shader_check/resolved_$(notdir $(SHADER))

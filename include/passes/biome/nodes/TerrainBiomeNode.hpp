@@ -15,6 +15,7 @@
 #include "graph/SetupBuilder.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -47,7 +48,12 @@ namespace brassica {
 		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
 		std::uint32_t cellOffset{0};
 		std::uint32_t cellsPerUpdate{constants::Weather::kCellsPerUpdate};
-		std::uint32_t pad{0};
+		std::uint32_t cpuLightsIndex{0};
+		// Real per-frame delta (NodeFrameParams::deltaTime, via TerrainBiomeNode::SetFrameParams)
+		// -- climate_ca.comp's lightning trigger needs this to convert a target strikes-per-
+		// second rate into a per-visit roll chance; everything else in this shader stays
+		// deltaTime-independent (the CA step itself is still a flat per-partial-update pass).
+		float deltaTime{1.0f / 60.0f};
 	};
 
 	// S4: no kPhase -- this node is the sole writer of all seven of its weather/biome keys (six
@@ -65,6 +71,7 @@ namespace brassica {
 		std::uint32_t frameCounter{0};
 		std::uint32_t cellOffset{0};
 		std::uint32_t cellsPerUpdate{constants::Weather::kCellsPerUpdate};
+		float         deltaTime{1.0f / 60.0f};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
@@ -91,6 +98,7 @@ namespace brassica {
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			forceRegeneration = p.forceRegeneration;
+			deltaTime = p.deltaTime;
 			++frameCounter;
 		}
 
@@ -107,8 +115,8 @@ namespace brassica {
 			r.Modify<TerrainBiomeMainTexture>();
 			r.Modify<TerrainBiomeMapATexture>();
 			r.Modify<TerrainBiomeMapBTexture>();
-			// shaders/climate_ca.comp reads uLights[0].direction via clustered_lighting.glsl.
-			r.Read<LightsBuffer>();
+			// shaders/climate_ca.comp reads uCpuLightsBuffers[...].lights[0].direction (the sun).
+			r.Read<CpuLightsBuffer>();
 			// climate_ca.comp's lightning trigger claims a ring-buffer slot and writes a fresh
 			// strike directly (see shaders/lighting.glsl's LightningStrikePool).
 			r.Modify<LightningStrikePool>();
@@ -201,7 +209,8 @@ namespace brassica {
 						.textureDim = textureDim,
 						.cellOffset = cellOffset,
 						.cellsPerUpdate = cellsToProcess,
-						.pad = 0
+						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
+						.deltaTime = deltaTime
 					},
 					textureDim,
 					cellsToProcess
@@ -237,7 +246,8 @@ namespace brassica {
 						.textureDim = textureDim,
 						.cellOffset = cellOffset,
 						.cellsPerUpdate = cellsToProcess,
-						.pad = 0
+						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
+						.deltaTime = deltaTime
 					},
 					textureDim,
 					cellsToProcess

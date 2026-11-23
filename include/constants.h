@@ -87,7 +87,14 @@ namespace brassica {
 
 		namespace Class {
 			namespace Lighting {
-				constexpr std::uint32_t MaxLights = 1024;
+				// Split from the old single MaxLights=1024 (CPU-and-GPU-mixed buffer) -- CPU
+				// lights are host-authored and rare (sun, moon, whatever a game script adds);
+				// GPU lights are compute-claimed (fireflies) or compute-written (lightning), and
+				// GpuLightDynamicCapacity reserves the top of that range for lightning's own
+				// static per-strike slots (LIGHTNING_MAX_STRIKES=32, shaders/lighting.glsl).
+				constexpr std::uint32_t MaxCpuLights = 64;
+				constexpr std::uint32_t MaxGpuLights = 512;
+				constexpr std::uint32_t GpuLightDynamicCapacity = 480;
 				constexpr std::uint32_t TotalClusters = 16 * 9 * 24 + 1; // 3457 clusters
 
 				// Sun Defaults
@@ -127,10 +134,10 @@ namespace brassica {
 				constexpr float DefaultGTAOIntensity = 1.0f;        // linear strength multiplier on raw occlusion
 				constexpr float DefaultGTAODirectInfluence = 0.35f; // how much AO also darkens direct lighting (0 = indirect-only)
 
-				// Lightning Defaults
-				constexpr float DefaultLightningMaxLifetime = 0.3f;
+				// Lightning Defaults (DefaultLightningBranchProbability/DefaultLightningColor()
+				// aren't consumed yet -- reserved for the branching/color-variety work still to
+				// come on top of this settings-UI port).
 				constexpr float DefaultLightningBranchProbability = 0.15f;
-				constexpr float DefaultLightningThickness = 1.5f;
 				constexpr float DefaultLightningColorR = 0.8f;
 				constexpr float DefaultLightningColorG = 0.9f;
 				constexpr float DefaultLightningColorB = 1.0f;

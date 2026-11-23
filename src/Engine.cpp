@@ -1,4 +1,5 @@
 #include "Engine.hpp"
+#include "passes/scene/resources.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +13,13 @@
 #include "graph/Dot.hpp"
 #include "graph/PhysicalExecutionBackend.hpp"
 #include "graph/Util.hpp"
+#include "passes/biome/resources.hpp"
+#include "passes/clouds/resources.hpp"
+#include "passes/model/ManifoldTreeAsset.hpp"
+#include "passes/model/ModelAsset.hpp"
+#include "passes/model/ProceduralArchetypeCatalog.hpp"
+#include "passes/model/ProceduralTreeAsset.hpp"
+#include "passes/terrain/resources.hpp"
 #include "passes/terrain/TerrainMapExporter.hpp"
 #include "types/AutoExposureData.hpp"
 #include "types/CdlGradingData.hpp"
@@ -247,8 +255,7 @@ namespace brassica {
 				.device = device,
 				.pipelineLibrary = &pipelineLibrary,
 				.shaderWatcher = &shaderWatcher,
-				.terrainAS = &terrainAS,
-				.dispatchLoader = &terrainAS.GetDls(),
+				.dispatchLoader = &dls,
 				.physicalRegistry = &physicalRegistry,
 				.swapchainFormat = GetSwapchainFormat(),
 			};
@@ -292,7 +299,7 @@ namespace brassica {
 			physicalRegistry.Reset();
 			queueRecorder.Destroy();
 
-			terrainAS.DestroyAccelerationStructures();
+			decorAS.Destroy();
 
 			pipelineLibrary.Reset();
 			render::EngineNodeRegistry::Instance().DestroyAll(device);
@@ -399,7 +406,14 @@ namespace brassica {
 		}
 		shaderWatcher.WatchDirectory(shaderDir);
 
-		terrainAS.Init(instance, device, allocator, physicalRegistry.ConcurrentFamilies());
+		dls.init(instance, device);
+		decorAS.Init(device, allocator, &dls, physicalRegistry.ConcurrentFamilies());
+		// Registered once, here -- unlike TerrainTLAS's old every-frame re-registration (needed
+		// pre-update-after-bind to guarantee the descriptor write landed before any command
+		// buffer read it), DecorTLAS's handle never changes after this (same object, rebuilt in
+		// place every frame by DecorTlasNode), and descriptorBindingAccelerationStructureUpdateAfterBind
+		// is now enabled for this binding, so one registration suffices.
+		physicalRegistry.RegisterImportedAccelerationStructure<DecorTLAS>(decorAS.GetTLAS());
 
 		// Simple constant seed, not a real terrain query -- no node/pipeline exists yet at this
 		// point in Init, so there's no cheap way to ask the GPU what's actually there. The
@@ -420,9 +434,9 @@ namespace brassica {
 			constants::Class::Terrain::BaseTexelSize,
 			physicalRegistry.ConcurrentFamilies()
 		);
-		// One-time: unlike AutoExposureBuffer/LightsBuffer (a different real handle per
-		// FRAME_OVERLAP slot, re-imported every frame), this staging buffer's handle never
-		// changes once TerrainManager::Init allocates it, so there's nothing to refresh.
+		// One-time: unlike AutoExposureBuffer (a different real handle per FRAME_OVERLAP slot,
+		// re-imported every frame), this staging buffer's handle never changes once
+		// TerrainManager::Init allocates it, so there's nothing to refresh.
 		physicalRegistry.RegisterImportedBuffer<TerrainReadbackStaging>(
 			terrainManager.GetReadbackStagingBuffer(),
 			graph::ResourceDesc{
@@ -437,8 +451,7 @@ namespace brassica {
 			.device = device,
 			.pipelineLibrary = &pipelineLibrary,
 			.shaderWatcher = &shaderWatcher,
-			.terrainAS = &terrainAS,
-			.dispatchLoader = &terrainAS.GetDls(),
+			.dispatchLoader = &dls,
 			.physicalRegistry = &physicalRegistry,
 			.swapchainFormat = GetSwapchainFormat(),
 		};
@@ -453,8 +466,6 @@ namespace brassica {
 		render::EngineNodeRegistry::Instance().CreateAll();
 		render::EngineNodeRegistry::Instance().InitAll(nodeServices);
 
-		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
-
 		{
 			float altitude = std::max(10.0f, camera.position.y);
 			float horizonDist = std::sqrt(altitude * (2.0f * FAKE_PLANET_RADIUS + altitude));
@@ -465,7 +476,6 @@ namespace brassica {
 
 		shaderWatcher.Initialize();
 		pipelineLibrary.Initialize();
-		terrainAS.Initialize();
 		terrainManager.Initialize();
 		physicalRegistry.Initialize();
 
@@ -515,13 +525,52 @@ namespace brassica {
 			std::shared_ptr<MaterialManager>(&materialManager, [](MaterialManager*) {})
 		);
 
-		// Stage 1 of the GLTF/GLB pipeline: load a single hardcoded test asset at startup -- no
-		// asset-selection UI or multi-model support yet, see GltfModelManager's own comment.
-		// Provided unconditionally regardless of load success/failure: a failed load just leaves
-		// GetMeshletCount() at 0, which already keeps GltfRenderNode inactive on its own.
-		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager);
-		serviceLocator.Provide<GltfModelManager>(
-			std::shared_ptr<GltfModelManager>(&gltfModelManager, [](GltfModelManager*) {})
+		// Stage 2: ModelRegistry is producer-agnostic -- GltfModelManager (a real glTF/GLB file)
+		// is one producer, BuildProceduralTreeAsset() (a hand-built asset, no file/textures at
+		// all) is another, proving the registry doesn't secretly assume glTF. Registered
+		// unconditionally regardless of the glTF load's success: a failed load just leaves
+		// cowAsset empty (0 meshlets), which registers as a harmless no-op model. Failed load
+		// result intentionally unchecked here, same as the old single-model call -- a model
+		// with GetTotalMeshletCount() == 0 already keeps ModelRenderNode inactive on its own.
+		ModelAsset cowAsset;
+		gltfModelManager.LoadFromFile("assets/cow.glb", physicalRegistry, materialManager, cowAsset);
+		modelRegistry.RegisterAsset(cowAsset, "Cow");
+		modelRegistry.RegisterAsset(BuildProceduralTreeAsset(), "Procedural Tree");
+		modelRegistry.RegisterAsset(BuildManifoldTestTree(), "Manifold Test Tree");
+		proceduralArchetypeIndices = RegisterProceduralArchetypes(modelRegistry, materialManager);
+		serviceLocator.Provide<ModelRegistry>(std::shared_ptr<ModelRegistry>(&modelRegistry, [](ModelRegistry*) {}));
+		serviceLocator.Provide<DecorAccelerationStructure>(
+			std::shared_ptr<DecorAccelerationStructure>(&decorAS, [](DecorAccelerationStructure*) {})
+		);
+		serviceLocator.Provide<ModelInstanceManager>(
+			std::shared_ptr<ModelInstanceManager>(&modelInstanceManager, [](ModelInstanceManager*) {})
+		);
+
+		// Debug texture dump: click-a-button GPU->CPU copy + PNG export for world-state
+		// textures (TextureDumpWidget, "Debug" category). Pre-registered, fixed list -- add
+		// the next one as one more RegisterDumpable<K>() call. TerrainBiomeMainTexture/
+		// TerrainWeatherBiomeTexture are TerrainBiomeNode's stable resolved outputs; the A/B
+		// suffixed keys are its internal CA ping-pong state (either side is "real," neither is
+		// uniquely "current" from outside that node), exposed separately rather than guessed at.
+		textureDumpService.Init(device, graphicsQueue, graphicsQueueFamily, allocator, physicalRegistry);
+		textureDumpService.RegisterDumpable<TerrainBiomeMainTexture>("Biome Map");
+		textureDumpService.RegisterDumpable<TerrainWeatherBiomeTexture>("Weather/Cloud Coverage Map");
+		textureDumpService.RegisterDumpable<TerrainWeatherPingPongTexture>("Weather CA Ping-Pong State");
+		textureDumpService.RegisterDumpable<TerrainWeatherMapATexture>("Weather CA State (A)");
+		textureDumpService.RegisterDumpable<TerrainWeatherMapBTexture>("Weather CA State (B)");
+		textureDumpService.RegisterDumpable<TerrainBiomeMapATexture>("Biome CA State (A)");
+		textureDumpService.RegisterDumpable<TerrainBiomeMapBTexture>("Biome CA State (B)");
+		textureDumpService.RegisterDumpable<TerrainClipmapTexture>("Terrain Height/Normal (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainMinMaxTexture>("Terrain Min/Max (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainBiomeTexture>("Terrain Biome Index (LOD 0)");
+		textureDumpService.RegisterDumpable<TerrainShadowMap>("Terrain Shadow Map");
+		textureDumpService.RegisterDumpable<CloudShadowMap>("Cloud Shadow Map");
+		textureDumpService.RegisterDumpable<ShadingRateMap>("Shading Rate Map");
+		serviceLocator.Provide<TextureDumpService>(
+			std::shared_ptr<TextureDumpService>(&textureDumpService, [](TextureDumpService*) {})
+		);
+		serviceLocator.Provide<ProceduralArchetypeIndices>(
+			std::shared_ptr<ProceduralArchetypeIndices>(&proceduralArchetypeIndices, [](ProceduralArchetypeIndices*) {})
 		);
 
 		particleManager.Initialize();
@@ -547,6 +596,11 @@ namespace brassica {
 			std::shared_ptr<CloudLightingManager>(&cloudLightingManager, [](CloudLightingManager*) {})
 		);
 
+		lightningManager.Initialize();
+		serviceLocator.Provide<LightningManager>(
+			std::shared_ptr<LightningManager>(&lightningManager, [](LightningManager*) {})
+		);
+
 		serviceLocator.Provide<ShaderWatcher>(std::shared_ptr<ShaderWatcher>(&shaderWatcher, [](ShaderWatcher*) {}));
 		serviceLocator.Provide<render::PipelineLibrary>(
 			std::shared_ptr<render::PipelineLibrary>(&pipelineLibrary, [](render::PipelineLibrary*) {})
@@ -555,9 +609,6 @@ namespace brassica {
 		}));
 		serviceLocator.Provide<TerrainManager>(std::shared_ptr<TerrainManager>(&terrainManager, [](TerrainManager*) {
 		}));
-		serviceLocator.Provide<TerrainAccelerationStructure>(
-			std::shared_ptr<TerrainAccelerationStructure>(&terrainAS, [](TerrainAccelerationStructure*) {})
-		);
 		serviceLocator.Provide<graph::PhysicalResourceRegistry>(
 			std::shared_ptr<graph::PhysicalResourceRegistry>(&physicalRegistry, [](graph::PhysicalResourceRegistry*) {})
 		);
@@ -570,7 +621,7 @@ namespace brassica {
 		atmosphereManager.LoadState(configManager);
 		volumetricLightingManager.LoadState(configManager);
 		cloudLightingManager.LoadState(configManager);
-		terrainAS.LoadState(configManager);
+		lightningManager.LoadState(configManager);
 		shaderWatcher.LoadState(configManager);
 		pipelineLibrary.LoadState(configManager);
 		physicalRegistry.LoadState(configManager);
@@ -1086,10 +1137,12 @@ namespace brassica {
 		// hard way when storageBufferBinding (binding 6, PhysicalRegistry's bindless buffer arena)
 		// shipped without shaderStorageBufferArrayNonUniformIndexing/
 		// descriptorBindingStorageBufferUpdateAfterBind and every device that actually validates
-		// them (unlike this Mac's MoltenVK, which resolves them for free) rejected it. Deliberately
-		// NOT requesting descriptorBindingAccelerationStructureUpdateAfterBind (the spottiest of
-		// this family) or descriptorBindingVariableDescriptorCount (unused -- see
-		// ShadingRateAttachmentDesc-style fixed-size arrays in InitGlobalDescriptors).
+		// them (unlike this Mac's MoltenVK, which resolves them for free) rejected it.
+		// descriptorBindingAccelerationStructureUpdateAfterBind (requested below, on asFeatures)
+		// is also enabled now -- it lets the decor TLAS's binding-4 slot be rewritten every frame
+		// without the strict "write the descriptor before recording any command buffer that reads
+		// it" discipline terrain's TLAS needed. descriptorBindingVariableDescriptorCount stays
+		// unused -- see ShadingRateAttachmentDesc-style fixed-size arrays in InitGlobalDescriptors.
 		VkPhysicalDeviceVulkan12Features features12{};
 		features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 		features12.descriptorIndexing = VK_TRUE;
@@ -1114,9 +1167,31 @@ namespace brassica {
 			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
 		};
 		asFeatures.accelerationStructure = VK_TRUE;
+		asFeatures.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
 
 		VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
 		rqFeatures.rayQuery = VK_TRUE;
+
+		// Attachment-only VRS (ShadingRateComputeNode/shading_rate.comp derives a per-tile rate
+		// image from last frame's data): only attachmentFragmentShadingRate is requested --
+		// primitiveFragmentShadingRate/pipelineFragmentShadingRate stay false, matching
+		// PipelineLibrary.cpp's fixed {KEEP, REPLACE} combiner ops (REPLACE there needs only this
+		// feature, not fragmentShadingRateNonTrivialCombinerOps).
+		VkPhysicalDeviceFragmentShadingRateFeaturesKHR shadingRateFeatures{
+			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR
+		};
+		shadingRateFeatures.attachmentFragmentShadingRate = VK_TRUE;
+
+		// shading_rate.comp derives its per-tile rate from this frame's own HdrColor via real
+		// dFdx/dFdy (GL_KHR_compute_shader_derivatives), not a depth-based proxy -- quad-grouped
+		// (derivative_group_quadsKHR), one workgroup per tile, 16x16 invocations (one per pixel).
+		// Newly added 2026-11-13; unlike every other extension requested here, this one has no
+		// prior confirmation of real support on sgreenhusted's test hardware -- the engine will
+		// simply fail device selection if it's missing, same as any other hard requirement here.
+		VkPhysicalDeviceComputeShaderDerivativesFeaturesNV computeDerivativeFeatures{
+			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_NV
+		};
+		computeDerivativeFeatures.computeDerivativeGroupQuads = VK_TRUE;
 
 		VkPhysicalDeviceFeatures features1{};
 		features1.shaderInt64 = VK_TRUE;
@@ -1134,6 +1209,13 @@ namespace brassica {
 		// loudly if a target GPU genuinely lacks one, not silently misbehave.
 		features1.shaderStorageImageReadWithoutFormat = VK_TRUE;
 		features1.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+		// render::BlendMode::WeightedOit (PipelineLibrary.hpp) needs genuinely different blend
+		// state per color attachment (accum vs. revealage) -- without this, the spec leaves
+		// per-attachment-differing pAttachments undefined, and a real device validation error
+		// confirmed MoltenVK does NOT fall back to applying attachment 0's state everywhere; it
+		// silently breaks both attachments' blend math instead. Also near-universal on desktop
+		// GPUs, same confidence as the two formatless-storage features above.
+		features1.independentBlend = VK_TRUE;
 
 		vkb::PhysicalDeviceSelector selector{vkbInst};
 		selector.set_surface(surface)
@@ -1145,9 +1227,13 @@ namespace brassica {
 			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)
+			.add_required_extension(VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME)
 			.add_required_extension_features(meshFeatures)
 			.add_required_extension_features(asFeatures)
-			.add_required_extension_features(rqFeatures);
+			.add_required_extension_features(rqFeatures)
+			.add_required_extension_features(shadingRateFeatures)
+			.add_required_extension_features(computeDerivativeFeatures);
 
 		auto phys_ret = selector.select();
 		if (!phys_ret) {
@@ -1177,6 +1263,73 @@ namespace brassica {
 				maxBindlessSampledImages,
 				descIndexingProps.maxPerStageDescriptorUpdateAfterBindSampledImages
 			);
+		}
+
+		// Clamp s_shadingRateTileWidth/Height (passes/scene/resources.hpp, default
+		// constants::Class::ShadingRate::TileWidth/TileHeight = 16x16) into this device's real
+		// reported min/maxFragmentShadingRateAttachmentTexelSize. This used to be a log-only
+		// check on the assumption that a device outside the default range would silently clamp
+		// its own behavior -- confirmed wrong on real hardware (a GPU reporting an 8x8-only
+		// range, i.e. min == max == 8, rejects a 16x16 attachment outright at
+		// vkCmdBeginRendering, VUID-VkRenderingFragmentShadingRateAttachmentInfoKHR-imageView-
+		// 06150/06153). Every consumer of the tile size (ShadingRateMap's own Desc(),
+		// ShadingRateComputeNode's dispatch grid, every ReadPrevious<ShadingRateMap>().
+		// ShadingRateTexelSize() call) reads these globals, not the bare constants, so clamping
+		// here once is sufficient -- no per-consumer fix needed.
+		{
+			auto chain = chosenGPU.getProperties2<
+				vk::PhysicalDeviceProperties2,
+				vk::PhysicalDeviceFragmentShadingRatePropertiesKHR>();
+			const auto& shadingRateProps = chain.get<vk::PhysicalDeviceFragmentShadingRatePropertiesKHR>();
+			const std::uint32_t requestedWidth = s_shadingRateTileWidth;
+			const std::uint32_t requestedHeight = s_shadingRateTileHeight;
+			s_shadingRateTileWidth = std::clamp(
+				requestedWidth,
+				shadingRateProps.minFragmentShadingRateAttachmentTexelSize.width,
+				shadingRateProps.maxFragmentShadingRateAttachmentTexelSize.width
+			);
+			s_shadingRateTileHeight = std::clamp(
+				requestedHeight,
+				shadingRateProps.minFragmentShadingRateAttachmentTexelSize.height,
+				shadingRateProps.maxFragmentShadingRateAttachmentTexelSize.height
+			);
+			if (s_shadingRateTileWidth != requestedWidth || s_shadingRateTileHeight != requestedHeight) {
+				spdlog::warn(
+					"ShadingRateMap's default {}x{} tile size is outside this device's reported "
+					"VK_KHR_fragment_shading_rate texel-size range ({}x{} .. {}x{}); clamped to "
+					"{}x{}.",
+					requestedWidth,
+					requestedHeight,
+					shadingRateProps.minFragmentShadingRateAttachmentTexelSize.width,
+					shadingRateProps.minFragmentShadingRateAttachmentTexelSize.height,
+					shadingRateProps.maxFragmentShadingRateAttachmentTexelSize.width,
+					shadingRateProps.maxFragmentShadingRateAttachmentTexelSize.height,
+					s_shadingRateTileWidth,
+					s_shadingRateTileHeight
+				);
+			} else {
+				spdlog::info(
+					"ShadingRateMap tile size {}x{} is within the device's reported range ({}x{} .. {}x{}).",
+					s_shadingRateTileWidth,
+					s_shadingRateTileHeight,
+					shadingRateProps.minFragmentShadingRateAttachmentTexelSize.width,
+					shadingRateProps.minFragmentShadingRateAttachmentTexelSize.height,
+					shadingRateProps.maxFragmentShadingRateAttachmentTexelSize.width,
+					shadingRateProps.maxFragmentShadingRateAttachmentTexelSize.height
+				);
+			}
+
+			// shading_rate.comp's local_size_x/y (and its shared-memory reduction array size)
+			// have to equal the real clamped tile size exactly -- one workgroup per tile, one
+			// invocation per pixel, for its derivative_group_quadsKHR-based gradient measurement
+			// -- but GLSL local_size must be a compile-time literal, and this value isn't known
+			// until the clamp above runs. Baked in via the same [[CONSTANT]] text-substitution
+			// Shader::RegisterDefaultConstants() already uses for sampler indices, registered
+			// here (before any node's Init() compiles a shader, confirmed by this running inside
+			// InitVulkan(), itself called before EngineNodeRegistry::InitAll() in Engine::Init)
+			// rather than waiting for InitGlobalDescriptors' own RegisterDefaultConstants() call.
+			Shader::RegisterConstant("SHADING_RATE_TILE_WIDTH", s_shadingRateTileWidth);
+			Shader::RegisterConstant("SHADING_RATE_TILE_HEIGHT", s_shadingRateTileHeight);
 		}
 
 		// 3. Logical Device
@@ -1367,15 +1520,15 @@ namespace brassica {
 			nodeRegistry.SetFrameParamsAll(frameParams);
 
 			graph::Graph frameGraph;
-			frameGraph.Register<graph::Import<TerrainTLAS>>();
 			frameGraph.Register<graph::Import<Swapchain>>();
 			frameGraph.Register<graph::Import<AutoExposureBuffer>>();
-			frameGraph.Register<graph::Import<LightsBuffer>>();
 			frameGraph.Register<graph::Import<ClusteredLighting>>();
 			materialManager.RegisterBufferNode(frameGraph, physicalRegistry.Catalog());
+			lightManager.RegisterBufferNode(frameGraph);
 			foliageManager.RegisterTableNode(frameGraph);
-			gltfModelManager.UpdatePose(0.0f); // no real frame time in this path -- see its own comment
-			gltfModelManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+			modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+			decorAS.RegisterBufferNode(frameGraph, physicalRegistry.Catalog(), modelRegistry);
+			modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 			nodeRegistry.RegisterAllInto(frameGraph);
 			vk::Extent2D        extent = GetSwapchainExtent();
 			graph::FrameContext ctx{
@@ -1546,7 +1699,6 @@ namespace brassica {
 		audioManager.Update(deltaTime);
 
 		lightManager.Update(deltaTime, camera.position);
-		lightningManager.Update(deltaTime, static_cast<float>(currentTime), lightManager);
 
 		// Sync UI-tunable settings into the live push-constant struct before anything below
 		// reads it (the AtmosphereUBO upload and this frame's NodeFrameParams.atmosphere, used
@@ -1557,6 +1709,7 @@ namespace brassica {
 		atmosphereManager.ApplyTo(atmosphere);
 		cloudLightingManager.ApplyTo(atmosphere);
 		volumetricLightingManager.ApplyTo(atmosphere);
+		lightningManager.ApplyTo(atmosphere);
 
 		FrameDetails frameDetails{
 			.deltaTime = deltaTime,
@@ -1592,6 +1745,8 @@ namespace brassica {
 		ubo.previousCameraPosition = glm::vec4{previousCameraPosition, 0.0f};
 		ubo.previousViewProjMatrix = previousViewProjMatrix;
 		ubo.time = static_cast<float>(currentTime);
+		// From the double, not from the already-narrowed ubo.time -- see FrameUBO.hpp's comment.
+		ubo.timeMs = static_cast<std::uint32_t>(currentTime * 1000.0);
 		ubo.fov = camera.fov;
 		ubo.aspectRatio = camera.aspectRatio;
 		ubo.nearPlane = camera.nearPlane;
@@ -1606,13 +1761,6 @@ namespace brassica {
 		}
 
 		LightingUBO lightingUbo = lightManager.GetLightingUBO();
-		// LightManager has no knowledge of LightningManager (a separate Engine-owned system,
-		// updated above), so it always returns a zeroed lightningColor -- overwrite it here
-		// with the real global pulse/color instead of adding a cross-system dependency to
-		// LightManager's own API. Previously always zero: shaders/lighting.glsl's
-		// uLightningColor was wired up on the shader side with nothing upstream ever writing
-		// it, so cloud_render.frag's lightning glow term never fired.
-		lightingUbo.lightningColor = glm::vec4(lightningManager.GetGlobalColor(), lightningManager.GetGlobalPulse());
 		if (lightingUboMapped[activeFrame]) {
 			std::memcpy(lightingUboMapped[activeFrame], &lightingUbo, sizeof(LightingUBO));
 			vmaFlushAllocation(allocator, lightingUboAllocations[activeFrame], 0, sizeof(LightingUBO));
@@ -1622,18 +1770,43 @@ namespace brassica {
 			std::memcpy(atmosphereUboMapped[activeFrame], &atmosphere, sizeof(AtmospherePushConstants));
 			vmaFlushAllocation(allocator, atmosphereUboAllocations[activeFrame], 0, sizeof(AtmospherePushConstants));
 		}
-		// Field-by-field, not a bulk memcpy: LayerData interleaves user-tunable fields (exposure,
-		// tone-mapping curve, CDL, white balance, LTM) with fields only bloom_downsample.comp's
-		// update_layer_ae ever writes (histogram, adaptedLuminance, EMAs, autoUchimura*) -- a full
-		// overwrite here would stomp the shader's own accumulated auto-exposure state every frame.
+		// autoExposureBuffers[] is tunables-only now (LayerDataHost no longer holds any of
+		// bloom_downsample.comp's update_layer_ae-owned fields -- see AutoExposureStateBuffer
+		// below for those), so there's nothing left here that a full overwrite could stomp. Kept
+		// as an explicit per-field sync (SyncAutoExposureTunables) rather than a bulk memcpy
+		// anyway -- see that function's own comment.
 		if (autoExposureMapped[activeFrame]) {
 			auto* mappedExposure = static_cast<ExposureDataHost*>(autoExposureMapped[activeFrame]);
-			// Snapshot this slot's current contents before overwriting -- see s_exposureReadback's
-			// comment (AutoExposureData.hpp) for why this is already safe without extra fencing.
-			std::memcpy(&s_exposureReadback, mappedExposure, sizeof(ExposureDataHost));
-			SyncAutoExposureTunables(mappedExposure->layers[0], s_exposureData.layers[0]);
-			SyncAutoExposureTunables(mappedExposure->layers[1], s_exposureData.layers[1]);
+			mappedExposure->numLayers = s_exposureData.numLayers;
+			for (std::int32_t i = 0; i < s_exposureData.numLayers; ++i) {
+				SyncAutoExposureTunables(mappedExposure->layers[i].data, s_exposureData.layers[i].data);
+				mappedExposure->layers[i].targetDepth = s_exposureData.layers[i].targetDepth;
+				mappedExposure->layers[i].falloffWidth = s_exposureData.layers[i].falloffWidth;
+				mappedExposure->layers[i].falloffRate = s_exposureData.layers[i].falloffRate;
+				mappedExposure->layers[i].priority = s_exposureData.layers[i].priority;
+				mappedExposure->layers[i].enabled = s_exposureData.layers[i].enabled;
+				mappedExposure->layers[i].isMain = s_exposureData.layers[i].isMain;
+				mappedExposure->layers[i].isSky = s_exposureData.layers[i].isSky;
+				mappedExposure->layers[i].isCloud = s_exposureData.layers[i].isCloud;
+			}
 			vmaFlushAllocation(allocator, autoExposureAllocations[activeFrame], 0, sizeof(ExposureDataHost));
+		}
+		// AutoExposureStateBuffer is the single persistent buffer bloom_downsample.comp's
+		// update_layer_ae actually accumulates into (see its own Engine.cpp creation comment) --
+		// read it directly into the debug-display copy every frame. No frame-overlap delay
+		// needed here (unlike the old per-slot s_exposureReadback this replaces): there's only
+		// one real buffer now, so there's no "wait for a slot to cycle back around" to reason
+		// about, just a live read of whatever the GPU wrote last.
+		if (autoExposureStateMapped) {
+			// Invalidate before reading -- unlike every other mapped buffer in this file (CPU
+			// only ever writes those, never reads), this is the one place the CPU reads back
+			// data the GPU wrote, every frame. VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+			// (used to pick this allocation's memory type, same flag LightningStrikePool's
+			// write-only allocation uses) only promises the memory type is good for host
+			// *writes* -- nothing guarantees it's HOST_COHERENT for a GPU-write-then-CPU-read,
+			// so skip relying on whatever coherency the picked memory type happens to have.
+			vmaInvalidateAllocation(allocator, autoExposureStateAllocation, 0, sizeof(AutoExposureStateHost));
+			std::memcpy(&s_exposureStateReadback, autoExposureStateMapped, sizeof(AutoExposureStateHost));
 		}
 		physicalRegistry.RegisterImportedBuffer<AutoExposureBuffer>(
 			autoExposureBuffers[activeFrame],
@@ -1649,29 +1822,20 @@ namespace brassica {
 			vmaFlushAllocation(allocator, cdlGradingAllocations[activeFrame], 0, sizeof(CdlGradingLayersHost));
 		}
 
-		LightsSSBOData lightsSSBO = lightManager.GetLightsSSBOData();
-		if (lightsSSBOMapped[activeFrame]) {
-			std::memcpy(lightsSSBOMapped[activeFrame], &lightsSSBO, sizeof(LightsSSBOData));
-			vmaFlushAllocation(allocator, lightsSSBOAllocations[activeFrame], 0, sizeof(LightsSSBOData));
-		}
-		// Imported right after the CPU write it covers, same pattern and reasoning as
-		// AutoExposureBuffer just below -- this is what lets ParticleBehaviorNode's later GPU
-		// write (shaders/particle_behavior.comp) and ClusterLightAssignmentNode's read get a
-		// real tracked dependency instead of the manual After<ParticleBehaviorNode>() relation
-		// that used to be the only thing connecting them.
-		physicalRegistry.RegisterImportedBuffer<LightsBuffer>(
-			lightsSSBOBuffers[activeFrame],
-			graph::StorageBufferDesc(sizeof(LightsSSBOData)),
-			true
-		);
+		// CpuLightsBuffer/GpuLightsBuffer are real catalog-provisioned, bindless-indexed graph
+		// resources now (resources/core.hpp) -- CpuLightsBuffer's sole producer is
+		// LightManager's own PredefinedBufferNode (registered below, inside frameGraph's
+		// Register<>() block, via LightManager::RegisterBufferNode), GpuLightsBuffer's is
+		// GpuLightsResetNode. Neither needs an Engine-owned raw VMA buffer or a RegisterImportedBuffer
+		// call the way the old hybrid LightsBuffer did.
 
 		// ClusteredLighting (frame set binding 3, shaders/lighting.glsl's uClusters) -- S0 fix,
 		// design plan's restructure: this used to be a Create()'d transient graph buffer with
 		// its own Desc() while the real data lived here, in clusterGridBuffers[], imported
 		// separately into set 0 -- the graph's buffer barriers named the wrong VkBuffer
-		// entirely, a phantom resource. Same pattern as AutoExposureBuffer/LightsBuffer above:
-		// imported right after InitFrameSet's binding setup covers it, and
-		// ClusterLightAssignmentNode's Setup() now does a real Modify<>() against it.
+		// entirely, a phantom resource. Imported right after InitFrameSet's binding setup
+		// covers it, and ClusterLightAssignmentNode's Setup() now does a real Modify<>()
+		// against it.
 		physicalRegistry.RegisterImportedBuffer<ClusteredLighting>(
 			clusterGridBuffers[activeFrame],
 			graph::StorageBufferDesc(TOTAL_CLUSTERS * sizeof(ClusterGPU)),
@@ -1691,6 +1855,7 @@ namespace brassica {
 		bindlessBindings.accelerationStructureBinding = 4;
 		bindlessBindings.sampledImage3DBinding = 5;
 		bindlessBindings.storageBufferBinding = 6;
+		bindlessBindings.stencilImage2DBinding = 7;
 		bindlessBindings.frameSet = frameDescriptorSets[activeFrame];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);
@@ -1703,8 +1868,6 @@ namespace brassica {
 		terrainPush.gridParams = glm::uvec4(lods, meshletsPerRow, totalMeshlets, constants::Class::Terrain::MapDim);
 
 		bool forceRegeneration = terrainManager.ShouldForceRegeneration();
-
-		physicalRegistry.RegisterImportedAccelerationStructure<TerrainTLAS>(terrainAS.GetTLAS());
 
 		// SetFrameParams is a data-flow concern (this frame's camera/water-level/LOD data),
 		// deliberately kept separate from NodeServices/InitAll -- see the CRTP auto-registration
@@ -1744,6 +1907,8 @@ namespace brassica {
 			.moonDir = moonDir,
 			.moonRadiance = moonRadiance,
 			.time = ubo.time,
+			.deltaTime = deltaTime,
+			.timeMs = ubo.timeMs,
 			.worldScale = 1.0f,
 			.multiScatScale = atmosphereManager.GetMultiScatScale(),
 			.cloudShadowIntensity = 0.5f,
@@ -1755,24 +1920,22 @@ namespace brassica {
 		nodeRegistry.SetFrameParamsAll(frameParams);
 
 		graph::Graph frameGraph;
-		frameGraph.Register<graph::Import<TerrainTLAS>>();
-		// LightsBuffer (uLights/uLightCount, frame set binding 2) is a genuine hybrid: the CPU
-		// upload a few lines above writes it fresh every frame, and ParticleBehaviorNode's own
-		// Modify<LightsBuffer>() (firefly particles) writes on top of that during graph
-		// execution -- but ParticleBehaviorNode being the sole real-node "producer" ValidateRuntime
-		// sees made every *other* reader's Read<LightsBuffer>() depend on it actually being
-		// registered and active this frame, which doesn't always hold (particles can be
-		// disabled). An explicit Import<>, same pattern TerrainTLAS already uses alongside
-		// TerrainGenNode's own Modify<TerrainTLAS>(), gives it a producer that's never missing
-		// regardless -- confirmed the hard way: this was missing here (though present in the
-		// --print-render-graph path below) and produced exactly ValidateRuntime's "no node or
-		// import produces these resource keys" error on real hardware.
-		frameGraph.Register<graph::Import<LightsBuffer>>();
+		// CpuLightsBuffer/GpuLightsBuffer need no Import<> fallback the way the old hybrid
+		// LightsBuffer did: GpuLightsResetNode (CpuLightsBuffer's analogue is LightManager's own
+		// PredefinedBufferNode, registered via RegisterBufferNode below) is never gated by
+		// IParticleManager::IsEnabled() or anything else, so it's always a real, active
+		// producer. CpuLightsBuffer's Lifetime::External (ExternalBuffer<>, same mechanism
+		// ParticleTypeBuffer already relies on) means a frame where LightManager's upload node
+		// goes inactive (nothing changed) still leaves every reader seeing the last real
+		// upload, not a "no producer this frame" validation error.
 		frameGraph.Register<graph::Import<ClusteredLighting>>();
 		materialManager.RegisterBufferNode(frameGraph, physicalRegistry.Catalog());
+		lightManager.RegisterBufferNode(frameGraph);
 		foliageManager.RegisterTableNode(frameGraph);
-		gltfModelManager.UpdatePose(ubo.time);
-		gltfModelManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+		modelRegistry.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
+		decorAS.RegisterBufferNode(frameGraph, physicalRegistry.Catalog(), modelRegistry);
+		modelInstanceManager.SetCurrentTimeMs(ubo.timeMs);
+		modelInstanceManager.RegisterBufferNodes(frameGraph, physicalRegistry.Catalog());
 		nodeRegistry.RegisterAllInto(frameGraph);
 
 		graph::FrameContext ctx{.width = extent.width, .height = extent.height, .frameIndex = frameNumber};
@@ -2013,6 +2176,10 @@ namespace brassica {
 			return;
 		}
 
+		// Binding 2 (formerly LightsBuffer) is deliberately absent, not renumbered into --
+		// CpuLightsBuffer/GpuLightsBuffer moved to the bindless storage-buffer catalog (binding
+		// 6 of set 1), so every other binding here keeps its original number rather than
+		// cascading a renumber through every shader that hardcodes one of them.
 		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 		// Binding 0: FrameUBO
 		bindings[0]
@@ -2026,39 +2193,39 @@ namespace brassica {
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
-		// Binding 2: LightsBuffer
-		bindings[2]
-			.setBinding(2)
-			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
-			.setDescriptorCount(1)
-			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 3: ClusterGridBuffer
-		bindings[3]
+		bindings[2]
 			.setBinding(3)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 4: AtmosphereUBO
-		bindings[4]
+		bindings[3]
 			.setBinding(4)
 			.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 5: AutoExposureBuffer
-		bindings[5]
+		bindings[4]
 			.setBinding(5)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 6: CdlGradingLayers
-		bindings[6]
+		bindings[5]
 			.setBinding(6)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 		// Binding 7: LightningStrikePool
-		bindings[7]
+		bindings[6]
 			.setBinding(7)
+			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+			.setDescriptorCount(1)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 8: AutoExposureStateBuffer
+		bindings[7]
+			.setBinding(8)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(1)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
@@ -2119,6 +2286,64 @@ namespace brassica {
 			);
 		}
 
+		// AutoExposureStateBuffer: one persistent allocation, not per-FRAME_OVERLAP-slot --
+		// bloom_downsample.comp's update_layer_ae owns this (adaptedLuminance/stats/EMAs/
+		// autoUchimura*/histogram), and splitting it across FRAME_OVERLAP(=2) separate real
+		// buffers meant two independent, half-frame-rate-sampled EMA sequences interleaving
+		// every displayed frame -- each only ever updated every *other* frame, so they'd diverge
+		// from each other whenever the scene brightness changed between consecutive frames,
+		// visible as flashing/alternating brightness. Worst right at startup, before either
+		// sequence has converged to the real scene value, and during fast swings (lightning)
+		// where the two sequences sample the changing signal differently. Seeded from
+		// AutoExposureStateHost's own field defaults (not zeroed) so the very first frame
+		// doesn't start adaptedLuminance from 0 either -- same reasoning as autoExposureBuffers[i]'s
+		// s_exposureData seed below, just for the half of this data that isn't per-slot anymore.
+		{
+			VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			bufferInfo.size = sizeof(AutoExposureStateHost);
+			bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			const auto concurrentFamilies = physicalRegistry.ConcurrentFamilies();
+			if (concurrentFamilies.size() > 1) {
+				bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+				bufferInfo.queueFamilyIndexCount = static_cast<std::uint32_t>(concurrentFamilies.size());
+				bufferInfo.pQueueFamilyIndices = concurrentFamilies.data();
+			}
+			VmaAllocationCreateInfo allocCreateInfo{};
+			allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+			allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+				VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			VkBuffer          rawBuffer = VK_NULL_HANDLE;
+			VmaAllocationInfo allocResultInfo{};
+			if (vmaCreateBuffer(
+					allocator, &bufferInfo, &allocCreateInfo, &rawBuffer, &autoExposureStateAllocation, &allocResultInfo
+				) != VK_SUCCESS) {
+				spdlog::critical("Failed to create AutoExposureStateBuffer with VMA");
+				throw std::runtime_error("Failed to create AutoExposureStateBuffer with VMA");
+			}
+			autoExposureStateBuffer = rawBuffer;
+			autoExposureStateMapped = allocResultInfo.pMappedData;
+			if (autoExposureStateMapped) {
+				AutoExposureStateHost seed{};
+				std::memcpy(autoExposureStateMapped, &seed, sizeof(AutoExposureStateHost));
+			}
+			physicalRegistry.RegisterImportedBuffer<AutoExposureStateBuffer>(
+				autoExposureStateBuffer,
+				graph::ResourceDesc{
+					.kind = graph::ResourceDesc::Kind::Buffer,
+					.usageMask = static_cast<std::uint32_t>(vk::BufferUsageFlagBits::eStorageBuffer),
+					.byteSize = sizeof(AutoExposureStateHost),
+					// This genuinely is a resource meant to live indefinitely once allocated,
+					// surviving any frame TonemapComputeNode is inactive (ResourceDesc::persistent's
+					// own comment, Execution.hpp) -- unlike LightningStrikePool, which is zeroed
+					// (not meaningfully seeded) at creation, this buffer is seeded with real,
+					// meaningful default values just above, so hasDefinedContents=true is the
+					// accurate statement too.
+					.persistent = true,
+				},
+				true
+			);
+		}
+
 		std::vector<vk::DescriptorSetLayout> layouts(FRAME_OVERLAP, frameSetLayout);
 		vk::DescriptorSetAllocateInfo        allocInfo{};
 		allocInfo.setDescriptorPool(frameDescriptorPool);
@@ -2136,7 +2361,7 @@ namespace brassica {
 				VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 				bufferInfo.size = size;
 				bufferInfo.usage = usage;
-				// These frame-set buffers (FrameUBO, LightsSSBOData, AutoExposureBuffer, etc.) live
+				// These frame-set buffers (FrameUBO, AutoExposureBuffer, etc.) live
 				// outside the registry, so they don't get PhysicalResource.hpp's
 				// BuildBufferCreateInfo treatment -- but they're read and written by real graph
 				// nodes (ClusterLightAssignmentNode, ExposureNode, ...) just like any registry
@@ -2184,13 +2409,6 @@ namespace brassica {
 				&lightingUboMapped[i]
 			);
 			createBufferHelper(
-				sizeof(LightsSSBOData),
-				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-				lightsSSBOBuffers[i],
-				lightsSSBOAllocations[i],
-				&lightsSSBOMapped[i]
-			);
-			createBufferHelper(
 				TOTAL_CLUSTERS * sizeof(ClusterGPU),
 				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 				clusterGridBuffers[i],
@@ -2228,19 +2446,26 @@ namespace brassica {
 			if (cdlGradingMapped[i]) {
 				std::memcpy(cdlGradingMapped[i], &s_cdlGradingLayers, sizeof(CdlGradingLayersHost));
 			}
+			// Binding 2 (formerly LightsBuffer) deliberately absent -- see InitFrameSet's
+			// identical comment. Array positions below no longer match binding numbers 1:1;
+			// each write's own .setDstBinding() call is what actually matters.
 			std::array<vk::DescriptorBufferInfo, 8> bufferDescs{};
 			bufferDescs[0].setBuffer(frameUboBuffers[i]).setOffset(0).setRange(sizeof(FrameUBO));
 			bufferDescs[1].setBuffer(lightingUboBuffers[i]).setOffset(0).setRange(sizeof(LightingUBO));
-			bufferDescs[2].setBuffer(lightsSSBOBuffers[i]).setOffset(0).setRange(sizeof(LightsSSBOData));
-			bufferDescs[3].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
-			bufferDescs[4].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
-			bufferDescs[5].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
-			bufferDescs[6].setBuffer(cdlGradingBuffers[i]).setOffset(0).setRange(sizeof(CdlGradingLayersHost));
+			bufferDescs[2].setBuffer(clusterGridBuffers[i]).setOffset(0).setRange(TOTAL_CLUSTERS * sizeof(ClusterGPU));
+			bufferDescs[3].setBuffer(atmosphereUboBuffers[i]).setOffset(0).setRange(sizeof(AtmospherePushConstants));
+			bufferDescs[4].setBuffer(autoExposureBuffers[i]).setOffset(0).setRange(sizeof(ExposureDataHost));
+			bufferDescs[5].setBuffer(cdlGradingBuffers[i]).setOffset(0).setRange(sizeof(CdlGradingLayersHost));
 			// Same single buffer for every i -- see lightningStrikePoolBuffer's member comment.
-			bufferDescs[7]
+			bufferDescs[6]
 				.setBuffer(lightningStrikePoolBuffer)
 				.setOffset(0)
 				.setRange(sizeof(LightningStrikePoolLayout));
+			// Same single buffer for every i -- see autoExposureStateBuffer's member comment.
+			bufferDescs[7]
+				.setBuffer(autoExposureStateBuffer)
+				.setOffset(0)
+				.setRange(sizeof(AutoExposureStateHost));
 
 			std::array<vk::WriteDescriptorSet, 8> writes{};
 			writes[0]
@@ -2255,32 +2480,32 @@ namespace brassica {
 				.setBufferInfo(bufferDescs[1]);
 			writes[2]
 				.setDstSet(frameDescriptorSets[i])
-				.setDstBinding(2)
+				.setDstBinding(3)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[2]);
 			writes[3]
 				.setDstSet(frameDescriptorSets[i])
-				.setDstBinding(3)
-				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
+				.setDstBinding(4)
+				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
 				.setBufferInfo(bufferDescs[3]);
 			writes[4]
 				.setDstSet(frameDescriptorSets[i])
-				.setDstBinding(4)
-				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+				.setDstBinding(5)
+				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[4]);
 			writes[5]
 				.setDstSet(frameDescriptorSets[i])
-				.setDstBinding(5)
+				.setDstBinding(6)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[5]);
 			writes[6]
 				.setDstSet(frameDescriptorSets[i])
-				.setDstBinding(6)
+				.setDstBinding(7)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[6]);
 			writes[7]
 				.setDstSet(frameDescriptorSets[i])
-				.setDstBinding(7)
+				.setDstBinding(8)
 				.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 				.setBufferInfo(bufferDescs[7]);
 
@@ -2320,12 +2545,6 @@ namespace brassica {
 				cdlGradingAllocations[i] = nullptr;
 				cdlGradingMapped[i] = nullptr;
 			}
-			if (lightsSSBOBuffers[i] && lightsSSBOAllocations[i]) {
-				vmaDestroyBuffer(allocator, lightsSSBOBuffers[i], lightsSSBOAllocations[i]);
-				lightsSSBOBuffers[i] = nullptr;
-				lightsSSBOAllocations[i] = nullptr;
-				lightsSSBOMapped[i] = nullptr;
-			}
 			if (clusterGridBuffers[i] && clusterGridAllocations[i]) {
 				vmaDestroyBuffer(allocator, clusterGridBuffers[i], clusterGridAllocations[i]);
 				clusterGridBuffers[i] = nullptr;
@@ -2336,6 +2555,12 @@ namespace brassica {
 			vmaDestroyBuffer(allocator, lightningStrikePoolBuffer, lightningStrikePoolAllocation);
 			lightningStrikePoolBuffer = nullptr;
 			lightningStrikePoolAllocation = nullptr;
+		}
+		if (autoExposureStateBuffer && autoExposureStateAllocation) {
+			vmaDestroyBuffer(allocator, autoExposureStateBuffer, autoExposureStateAllocation);
+			autoExposureStateBuffer = nullptr;
+			autoExposureStateAllocation = nullptr;
+			autoExposureStateMapped = nullptr;
 		}
 		if (frameDescriptorPool) {
 			device.destroyDescriptorPool(frameDescriptorPool);
@@ -2351,7 +2576,7 @@ namespace brassica {
 		if (bindlessSetLayout) {
 			return;
 		}
-		std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
+		std::array<vk::DescriptorSetLayoutBinding, 8> bindings{};
 		// Binding 0: uTextures2D
 		bindings[0]
 			.setBinding(0)
@@ -2393,26 +2618,36 @@ namespace brassica {
 		// image2D/image2DArray/image3D aliases at binding 3). AssignAndWriteBindlessBufferIndex
 		// (PhysicalRegistry.hpp) auto-registers *every* eStorageBuffer-usage buffer here the
 		// moment it's provisioned, regardless of whether anything actually reads its index --
-		// 21 distinct keys are live today (entity, material, 5x foliage archetype/instance, 5x
-		// gltf geometry, 7x particle buffers now that the cluster's reactivated), and
+		// confirmed on real hardware that 20+ distinct keys are live today (entity, material,
+		// clustered lighting, 5x foliage archetype/instance, 5x gltf geometry, the full
+		// Model*/decor buffer set, 7x particle buffers now that the cluster's reactivated), and
 		// BindlessArena's own index 0 is never handed out (see its own comment), so 16 slots
 		// only ever gave 15 usable ones -- confirmed overflowing on real hardware as a
 		// "vkUpdateDescriptorSets ... oversteps the bounds of this binding" validation error
-		// (same fix already landed independently on the model-work branch, commit 8a140f1,
-		// once *its* buffers pushed the same pre-existing 16-slot cap over). 64 gives real
-		// headroom beyond today's count.
+		// (same fix landed independently on both the main-unified and model-work branches once
+		// each side's own buffer growth pushed the same pre-existing 16-slot cap over). 64 gives
+		// real headroom beyond today's count.
 		bindings[6]
 			.setBinding(6)
 			.setDescriptorType(vk::DescriptorType::eStorageBuffer)
 			.setDescriptorCount(64)
 			.setStageFlags(vk::ShaderStageFlagBits::eAll);
+		// Binding 7: uUTextures2D -- stencil-aspect-only sampled catalog (bindless.glsl). Small
+		// count: only a combined depth-stencil format with real eSampled usage registers here
+		// (PhysicalRegistry::AssignAndWriteBindlessIndices), which today is just GBufferDepth.
+		bindings[7]
+			.setBinding(7)
+			.setDescriptorType(vk::DescriptorType::eSampledImage)
+			.setDescriptorCount(16)
+			.setStageFlags(vk::ShaderStageFlagBits::eAll);
 
-		std::array<vk::DescriptorBindingFlags, 7> bindingFlags{
+		std::array<vk::DescriptorBindingFlags, 8> bindingFlags{
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlags{},
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
-			vk::DescriptorBindingFlagBits::ePartiallyBound,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 			vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind,
 		};
@@ -2429,7 +2664,8 @@ namespace brassica {
 		// resource's descriptor is written once at creation and read for the rest of its life,
 		// so there is no in-flight copy to keep separate the way the per-frame UBO needs.
 		std::array<vk::DescriptorPoolSize, 5> poolSizes{
-			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 32},
+			// +16 for binding 7 (uUTextures2D, the stencil-only sampled catalog)
+			vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, maxBindlessSampledImages + 64 + 32 + 16},
 			vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 4},
 			vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 256},
 			vk::DescriptorPoolSize{vk::DescriptorType::eAccelerationStructureKHR, 4},
@@ -2495,6 +2731,7 @@ namespace brassica {
 		bindlessBindings.accelerationStructureBinding = 4;
 		bindlessBindings.sampledImage3DBinding = 5;
 		bindlessBindings.storageBufferBinding = 6;
+		bindlessBindings.stencilImage2DBinding = 7;
 		bindlessBindings.frameSet = frameDescriptorSets[0];
 		bindlessBindings.frameSetLayout = frameSetLayout;
 		physicalRegistry.SetGlobalDescriptorSet(bindlessBindings);

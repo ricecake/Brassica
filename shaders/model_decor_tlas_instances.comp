@@ -1,0 +1,90 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bindless.glsl"
+#include "model_instance.glsl"
+
+// Stage 2 (model-shadows plan): walks every decor slot unconditionally -- the raw
+// [kDecorSlotBase, kDecorSlotBase + kDecorCapacity) range, not ModelVisibleListBuffer's
+// camera-frustum-culled survivor list -- because a shadow caster must still be considered when
+// it's outside the primary camera's frustum (e.g. a tree behind the camera casting a shadow
+// forward into view). Writes exactly kDecorCapacity hand-packed VkAccelerationStructureInstanceKHR
+// entries every frame (dead/ineligible slots get instanceMask = 0, not omitted) so the TLAS build
+// always has a fixed, known primitive count -- no GPU-compacted indirect count needed yet.
+//
+// Far-only MVP (Stage 2's own deliberate scope cut): every alive instance references its model's
+// shared template BLAS directly via DecorTemplateBlasAddressBuffer, even a currently wind-swaying
+// one -- Stage 4/5 adds the near/animated refit-BLAS path on top of this, not yet built here.
+layout(push_constant) uniform DecorTlasInstancePushConstants {
+	uint instanceBufIdx;
+	uint blasAddressBufIdx;
+	uint outInstanceBufIdx;
+}
+push;
+
+// One registered model's BLAS device address (lo/hi uint32 pair) -- see
+// DecorTemplateBlasAddressBuffer's own C++ comment (model/resources.hpp).
+layout(set = 1, binding = 6, std430) readonly buffer DecorTemplateBlasAddressBufferArray {
+	uvec2 addresses[];
+}
+uDecorTemplateBlasAddressBuffers[];
+
+// Hand-packed VkAccelerationStructureInstanceKHR -- GLSL has no native type for this struct.
+// transformRow0/1/2 are the real struct's row-major 3x4 transform; customIndexAndMask packs
+// instanceCustomIndex (low 24 bits) | mask (high 8 bits); sbtOffsetAndFlags packs
+// instanceShaderBindingTableRecordOffset (low 24 bits) | flags (high 8 bits); accelStructRefLo/Hi
+// is the 64-bit accelerationStructureReference, split because GLSL has no buffer-visible uint64
+// element type here. std430: three vec4 (48 bytes, 16-byte aligned) then four tightly-packed
+// uint scalars = 64 bytes total, matching the real C struct's byte layout exactly.
+struct RTInstance {
+	vec4 transformRow0;
+	vec4 transformRow1;
+	vec4 transformRow2;
+	uint customIndexAndMask;
+	uint sbtOffsetAndFlags;
+	uint accelStructRefLo;
+	uint accelStructRefHi;
+};
+
+layout(set = 1, binding = 6, std430) writeonly buffer DecorTLASInstanceBufferArray {
+	RTInstance instances[];
+}
+uDecorTLASInstanceBuffers[];
+
+void main() {
+	uint localIndex = gl_GlobalInvocationID.x;
+	if (localIndex >= kDecorCapacity) {
+		return;
+	}
+	uint decorIndex = kDecorSlotBase + localIndex;
+
+	RTInstance outInst;
+	outInst.transformRow0 = vec4(1.0, 0.0, 0.0, 0.0);
+	outInst.transformRow1 = vec4(0.0, 1.0, 0.0, 0.0);
+	outInst.transformRow2 = vec4(0.0, 0.0, 1.0, 0.0);
+	outInst.customIndexAndMask = 0u; // mask == 0: never intersected, the spec-legal "dead" entry
+	outInst.sbtOffsetAndFlags = 0u;
+	outInst.accelStructRefLo = 0u;
+	outInst.accelStructRefHi = 0u;
+
+	ModelInstance inst = uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[decorIndex];
+	if ((inst.flags & kModelInstanceAliveBit) != 0u) {
+		uvec2 blasAddr = uDecorTemplateBlasAddressBuffers[nonuniformEXT(push.blasAddressBufIdx)].addresses[inst.modelIndex];
+		// (0,0) means this model's template BLAS hasn't been built yet (e.g. the registry just
+		// changed this frame and DecorTemplateBlasNode hasn't caught up) -- a real, spec-legal
+		// "contributes nothing" reference, not an error.
+		if (blasAddr.x != 0u || blasAddr.y != 0u) {
+			mat4 m = QuatTranslationScaleToMat4(inst.position, inst.rotation, inst.scale);
+			outInst.transformRow0 = vec4(m[0][0], m[1][0], m[2][0], m[3][0]);
+			outInst.transformRow1 = vec4(m[0][1], m[1][1], m[2][1], m[3][1]);
+			outInst.transformRow2 = vec4(m[0][2], m[1][2], m[2][2], m[3][2]);
+			outInst.customIndexAndMask = (0xFFu << 24) | (decorIndex & 0xFFFFFFu);
+			outInst.sbtOffsetAndFlags = 0u;
+			outInst.accelStructRefLo = blasAddr.x;
+			outInst.accelStructRefHi = blasAddr.y;
+		}
+	}
+
+	uDecorTLASInstanceBuffers[nonuniformEXT(push.outInstanceBufIdx)].instances[localIndex] = outInst;
+}

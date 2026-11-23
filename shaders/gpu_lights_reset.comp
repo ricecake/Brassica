@@ -1,0 +1,34 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Zeroes GpuLightsBuffer fresh every frame -- count reset to MAX_GPU_LIGHTS (consumers skip
+// zero-intensity slots, same idiom the old shared buffer's atomicMax-to-a-fixed-ceiling already
+// used, so there's no need to track a real "how many are active" count), dynamicClaimCounter
+// reset to 0 (fireflies claim from this via atomicAdd), and every light's intensity zeroed so a
+// firefly that existed last frame but not this one doesn't leave a stale light behind. Runs
+// before ParticleBehaviorNode/LightningAgeNode (both Modify<GpuLightsBuffer>()) via the graph's
+// normal Create-before-accessor ordering -- see GpuLightsResetNode's own comment for why this
+// has to be a separate dispatch rather than a self-clear-then-claim step inside
+// particle_behavior.comp (no ordering guarantee between different invocations in one dispatch).
+#define GPU_LIGHTS_BUFFER_WRITABLE
+#include "bindless.glsl"
+#include "lighting.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuLightsResetPushConstants {
+	uint gpuLightsIndex;
+} push;
+
+void main() {
+	uint idx = gl_GlobalInvocationID.x;
+
+	if (idx == 0u) {
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].count = MAX_GPU_LIGHTS;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].dynamicClaimCounter = 0u;
+	}
+
+	if (idx < MAX_GPU_LIGHTS) {
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[idx].intensity = 0.0;
+	}
+}

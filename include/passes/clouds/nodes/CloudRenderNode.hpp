@@ -10,8 +10,10 @@
 #include "graph/PhysicalRegistry.hpp"
 #include "graph/PhysicalResource.hpp"
 #include "graph/SetupBuilder.hpp"
+#include "passes/lighting/resources.hpp"
 #include "passes/RenderPhases.hpp"
 #include "resources.hpp"
+#include "resources/core.hpp"
 #include "render/NodeCommands.hpp"
 #include "render/NodeLifecycle.hpp"
 #include "render/PipelineLibrary.hpp"
@@ -29,7 +31,6 @@ namespace brassica {
 		std::uint32_t skyViewIndex{0};
 		std::uint32_t weatherBiomeIndex{0};
 		std::uint32_t cloudShadowIndex{0};
-		std::uint32_t clipmapIndex{0};
 		std::uint32_t volumeIndex{0}; // sampled bindless index for CloudDetailVolume
 		std::uint32_t colorStorageIdx{0};
 		std::uint32_t transmittanceStorageIdx{0};
@@ -87,7 +88,10 @@ namespace brassica {
 			r.Read<SkyViewLUT>();
 			r.Read<CloudShadowMap>();
 			r.Read<TerrainWeatherBiomeTexture>();
-			r.Read<TerrainClipmapTexture>();
+			// Reads shaders/lighting.glsl's LightningStrikePool directly now (ray-distance-based
+			// glow localization, climate_ca.comp/cloud_raymarch.comp), not the reserved
+			// GpuLightsBuffer light-slot range -- those are for terrain/fog lighting instead.
+			r.Read<LightningStrikePool>();
 			r.Create<CloudColor>();
 			r.Create<CloudTransmittance>();
 			r.Create<CloudDepth>();
@@ -102,7 +106,6 @@ namespace brassica {
 			push.skyViewIndex = ctx.Index<SkyViewLUT>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
 			push.cloudShadowIndex = ctx.Index<CloudShadowMap>();
-			push.clipmapIndex = ctx.Index<TerrainClipmapTexture>();
 			push.colorStorageIdx = ctx.StorageIndex<CloudColor>();
 			push.transmittanceStorageIdx = ctx.StorageIndex<CloudTransmittance>();
 			push.depthStorageIdx = ctx.StorageIndex<CloudDepth>();

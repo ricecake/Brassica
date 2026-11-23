@@ -111,6 +111,12 @@ namespace brassica::testing {
 			// rather than prove anything about the declaration itself.
 			features1.shaderStorageImageReadWithoutFormat = VK_TRUE;
 			features1.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+			// Mirrors Engine.cpp's own independentBlend request -- test_pipeline_library.cpp's
+			// BlendMode::WeightedOit case needs genuinely different per-attachment blend state
+			// actually enabled on the device, confirmed via a real validation error without this
+			// (independentBlend feature was not enabled) plus silently wrong accum/revealage
+			// values, not just a diagnostic.
+			features1.independentBlend = VK_TRUE;
 
 			vkb::PhysicalDeviceSelector selector{m_vkbInstance};
 			selector.set_minimum_version(1, 3)

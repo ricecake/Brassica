@@ -1,5 +1,6 @@
 #version 460
 #include "bindless.glsl"
+#define AUTOEXPOSURE_STATE_WRITABLE
 #include "types/autoexposure.glsl"
 #include "helpers/tonemapping.glsl"
 
@@ -30,15 +31,49 @@ layout(push_constant) uniform DownsamplePushConstants {
 	float softness;
 	float karisDampening;
 	float maxPoolingFactor;
+	// Appended last -- see BloomPushConstants.hpp's comment on why this field specifically has to
+	// go here and nowhere else in this struct.
+	uint  cloudTransmittanceIndex;
+	// Sky/Cloud LTM pyramid slots -- see BloomPushConstants.hpp's matching comment. Main's slot
+	// keeps the field names above; these are the two other hard-classification kinds.
+	uint  outExpMip0SkyIndex;
+	uint  outExpMip1SkyIndex;
+	uint  outExpMip2SkyIndex;
+	uint  outExpMip3SkyIndex;
+	uint  outExpMip4SkyIndex;
+	uint  outWgtMip0SkyIndex;
+	uint  outWgtMip1SkyIndex;
+	uint  outWgtMip2SkyIndex;
+	uint  outWgtMip3SkyIndex;
+	uint  outWgtMip4SkyIndex;
+	uint  outExpMip0CloudIndex;
+	uint  outExpMip1CloudIndex;
+	uint  outExpMip2CloudIndex;
+	uint  outExpMip3CloudIndex;
+	uint  outExpMip4CloudIndex;
+	uint  outWgtMip0CloudIndex;
+	uint  outWgtMip1CloudIndex;
+	uint  outWgtMip2CloudIndex;
+	uint  outWgtMip3CloudIndex;
+	uint  outWgtMip4CloudIndex;
 } push;
 
 shared vec3 s_mip[16][16];
 shared vec3 s_ltmExp[16][16];
 shared vec3 s_ltmWgt[16][16];
+shared vec3 s_ltmExpSky[16][16];
+shared vec3 s_ltmWgtSky[16][16];
+shared vec3 s_ltmExpCloud[16][16];
+shared vec3 s_ltmWgtCloud[16][16];
 
 // Constants for histogram
 const float MIN_LOG_LUMA = -10.0;
 const float MAX_LOG_LUMA = 14.0; // Expanded to perfectly cover up to 100k+ lux physical light levels
+
+float get_saturation(vec3 c) {
+	float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+	return sqrt(max(dot(c - l, c - l) / 3.0, 0.0));
+}
 
 // Calculates a safe multiplier to prevent sky luminance from blowing out the Uchimura shoulder
 float calculateSkyAttenuation(vec3 rawHdrColor, float uchimuraM, float uchimuraL, float rolloffStrength) {
@@ -56,21 +91,16 @@ float calculateSkyAttenuation(vec3 rawHdrColor, float uchimuraM, float uchimuraL
 	return multiplier;
 }
 
-float get_saturation(vec3 c) {
-	float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-	return sqrt(max(dot(c - l, c - l) / 3.0, 0.0));
-}
-
 void update_layer_ae(int layerIdx) {
 	// Calculate total weight
 	float totalWeight = 0.0;
 	for (int i = 0; i < 256; i++) {
-		totalWeight += float(layers[layerIdx].histogram[i]);
+		totalWeight += float(states[layerIdx].histogram[i]);
 	}
 
 	if (totalWeight > 0.0) {
-		float lowCutoffWeight = totalWeight * layers[layerIdx].histogramLowCutoff;
-		float highCutoffWeight = totalWeight * layers[layerIdx].histogramHighCutoff;
+		float lowCutoffWeight = totalWeight * layers[layerIdx].data.histogramLowCutoff;
+		float highCutoffWeight = totalWeight * layers[layerIdx].data.histogramHighCutoff;
 
 		float filteredWeightSum = 0.0;
 		float weightedLogLumaSum = 0.0;
@@ -80,7 +110,7 @@ void update_layer_ae(int layerIdx) {
 		float maxValidLogLuma = MIN_LOG_LUMA;
 
 		for (int i = 0; i < 256; i++) {
-			float binWeight = float(layers[layerIdx].histogram[i]);
+			float binWeight = float(states[layerIdx].histogram[i]);
 			float nextWeightAccum = currentWeightAccum + binWeight;
 
 			// Check if this bin is within our cutoff range
@@ -112,7 +142,7 @@ void update_layer_ae(int layerIdx) {
 			float weightedLogLumaSqSum = 0.0;
 			currentWeightAccum = 0.0;
 			for (int i = 0; i < 256; i++) {
-				float binWeight = float(layers[layerIdx].histogram[i]);
+				float binWeight = float(states[layerIdx].histogram[i]);
 				float nextWeightAccum = currentWeightAccum + binWeight;
 				if (nextWeightAccum > lowCutoffWeight && currentWeightAccum < highCutoffWeight) {
 					float validBinWeight = binWeight;
@@ -128,48 +158,51 @@ void update_layer_ae(int layerIdx) {
 			float logStdDev = sqrt(weightedLogLumaSqSum / filteredWeightSum);
 
 			// Update Statistics
-			layers[layerIdx].minLuma = exp(minValidLogLuma);
-			layers[layerIdx].maxLuma = exp(maxValidLogLuma);
-			layers[layerIdx].avgLuma = avgLumaVal;
-			layers[layerIdx].stdDevLuma = logStdDev;
+			states[layerIdx].minLuma = exp(minValidLogLuma);
+			states[layerIdx].maxLuma = exp(maxValidLogLuma);
+			states[layerIdx].avgLuma = avgLumaVal;
+			states[layerIdx].stdDevLuma = logStdDev;
 
 			// Update adapted luminance (EMA)
-			float speed = (avgLumaVal > layers[layerIdx].adaptedLuminance) ? layers[layerIdx].speedUp : layers[layerIdx].speedDown;
+			float speed = (avgLumaVal > states[layerIdx].adaptedLuminance) ? layers[layerIdx].data.speedUp : layers[layerIdx].data.speedDown;
 			float adaptation = 1.0 - exp(-push.deltaTime * speed);
-			layers[layerIdx].adaptedLuminance += (avgLumaVal - layers[layerIdx].adaptedLuminance) * adaptation;
+			states[layerIdx].adaptedLuminance += (avgLumaVal - states[layerIdx].adaptedLuminance) * adaptation;
 
 			// Slow start EMA for statistics
 			float statsSpeed = 0.5; // Slightly slower for stability
 			float statsAdaptation = 1.0 - exp(-push.deltaTime * statsSpeed);
 
-			layers[layerIdx].emaMinLuma = mix(layers[layerIdx].emaMinLuma, layers[layerIdx].minLuma, statsAdaptation);
-			layers[layerIdx].emaMaxLuma = mix(layers[layerIdx].emaMaxLuma, layers[layerIdx].maxLuma, statsAdaptation);
-			layers[layerIdx].emaAvgLuma = mix(layers[layerIdx].emaAvgLuma, layers[layerIdx].avgLuma, statsAdaptation);
-			layers[layerIdx].emaStdDevLuma = mix(layers[layerIdx].emaStdDevLuma, layers[layerIdx].stdDevLuma, statsAdaptation);
+			states[layerIdx].emaMinLuma = mix(states[layerIdx].emaMinLuma, states[layerIdx].minLuma, statsAdaptation);
+			states[layerIdx].emaMaxLuma = mix(states[layerIdx].emaMaxLuma, states[layerIdx].maxLuma, statsAdaptation);
+			states[layerIdx].emaAvgLuma = mix(states[layerIdx].emaAvgLuma, states[layerIdx].avgLuma, statsAdaptation);
+			states[layerIdx].emaStdDevLuma = mix(states[layerIdx].emaStdDevLuma, states[layerIdx].stdDevLuma, statsAdaptation);
 
 			// Auto-tune Tonemapper
-			if (layers[layerIdx].autoTuneEnabled != 0) {
+			if (layers[layerIdx].data.autoTuneEnabled != 0) {
 				// Contrast derived from standard deviation
-				layers[layerIdx].autoUchimuraA = clamp(layers[layerIdx].emaStdDevLuma * 2.0, layers[layerIdx].minContrast, layers[layerIdx].maxContrast);
+				states[layerIdx].autoUchimuraA = clamp(states[layerIdx].emaStdDevLuma * 2.0, layers[layerIdx].data.minContrast, layers[layerIdx].data.maxContrast);
 
 				// Linear start pegged to adapted luminance
-				layers[layerIdx].autoUchimuraM = clamp(layers[layerIdx].adaptedLuminance * 0.5, 0.0, 0.5);
+				states[layerIdx].autoUchimuraM = clamp(states[layerIdx].adaptedLuminance * 0.5, 0.0, 0.5);
 
 				// Brightness from difference of max and average
-				float lumaRange = layers[layerIdx].emaMaxLuma - layers[layerIdx].emaAvgLuma;
-				layers[layerIdx].autoUchimuraP = clamp(layers[layerIdx].targetBrightness + lumaRange * 0.1, 0.5, 5.0);
+				float lumaRange = states[layerIdx].emaMaxLuma - states[layerIdx].emaAvgLuma;
+				states[layerIdx].autoUchimuraP = clamp(layers[layerIdx].data.targetBrightness + lumaRange * 0.1, 0.5, 5.0);
 
 				// Defaults for other parameters
-				layers[layerIdx].autoUchimuraL = 0.4;
-				layers[layerIdx].autoUchimuraC = 1.33;
-				layers[layerIdx].autoUchimuraB = 0.0;
+				states[layerIdx].autoUchimuraL = 0.4;
+				states[layerIdx].autoUchimuraC = 1.33;
+				states[layerIdx].autoUchimuraB = 0.0;
 			}
 		}
 	}
 
-	// Reset histogram for next frame
+	// Snapshot this frame's fully-accumulated histogram for CPU readback (LightingWidget), then
+	// reset the working histogram for next frame's accumulation. Must snapshot before resetting --
+	// nothing else ever holds onto this frame's real bin values once they're zeroed below.
 	for (int i = 0; i < 256; i++) {
-		layers[layerIdx].histogram[i] = 0;
+		states[layerIdx].histogramSnapshot[i] = states[layerIdx].histogram[i];
+		states[layerIdx].histogram[i] = 0;
 	}
 }
 
@@ -180,8 +213,14 @@ void main() {
 	ivec2 numGroups = ivec2(gl_NumWorkGroups.xy);
 
 	vec3 bloomColor = vec3(0.0);
-	vec3 ltmExposures = vec3(0.0);
-	vec3 ltmWeights = vec3(0.0);
+	// Separate per-slot LTM accumulators (Main/Sky/Cloud) -- see autoexposure/tonemap layer
+	// comment below for why these can no longer share one pyramid.
+	vec3 ltmExposuresMain = vec3(0.0);
+	vec3 ltmWeightsMain = vec3(0.0);
+	vec3 ltmExposuresSky = vec3(0.0);
+	vec3 ltmWeightsSky = vec3(0.0);
+	vec3 ltmExposuresCloud = vec3(0.0);
+	vec3 ltmWeightsCloud = vec3(0.0);
 
 	if (id.x < mip0Size.x && id.y < mip0Size.y) {
 		vec2 uv = (vec2(id) + 0.5) / vec2(mip0Size);
@@ -190,98 +229,187 @@ void main() {
 		// Sample center for auto-exposure (unthresholded)
 		vec3 centerSample = SAMPLE_NEAREST(push.hdrColorIndex, uv).rgb;
 		float centerDepth = SAMPLE_NEAREST(push.depthIndex, uv).r;
+		float linearZ = linearizeDepth(centerDepth, uNearPlane, uFarPlane);
 
-		int isSky = 0;
 		vec2 ndc = uv * 2.0 - 1.0;
 		vec4 ray_view = uInvProjMatrix * vec4(ndc, -1.0, 1.0);
 		ray_view = vec4(ray_view.xy, -1.0, 0.0);
 		vec3 worldDir = normalize((uInvViewMatrix * ray_view).xyz);
-		if (centerDepth >= 1.0) {
-			isSky = 1;
-		}
+		bool isSkyPixel = centerDepth >= 1.0;
+
+		// Real local cloud opacity, sampled directly from the raymarch's own accumulated
+		// transmittance (a plain texture -- no stencil involved) rather than a hard classification
+		// -- see exposureLayerWeight's comment (autoexposure.glsl) for why this needs to be
+		// continuous: a thin/translucent edge should hand most of its weight to whatever's behind
+		// it (isSkyPixel already covers that, unaffected by cloud presence), not snap entirely to
+		// the Cloud layer's own exposure/tonemap tuning.
+		vec3  cloudTransmittance = SAMPLE_LINEAR(push.cloudTransmittanceIndex, uv).rgb;
+		float avgCloudTransmittance = (cloudTransmittance.r + cloudTransmittance.g + cloudTransmittance.b) / 3.0;
+		float cloudWeight = clamp(1.0 - avgCloudTransmittance, 0.0, 1.0);
 
 		float luma = dot(centerSample, vec3(0.2126, 0.7152, 0.0722));
+		float logLuma = log(max(luma, 0.0001));
+		float normalizedLogLuma = clamp((logLuma - MIN_LOG_LUMA) / (MAX_LOG_LUMA - MIN_LOG_LUMA), 0.0, 1.0);
+		int   bin = int(normalizedLogLuma * 255.0);
 
-		if (layers[isSky].useAutoExposure != 0) {
-			float logLuma = log(max(luma, 0.0001));
+		// Loop every exposure layer whose depth range overlaps this pixel (exposureLayerWeight,
+		// autoexposure.glsl -- isMain layers always weight 1.0; the default single-layer config
+		// reduces this to exactly the old unconditional behavior). Each layer still accumulates
+		// its own histogram/adapted-luminance independently (weighted by overlap, not an
+		// all-or-nothing scene/sky pick); the per-pixel scalars this dispatch outputs itself
+		// (bloom's exposure/dynMaxLuma, the shared LTM exposures/weights) blend across layers in
+		// array order with the same sequential mix() idiom tonemap.frag's final color blend uses.
+		float exposure = 0.0;
+		float dynMaxLuma = 0.0;
+		bool  anyLayerWeighted = false;
+		bool  anyMainLtmEnabled = false;
+		bool  anySkyLtmEnabled = false;
+		bool  anyCloudLtmEnabled = false;
 
-			// Calculate weight based on distance to focus point
-			float dist = distance(uv, layers[isSky].focusPoint);
-			float weight = exp(-dist * layers[isSky].centerWeightTightness);
+		float remainingWeight = 1.0;
 
-			if (isSky == 1) {
-				// Raise the floor: ignore/down-weight sky pixels near or below the horizon
-				// This prevents dark sub-horizon values from dragging down the luminance.
-				weight *= smoothstep(-0.05, 0.1, worldDir.y);
+		// Iterate back-to-front (top layer down to main) to calculate the actual visible contribution
+		// of each layer. This prevents the main layer's histogram from capturing pixels fully covered
+		// by another layer, acting purely as a fallback for the remaining weight.
+		for (int mainValue = 0; mainValue <= 1; mainValue++)
+		for (int li = numExposureLayers - 1; li >= 0; --li) {
+			if (layers[li].isMain != mainValue) continue;
+
+			float baseWeight = exposureLayerWeight(layers[li], linearZ, isSkyPixel, cloudWeight);
+			if (baseWeight <= 0.0 || remainingWeight <= 0.0) {
+				continue;
 			}
 
-			// Map logLuma to histogram bin
-			float normalizedLogLuma = clamp((logLuma - MIN_LOG_LUMA) / (MAX_LOG_LUMA - MIN_LOG_LUMA), 0.0, 1.0);
-			int bin = int(normalizedLogLuma * 255.0);
+			// How much this layer actually contributes to the final pixel after upper layers take their share
+			float effectiveWeight = baseWeight * remainingWeight;
 
-			// Atomic add to histogram bin (weight scaled to uint)
-			atomicAdd(layers[isSky].histogram[bin], uint(weight * 1024.0));
-		}
+			if (layers[li].data.useAutoExposure != 0) {
+				float dist = distance(uv, layers[li].data.focusPoint);
+				float centerWeight = exp(-dist * layers[li].data.centerWeightTightness);
 
-		// LTM generation for Mip 0 (Scene and Sky)
-		if (layers[isSky].ltmEnabled != 0) {
-			float exposure = layers[isSky].targetLuminance / max(layers[isSky].avgLuma, 0.0001);
+				if (isSkyPixel) {
+					centerWeight *= smoothstep(-0.05, 0.1, worldDir.y);
+				}
 
-			vec3 c1 = centerSample * exposure * exp2(layers[isSky].ltmEvSpread);
-			vec3 c2 = centerSample * exposure;
-			vec3 c3 = centerSample * exposure * exp2(-layers[isSky].ltmEvSpread);
-
-			vec3 tc1 = aces(c1);
-			vec3 tc2 = aces(c2);
-			vec3 tc3 = aces(c3);
-
-			float l1 = sqrt(max(dot(tc1, vec3(0.2126, 0.7152, 0.0722)), 0.0));
-			float l2 = sqrt(max(dot(tc2, vec3(0.2126, 0.7152, 0.0722)), 0.0));
-			float l3 = sqrt(max(dot(tc3, vec3(0.2126, 0.7152, 0.0722)), 0.0));
-
-			ltmExposures = vec3(l1, l2, l3);
-
-			// Weights
-			vec3 e;
-			e.x = exp(-0.5 * (l1 - layers[isSky].ltmTarget) * (l1 - layers[isSky].ltmTarget) / (layers[isSky].ltmSigma * layers[isSky].ltmSigma));
-			e.y = exp(-0.5 * (l2 - layers[isSky].ltmTarget) * (l2 - layers[isSky].ltmTarget) / (layers[isSky].ltmSigma * layers[isSky].ltmSigma));
-			e.z = exp(-0.5 * (l3 - layers[isSky].ltmTarget) * (l3 - layers[isSky].ltmTarget) / (layers[isSky].ltmSigma * layers[isSky].ltmSigma));
-
-			vec3 s;
-			s.x = get_saturation(tc1);
-			s.y = get_saturation(tc2);
-			s.z = get_saturation(tc3);
-
-			// Combine weights
-			ltmWeights = pow(max(e, vec3(0.0001)), vec3(layers[isSky].ltmWeightExposedness)) * pow(max(s, vec3(0.0001)), vec3(layers[isSky].ltmWeightSaturation));
-
-			float weightSum = ltmWeights.x + ltmWeights.y + ltmWeights.z;
-			ltmWeights /= max(weightSum, 0.00001);
-
-			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0Index)], id, vec4(ltmExposures, 1.0));
-			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0Index)], id, vec4(ltmWeights, 1.0));
-		}
-
-		// 2. Exposure calculation
-		float exposure = 1.0;
-		if (layers[isSky].useAutoExposure != 0) {
-			exposure = layers[isSky].targetLuminance / max(layers[isSky].adaptedLuminance, 0.0001);
-			exposure = clamp(exposure, layers[isSky].minExposure, layers[isSky].maxExposure);
-
-			if (isSky == 1) {
-				float attenuation = calculateSkyAttenuation(centerSample * exposure, layers[1].autoUchimuraM, layers[1].autoUchimuraL, 1.20);
-				float mask = smoothstep(-3.14 * 0.125, 0.5 * 1.5707, asin(worldDir.y));
-				attenuation = mix(attenuation, 1.0, mask);
-				exposure *= attenuation;
+				// Atomic add to this layer's own histogram bin using effective visibility
+				atomicAdd(states[li].histogram[bin], uint(effectiveWeight * centerWeight * 1024.0));
 			}
-		} else {
-			exposure = (layers[isSky].iso / 100.0) * (1.0 / (layers[isSky].aperture * layers[isSky].aperture)) * layers[isSky].exposureTime;
+
+			// LTM generation for Mip 0
+			if (layers[li].data.ltmEnabled != 0) {
+				float ltmExposure = layers[li].data.targetLuminance / max(states[li].avgLuma, 0.0001);
+
+				vec3 c1 = centerSample * ltmExposure * exp2(layers[li].data.ltmEvSpread);
+				vec3 c2 = centerSample * ltmExposure;
+				vec3 c3 = centerSample * ltmExposure * exp2(-layers[li].data.ltmEvSpread);
+
+				vec3 tc1 = aces(c1);
+				vec3 tc2 = aces(c2);
+				vec3 tc3 = aces(c3);
+
+				float l1 = sqrt(max(dot(tc1, vec3(0.2126, 0.7152, 0.0722)), 0.0));
+				float l2 = sqrt(max(dot(tc2, vec3(0.2126, 0.7152, 0.0722)), 0.0));
+				float l3 = sqrt(max(dot(tc3, vec3(0.2126, 0.7152, 0.0722)), 0.0));
+
+				vec3 layerExposures = vec3(l1, l2, l3);
+
+				vec3 e;
+				e.x = exp(-0.5 * (l1 - layers[li].data.ltmTarget) * (l1 - layers[li].data.ltmTarget) / (layers[li].data.ltmSigma * layers[li].data.ltmSigma));
+				e.y = exp(-0.5 * (l2 - layers[li].data.ltmTarget) * (l2 - layers[li].data.ltmTarget) / (layers[li].data.ltmSigma * layers[li].data.ltmSigma));
+				e.z = exp(-0.5 * (l3 - layers[li].data.ltmTarget) * (l3 - layers[li].data.ltmTarget) / (layers[li].data.ltmSigma * layers[li].data.ltmSigma));
+
+				vec3 s;
+				s.x = get_saturation(tc1);
+				s.y = get_saturation(tc2);
+				s.z = get_saturation(tc3);
+
+				vec3 layerWeights = pow(max(e, vec3(0.0001)), vec3(layers[li].data.ltmWeightExposedness)) * pow(max(s, vec3(0.0001)), vec3(layers[li].data.ltmWeightSaturation));
+				float layerWeightSum = layerWeights.x + layerWeights.y + layerWeights.z;
+				layerWeights /= max(layerWeightSum, 0.00001);
+
+				// Route into this layer's own pyramid slot -- isMain/isCloud/isSky are mutually
+				// exclusive hard overrides (exposureLayerWeight's own priority order), any other
+				// generic depth-ranged layer falls back to Main's slot, same as the shared-
+				// pyramid behavior this replaces.
+				if (layers[li].isCloud != 0) {
+					ltmExposuresCloud += layerExposures * effectiveWeight;
+					ltmWeightsCloud += layerWeights * effectiveWeight;
+					anyCloudLtmEnabled = true;
+				} else if (layers[li].isSky != 0) {
+					ltmExposuresSky += layerExposures * effectiveWeight;
+					ltmWeightsSky += layerWeights * effectiveWeight;
+					anySkyLtmEnabled = true;
+				} else {
+					ltmExposuresMain += layerExposures * effectiveWeight;
+					ltmWeightsMain += layerWeights * effectiveWeight;
+					anyMainLtmEnabled = true;
+				}
+			}
+
+			// Exposure for bloom extraction
+			float layerExposure;
+			if (layers[li].data.useAutoExposure != 0) {
+				layerExposure = layers[li].data.targetLuminance / max(states[li].adaptedLuminance, 0.0001);
+				layerExposure = clamp(layerExposure, layers[li].data.minExposure, layers[li].data.maxExposure);
+
+				if (layers[li].isSky == 1) {
+					float attenuation = calculateSkyAttenuation(centerSample * layerExposure, states[li].autoUchimuraM, states[li].autoUchimuraL, 1.20);
+					// float mask = smoothstep(-3.14 * 0.125, 0.5 * 1.5707, asin(worldDir.y));
+					// attenuation = mix(attenuation, 1.0, mask);
+					layerExposure *= attenuation;
+				}
+
+			} else {
+				layerExposure = (layers[li].data.iso / 100.0) * (1.0 / (layers[li].data.aperture * layers[li].data.aperture)) * layers[li].data.exposureTime;
+			}
+			float layerDynMaxLuma = mix(10.0, 500.0, smoothstep(0.01, 1000.0, states[li].adaptedLuminance));
+
+			exposure += layerExposure * effectiveWeight;
+			dynMaxLuma += layerDynMaxLuma * effectiveWeight;
+			anyLayerWeighted = true;
+
+			remainingWeight -= effectiveWeight;
 		}
 
-		// Smoothly scale the maximum allowed bloom energy based on scene adaptation
-		float nightCap = 10.0; // Max post-exposure energy at night
-		float dayCap = 500.0;  // Max post-exposure energy in daylight
-		float dynMaxLuma = mix(nightCap, dayCap, smoothstep(0.01, 1000.0, layers[isSky].adaptedLuminance));
+		// Normalize if the sum of weights didn't reach 1.0 (restores the behavior where a
+		// single low-weight layer was forced to act as an opaque baseline). The same scalar
+		// rescales every per-slot LTM accumulator too -- it's a "the weights summed to less than
+		// 1, scale everything back up as if they'd summed to 1" correction, not a per-slot
+		// quantity, so each slot that accumulated anything gets the same invWeight applied.
+		float totalAccumulatedWeight = 1.0 - remainingWeight;
+		if (totalAccumulatedWeight > 0.0 && totalAccumulatedWeight < 1.0) {
+			float invWeight = 1.0 / totalAccumulatedWeight;
+			exposure *= invWeight;
+			dynMaxLuma *= invWeight;
+			if (anyMainLtmEnabled) {
+				ltmExposuresMain *= invWeight;
+				ltmWeightsMain *= invWeight;
+			}
+			if (anySkyLtmEnabled) {
+				ltmExposuresSky *= invWeight;
+				ltmWeightsSky *= invWeight;
+			}
+			if (anyCloudLtmEnabled) {
+				ltmExposuresCloud *= invWeight;
+				ltmWeightsCloud *= invWeight;
+			}
+		} else if (!anyLayerWeighted) {
+			exposure = 1.0;
+			dynMaxLuma = 10.0;
+		}
+
+		if (anyMainLtmEnabled) {
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0Index)], id, vec4(ltmExposuresMain, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0Index)], id, vec4(ltmWeightsMain, 1.0));
+		}
+		if (anySkyLtmEnabled) {
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0SkyIndex)], id, vec4(ltmExposuresSky, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0SkyIndex)], id, vec4(ltmWeightsSky, 1.0));
+		}
+		if (anyCloudLtmEnabled) {
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip0CloudIndex)], id, vec4(ltmExposuresCloud, 1.0));
+			imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip0CloudIndex)], id, vec4(ltmWeightsCloud, 1.0));
+		}
 
 		float knee = max(push.threshold * push.softness, 0.0001);
 		float kneeLower = push.threshold - knee;
@@ -335,8 +463,12 @@ void main() {
 	}
 
 	s_mip[localId.x][localId.y] = bloomColor;
-	s_ltmExp[localId.x][localId.y] = ltmExposures;
-	s_ltmWgt[localId.x][localId.y] = ltmWeights;
+	s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+	s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+	s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+	s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+	s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+	s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 
 	barrier();
 
@@ -346,13 +478,33 @@ void main() {
 		if (finished == numGroups.x * numGroups.y - 1) {
 			memoryBarrierBuffer();
 
-			if (layers[0].useAutoExposure != 0) update_layer_ae(0);
-			if (layers[1].useAutoExposure != 0) update_layer_ae(1);
+			for (int li = 0; li < numExposureLayers; ++li) {
+				if (layers[li].data.useAutoExposure != 0) update_layer_ae(li);
+			}
 
 			// Ensure results are written before we reset counters
 			memoryBarrierBuffer();
 			memoryBarrier();
 			workgroupCounter = 0;
+		}
+	}
+
+	// Whether to propagate each slot's LTM exposure/weight mip chain at all -- a uniform buffer
+	// read, same across every invocation, so computing it once here and reusing it below
+	// (instead of re-deriving it 4 times, once per mip level) is a plain dedup, not a behavior
+	// change. Per-slot (not one combined bool) so a layer that isn't configured for LTM doesn't
+	// force an unrelated slot's pyramid to still propagate.
+	bool anyMainLtmConfigured = false;
+	bool anySkyLtmConfigured = false;
+	bool anyCloudLtmConfigured = false;
+	for (int li = 0; li < numExposureLayers; ++li) {
+		if (layers[li].data.ltmEnabled == 0) continue;
+		if (layers[li].isCloud != 0) {
+			anyCloudLtmConfigured = true;
+		} else if (layers[li].isSky != 0) {
+			anySkyLtmConfigured = true;
+		} else {
+			anyMainLtmConfigured = true;
 		}
 	}
 
@@ -370,21 +522,53 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 1][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 1] +
 						  s_ltmExp[localId.x + 1][localId.y + 1]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 1][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 1] +
 						  s_ltmWgt[localId.x + 1][localId.y + 1]) * 0.25;
 			if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1Index)], outId, vec4(ltmWeightsMain, 1.0));
 			}
-			s_ltmExp[localId.x][localId.y] = ltmExposures;
-			s_ltmWgt[localId.x][localId.y] = ltmWeights;
+			s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+			s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 1][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 1] +
+						  s_ltmExpSky[localId.x + 1][localId.y + 1]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 1][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 1] +
+						  s_ltmWgtSky[localId.x + 1][localId.y + 1]) * 0.25;
+			if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+			s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+			s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 1][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 1] +
+						  s_ltmExpCloud[localId.x + 1][localId.y + 1]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 1][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 1] +
+						  s_ltmWgtCloud[localId.x + 1][localId.y + 1]) * 0.25;
+			if (outId.x < mip1Size.x && outId.y < mip1Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip1CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip1CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
+			}
+			s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+			s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 		}
 	}
 
@@ -403,21 +587,53 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 2][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 2] +
 						  s_ltmExp[localId.x + 2][localId.y + 2]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 2][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 2] +
 						  s_ltmWgt[localId.x + 2][localId.y + 2]) * 0.25;
 			if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2Index)], outId, vec4(ltmWeightsMain, 1.0));
 			}
-			s_ltmExp[localId.x][localId.y] = ltmExposures;
-			s_ltmWgt[localId.x][localId.y] = ltmWeights;
+			s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+			s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 2][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 2] +
+						  s_ltmExpSky[localId.x + 2][localId.y + 2]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 2][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 2] +
+						  s_ltmWgtSky[localId.x + 2][localId.y + 2]) * 0.25;
+			if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+			s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+			s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 2][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 2] +
+						  s_ltmExpCloud[localId.x + 2][localId.y + 2]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 2][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 2] +
+						  s_ltmWgtCloud[localId.x + 2][localId.y + 2]) * 0.25;
+			if (outId.x < mip2Size.x && outId.y < mip2Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip2CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip2CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
+			}
+			s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+			s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 		}
 	}
 
@@ -436,21 +652,53 @@ void main() {
 		}
 		s_mip[localId.x][localId.y] = bloomColor;
 
-		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 4][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 4] +
 						  s_ltmExp[localId.x + 4][localId.y + 4]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 4][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 4] +
 						  s_ltmWgt[localId.x + 4][localId.y + 4]) * 0.25;
 			if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3Index)], outId, vec4(ltmWeightsMain, 1.0));
 			}
-			s_ltmExp[localId.x][localId.y] = ltmExposures;
-			s_ltmWgt[localId.x][localId.y] = ltmWeights;
+			s_ltmExp[localId.x][localId.y] = ltmExposuresMain;
+			s_ltmWgt[localId.x][localId.y] = ltmWeightsMain;
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 4][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 4] +
+						  s_ltmExpSky[localId.x + 4][localId.y + 4]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 4][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 4] +
+						  s_ltmWgtSky[localId.x + 4][localId.y + 4]) * 0.25;
+			if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+			s_ltmExpSky[localId.x][localId.y] = ltmExposuresSky;
+			s_ltmWgtSky[localId.x][localId.y] = ltmWeightsSky;
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 4][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 4] +
+						  s_ltmExpCloud[localId.x + 4][localId.y + 4]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 4][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 4] +
+						  s_ltmWgtCloud[localId.x + 4][localId.y + 4]) * 0.25;
+			if (outId.x < mip3Size.x && outId.y < mip3Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip3CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip3CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
+			}
+			s_ltmExpCloud[localId.x][localId.y] = ltmExposuresCloud;
+			s_ltmWgtCloud[localId.x][localId.y] = ltmWeightsCloud;
 		}
 	}
 
@@ -468,18 +716,46 @@ void main() {
 			imageStore(uImagesGenericWrite[nonuniformEXT(push.outMip4Index)], outId, vec4(bloomColor, 1.0));
 		}
 
-		if (layers[0].ltmEnabled != 0 || layers[1].ltmEnabled != 0) {
-			ltmExposures = (s_ltmExp[localId.x][localId.y] +
+		if (anyMainLtmConfigured) {
+			ltmExposuresMain = (s_ltmExp[localId.x][localId.y] +
 						  s_ltmExp[localId.x + 8][localId.y] +
 						  s_ltmExp[localId.x][localId.y + 8] +
 						  s_ltmExp[localId.x + 8][localId.y + 8]) * 0.25;
-			ltmWeights = (s_ltmWgt[localId.x][localId.y] +
+			ltmWeightsMain = (s_ltmWgt[localId.x][localId.y] +
 						  s_ltmWgt[localId.x + 8][localId.y] +
 						  s_ltmWgt[localId.x][localId.y + 8] +
 						  s_ltmWgt[localId.x + 8][localId.y + 8]) * 0.25;
 			if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4Index)], outId, vec4(ltmExposures, 1.0));
-				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4Index)], outId, vec4(ltmWeights, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4Index)], outId, vec4(ltmExposuresMain, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4Index)], outId, vec4(ltmWeightsMain, 1.0));
+			}
+		}
+		if (anySkyLtmConfigured) {
+			ltmExposuresSky = (s_ltmExpSky[localId.x][localId.y] +
+						  s_ltmExpSky[localId.x + 8][localId.y] +
+						  s_ltmExpSky[localId.x][localId.y + 8] +
+						  s_ltmExpSky[localId.x + 8][localId.y + 8]) * 0.25;
+			ltmWeightsSky = (s_ltmWgtSky[localId.x][localId.y] +
+						  s_ltmWgtSky[localId.x + 8][localId.y] +
+						  s_ltmWgtSky[localId.x][localId.y + 8] +
+						  s_ltmWgtSky[localId.x + 8][localId.y + 8]) * 0.25;
+			if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4SkyIndex)], outId, vec4(ltmExposuresSky, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4SkyIndex)], outId, vec4(ltmWeightsSky, 1.0));
+			}
+		}
+		if (anyCloudLtmConfigured) {
+			ltmExposuresCloud = (s_ltmExpCloud[localId.x][localId.y] +
+						  s_ltmExpCloud[localId.x + 8][localId.y] +
+						  s_ltmExpCloud[localId.x][localId.y + 8] +
+						  s_ltmExpCloud[localId.x + 8][localId.y + 8]) * 0.25;
+			ltmWeightsCloud = (s_ltmWgtCloud[localId.x][localId.y] +
+						  s_ltmWgtCloud[localId.x + 8][localId.y] +
+						  s_ltmWgtCloud[localId.x][localId.y + 8] +
+						  s_ltmWgtCloud[localId.x + 8][localId.y + 8]) * 0.25;
+			if (outId.x < mip4Size.x && outId.y < mip4Size.y) {
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outExpMip4CloudIndex)], outId, vec4(ltmExposuresCloud, 1.0));
+				imageStore(uImagesGenericWrite[nonuniformEXT(push.outWgtMip4CloudIndex)], outId, vec4(ltmWeightsCloud, 1.0));
 			}
 		}
 	}

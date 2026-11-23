@@ -18,7 +18,6 @@
 #include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 #include "ShaderWatcher.hpp"
-#include "passes/terrain/TerrainAccelerationStructure.hpp"
 #include "passes/terrain/TerrainManager.hpp"
 
 namespace brassica {
@@ -47,19 +46,16 @@ namespace brassica {
 		render::PipelineLibrary*         pipelineLibrary = nullptr;
 		graph::PhysicalResourceRegistry* physicalRegistry = nullptr;
 		ComputeShader                    genShader;
-		ComputeShader                    aabbShader;
-		TerrainAccelerationStructure*    terrainAS = nullptr;
 		TerrainGenPushConstants          push{};
 		glm::vec3                        cameraPos{0.0f};
 		bool                             hasUpdate{true};
 		bool                             forceRegeneration{true};
+		bool                             shaderChanged{false};
 
 		void Init(const render::NodeServices& services) {
 			pipelineLibrary = services.pipelineLibrary;
-			terrainAS = services.terrainAS;
 			physicalRegistry = services.physicalRegistry;
-			if (!genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp") ||
-			    !aabbShader.CompileComputeFromFile(services.device, "shaders/terrain_aabb.comp")) {
+			if (!genShader.CompileComputeFromFile(services.device, "shaders/terrain_gen.comp")) {
 				spdlog::critical("TerrainGenNode shader compilation failed.");
 				throw std::runtime_error("TerrainGenNode shader compilation failed.");
 			}
@@ -69,20 +65,20 @@ namespace brassica {
 		}
 
 		void RegisterShaders(ShaderWatcher& watcher) {
-			watcher.RegisterShader(&genShader);
-			watcher.RegisterShader(&aabbShader);
+			watcher.RegisterShader(&genShader, [this](){
+				shaderChanged = true;
+			});
 		}
 
 		void Destroy(vk::Device device) {
 			genShader.Destroy(device);
-			aabbShader.Destroy(device);
 		}
 
 		void SetFrameParams(const render::NodeFrameParams& p) {
 			cameraPos = p.cameraPosition;
 			push.gridParams = p.terrainGridParams;
 			hasUpdate = p.cameraPosition != p.previousCameraPosition;
-			forceRegeneration = p.forceRegeneration;
+			forceRegeneration = p.forceRegeneration || shaderChanged;
 
 			// Publishes this frame's numLODs onto all three keys' catalog instances -- the one
 			// piece of runtime config their Desc() needs beyond FrameContext (ResourceKeys.hpp).
@@ -104,20 +100,19 @@ namespace brassica {
 		// actually wanted here -- alias-pool bypass + zero-init-clear exemption only, nothing
 		// about scheduling -- so "recreating" them each frame is really just re-asserting the same
 		// desc through ProvisionTexture's normal desc-match early return, not destroying state.
-		// TerrainTLAS needs no .Desc() either -- Provision()'s AccelerationStructure detection now
-		// checks the registry's own m_accelStructs map directly instead of a realization's raw
-		// desc.kind (PhysicalRegistry.hpp).
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Create<TerrainClipmapTexture>();
 			r.Create<TerrainMinMaxTexture>();
 			r.Create<TerrainBiomeTexture>();
-			r.Modify<TerrainTLAS>();
 		}
 
 		void Execute(graph::NodeContext& ctx) {
 			if (!hasUpdate && !forceRegeneration) {
 				return;
+			}
+			if (shaderChanged) {
+				shaderChanged = false;
 			}
 
 			push.clipmapStorageIdx = ctx.StorageIndex<TerrainClipmapTexture>();

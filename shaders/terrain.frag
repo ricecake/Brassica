@@ -2,6 +2,7 @@
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
+#include "helpers/wind.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 
 layout(location = 0) in vec3 inPosition;
@@ -39,97 +40,11 @@ void main() {
 	float roughness = inMaterial.g;
 	float glint = inMaterial.b;
 
-	// View vector and grazing angle for screen-space footprint:
-	vec3 viewDir = -normalize(inPosition);
-	float NdotV = clamp(abs(dot(N, viewDir)), 0.20, 1.0);
-	float effDist = camDist / NdotV;
-
-	// -------------------------------------------------------------------------
-	// Unified 3-Tier Stationary Base Noises (Macro, Medium, Micro)
-	// Evaluated at fixed world-space frequencies to eliminate texture swimming.
-	// We extract both value and analytical gradient in just three invocations.
-	// -------------------------------------------------------------------------
-	// 1. Construct the TBN frame
-	vec3 referenceUp = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-	vec3 T = normalize(cross(referenceUp, N));
-	vec3 B = normalize(cross(N, T));
-
-	mat3 warpNoiseGrad;
-	vec3 warpNoise = 1.0*500*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
-	OrganicPlateData mCellS = getOrganicPlate(((worldPos+warpNoise)).xz, 0.00625, 5.0);
-	OrganicPlateData mCellM = getOrganicPlate(((worldPos+warpNoise)).xz, 0.003125, 7.0);
-	OrganicPlateData mCellL = getOrganicPlate(((worldPos+warpNoise)).xz, 0.0015625, 11.0);
-
-	// vec3 noisePos = clamp(mCell.barycentric, 0.0, 1.0);
-	vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + ((2.0*mCellL.barycentric)-1.0);
-	vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + ((2.0*mCellM.barycentric)-1.0);
-	vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + ((2.0*mCellS.barycentric)-1.0);
-
-	// vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + (mCellL.barycentric-vec3(1.0/3.0));
-	// vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + (mCellM.barycentric-vec3(1.0/3.0));
-	// vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + (mCellS.barycentric-vec3(1.0/3.0));
-
-	vec3 macroGrad3D;
-	float macroVal = abs(0.5+0.5*dot_noise_fbm(noisePosL, 2, 0.0, macroGrad3D));
-
-	vec3 mediumGrad3D;
-	float mediumVal = abs(0.5+0.5*dot_noise_fbm(noisePosM, 3, 37.0, mediumGrad3D));
-
-	vec3 microGrad3D;
-	float microVal = abs(0.5+0.5*dot_noise_fbm(noisePosS, 4, 83.0, microGrad3D));
-
-/*
-	vec3 scaled_pos = noisePos;//vec3(noisePos.xz * 0.022, noisePos.y * 0.011);
-	float footprint = length(dFdx(scaled_pos)) + length(dFdy(scaled_pos));
-	vec4 macro = simplex_flow_noise_grad(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), vec2(0, 1), 256);
-	// float medium = simplex_fbm_curl(scaled_pos, 8, uTime, N, footprint, 512);
-	// float medium = phasimpleNoise(noisePos.xz*0.01, normalize(B.xz), 0.50*uTime);
-	// vec2 Z = phasorNoise3D(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 1.0, normalize(macro.yzw), B, 0.0, uTime);
-	// medium = Z.x/length(Z);
-	vec4 micro = simplex_flow_noise_grad(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), vec2(1, 0), 64);
-
-	vec3 macroGrad3D = macro.yzw;
-	// float macroVal = macro.x;// = dot_noise_fbm(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 3, 0.0, macroGrad3D);
-	float macroVal = dot_noise_fbm(vec3(noisePos.xz * 0.035, noisePos.y * 0.018), 3, 0.0, macroGrad3D);
-
-	vec3 mediumGrad3D = macro.yzw;
-	// float mediumVal = medium;//dot_noise_fbm(vec3(noisePos.xz * 0.22, noisePos.y * 0.11), 2, 37.0, mediumGrad3D);
-	float mediumVal = dot_noise_fbm(vec3(noisePos.xz * 0.22, noisePos.y * 0.11), 2, 37.0, mediumGrad3D);
-
-	vec3 microGrad3D = micro.yzw;
-	// float microVal = micro.x;//dot_noise_fbm(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), 2, 83.0, microGrad3D);
-	float microVal = dot_noise_fbm(vec3(noisePos.xz * 1.40, noisePos.y * 0.70), 2, 83.0, microGrad3D);
-*/
-	// Scale analytical gradients by base frequency (chain rule: d(noise)/d(noisePos) = d(noise)/dp * freq)
-	vec2 macroGrad  = macroGrad3D.xz;
-	vec2 mediumGrad = mediumGrad3D.xz;
-	vec2 microGrad  = microGrad3D.xz;
-
-	// -------------------------------------------------------------------------
-	// 3-Band Distance Cross-Fading: One fading out, one sustaining, one fading in.
-	// Near transition (~15m to ~120m): Micro fades out, Medium sustains, Macro fades in.
-	// Sum of active noise weight is preserved to maintain consistent surface complexity.
-	// -------------------------------------------------------------------------
-	vec4 fadeRanges = vec4(250.0, 1000.0, 25000.0, 250000.0);
-	float nearBlend = smoothstep(fadeRanges[0], fadeRanges[1], effDist);
-	float farBlend = smoothstep(fadeRanges[1], fadeRanges[2], effDist);
-	float horizonFade = smoothstep(fadeRanges[2], fadeRanges[3], effDist);
-
-	float wMicroColor  = (1.0 - nearBlend);
-	float wMediumColor = (1.0 - farBlend);
-	float wMacroColor  = (1.0 - horizonFade);
-
-	float wMicroNorm  = (1.0 - nearBlend);
-	float wMediumNorm = (1.0 - farBlend);
-	float wMacroNorm  = (1.0 - horizonFade);
-
 	vec4 weights = inMaterialWeights;
 	float grassW = weights.x;
 	float rockW  = weights.y;
 	float sandW  = weights.z;
 	float snowW  = weights.w;
-
-	vec2 perturbedGradSum = vec2(0.0);
 
 	// Sample climate weather biome parameters if available
 	float cloudCoverage = 0.0;
@@ -169,18 +84,158 @@ void main() {
 		wb.color = evalCosinePalette(palA, palB, palC, palD, 0.65);
 	}
 
+
+	// View vector and grazing angle for screen-space footprint:
+	vec3 viewDir = -normalize(inPosition);
+	float NdotV = clamp(abs(dot(N, viewDir)), 0.20, 1.0);
+	float effDist = camDist / NdotV;
+
+	// -------------------------------------------------------------------------
+	// Unified 3-Tier Stationary Base Noises (Macro, Medium, Micro)
+	// Evaluated at fixed world-space frequencies to eliminate texture swimming.
+	// We extract both value and analytical gradient in just three invocations.
+	// -------------------------------------------------------------------------
+	// 1. Construct the TBN frame
+	vec3 referenceUp = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 T = normalize(cross(referenceUp, N));
+	vec3 B = normalize(cross(N, T));
+
+	mat3 warpNoiseGrad;
+	vec3 warpNoise = 1.0*1*cross_noise_fbm(worldPos*0.00125, 3, 12, warpNoiseGrad);
+	vec3 warpCurl = get_curl(warpNoiseGrad);
+	// OrganicPlateData mCellS = getOrganicPlate(((worldPos+warpNoise)).xz, 0.00625, 5.0);
+	// OrganicPlateData mCellM = getOrganicPlate(((worldPos+warpNoise)).xz, 0.003125, 7.0);
+	// OrganicPlateData mCellL = getOrganicPlate(((worldPos+warpNoise)).xz, 0.0015625, 11.0);
+
+	// vec3 noisePos = clamp(mCell.barycentric, 0.0, 1.0);
+	// vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + ((2.0*mCellL.barycentric)-1.0);
+	// vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + ((2.0*mCellM.barycentric)-1.0);
+	// vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + ((2.0*mCellS.barycentric)-1.0);
+	// PUT THIS IN THE debris shader for tree cannopy
+
+	// vec3 noisePosL = vec3(mCellL.nearestCentroid.x, 0.0, mCellL.nearestCentroid.y) + (mCellL.barycentric-vec3(1.0/3.0));
+	// vec3 noisePosM = vec3(mCellM.nearestCentroid.x, 0.0, mCellM.nearestCentroid.y) + (mCellM.barycentric-vec3(1.0/3.0));
+	// vec3 noisePosS = vec3(mCellS.nearestCentroid.x, 0.0, mCellS.nearestCentroid.y) + (mCellS.barycentric-vec3(1.0/3.0));
+
+	// 2. Wind Alignment & Terrain Exposure to Wind
+	// Surface prevailing wind vector from latitude:
+	float lat = clamp(worldPos.z / (FAKE_PLANET_RADIUS * 1.5707963), -1.0, 1.0);
+	vec2 pWind = getPrevailingWind(lat);
+	vec3 windDir3D = vec3(pWind.x, 0.0, pWind.y);
+	float windLen = length(windDir3D);
+	if (windLen > 1e-4) {
+		windDir3D /= windLen;
+	} else {
+		windDir3D = vec3(1.0, 0.0, 0.0);
+	}
+
+	// Tangent plane wind vector projection for wave alignment
+	vec3 windTangent = normalize(windDir3D - N * dot(windDir3D, N));
+	if (length(windTangent) < 1e-4) {
+		windTangent = T;
+	}
+
+	// Surface exposure to wind:
+	// Wind blowing against the slope: N dot (-windDir3D) > 0 is the exposed windward face.
+	// Leeward / back sides of hills face away from incoming wind (N dot (-windDir3D) < 0).
+	// Exposure factor slows phase speed down to 0.25x on the back side of hills.
+	float slopeExposure = dot(N, -windDir3D);
+	float windExposure = mix(0.25, 1.35, smoothstep(-0.6, 0.6, slopeExposure));
+
+	// Phase time scales with surface wind exposure:
+	float exposedTime = uTime * windExposure;
+
+// -------------------------------------------------------------------------
+	// Unified 3-Tier Dynamic LOD Base Noises
+	// -------------------------------------------------------------------------
+
+	// Configure the dynamic LOD. You can tweak lodDistanceScale to control how fast layers shift.
+	float lodDistanceScale = 0.001;
+	float baseFrequency = 0.050;
+	float growthFactor = 2.0; // Octaves double in size
+
+	NoiseCascade cascade = calculateDynamicLOD(
+		effDist * lodDistanceScale,
+		baseFrequency,
+		growthFactor
+		// 0.25, 0.50, 0.25 // Fade in, Hold, Fade out
+	);
+
+	// Apply dynamic scales to the noise coordinates
+	vec3 noisePosL = (warpNoise + worldPos) * cascade.frequencies.x; // Macro
+	vec3 noisePosM = (warpNoise + worldPos) * cascade.frequencies.y; // Medium
+	vec3 noisePosS = (warpNoise + worldPos) * cascade.frequencies.z; // Micro
+
+	// Scale wave speeds by frequency to prevent distance waves from looking hyper-fast
+	// Can we make the windspeed biome dependent?
+	float timeL = exposedTime * cascade.frequencies.x * 0.625;
+	float timeM = exposedTime * cascade.frequencies.y * 0.625;
+	float timeS = exposedTime * cascade.frequencies.z * 0.625;
+
+	// Align phasor spatial frequency F and advection velocity W with windTangent
+	vec3 windWaveF_L = normalize(windTangent + warpCurl);// * 0.2);
+	vec3 windWaveF_M = normalize(windTangent + warpCurl);// * 0.4);
+	vec3 windWaveF_S = normalize(windTangent + warpCurl);// * 0.6);
+
+	vec3 macroGrad3D;
+	vec2 macroValPhase = phasorNoise3DGrad(noisePosL, 1.0, windWaveF_L, windTangent, 0.68, timeL, macroGrad3D);
+	float macroVal = macroValPhase.x / max(length(macroValPhase), 0.0001);
+
+	vec3 mediumGrad3D;
+	vec2 mediumValPhase = phasorNoise3DGrad(noisePosM, 1.0, windWaveF_M, windTangent, 0.68, timeM, mediumGrad3D);
+	float mediumVal = mediumValPhase.x / max(length(mediumValPhase), 0.0001);
+
+	vec3 microGrad3D;
+	vec2 microValPhase = phasorNoise3DGrad(noisePosS, 1.0, windWaveF_S, windTangent, 0.68, timeS, microGrad3D);
+	float microVal = microValPhase.x / max(length(microValPhase), 0.0001);
+
+	// CHAIN RULE FIX: Multiply the returned gradient by the layer's frequency scale.
+	// Without this, your normals will randomly flatten or exaggerate as the scale shifts.
+	vec2 macroGrad  = macroGrad3D.xz * cascade.frequencies.x;
+	vec2 mediumGrad = mediumGrad3D.xz * cascade.frequencies.y;
+	vec2 microGrad  = microGrad3D.xz * cascade.frequencies.z;
+
+	macroGrad  /= (1.0 + length(macroGrad));
+	mediumGrad /= (1.0 + length(mediumGrad));
+	microGrad  /= (1.0 + length(microGrad));
+
+	// Map cascade weights directly to your color and normal blend variables
+	float wMacroColor  = cascade.weights.x;
+	float wMediumColor = cascade.weights.y;
+	float wMicroColor  = cascade.weights.z;
+
+	float wMacroNorm  = cascade.weights.x;
+	float wMediumNorm = cascade.weights.y;
+	float wMicroNorm  = cascade.weights.z;
+
+	vec2 perturbedGradSum = vec2(0.0);
+
 	// Evaluate the cosine palette with parameter t modulated by moisture, slope, and procedural noise.
 	// As distance increases, modulation seamlessly transitions from medium-scale variegation to broad macro-scale geographic variation.
-	float palNoise = mix(mediumVal, macroVal, nearBlend);
+// Evaluate the cosine palette with parameter t modulated by moisture, slope, and procedural noise.
+	// This linearly blends all 3 dynamic layers to determine the biome palette offset.
+	float palNoise = (macroVal * wMacroColor) + (mediumVal * wMediumColor) + (microVal * wMicroColor);
 	float palT = clamp(0.60 + 0.25 * palNoise + 0.15 * (moisture - 0.5) + 0.10 * (N.y - 0.7), 0.0, 1.0);
 	vec3 paletteColor = evalCosinePalette(palA, palB, palC, palD, palT);
 
 	// 1. Climate biome color blending: enhance greenness in moist regions
 	if (grassW > 0.01) {
 		vec3 lushGreen = mix(paletteColor, vec3(0.12, 0.48, 0.10), smoothstep(0.35, 0.75, moisture) * 0.5);
+
+		// Wind gust response on grass:
+		// When grass bends under wind gusts, blades reflect light differently, exposing lighter
+		// undersides and shifting roughness (specular sheen) dynamically along the wave phase.
+		float grassWindWave = microVal * 0.6 + mediumVal * 0.4;
+		// Lightness brightening (+15% to -10%) as grass leans into/away from wind
+		float grassLightness = 1.0 + 0.18 * grassWindWave * windExposure;
+		// Roughness reduction on bent grass creates moving specular highlights across fields
+		float grassRoughnessMod = -0.15 * max(0.0, grassWindWave) * windExposure;
+
+		lushGreen *= grassLightness;
+
 		finalAlbedo = mix(finalAlbedo, lushGreen, grassW * 0.70);
-		roughness = mix(roughness, clamp(wb.roughness + 0.08 * (mediumVal * wMediumColor + microVal * wMicroColor), 0.35, 0.95), grassW * 0.5);
-		perturbedGradSum += (macroGrad * wMacroNorm + mediumGrad * wMediumNorm) * (0.12 * grassW);
+		roughness = mix(roughness, clamp(wb.roughness + grassRoughnessMod + 0.08 * (mediumVal * wMediumColor + microVal * wMicroColor), 0.25, 0.95), grassW * 0.5);
+		perturbedGradSum += (macroGrad * wMacroNorm + mediumGrad * wMediumNorm + microGrad * wMicroNorm) * (0.18 * grassW);
 	}
 
 	// 2. Patches of green moss / damp vegetation on wet cliff ledges and crevices

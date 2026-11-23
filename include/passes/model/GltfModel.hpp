@@ -10,6 +10,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "passes/model/GltfTypes.hpp"
+#include "passes/model/ModelTypes.hpp"
 
 namespace brassica {
 
@@ -97,11 +98,11 @@ namespace brassica {
 		[[nodiscard]] const std::vector<GltfVertex>& Vertices() const { return m_vertices; }
 
 		// Indices into Vertices(), one entry per meshlet-local vertex slot -- see
-		// shaders/gltf_mesh.glsl's GltfMeshletVertexRef comment.
+		// shaders/gltf_mesh.glsl's GltfMeshletVertexBufferArray comment.
 		[[nodiscard]] const std::vector<std::uint32_t>& MeshletVertices() const { return m_meshletVertices; }
 
 		// 4 micro-indices packed per uint (little-endian byte order) -- see
-		// shaders/gltf_mesh.glsl's GltfMeshletTriangleRef comment for the unpacking formula.
+		// shaders/gltf_mesh.glsl's GltfMeshletTriangleBufferArray comment for the unpacking formula.
 		[[nodiscard]] const std::vector<std::uint32_t>& MeshletTrianglesPacked() const {
 			return m_meshletTrianglesPacked;
 		}
@@ -131,11 +132,29 @@ namespace brassica {
 		[[nodiscard]] std::size_t JointCount() const { return m_jointNodeIndices.size(); }
 
 		// Computes this animation's pose at `time` (seconds, wrapped to [0, duration) by the
-		// caller -- see GltfModelManager::UpdatePose) and writes one mat4 per joint, in skin-joint
-		// order, into outJointMatrices (resized as needed). animationIndex out of range (including
+		// caller) and writes one mat4 per joint, in skin-joint order, into outJointMatrices
+		// (resized as needed). animationIndex out of range (including
 		// when the asset has no animations at all) falls back to the skeleton's rest pose --
 		// never an error, since "no animation selected yet" is a normal state, not a failure.
 		void EvaluatePose(std::uint32_t animationIndex, float time, std::vector<glm::mat4>& outJointMatrices) const;
+
+		// Stage 0's measured finding (see the plan): 30-60 Hz straddles the dense keyframe bursts
+		// authored into fast clips (attacks, impacts) and misses them -- error up to 150% of the
+		// model's own body size. 120 Hz converges to ~4% and is the flat rate every clip bakes at;
+		// TRS-decompose+NLERP blending didn't help (confirmed empirically), so this stays plain
+		// matrix lerp between two baked frames, same as EvaluatePose's own per-channel blending.
+		//
+		// outPalette[0 .. JointCount()) is always the rest pose (clipIndex == kModelClipRestPose
+		// reads this directly, bypassing outClipTable entirely -- see ModelInstance's own
+		// comment). Each outClipTable entry's paletteBase points past that, into its own
+		// contiguous run of frameCount * JointCount() matrices. A jointless model (JointCount()
+		// == 0) still gets a single identity "rest" matrix so jointMatrixBufAddress is never a
+		// null/empty buffer, and an empty clip table (nothing to bake).
+		void BakeClips(
+			float                         sampleRateHz,
+			std::vector<glm::mat4>&       outPalette,
+			std::vector<ModelClipEntry>&  outClipTable
+		) const;
 
 	private:
 		std::vector<GltfVertex>    m_vertices;

@@ -14,6 +14,7 @@
 #include "graph/ResourceKey.hpp"
 #include "graph/TypeList.hpp"
 #include "MinimalDevice.hpp"
+#include "render/PipelineLibrary.hpp"
 #include "Shader.hpp"
 
 using namespace brassica::graph;
@@ -2266,6 +2267,528 @@ TEST_CASE(
 		vkDevice.destroyDescriptorSetLayout(setLayout);
 		vkDevice.destroyImageView(view);
 		vmaDestroyImage(allocator, rawImage, imageAllocation);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+namespace {
+
+	// 2x1 so each pixel gets its own, unambiguous depth value -- no averaging/filtering concerns.
+	struct TestAttachDepthTarget {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const { return DepthBufferDesc(ctx.width, ctx.height); }
+	};
+
+	struct TestAttachColorTarget {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm);
+		}
+	};
+
+	// Writes a real per-pixel depth gradient via gl_FragDepth (x=0 -> 0.2, x=1 -> 0.8) -- a real
+	// draw, not just Create<>() with an empty Execute, so the read-only consumer below has actual
+	// non-clear-value content to prove it's really preserved (loadOp=eLoad) rather than re-cleared.
+	struct DepthWriterNode {
+		vk::Pipeline       pipeline{};
+		vk::PipelineLayout layout{};
+
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestAttachDepthTarget>();
+		}
+
+		void Execute(NodeContext& ctx) {
+			vk::CommandBuffer cmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (!cmd || !ctx.insideRendering) {
+				return;
+			}
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+			cmd.setViewport(0, vk::Viewport{0.0f, 0.0f, 2.0f, 1.0f, 0.0f, 1.0f});
+			cmd.setScissor(0, vk::Rect2D{{0, 0}, {2, 1}});
+			cmd.draw(3, 1, 0, 0);
+		}
+	};
+
+	// Depth-tests (compareOp=eLess, depthWrite=false) a known constant depth (0.5, via its own
+	// gl_FragDepth) against DepthWriterNode's gradient, reading it as a real read-only attachment
+	// (AsAttachment()) -- this is the exact access pattern WaterNode/LightningRenderNode use. At
+	// x=0 (stored 0.2): 0.5 < 0.2 is false -> fails, color stays the Create<>() clear value. At
+	// x=1 (stored 0.8): 0.5 < 0.8 is true -> passes, color becomes the sentinel. Proves, on real
+	// hardware: AsAttachment binds correctly (no "unused attachment" validation error), the prior
+	// node's depth values survive (loadOp=eLoad, not eClear), and the real depth test gates
+	// output exactly as Vulkan's compareOp semantics say it should.
+	struct DepthReaderNode {
+		vk::Pipeline       pipeline{};
+		vk::PipelineLayout layout{};
+
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<TestAttachDepthTarget>().AsAttachment();
+			r.Create<TestAttachColorTarget>();
+		}
+
+		void Execute(NodeContext& ctx) {
+			vk::CommandBuffer cmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (!cmd || !ctx.insideRendering) {
+				return;
+			}
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+			cmd.setViewport(0, vk::Viewport{0.0f, 0.0f, 2.0f, 1.0f, 0.0f, 1.0f});
+			cmd.setScissor(0, vk::Rect2D{{0, 0}, {2, 1}});
+			cmd.draw(3, 1, 0, 0);
+		}
+	};
+
+} // namespace
+
+TEST_CASE(
+	"Read<K>().AsAttachment() binds a real read-only depth attachment that depth-tests against "
+	"an earlier node's real per-pixel values, with no validation errors"
+) {
+	brassica::testing::MinimalDevice device;
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		static constexpr const char* kVertSource = R"(
+			#version 450
+			void main() {
+				vec2 pos = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2) * 2.0 - 1.0;
+				gl_Position = vec4(pos, 0.0, 1.0);
+			}
+		)";
+		static constexpr const char* kWriterFragSource = R"(
+			#version 450
+			void main() {
+				gl_FragDepth = (gl_FragCoord.x < 1.0) ? 0.2 : 0.8;
+			}
+		)";
+		static constexpr const char* kReaderFragSource = R"(
+			#version 450
+			layout(location = 0) out vec4 outColor;
+			void main() {
+				gl_FragDepth = 0.5;
+				outColor = vec4(1.0);
+			}
+		)";
+
+		brassica::VertexShader vert;
+		REQUIRE(vert.CompileFromSource(vkDevice, kVertSource, shaderc_glsl_vertex_shader, "attach_test_vert"));
+		brassica::FragmentShader writerFrag;
+		REQUIRE(
+			writerFrag
+				.CompileFromSource(vkDevice, kWriterFragSource, shaderc_glsl_fragment_shader, "attach_test_writer_frag")
+		);
+		brassica::FragmentShader readerFrag;
+		REQUIRE(
+			readerFrag
+				.CompileFromSource(vkDevice, kReaderFragSource, shaderc_glsl_fragment_shader, "attach_test_reader_frag")
+		);
+
+		brassica::render::PipelineLibrary library(vkDevice, nullptr);
+
+		std::array<brassica::GraphicsShader*, 2> writerStages{&vert, &writerFrag};
+		brassica::render::GraphicsPipelineRequest writerRequest{
+			.stages = writerStages,
+			.state = brassica::render::GraphicsPipelineState{
+				.cullMode = vk::CullModeFlagBits::eNone,
+				.depthTest = true,
+				.depthWrite = true,
+				.depthCompareOp = vk::CompareOp::eAlways,
+			},
+			.colorFormats = {},
+			.depthFormat = vk::Format::eD32Sfloat,
+		};
+		brassica::render::ResolvedPipeline writerResolved = library.Resolve(writerRequest);
+		REQUIRE(writerResolved.pipeline);
+
+		std::array<brassica::GraphicsShader*, 2> readerStages{&vert, &readerFrag};
+		std::array<vk::Format, 1>      readerColorFormats{vk::Format::eR8G8B8A8Unorm};
+		brassica::render::GraphicsPipelineRequest readerRequest{
+			.stages = readerStages,
+			.state = brassica::render::GraphicsPipelineState{
+				.cullMode = vk::CullModeFlagBits::eNone,
+				.depthTest = true,
+				.depthWrite = false,
+				.depthCompareOp = vk::CompareOp::eLess,
+			},
+			.colorFormats = readerColorFormats,
+			.depthFormat = vk::Format::eD32Sfloat,
+		};
+		brassica::render::ResolvedPipeline readerResolved = library.Resolve(readerRequest);
+		REQUIRE(readerResolved.pipeline);
+
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
+		);
+		vk::CommandBuffer vkCmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		PhysicalExecutionBackend backend(registry);
+
+		Graph graph;
+		graph.Register<DepthWriterNode>(DepthWriterNode{.pipeline = writerResolved.pipeline, .layout = writerResolved.layout});
+		graph.Register<DepthReaderNode>(DepthReaderNode{.pipeline = readerResolved.pipeline, .layout = readerResolved.layout});
+
+		FrameContext ctx{.width = 2, .height = 1};
+
+		vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
+		vkCmd.end();
+
+		vk::SubmitInfo submitInfo{};
+		submitInfo.setCommandBuffers(vkCmd);
+		device.GetQueue().submit(submitInfo);
+		device.GetQueue().waitIdle();
+
+		auto depthTex = registry.GetTexture<TestAttachDepthTarget>();
+		REQUIRE(depthTex != nullptr);
+		CHECK(depthTex->GetCurrentLayout() == vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+
+		auto colorTex = registry.GetTexture<TestAttachColorTarget>();
+		REQUIRE(colorTex != nullptr);
+
+		vk::BufferCreateInfo readbackInfo{};
+		readbackInfo.setSize(2 * 4).setUsage(vk::BufferUsageFlagBits::eTransferDst);
+		VkBufferCreateInfo       rawReadbackInfo = static_cast<VkBufferCreateInfo>(readbackInfo);
+		VmaAllocationCreateInfo  readbackAllocInfo{};
+		readbackAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		readbackAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VkBuffer          rawReadback{};
+		VmaAllocation     readbackAlloc{};
+		VmaAllocationInfo readbackAllocResultInfo{};
+		REQUIRE(
+			vmaCreateBuffer(
+				device.GetAllocator(),
+				&rawReadbackInfo,
+				&readbackAllocInfo,
+				&rawReadback,
+				&readbackAlloc,
+				&readbackAllocResultInfo
+			) == VK_SUCCESS
+		);
+
+		vk::CommandBuffer readbackCmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+		readbackCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+		vk::ImageMemoryBarrier2 toTransferSrc{};
+		toTransferSrc.setSrcStageMask(colorTex->GetLastStage())
+			.setSrcAccessMask(colorTex->GetLastAccess())
+			.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer)
+			.setDstAccessMask(vk::AccessFlagBits2::eTransferRead)
+			.setOldLayout(colorTex->GetCurrentLayout())
+			.setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+			.setImage(colorTex->GetImage())
+			.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+		vk::DependencyInfo toTransferSrcDep{};
+		toTransferSrcDep.setImageMemoryBarriers(toTransferSrc);
+		readbackCmd.pipelineBarrier2(toTransferSrcDep);
+
+		vk::BufferImageCopy copyRegion{};
+		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+			.setImageExtent(vk::Extent3D{2, 1, 1});
+		readbackCmd.copyImageToBuffer(
+			colorTex->GetImage(),
+			vk::ImageLayout::eTransferSrcOptimal,
+			vk::Buffer{rawReadback},
+			copyRegion
+		);
+		readbackCmd.end();
+
+		vk::SubmitInfo readbackSubmit{};
+		readbackSubmit.setCommandBuffers(readbackCmd);
+		device.GetQueue().submit(readbackSubmit);
+		device.GetQueue().waitIdle();
+
+		vmaInvalidateAllocation(device.GetAllocator(), readbackAlloc, 0, VK_WHOLE_SIZE);
+		const auto* pixels = static_cast<const std::uint8_t*>(readbackAllocResultInfo.pMappedData);
+
+		// x=0: depth test failed (0.5 < 0.2 is false) -- stays at the Create<>() clear value.
+		CHECK(pixels[0] == 0);
+		CHECK(pixels[3] == 255); // clear alpha is 1.0 (ResourceRealization::clearColor's default)
+		// x=1: depth test passed (0.5 < 0.8 is true) -- the reader's sentinel white.
+		CHECK(pixels[4] == 255);
+		CHECK(pixels[7] == 255);
+
+		vmaDestroyBuffer(device.GetAllocator(), rawReadback, readbackAlloc);
+		vkDevice.destroyCommandPool(pool);
+		// Resolve()'s contract is "caller owns it" (unlike ResolveCached) -- library.Reset() only
+		// destroys cache entries, so these two must be destroyed directly.
+		vkDevice.destroyPipeline(writerResolved.pipeline);
+		vkDevice.destroyPipelineLayout(writerResolved.layout);
+		vkDevice.destroyPipeline(readerResolved.pipeline);
+		vkDevice.destroyPipelineLayout(readerResolved.layout);
+		vert.Destroy(vkDevice);
+		writerFrag.Destroy(vkDevice);
+		readerFrag.Destroy(vkDevice);
+	}
+
+	CHECK(device.GetValidationErrorCount() == 0);
+	CHECK(device.GetValidationWarningCount() == 0);
+}
+
+namespace {
+
+	// eD32SfloatS8Uint, matching GBufferDepth's real shape (core.hpp) exactly -- TestAttachDepthTarget
+	// above deliberately uses the plain eD32Sfloat default instead, since it's testing the generic
+	// depth-attachment mechanism, not this format specifically.
+	struct TestAttachDepthStencilTarget {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return DepthBufferDesc(ctx.width, ctx.height, vk::Format::eD32SfloatS8Uint);
+		}
+	};
+
+	struct TestAttachColorTarget2 {
+		[[nodiscard]] ResourceDesc Desc(const FrameContext& ctx) const {
+			return ColorAttachmentDesc(ctx.width, ctx.height, vk::Format::eR8G8B8A8Unorm);
+		}
+	};
+
+	constexpr std::uint32_t kStencilTestReference = 7;
+
+	// Writes the stencil reference (7) via StencilMode::Write, scissored to pixel 0 only -- pixel
+	// 1 stays at the clear value (stencil=0, from Begin's hardcoded {1.0f, 0} clear), giving the
+	// reader below a real two-way signal to discriminate.
+	struct StencilWriterNode {
+		vk::Pipeline       pipeline{};
+		vk::PipelineLayout layout{};
+
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Create<TestAttachDepthStencilTarget>();
+		}
+
+		void Execute(NodeContext& ctx) {
+			vk::CommandBuffer cmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (!cmd || !ctx.insideRendering) {
+				return;
+			}
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+			cmd.setViewport(0, vk::Viewport{0.0f, 0.0f, 2.0f, 1.0f, 0.0f, 1.0f});
+			cmd.setScissor(0, vk::Rect2D{{0, 0}, {1, 1}}); // pixel 0 only
+			cmd.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, kStencilTestReference);
+			cmd.draw(3, 1, 0, 0);
+		}
+	};
+
+	// Tests StencilMode::TestEqual against the same reference, reading the stencil-shaped
+	// resource as a real read-only attachment (AsAttachment()). The fragment shader writes
+	// unconditionally -- the stencil test itself, not shader logic, is what should gate output:
+	// pixel 0 (stencil=7) passes, pixel 1 (stencil=0, never touched by the writer) fails.
+	struct StencilReaderNode {
+		vk::Pipeline       pipeline{};
+		vk::PipelineLayout layout{};
+
+		void Setup(SetupBuilder& r, const FrameContext&) {
+			r.Domain(ExecutionDomain::Graphics);
+			r.Read<TestAttachDepthStencilTarget>().AsAttachment();
+			r.Create<TestAttachColorTarget2>();
+		}
+
+		void Execute(NodeContext& ctx) {
+			vk::CommandBuffer cmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
+			if (!cmd || !ctx.insideRendering) {
+				return;
+			}
+			cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+			cmd.setViewport(0, vk::Viewport{0.0f, 0.0f, 2.0f, 1.0f, 0.0f, 1.0f});
+			cmd.setScissor(0, vk::Rect2D{{0, 0}, {2, 1}});
+			cmd.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, kStencilTestReference);
+			cmd.draw(3, 1, 0, 0);
+		}
+	};
+
+} // namespace
+
+TEST_CASE(
+	"StencilMode::Write stamps a real reference value that StencilMode::TestEqual correctly "
+	"gates on through Read<K>().AsAttachment(), with no validation errors"
+) {
+	brassica::testing::MinimalDevice device;
+	if (!device.IsValid()) {
+		MESSAGE("Vulkan physical device not available in this environment; skipping GPU execution.");
+		return;
+	}
+
+	vk::Device vkDevice = device.GetDevice();
+
+	{
+		static constexpr const char* kVertSource = R"(
+			#version 450
+			void main() {
+				vec2 pos = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2) * 2.0 - 1.0;
+				gl_Position = vec4(pos, 0.0, 1.0);
+			}
+		)";
+		// No color output -- the writer pipeline declares zero color attachments, and writing
+		// one anyway is exactly the "unused fragment output" validation warning this avoids.
+		static constexpr const char* kWriterFragSource = R"(
+			#version 450
+			void main() {
+			}
+		)";
+		static constexpr const char* kReaderFragSource = R"(
+			#version 450
+			layout(location = 0) out vec4 outColor;
+			void main() {
+				outColor = vec4(1.0);
+			}
+		)";
+
+		brassica::VertexShader   vert;
+		brassica::FragmentShader writerFrag;
+		brassica::FragmentShader readerFrag;
+		REQUIRE(vert.CompileFromSource(vkDevice, kVertSource, shaderc_glsl_vertex_shader, "stencil_test_vert"));
+		REQUIRE(
+			writerFrag
+				.CompileFromSource(vkDevice, kWriterFragSource, shaderc_glsl_fragment_shader, "stencil_test_writer_frag")
+		);
+		REQUIRE(
+			readerFrag
+				.CompileFromSource(vkDevice, kReaderFragSource, shaderc_glsl_fragment_shader, "stencil_test_reader_frag")
+		);
+
+		brassica::render::PipelineLibrary library(vkDevice, nullptr);
+
+		std::array<brassica::GraphicsShader*, 2> writerStages{&vert, &writerFrag};
+		brassica::render::GraphicsPipelineRequest writerRequest{
+			.stages = writerStages,
+			.state = brassica::render::GraphicsPipelineState{
+				.cullMode = vk::CullModeFlagBits::eNone,
+				.stencilMode = brassica::render::StencilMode::Write,
+			},
+			.colorFormats = {},
+			.depthFormat = vk::Format::eD32SfloatS8Uint,
+		};
+		brassica::render::ResolvedPipeline writerResolved = library.Resolve(writerRequest);
+		REQUIRE(writerResolved.pipeline);
+
+		std::array<brassica::GraphicsShader*, 2> readerStages{&vert, &readerFrag};
+		std::array<vk::Format, 1>                readerColorFormats{vk::Format::eR8G8B8A8Unorm};
+		brassica::render::GraphicsPipelineRequest readerRequest{
+			.stages = readerStages,
+			.state = brassica::render::GraphicsPipelineState{
+				.cullMode = vk::CullModeFlagBits::eNone,
+				.stencilMode = brassica::render::StencilMode::TestEqual,
+			},
+			.colorFormats = readerColorFormats,
+			.depthFormat = vk::Format::eD32SfloatS8Uint,
+		};
+		brassica::render::ResolvedPipeline readerResolved = library.Resolve(readerRequest);
+		REQUIRE(readerResolved.pipeline);
+
+		vk::CommandPool pool = vkDevice.createCommandPool(
+			vk::CommandPoolCreateInfo{vk::CommandPoolCreateFlagBits::eTransient, device.GetQueueFamily()}
+		);
+		vk::CommandBuffer vkCmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+
+		PhysicalResourceRegistry registry(vkDevice, device.GetAllocator());
+		PhysicalExecutionBackend backend(registry);
+
+		Graph graph;
+		graph.Register<StencilWriterNode>(StencilWriterNode{.pipeline = writerResolved.pipeline, .layout = writerResolved.layout});
+		graph.Register<StencilReaderNode>(StencilReaderNode{.pipeline = readerResolved.pipeline, .layout = readerResolved.layout});
+
+		FrameContext ctx{.width = 2, .height = 1};
+
+		vkCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		CommandBuffer cmd{static_cast<void*>(static_cast<VkCommandBuffer>(vkCmd))};
+		CHECK_NOTHROW(backend.Execute(graph, ctx, cmd, false));
+		vkCmd.end();
+
+		vk::SubmitInfo submitInfo{};
+		submitInfo.setCommandBuffers(vkCmd);
+		device.GetQueue().submit(submitInfo);
+		device.GetQueue().waitIdle();
+
+		auto colorTex = registry.GetTexture<TestAttachColorTarget2>();
+		REQUIRE(colorTex != nullptr);
+
+		vk::BufferCreateInfo readbackInfo{};
+		readbackInfo.setSize(2 * 4).setUsage(vk::BufferUsageFlagBits::eTransferDst);
+		VkBufferCreateInfo      rawReadbackInfo = static_cast<VkBufferCreateInfo>(readbackInfo);
+		VmaAllocationCreateInfo readbackAllocInfo{};
+		readbackAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		readbackAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		VkBuffer          rawReadback{};
+		VmaAllocation     readbackAlloc{};
+		VmaAllocationInfo readbackAllocResultInfo{};
+		REQUIRE(
+			vmaCreateBuffer(
+				device.GetAllocator(),
+				&rawReadbackInfo,
+				&readbackAllocInfo,
+				&rawReadback,
+				&readbackAlloc,
+				&readbackAllocResultInfo
+			) == VK_SUCCESS
+		);
+
+		vk::CommandBuffer readbackCmd =
+			vkDevice.allocateCommandBuffers(vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1})
+				.front();
+		readbackCmd.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+		vk::ImageMemoryBarrier2 toTransferSrc{};
+		toTransferSrc.setSrcStageMask(colorTex->GetLastStage())
+			.setSrcAccessMask(colorTex->GetLastAccess())
+			.setDstStageMask(vk::PipelineStageFlagBits2::eTransfer)
+			.setDstAccessMask(vk::AccessFlagBits2::eTransferRead)
+			.setOldLayout(colorTex->GetCurrentLayout())
+			.setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+			.setImage(colorTex->GetImage())
+			.setSubresourceRange(vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+		vk::DependencyInfo toTransferSrcDep{};
+		toTransferSrcDep.setImageMemoryBarriers(toTransferSrc);
+		readbackCmd.pipelineBarrier2(toTransferSrcDep);
+
+		vk::BufferImageCopy copyRegion{};
+		copyRegion.setImageSubresource(vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+			.setImageExtent(vk::Extent3D{2, 1, 1});
+		readbackCmd.copyImageToBuffer(
+			colorTex->GetImage(),
+			vk::ImageLayout::eTransferSrcOptimal,
+			vk::Buffer{rawReadback},
+			copyRegion
+		);
+		readbackCmd.end();
+
+		vk::SubmitInfo readbackSubmit{};
+		readbackSubmit.setCommandBuffers(readbackCmd);
+		device.GetQueue().submit(readbackSubmit);
+		device.GetQueue().waitIdle();
+
+		vmaInvalidateAllocation(device.GetAllocator(), readbackAlloc, 0, VK_WHOLE_SIZE);
+		const auto* pixels = static_cast<const std::uint8_t*>(readbackAllocResultInfo.pMappedData);
+
+		// x=0: stencil was written to 7 -- TestEqual(7) passes -- sentinel white.
+		CHECK(pixels[0] == 255);
+		CHECK(pixels[3] == 255);
+		// x=1: stencil stayed at the clear value 0 -- TestEqual(7) fails -- stays clear color.
+		CHECK(pixels[4] == 0);
+		CHECK(pixels[7] == 255); // clear alpha is 1.0 (ResourceRealization::clearColor's default)
+
+		vmaDestroyBuffer(device.GetAllocator(), rawReadback, readbackAlloc);
+		vkDevice.destroyCommandPool(pool);
+		vkDevice.destroyPipeline(writerResolved.pipeline);
+		vkDevice.destroyPipelineLayout(writerResolved.layout);
+		vkDevice.destroyPipeline(readerResolved.pipeline);
+		vkDevice.destroyPipelineLayout(readerResolved.layout);
+		vert.Destroy(vkDevice);
+		writerFrag.Destroy(vkDevice);
+		readerFrag.Destroy(vkDevice);
 	}
 
 	CHECK(device.GetValidationErrorCount() == 0);

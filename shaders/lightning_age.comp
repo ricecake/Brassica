@@ -6,18 +6,20 @@
 // slot range, unconditional zero then conditional overwrite). Dispatched once per frame with
 // LIGHTNING_MAX_STRIKES threads, before the graphics phase, so shaders/lightning.task's
 // per-frame read of lifetime/polyline-plotting sees already-aged state.
-#define LIGHTS_BUFFER_WRITABLE
+#define GPU_LIGHTS_BUFFER_WRITABLE
 #define LIGHTNING_STRIKE_POOL_WRITABLE
 
 #include "bindless.glsl"
 #include "common.glsl"
 #include "lighting.glsl"
 #include "atmosphere/common.glsl"
+#include "terrain/generation.glsl"
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform LightningAgePushConstants {
 	float deltaTime;
+	uint  gpuLightsIndex;
 } push;
 
 void main() {
@@ -26,37 +28,60 @@ void main() {
 		return;
 	}
 
+	// Resolve a pending ground strike's real terrain height before anything below reads
+	// endPos.y -- climate_ca.comp has no terrain-height source of its own (see its trigger
+	// comment), so it leaves this flagged and a placeholder Y in place until the first time
+	// this slot ages. Same config/call as terrain_gen.comp's own evaluate_terrain_analytical()
+	// use, so the ground point matches the terrain mesh actually drawn there. Clamped to
+	// u_waterLevel so a strike over open water lands on the surface instead of the seabed.
+	if ((uStrikes[slot].flags & LIGHTNING_FLAG_PENDING_GROUND) != 0u) {
+		TerrainConfig con = TerrainConfig(0.00001, -500.0, 2000.0, 0.14, 0.5);
+		vec3           p = vec3(uStrikes[slot].endPos.x, 0.0, uStrikes[slot].endPos.z);
+		vec3           normal = vec3(0.0, 1.0, 0.0);
+		float          groundHeight = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal);
+		uStrikes[slot].endPos.y = max(groundHeight, u_waterLevel);
+		uStrikes[slot].flags &= ~LIGHTNING_FLAG_PENDING_GROUND;
+	}
+
 	uStrikes[slot].lifetime -= push.deltaTime;
 	float lifetime = uStrikes[slot].lifetime;
 	float maxLifetime = max(uStrikes[slot].maxLifetime, 0.0001);
 
 	uint lightSlot = LIGHTNING_LIGHT_SLOT_BASE + slot;
 	// Unconditional zero first -- a dead slot's light goes dark the instant lifetime expires,
-	// regardless of what the conditional branch below last wrote.
-	uLights[lightSlot].intensity = 0.0;
+	// regardless of what the conditional branch below last wrote. GpuLightsResetNode already
+	// zeroed this slot once earlier in the frame; this is about *this strike's* lifecycle, not
+	// the per-frame reset, so it stays unconditional here too (same as before the split).
+	uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].intensity = 0.0;
 
 	if (lifetime > 0.0) {
-		// Forces the clustered-lighting pass to consider this whole reserved range active
-		// regardless of the CPU's own uLightCount -- same reasoning as the firefly path.
-		atomicMax(uLightCount, LIGHTNING_LIGHT_SLOT_BASE + LIGHTNING_MAX_STRIKES);
+		float flicker = lightningEnvelope(lifetime, maxLifetime);
+		bool  isGround = (uStrikes[slot].flags & LIGHTNING_FLAG_GROUND) != 0u;
 
-		// Flicker envelope -- same formula LightningManager::Update() already uses on the CPU
-		// path (src/lighting/LightningManager.cpp), moved here since this GPU path now owns the
-		// strike's whole lifecycle instead.
-		float normalizedAge = 1.0 - clamp(lifetime / maxLifetime, 0.0, 1.0);
-		float flicker = max(0.0, sin(normalizedAge * PI) * (0.8 + 0.2 * sin(lifetime * 50.0)));
+		// Cloud-to-ground: light the ground point itself, with a bigger radius/base intensity
+		// (boidish's own values) since illuminating the terrain is the point of it. Cloud-to-
+		// cloud: light the midpoint between the two cloud-side points, same as before.
+		vec3  lightPos = isGround ? uStrikes[slot].endPos.xyz
+		                          : mix(uStrikes[slot].originAndSeed.xyz, uStrikes[slot].endPos.xyz, 0.5);
+		float flashRadius = isGround ? u_lightningGroundFlashRadius : u_lightningCloudFlashRadius;
+		float baseIntensity = isGround ? 150.0 : 50.0;
 
-		vec3 midPoint = mix(uStrikes[slot].originAndSeed.xyz, uStrikes[slot].endPos.xyz, 0.5);
-
-		uLights[lightSlot].position = midPoint;
-		uLights[lightSlot].intensity = u_lightningFlashIntensity * 50.0 * flicker;
-		uLights[lightSlot].color = vec3(0.8, 0.85, 1.0);
-		uLights[lightSlot].type = LIGHT_TYPE_FLASH;
-		uLights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
-		uLights[lightSlot].innerCutoff = 0.0;
-		uLights[lightSlot].outerCutoff = 8.0;
-		uLights[lightSlot].flags = 0;
-		uLights[lightSlot]._pad0 = 0.0;
-		uLights[lightSlot]._pad1 = 0.0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].position = lightPos;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].intensity =
+			u_lightningIntensityScale * baseIntensity * flicker * uStrikes[slot].colorAndPeak.a;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].color = uStrikes[slot].colorAndPeak.rgb;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].type = LIGHT_TYPE_FLASH;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].direction = vec3(0.0, -1.0, 0.0);
+		// innerCutoff is the FLASH radius and outerCutoff is its falloff exponent (see
+		// helpers/lighting.glsl's LIGHT_TYPE_FLASH branch) -- these were 0/8.0, a radius of
+		// effectively zero (attenuation only nonzero within ~3mm) copied from a POINT light's
+		// own innerCutoff-as-radius convention mismatched onto FLASH's different field meaning,
+		// so this light never actually lit anything. Light::CreateFlash's own defaults are
+		// radius=50/falloffExp=2.0; use the user-tunable flash radius here instead.
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].innerCutoff = flashRadius;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].outerCutoff = 2.0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot].flags = 0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot]._pad0 = 0.0;
+		uGpuLightsBuffers[nonuniformEXT(push.gpuLightsIndex)].lights[lightSlot]._pad1 = 0.0;
 	}
 }

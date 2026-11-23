@@ -17,7 +17,17 @@ TEST_CASE("AtmospherePushConstants Struct Layout and Size") {
 	// 128 -> 272: cloud and volumetric settings now land in this same common UBO/push-struct
 	// instead of per-node push constants (AtmosphereManager/CloudLightingManager/
 	// VolumetricLightingManager::ApplyTo) -- appended fields only, every offset below unchanged.
-	CHECK(sizeof(brassica::AtmospherePushConstants) == 272);
+	// 272 -> 304: LightningManager's spawnRadius/stormThreshold/cloudGlowRadius/
+	// cloudFlashRadius/ignoreWeather appended at the end (20 bytes of new fields, but the
+	// struct's overall alignment is 16 thanks to its alignas(16) vec3 members, so the tail pads
+	// out to the next 16-byte multiple -- 292 -> 304, not 292) -- again, every offset below
+	// unchanged.
+	// 304 -> 320 -> 352: groundStrikeChance/groundFlashRadius/lifetimeScale (12 bytes) exactly
+	// filled that same trailing pad with real data instead of growing sizeof at all (seams
+	// cross-checked against spirv-dis's AtmosphereUBO offsets, not hand math); baseColor/
+	// humidColor/dustyColor/colorVariance then added a real 48 bytes (each vec3 reserves a full
+	// 16-byte std140 slot even though it's only 12 bytes of real data).
+	CHECK(sizeof(brassica::AtmospherePushConstants) == 352);
 
 	brassica::AtmospherePushConstants push{};
 	CHECK(offsetof(brassica::AtmospherePushConstants, rayleighScatteringBase) == 0);

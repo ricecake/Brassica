@@ -3,15 +3,7 @@
 
 #include "Engine.hpp"
 
-// 14 before EntityNode replaced BallNode: BallNode used to be a plain auto-registered node like
-// every other, but EntityNode<Tag> is instantiated per-Tag and registered dynamically per frame
-// via SystemHandler::GetEntityNode().RegisterInto (Engine::DrawFrame), not through this static
-// list -- see include/passes/AllNodes.hpp's own header comment for why that list exists at all.
-// 13 -> 15: UnderwaterParticleRenderNode/AboveWaterParticleRenderNode were promoted out of
-// ParticleSystemNode's Subgraph to be independent top-level nodes (ParticleSystemNode.hpp), so
-// their SubPhase::UnderwaterParticleRender/ParticleRender phases actually reach the outer
-// scheduler relative to WaterNode's SubPhase::WaterRender -- a Subgraph child's own kPhase only
-// orders it against its Subgraph siblings, never an outer sibling.
+// 13 -> 15: UnderwaterParticleRenderNode/AboveWaterParticleRenderNode
 // 16 -> 17: Added CirrusNode for thin cirrus cloud weather indicator layer.
 // 18 -> 20: Added CloudVolumeGenNode and CloudRenderNode.
 // 20 -> 24: Replaced per-handler EntityNode with auto-registered EntityPrepareNode and EntityNode.
@@ -19,16 +11,10 @@
 // 25 -> 27: Added VolumetricFroxelGenNode and VolumetricRenderNode for froxel volumetric rendering.
 // 27 -> 28: Added GTAONode.
 // 28 -> 26: ParticleSystemNode sub-nodes dynamically registered, added CloudShadowGenNode.
-// 26 -> 27: Added TerrainReadbackNode (design plan's bug 6 fix -- the terrain ground-height
-// readback is now a real graph node instead of TerrainManager's own side-channel transfer-queue
-// submit).
+// 26 -> 27: Added TerrainReadbackNode
 // 27 -> 28: Added TerrainShadowNode.
 // 28 -> 27: Unified AtmosphereCompositeNode into VolumetricRenderNode.
-// 27 -> 32: Drift found empirically while adding GltfRenderNode below -- the tracked count here
-// had already fallen behind several nodes' worth of uncommitted foliage/HiZ/multi-queue work
-// this session before this change, with no corresponding history entries. Not reconstructing
-// which specific additions those were; resynced to the real current count instead.
-// 32 -> 33: Added GltfRenderNode (Stage 1 of the GLTF/GLB pipeline).
+// 27 -> 32: Drift
 // 33 -> 34: Added FoliageIndirectResetNode (splitting FoliageIndirectArgsBuffer's zero-clear out
 // of FoliageNode::Execute() into its own Compute-domain node -- see FoliageNode.hpp's comment;
 // the Graphics-domain original was issuing an illegal barrier+fillBuffer inside its own
@@ -36,12 +22,28 @@
 // 34 -> 43: Particle cluster reactivated (S2) -- ParticleResetNode, ParticleLivenessNode,
 // ParticleBehaviorNode, ParticleGridBuildNode, UnderwaterParticleRenderNode,
 // AboveWaterParticleRenderNode, ParticleTypeBufferNode all uncommented, gated at runtime by
-// IParticleManager::IsEnabled(). Landed independently of the cloud/model-work additions just
-// above (two lineages untangled onto the same branch); resynced to the real current count, same
-// precedent as the 27 -> 32 entry above.
-// 43 -> 50: Added TerrainChunkResetNode, TerrainChunkLODNode, TerrainChunkRequirementsNode,
-// TerrainChunkAllocNode, TerrainChunkGenerateNode, TerrainChunkEvictNode, and TerrainChunkRenderNode
-// for terrain chunk page table and indirection buffer management.
+// IParticleManager::IsEnabled().
+// 43 -> 45: Resynced with auto-registered nodes (including TonemapComputeNode / TonemapNode).
+// 45 -> 46: Added GroundDebrisNode for camera proximity terrain debris mesh rendering.
+// 46 -> 48: Added GpuLightsResetNode (CPU/GPU light buffer split -- zeroes GpuLightsBuffer each
+// frame so atomic-claimed dynamic light slots, e.g. fireflies, start from a known state) and
+// ShadingRateComputeNode (attachment-only variable rate shading -- derives this frame's per-tile
+// shading rate from last frame's ShadingRateMap/HiZTexture). This was main's own lineage.
+// Model-work branch merge (generalized-model-mahem, rebased onto the above on 2026-11-10):
+// replaced GltfRenderNode with ModelRenderNode (GPU-driven model instances, baked clips) and
+// added ModelInstanceScatterNode (applies ModelInstanceManager's sparse CPU writes to
+// ModelInstanceBuffer); added ModelCullResetNode and ModelCullNode (Stage 3 -- compacted-
+// visible-list cull pass + indirect task dispatch); added ModelLiveFinalizeNode and
+// ModelLiveEvalNode (Stage 4 -- live wind/seed-bend eval); added DecorPopulationNode (Stage 5.2
+// -- persistent, disocclusion-driven decor population). Removed FoliageBakeNode,
+// FoliageArchetypeRenderNode, and FoliageIndirectResetNode (Stage 5.1/5.2 cleanup -- the GPU-
+// baked tree/bush archetype path they served is fully superseded by real
+// ManifoldBranchingTreeAsset/ManifoldRockAsset models + DecorPopulationNode's persistent
+// population). Two independent deltas from two different baselines (main's own 46->48, and the
+// model branch's own -4/+7 relative to ITS OWN pre-merge baseline) don't combine by simple
+// arithmetic -- resynced to the real current count via a direct grep of every
+// BRASSICA_REGISTER_NODE( call site across AllNodes.hpp's own include list, not arithmetic,
+// same "Drift"/"resynced" precedent already used twice above in this exact file.
 TEST_CASE("Every AllNodes.hpp node's CRTP registrar survives static-library linking under this build's LTO") {
-	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 50);
+	CHECK(brassica::render::EngineNodeRegistry::Instance().RegisteredTypeCount() == 49);
 }

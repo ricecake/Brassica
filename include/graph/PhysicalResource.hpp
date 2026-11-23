@@ -168,6 +168,8 @@ namespace brassica::graph {
 			m_allocator(o.m_allocator),
 			m_image(o.m_image),
 			m_view(o.m_view),
+			m_sampledView(o.m_sampledView),
+			m_stencilSampledView(o.m_stencilSampledView),
 			m_allocation(o.m_allocation),
 			m_desc(o.m_desc),
 			m_ownership(o.m_ownership),
@@ -177,10 +179,13 @@ namespace brassica::graph {
 			m_hasDefinedContents(o.m_hasDefinedContents),
 			m_sampledBindlessIndex(o.m_sampledBindlessIndex),
 			m_storageBindlessIndex(o.m_storageBindlessIndex),
+			m_stencilBindlessIndex(o.m_stencilBindlessIndex),
 			m_mipViews(std::move(o.m_mipViews)),
 			m_mipStorageIndices(std::move(o.m_mipStorageIndices)) {
 			o.m_image = nullptr;
 			o.m_view = nullptr;
+			o.m_sampledView = nullptr;
+			o.m_stencilSampledView = nullptr;
 			o.m_allocation = nullptr;
 			o.m_currentLayout = vk::ImageLayout::eUndefined;
 			o.m_lastStage = {};
@@ -188,6 +193,7 @@ namespace brassica::graph {
 			o.m_hasDefinedContents = false;
 			o.m_sampledBindlessIndex = 0;
 			o.m_storageBindlessIndex = 0;
+			o.m_stencilBindlessIndex = 0;
 			o.m_mipViews.clear();
 			o.m_mipStorageIndices.clear();
 		}
@@ -199,6 +205,8 @@ namespace brassica::graph {
 				m_allocator = o.m_allocator;
 				m_image = o.m_image;
 				m_view = o.m_view;
+				m_sampledView = o.m_sampledView;
+				m_stencilSampledView = o.m_stencilSampledView;
 				m_allocation = o.m_allocation;
 				m_desc = o.m_desc;
 				m_ownership = o.m_ownership;
@@ -208,11 +216,13 @@ namespace brassica::graph {
 				m_hasDefinedContents = o.m_hasDefinedContents;
 				m_sampledBindlessIndex = o.m_sampledBindlessIndex;
 				m_storageBindlessIndex = o.m_storageBindlessIndex;
+				m_stencilBindlessIndex = o.m_stencilBindlessIndex;
 				m_mipViews = std::move(o.m_mipViews);
 				m_mipStorageIndices = std::move(o.m_mipStorageIndices);
 
 				o.m_image = nullptr;
 				o.m_view = nullptr;
+				o.m_stencilSampledView = nullptr;
 				o.m_allocation = nullptr;
 				o.m_currentLayout = vk::ImageLayout::eUndefined;
 				o.m_lastStage = {};
@@ -220,6 +230,7 @@ namespace brassica::graph {
 				o.m_hasDefinedContents = false;
 				o.m_sampledBindlessIndex = 0;
 				o.m_storageBindlessIndex = 0;
+				o.m_stencilBindlessIndex = 0;
 				o.m_mipViews.clear();
 				o.m_mipStorageIndices.clear();
 			}
@@ -229,6 +240,21 @@ namespace brassica::graph {
 		[[nodiscard]] vk::Image GetImage() const { return m_image; }
 
 		[[nodiscard]] vk::ImageView GetView() const { return m_view; }
+
+		// A sampled descriptor must have exactly one aspect (VUID-VkDescriptorImageInfo-imageView
+		// -01976-adjacent) -- for a combined depth-stencil format, m_view (built with both
+		// aspects, for the attachment-binding path) is illegal there. CreateView builds a
+		// depth-only m_sampledView specifically for this case; every other format's m_sampledView
+		// stays unset and this just falls back to the one real view, so a non-depth-stencil
+		// texture pays nothing extra.
+		[[nodiscard]] vk::ImageView GetSampledView() const { return m_sampledView ? m_sampledView : m_view; }
+
+		// A stencil-aspect-only view, built alongside m_sampledView's depth-only view for the same
+		// reason (a sampled descriptor must have exactly one aspect) -- only non-null for a format
+		// with a real stencil component and eSampled usage. Returns a null handle otherwise; a
+		// caller has no business asking for this on a non-depth-stencil texture, so there's no
+		// same-as-m_view fallback the way GetSampledView() has one.
+		[[nodiscard]] vk::ImageView GetStencilSampledView() const { return m_stencilSampledView; }
 
 		[[nodiscard]] const ResourceDesc& GetDesc() const { return m_desc; }
 
@@ -298,6 +324,16 @@ namespace brassica::graph {
 		[[nodiscard]] std::uint32_t GetStorageBindlessIndex() const { return m_storageBindlessIndex; }
 
 		void SetStorageBindlessIndex(std::uint32_t index) { m_storageBindlessIndex = index; }
+
+		// This texture's slot in the stencil-only sampled catalog (bindless.glsl's uUTextures2D,
+		// binding 7) -- only ever assigned for a format with a real stencil component and eSampled
+		// usage (AssignAndWriteBindlessIndices, PhysicalRegistry.hpp). 0 for everything else, same
+		// "reads as the fallback" reasoning as GetSampledBindlessIndex, though there's no actual
+		// fallback stencil texture registered there -- a caller indexing uUTextures2D[0] without
+		// ever having been assigned a real slot is a caller bug, not a case this tries to paper over.
+		[[nodiscard]] std::uint32_t GetStencilBindlessIndex() const { return m_stencilBindlessIndex; }
+
+		void SetStencilBindlessIndex(std::uint32_t index) { m_stencilBindlessIndex = index; }
 
 		// Per-mip counterparts, populated only when CreateView built m_mipViews (desc.mips > 1
 		// with eStorage usage -- see CreateView). HasPerMipStorage() is what callers branch on to
@@ -375,11 +411,42 @@ namespace brassica::graph {
 			};
 			m_view = m_device.createImageView(viewInfo);
 
+			const auto usage = m_desc.usageMask ? vk::ImageUsageFlags(m_desc.usageMask) : vk::ImageUsageFlags{};
+
+			// A sampled descriptor must have exactly one aspect -- m_view above spans both
+			// depth and stencil for a combined format, which is only legal for the
+			// attachment-binding path (DynamicRenderingWrapper::Begin). GetSampledView() is what
+			// every bindless sampled-descriptor registration actually reads (PhysicalRegistry.hpp).
+			if (HasStencilComponent(format) && (usage & vk::ImageUsageFlagBits::eSampled)) {
+				vk::ImageViewCreateInfo depthOnlyViewInfo{
+					{},
+					m_image,
+					viewType,
+					format,
+					vk::ComponentMapping{},
+					vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, mips, 0, layers),
+				};
+				m_sampledView = m_device.createImageView(depthOnlyViewInfo);
+
+				// Same reasoning, stencil aspect: a combined depth-stencil format's stencil half
+				// needs its own single-aspect view to be legal as a sampled descriptor too (bindless.
+				// glsl's uUTextures2D, binding 7 -- AssignAndWriteBindlessIndices writes this one in,
+				// not GetSampledView()'s depth-only view).
+				vk::ImageViewCreateInfo stencilOnlyViewInfo{
+					{},
+					m_image,
+					viewType,
+					format,
+					vk::ComponentMapping{},
+					vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eStencil, 0, mips, 0, layers),
+				};
+				m_stencilSampledView = m_device.createImageView(stencilOnlyViewInfo);
+			}
+
 			// A storage-image descriptor requires levelCount == 1 (VUID-VkWriteDescriptorSet-
 			// descriptorType-04152) -- m_view above, spanning every mip, is only legal for the
 			// *sampled* descriptor. A resource with real per-mip storage usage (the terrain
 			// min/max chain's SPD writes) additionally needs one single-mip view per level.
-			const auto usage = m_desc.usageMask ? vk::ImageUsageFlags(m_desc.usageMask) : vk::ImageUsageFlags{};
 			if (mips > 1 && (usage & vk::ImageUsageFlagBits::eStorage)) {
 				m_mipViews.reserve(mips);
 				for (std::uint32_t mip = 0; mip < mips; ++mip) {
@@ -404,6 +471,14 @@ namespace brassica::graph {
 				m_device.destroyImageView(m_view);
 				m_view = nullptr;
 			}
+			if (m_sampledView) {
+				m_device.destroyImageView(m_sampledView);
+				m_sampledView = nullptr;
+			}
+			if (m_stencilSampledView) {
+				m_device.destroyImageView(m_stencilSampledView);
+				m_stencilSampledView = nullptr;
+			}
 			for (vk::ImageView& mipView : m_mipViews) {
 				if (mipView) {
 					m_device.destroyImageView(mipView);
@@ -426,6 +501,12 @@ namespace brassica::graph {
 		VmaAllocator  m_allocator = nullptr;
 		vk::Image     m_image{};
 		vk::ImageView m_view{};
+		// Only non-null for a combined depth-stencil format with eSampled usage -- see
+		// GetSampledView()'s comment. Built by CreateView, destroyed by Cleanup, carried (not
+		// re-derived) through move -- same treatment as m_view.
+		vk::ImageView m_sampledView{};
+		// Same treatment, stencil aspect -- see GetStencilSampledView()'s comment.
+		vk::ImageView m_stencilSampledView{};
 		VmaAllocation m_allocation = nullptr;
 		ResourceDesc  m_desc{};
 		Ownership     m_ownership = Ownership::Imported;
@@ -439,6 +520,7 @@ namespace brassica::graph {
 		bool                    m_hasDefinedContents{false};
 		std::uint32_t           m_sampledBindlessIndex{0};
 		std::uint32_t           m_storageBindlessIndex{0};
+		std::uint32_t           m_stencilBindlessIndex{0};
 
 		// Populated only when m_desc.mips > 1 and usage includes eStorage (see CreateView) --
 		// one single-mip view + bindless storage index per level, since a storage-image
