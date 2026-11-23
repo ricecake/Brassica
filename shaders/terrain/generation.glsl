@@ -2,6 +2,7 @@
 #include "terrain.glsl"
 #include "lygia/generative/psrdnoise.glsl"
 #include "lygia/generative/noised.glsl"
+#include "helpers/wind.glsl"
 
 struct TerrainConfig {
     float spatial_scale;
@@ -803,14 +804,15 @@ struct MicroDetailResult {
 // Evaluates band-limited mesostructure (wavelengths ~24m down to ~1.5m at LOD 0).
 // Uses P_geo to avoid float32 precision loss at planetary coordinates, and modulates
 // character using existing substrate, ridge, and hydrology fields.
+// Evaluates stationary directional phasor mesostructure (20m down to 1.25m, Nyquist-gated
+// per LOD) matching the warp, orientation, and phase of terrain.frag.
+// Evaluates stationary directional phasor mesostructure (20m down to 2.5m, Nyquist-gated
+// per LOD) matching the warp, orientation, and phase of terrain.frag.
 MicroDetailResult evaluateMicroDetail(
-    vec3  P_geo,
-    vec3  dP_dx,
-    vec3  dP_dz,
-    float world_y,
-    vec2  macro_slope,
+    vec3  worldPos,
+    vec3  macroNormal,
+    bool  poleFlipped,
     float texelSize,
-    float phase,
     float ridge_map,
     float substrate,
     float water_level,
@@ -818,73 +820,70 @@ MicroDetailResult evaluateMicroDetail(
 ) {
     MicroDetailResult res = MicroDetailResult(0.0, vec2(0.0));
 
-    float wavelength = 24.0;
+    // Matches terrain.frag baseFrequency = 0.050 (lambda = 20m, 10m, 5m, 2.5m)
+    float freq = 0.050;
+    float wavelength = 1.0 / freq;
+    float minWavelength = 2.0 * texelSize;
+    if (wavelength <= minWavelength) {
+        return res;
+    }
 
-    float slopeMag = length(macro_slope);
+    float slopeMag = length(vec2(macroNormal.x, macroNormal.z)) / max(macroNormal.y, 0.15);
     float steepness = smoothstep(0.06, 0.40, slopeMag);
     float depositional = smoothstep(-0.1, 0.6, substrate);
-
-    // Only treat negative substrate as exposed bedrock if slope is steep enough to scour;
-    // keeps flat low-elevation plains smooth instead of ridged.
     float scouredRock = clamp01(-substrate) * smoothstep(0.04, 0.22, slopeMag);
+
     float rockiness = clamp01(
         max(ridge_map * 0.85, scouredRock) * 0.75 +
         steepness * 0.45 -
         depositional * (1.0 - steepness) * 0.45
     );
 
-    // Suppress micro-relief underwater and inside wetted river/lake corridors
-    float submergence = smoothstep(water_level - 1.5, water_level + 0.5, world_y);
+    float submergence = smoothstep(water_level - 1.5, water_level + 0.5, worldPos.y);
     float dryFactor = min(submergence, 1.0 - wetness_mask * 0.85);
 
-    float amp = mix(0.04, 0.38, rockiness) * mix(0.2, 1.0, dryFactor);
-    float strataStretch = mix(0.15, 1.4, rockiness) / (1.0 + slopeMag * 0.75);
-    float slopeCompression = sqrt(1.0 + (slopeMag * strataStretch) * (slopeMag * strataStretch));
-    float minWavelength = 2.0 * texelSize * slopeCompression;
+    // Conservative amplitude in meters at lambda = 20m; halves per octave so slope stays gentle
+    float amp = mix(0.025, 0.12, rockiness) * mix(0.2, 1.0, dryFactor);
 
-    if (wavelength <= minWavelength) {
-        return res;
-    }
+    // Match terrain.frag's exact domain warp and tangent orientation
+    mat3 warpNoiseGrad;
+    vec3 warpNoise = cross_noise_fbm(worldPos * 0.00125, 3, 12.0, warpNoiseGrad);
+    vec3 warpCurl = get_curl(warpNoiseGrad);
 
-    const int MICRO_OCTAVES = 5;
-    const float LACUNARITY = 2.15;
-    const float GAIN = 0.44; // LACUNARITY * GAIN < 1.0 keeps normals bounded
+    float lat = clamp(worldPos.z / (FAKE_PLANET_RADIUS * 1.5707963), -1.0, 1.0);
+    vec2 pWind = getPrevailingWind(lat);
+    vec3 windDir3D = vec3(pWind.x, 0.0, pWind.y);
+    float windLen = length(windDir3D);
+    windDir3D = (windLen > 1e-4) ? (windDir3D / windLen) : vec3(1.0, 0.0, 0.0);
 
+    vec3 referenceUp = abs(macroNormal.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(referenceUp, macroNormal));
+    vec3 windTangent = windDir3D - macroNormal * dot(windDir3D, macroNormal);
+    windTangent = (length(windTangent) > 1e-4) ? normalize(windTangent) : T;
+
+    vec3 waveF = normalize(windTangent + warpCurl);
+    vec3 warpedPos = warpNoise + worldPos;
+
+    const int MICRO_OCTAVES = 4; // 20m -> 10m -> 5m -> 2.5m
     for (int i = 0; i < MICRO_OCTAVES; i++) {
+        wavelength = 1.0 / freq;
         if (wavelength <= minWavelength) break;
 
         float nyquistFade = smoothstep(minWavelength, 2.0 * minWavelength, wavelength);
         float w = amp * nyquistFade;
-        float freq = 1.0 / wavelength;
 
-        // Slicing radially along unit P_geo by (world_y * strataStretch) creates horizontal
-        // geological strata without losing float32 precision at planetary coordinates.
-        float freqGeo = FAKE_PLANET_RADIUS * freq;
-        float strataOffset = world_y * strataStretch * freq;
-        float radialScale = freqGeo + strataOffset;
+        vec3 grad3D;
+        vec2 valPhase = phasorNoise3DGrad(warpedPos * freq, 1.0, waveF, windTangent, 0.68, 0.0, grad3D);
+        float phasorCos = valPhase.x / max(length(valPhase), 0.0001);
 
-        vec3 pSample = P_geo * radialScale + vec3(phase * 13.7 + float(i) * 31.1);
-        vec4 n = noised(pSample);
+        // Chain rule: d/dxz [phasorCos(warpedPos * freq) * w] = grad3D.xz * freq * w
+        vec2 dHdxz = grad3D.xz * freq * w;
 
-        // Smooth ridge creases for rock vs rolling mounds for soil
-        float crease = 1.0 - abs(n.x);
-        float softSign = n.x * inversesqrt(n.x * n.x + 1e-4);
-        float shapedVal = mix(n.x, crease * 2.0 - 1.0, rockiness * 0.75);
-        float derivMult = mix(1.0, -2.0 * softSign, rockiness * 0.75);
+        res.height_delta += phasorCos * w;
+        res.slope_delta  += vec2(dHdxz.x, poleFlipped ? -dHdxz.y : dHdxz.y);
 
-        vec3 dnDp = n.yzw * derivMult;
-        float dNdY = dot(dnDp, P_geo) * strataStretch * freq;
-
-        vec2 dHdxz = vec2(
-            dot(dnDp, dP_dx) * radialScale + dNdY * macro_slope.x,
-            dot(dnDp, dP_dz) * radialScale + dNdY * macro_slope.y
-        );
-
-        res.height_delta += shapedVal * w;
-        res.slope_delta  += dHdxz * w;
-
-        wavelength /= LACUNARITY;
-        amp *= GAIN;
+        freq *= 2.0;
+        amp *= 0.5;
     }
 
     return res;
@@ -995,13 +994,22 @@ float evaluate_terrain_analytical(
     );
 
     // 10. Close-up band-limited mesostructure
+    vec3 macro_normal = normalize(vec3(
+        -erosion.slope.x,
+        1.0,
+        wrapped.poleFlipped ? erosion.slope.y : -erosion.slope.y
+    ));
     float wetness_mask = clamp01(max(max(river_w, canyon_w), max(hydrology.basin_mask, erosion.stream_mask)));
+
     MicroDetailResult micro = evaluateMicroDetail(
-        tectonics.P_geo, tectonics.dP_dx, tectonics.dP_dz,
-        erosion.true_height, erosion.slope,
-        texelSize, phase,
-        out_ridge_map, erosion.substrate,
-        out_water_level, wetness_mask
+        vec3(p_local.x, erosion.true_height, p_local.z),
+        macro_normal,
+        wrapped.poleFlipped,
+        texelSize,
+        out_ridge_map,
+        erosion.substrate,
+        out_water_level,
+        wetness_mask
     );
 
     true_height = erosion.true_height + micro.height_delta;

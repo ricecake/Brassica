@@ -249,7 +249,7 @@ void main() {
 	vec4 matWeights = vec4(grassWeight, rockWeight, sandWeight, snowWeight);
 
 	outAlbedo[vertexIndex] = vec4(baseColor, 1.0);
-	outMaterial[vertexIndex] = vec4(metallic, roughness, glint, 0.0);
+	outMaterial[vertexIndex] = vec4(metallic, roughness, glint, substrate);
 	outMaterialWeights[vertexIndex] = matWeights;
 
 	// Only generate skirts on the absolute outer edges of the macro-slot
@@ -289,7 +289,7 @@ void main() {
 		outPosition[skirtIdx] = relSkirtPos;
 		outNormal[skirtIdx] = normal;
 		outAlbedo[skirtIdx] = vec4(baseColor, 1.0);
-		outMaterial[skirtIdx] = vec4(metallic, roughness, glint, 0.0);
+		outMaterial[skirtIdx] = vec4(metallic, roughness, glint, substrate);
 		outMaterialWeights[skirtIdx] = matWeights;
 	}
 
