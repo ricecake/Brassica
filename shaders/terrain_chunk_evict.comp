@@ -15,6 +15,8 @@ struct TerrainPageTableEntry {
 	int  coordX;       // grid cell X
 	int  coordZ;       // grid cell Z
 	uint lod;
+	float minHeight;
+	float maxHeight;
 };
 
 layout(scalar, buffer_reference) buffer PageTableRef {

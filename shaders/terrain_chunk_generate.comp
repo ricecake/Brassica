@@ -3,6 +3,8 @@
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
 
 #include "bindless.glsl"
 #include "common.glsl"
@@ -33,6 +35,8 @@ struct TerrainPageTableEntry {
 	int  coordX;       // grid cell X
 	int  coordZ;       // grid cell Z
 	uint lod;
+	float minHeight;
+	float maxHeight;
 };
 
 layout(scalar, buffer_reference) buffer PageTableRef {
@@ -49,6 +53,9 @@ layout(push_constant) uniform TerrainChunkGeneratePush {
 	uint  chunkDimension; // 16
 	uint  pad1[2];
 } push;
+
+shared float sMinHeight[32];
+shared float sMaxHeight[32];
 
 void main() {
 	uint reqIdx = gl_WorkGroupID.x;
@@ -115,4 +122,26 @@ void main() {
 	vertBuf.vertices[totalVertIdx].position = vec4(worldPos, h);
 	vertBuf.vertices[totalVertIdx].normal = vec4(normal, clamp(biome, 0.0, 1.0));
 	vertBuf.vertices[totalVertIdx].material = vec4(waterLevel, ridgeMap, substrate, 0.0);
+
+	// 1. Subgroup-level min/max reduction
+	float subMin = subgroupMin(h);
+	float subMax = subgroupMax(h);
+
+	if (subgroupElect()) {
+		sMinHeight[gl_SubgroupID] = subMin;
+		sMaxHeight[gl_SubgroupID] = subMax;
+	}
+	barrier();
+
+	// 2. Workgroup-level reduction written to the page table
+	if (gl_LocalInvocationIndex == 0u) {
+		float chunkMin = sMinHeight[0];
+		float chunkMax = sMaxHeight[0];
+		for (uint i = 1u; i < gl_NumSubgroups; ++i) {
+			chunkMin = min(chunkMin, sMinHeight[i]);
+			chunkMax = max(chunkMax, sMaxHeight[i]);
+		}
+		pt.entries[virtualChunkId].minHeight = chunkMin;
+		pt.entries[virtualChunkId].maxHeight = chunkMax;
+	}
 }

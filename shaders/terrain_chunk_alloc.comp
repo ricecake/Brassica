@@ -15,6 +15,8 @@ struct TerrainPageTableEntry {
 	int  coordX;       // grid cell X
 	int  coordZ;       // grid cell Z
 	uint lod;
+	float minHeight;
+	float maxHeight;
 };
 
 layout(scalar, buffer_reference) buffer PageTableRef {
@@ -100,6 +102,8 @@ void main() {
 			pt.entries[virtualChunkId].coordX = currCoordX;
 			pt.entries[virtualChunkId].coordZ = currCoordZ;
 			pt.entries[virtualChunkId].lod = lod;
+			pt.entries[virtualChunkId].minHeight = -2000.0;
+			pt.entries[virtualChunkId].maxHeight = 4000.0;
 			break;
 		}
 	}

@@ -78,8 +78,10 @@ namespace brassica {
 		std::int32_t  coordX{0x7FFFFFFF};
 		std::int32_t  coordZ{0x7FFFFFFF};
 		std::uint32_t lod{0xFFFFFFFFu};
+		float minHeight{0.0f};
+		float maxHeight{0.0f};
 	};
-	static_assert(sizeof(TerrainPageTableEntryGPU) == 16, "TerrainPageTableEntryGPU size must be 16 bytes");
+	static_assert(sizeof(TerrainPageTableEntryGPU) == 24, "TerrainPageTableEntryGPU size must be 24 bytes");
 
 	// Terrain Page Table buffer: maps virtual chunk IDs (maxVirtualChunks) to physical slot indices and coordinates
 	struct TerrainPageTableBuffer {

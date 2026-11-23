@@ -17,6 +17,8 @@ struct TerrainPageTableEntry {
 	int  coordX;       // grid cell X
 	int  coordZ;       // grid cell Z
 	uint lod;
+	float minHeight;
+	float maxHeight;
 };
 
 layout(scalar, buffer_reference) buffer PageTableRef {
@@ -60,17 +62,41 @@ void main() {
 			float chunkSize = baseChunkSize * getLODScale(float(lod));
 
 			vec2 chunkMinXZ = vec2(float(entry.coordX) * chunkSize, float(entry.coordZ) * chunkSize);
-			vec2 maxRel = max(abs(chunkMinXZ - uCameraPosition.xz), abs(chunkMinXZ + vec2(chunkSize) - uCameraPosition.xz));
+			vec2 chunkMaxXZ = chunkMinXZ + vec2(chunkSize);
+
+			vec2 minRel = clamp(uCameraPosition.xz, chunkMinXZ, chunkMaxXZ) - uCameraPosition.xz;
+			vec2 maxRel = max(abs(chunkMinXZ - uCameraPosition.xz), abs(chunkMaxXZ - uCameraPosition.xz));
+			float minDropOff = dot(minRel, minRel) / (2.0 * FAKE_PLANET_RADIUS);
 			float maxDropOff = dot(maxRel, maxRel) / (2.0 * FAKE_PLANET_RADIUS);
 
-			vec3 relMinB = vec3(chunkMinXZ.x - uCameraPosition.x, -2000.0 - uCameraPosition.y - maxDropOff, chunkMinXZ.y - uCameraPosition.z);
-			vec3 relMaxB = vec3(chunkMinXZ.x + chunkSize - uCameraPosition.x, 4000.0 - uCameraPosition.y, chunkMinXZ.y + chunkSize - uCameraPosition.z);
+			// Margin for continuous analytical peaks/valleys between the 16x16 vertex samples
+			float yPad = max(25.0, chunkSize * 0.05);
+
+			vec3 relMinB = vec3(
+				chunkMinXZ.x - uCameraPosition.x,
+				(entry.minHeight - yPad - maxDropOff) - uCameraPosition.y,
+				chunkMinXZ.y - uCameraPosition.z
+			);
+			vec3 relMaxB = vec3(
+				chunkMaxXZ.x - uCameraPosition.x,
+				(entry.maxHeight + yPad - minDropOff) - uCameraPosition.y,
+				chunkMaxXZ.y - uCameraPosition.z
+			);
 
 			mat4 viewRel = mat4(mat3(uViewMatrix));
 			mat4 viewProjRel = uProjMatrix * viewRel;
 
-			// Generous frustum culling
-			visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(chunkSize * 2.0, 1000.0, chunkSize * 2.0), -500.0);
+			visible = isAABBVisible(relMinB, relMaxB, viewProjRel, vec3(100.0, 300.0, 100.0), -200.0);
+
+			if (visible && lod > 1u) {
+				float tileDist = length(minRel);
+				float camAltitude = uCameraPosition.y - push.waterLevel;
+				float tileMaxYAboveRef = (entry.maxHeight + yPad) - push.waterLevel;
+				float slack = chunkSize * 2.0 + 500.0;
+				if (isBeyondHorizon(tileDist, tileMaxYAboveRef, camAltitude, slack)) {
+					visible = false;
+				}
+			}
 
 			// Inner LOD culling: prevent coarse LOD chunks from rendering over finer LOD chunks
 			if (visible && lod > 0u) {
