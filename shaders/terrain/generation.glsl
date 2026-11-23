@@ -70,7 +70,7 @@ const TectonicPlate plates[] = TectonicPlate[](
  */
 vec4 ErosionFilter(
 	in vec2   p,
-    float texelSize,
+    float     texelSize,
 	vec3      heightAndSlope,
 	float     fadeTarget,
 	float     strength,
@@ -87,18 +87,18 @@ vec4 ErosionFilter(
 	float     normalization,
 	out float ridgeMap,
 	out float substrate,
-	out float debug
+	out vec2  flowDir,
+	out float streamMask
 ) {
 	strength *= (scale + 10.0);
 	fadeTarget = clamp(fadeTarget, -1.0, 1.0);
-
-	scale *= 100.0;
+	scale *= 1000.0;
 
 	vec3  inputHeightAndSlope = heightAndSlope;
-    float wavelength = scale * cellScale;
-	float freq = 1.0 / wavelength;
+	float freq = 1.0 / (scale * cellScale);
     float fadeFreqStart = 1.0 / (4.0 * texelSize);
-    float fadeFreqEnd = 1.0 / (2.0 * texelSize);
+    float fadeFreqEnd   = 1.0 / (2.0 * texelSize);
+
 	float slopeLength = max(length(heightAndSlope.yz), 1e-10);
 	float magnitude = 0.0;
 	float roundingMult = 1.0;
@@ -111,20 +111,36 @@ vec4 ErosionFilter(
 
 	vec2 gullySlope = mix(heightAndSlope.yz, heightAndSlope.yz / slopeLength * assumedSlope.x, assumedSlope.y);
 
+    float streamAccum = 0.0;
+    float streamWeightSum = 0.0;
+
 	for (int i = 0; i < octaves; i++) {
-        if (freq > fadeFreqEnd) break;
-		vec4 phacelle = PhacelleNoise(p * freq, safe_normalize(gullySlope), cellScale, 0.25, normalization);
+        if (freq >= fadeFreqEnd) break;
+
+        // 1.0 below fadeFreqStart, smoothly fading to 0.0 at fadeFreqEnd
+        float nyquistFade = smoothstep(fadeFreqEnd, fadeFreqStart, freq);
+        float octaveStrength = strength * nyquistFade;
+
+        vec4 phacelle = PhacelleNoise(p * freq, safe_normalize(gullySlope), cellScale, 0.25, normalization);
 		phacelle.zw *= -freq;
 		float sloping = abs(phacelle.y);
 
-		gullySlope += sign(phacelle.y) * phacelle.zw * strength * gullyWeight;
+		gullySlope += sign(phacelle.y) * phacelle.zw * octaveStrength * gullyWeight;
 
 		vec3 gullies = vec3(phacelle.x, phacelle.y * phacelle.zw);
 		vec3 fadedGullies = mix(vec3(fadeTarget, 0.0, 0.0), gullies * gullyWeight, combiMask);
-		heightAndSlope += fadedGullies * strength;
-		magnitude += strength;
+		heightAndSlope += fadedGullies * octaveStrength;
+		magnitude += octaveStrength;
 
 		fadeTarget = fadedGullies.x;
+
+        // Gather drainage creases weighted toward macro/meso valley octaves (i = 0..3)
+        // so high-frequency hillside rills do not trigger standing water.
+        float crease = clamp01(-phacelle.x);
+        float valleyFlatness = 1.0 - smoothstep(0.08, 0.25, length(heightAndSlope.yz));
+        float catchmentWeight = nyquistFade * exp(-float(i) * 0.7) * valleyFlatness;
+        streamAccum += crease * max(combiMask, 0.35) * catchmentWeight;
+        streamWeightSum += catchmentWeight;
 
 		float roundingForOctave = mix(rounding.y, rounding.x, clamp01(phacelle.x + 0.5)) * roundingMult;
 		float newMask = ease_out(smooth_start(sloping * onset.y, roundingForOctave * onset.y));
@@ -134,14 +150,22 @@ vec4 ErosionFilter(
 		float newRidgeMapMask = ease_out(sloping * onset.w);
 		ridgeMapCombiMask = ridgeMapCombiMask * newRidgeMapMask;
 
-		strength *= gain * smoothstep(fadeFreqStart, fadeFreqEnd, freq);
+		strength *= gain;
 		freq *= lacunarity;
 		roundingMult *= rounding.w;
 	}
 
 	ridgeMap = ridgeMapFadeTarget * (1.0 - ridgeMapCombiMask);
 	substrate = clamp(fadeTarget, -1.0, 1.0);
-	debug = fadeTarget;
+
+    // heightAndSlope.yz points uphill; negate for steepest-descent flow and blend with
+    // gullySlope so flow vectors stay continuous along flattened channel bottoms.
+    vec2 bedDownhill = safe_normalize(-heightAndSlope.yz);
+    vec2 channelDownhill = safe_normalize(-gullySlope);
+    flowDir = safe_normalize(mix(bedDownhill, channelDownhill, 0.35));
+
+    float rawStream = (streamWeightSum > 1e-5) ? (streamAccum / streamWeightSum) : 0.0;
+    streamMask = smoothstep(0.22, 0.60, rawStream);
 
 	vec3 heightAndSlopeDelta = heightAndSlope - inputHeightAndSlope;
 	return vec4(heightAndSlopeDelta, magnitude);
@@ -495,13 +519,20 @@ HydrologyResult evaluateHydrology(
     vec3  grad_base_h,
     float macro_h,
     vec3  macro_grad_geo,
+    vec3  smooth_grad_geo, // grad_base_h + grad_continent_h (no high-octave hill gradients)
     int   riverOctaves,
     int   canyonOctaves,
     int   basinOctaves
 ) {
     HydrologyResult result;
 
-    // 1. RIVERS (Zero-crossings warped by plate velocity)
+    // Suppress rivers, canyons, and lakes on steep mountain walls
+    float physical_slope  = length(smooth_grad_geo) * (2500.0 / FAKE_PLANET_RADIUS);
+    float river_flatness  = 1.0 - smoothstep(0.12, 0.35, physical_slope);
+    float canyon_flatness = 1.0 - smoothstep(0.18, 0.45, physical_slope);
+    float basin_flatness  = (1.0 - smoothstep(0.04, 0.14, physical_slope)) * interior_mask;
+
+    // 1. RIVERS
     vec3 grad_raw_river;
     vec3 P_river = P_geo * radius_scale * 2.0 + vel * warp_strength * 1.5;
     float raw_river = dot_noise_fbm(P_river, riverOctaves, phase + 112.0, grad_raw_river);
@@ -510,9 +541,8 @@ HydrologyResult evaluateHydrology(
     float river_width = 0.035;
     float t_river = clamp(abs(raw_river) / river_width, 0.0, 1.0);
     result.river_profile = 1.0 - (t_river * t_river * (3.0 - 2.0 * t_river));
-    result.river_mask = interior_mask;
+    result.river_mask = interior_mask * river_flatness;
 
-    // Project macro_h onto nearest raw_river == 0 centerline (removes cross-slope)
     float river_grad_sq = max(dot(grad_river_warped, grad_river_warped), 1e-8);
     vec3 delta_P_river = -(raw_river / river_grad_sq) * grad_river_warped;
     float max_river_step = 0.05 / max(radius_scale, 1e-4);
@@ -521,16 +551,18 @@ HydrologyResult evaluateHydrology(
         delta_P_river *= max_river_step / r_step_len;
     }
 
-    float river_center_h = macro_h + dot(macro_grad_geo, delta_P_river);
+    float river_proj_delta = clamp(dot(smooth_grad_geo, delta_P_river), -0.025, 0.025);
+    float river_center_h = macro_h + river_proj_delta;
     vec3 n_river = grad_river_warped * inversesqrt(river_grad_sq);
     vec3 grad_river_center_h = macro_grad_geo - n_river * dot(macro_grad_geo, n_river);
 
     float river_depth = 0.035;
-    result.river_bed_h = river_center_h - river_depth;
+    // Never allow a river bed to extrude above surrounding terrain on slopes
+    result.river_bed_h = min(river_center_h - river_depth, macro_h - river_depth * 0.35);
     result.grad_river_bed_h = grad_river_center_h;
-    result.river_water_h = river_center_h - river_depth * 0.25;
+    result.river_water_h = result.river_bed_h + river_depth * 0.75;
 
-    // 2. CANYONS (Zero-crossings masked to high elevation)
+    // 2. CANYONS
     vec3 grad_raw_canyon;
     float raw_canyon = dot_noise_fbm(P_geo * radius_scale * 1.5, canyonOctaves, phase + 175.0, grad_raw_canyon);
     vec3 grad_canyon_warped = grad_raw_canyon * radius_scale * 1.5;
@@ -541,7 +573,7 @@ HydrologyResult evaluateHydrology(
 
     float t_elev = clamp((base_h - 0.2) / 0.3, 0.0, 1.0);
     float high_elev_mask = t_elev * t_elev * (3.0 - 2.0 * t_elev);
-    result.canyon_mask = interior_mask * high_elev_mask;
+    result.canyon_mask = interior_mask * high_elev_mask * canyon_flatness;
 
     float canyon_grad_sq = max(dot(grad_canyon_warped, grad_canyon_warped), 1e-8);
     vec3 delta_P_canyon = -(raw_canyon / canyon_grad_sq) * grad_canyon_warped;
@@ -551,24 +583,25 @@ HydrologyResult evaluateHydrology(
         delta_P_canyon *= max_canyon_step / c_step_len;
     }
 
-    float canyon_center_h = macro_h + dot(macro_grad_geo, delta_P_canyon);
+    float canyon_proj_delta = clamp(dot(smooth_grad_geo, delta_P_canyon), -0.04, 0.04);
+    float canyon_center_h = macro_h + canyon_proj_delta;
     vec3 n_canyon = grad_canyon_warped * inversesqrt(canyon_grad_sq);
     vec3 grad_canyon_center_h = macro_grad_geo - n_canyon * dot(macro_grad_geo, n_canyon);
 
     float canyon_depth = 0.09;
-    result.canyon_bed_h = canyon_center_h - canyon_depth;
+    result.canyon_bed_h = min(canyon_center_h - canyon_depth, macro_h - canyon_depth * 0.35);
     result.grad_canyon_bed_h = grad_canyon_center_h;
-    result.canyon_water_h = canyon_center_h - canyon_depth * 0.80;
+    result.canyon_water_h = result.canyon_bed_h + canyon_depth * 0.20;
 
-    // 3. LAKE BASINS (Project onto basin_noise == 0.65 shoreline contour for level lakes)
+    // 3. LAKE BASINS
     vec3 grad_basin_noise;
     float basin_noise = dot_noise_fbm(P_geo * radius_scale * 1.2, basinOctaves, phase + 200.0, grad_basin_noise);
     vec3 grad_basin_geo = grad_basin_noise * radius_scale * 1.2;
 
     float t_basin = clamp((basin_noise - 0.65) / 0.25, 0.0, 1.0);
-    result.basin_mask = t_basin * t_basin * (3.0 - 2.0 * t_basin);
+    result.basin_mask = t_basin * t_basin * (3.0 - 2.0 * t_basin) * basin_flatness;
     float d_basin_mask = 6.0 * t_basin * (1.0 - t_basin) / 0.25;
-    result.grad_basin_mask = d_basin_mask * grad_basin_geo;
+    result.grad_basin_mask = d_basin_mask * grad_basin_geo * basin_flatness;
 
     float basin_grad_sq = max(dot(grad_basin_geo, grad_basin_geo), 1e-8);
     vec3 delta_P_basin = ((0.65 - basin_noise) / basin_grad_sq) * grad_basin_geo;
@@ -578,7 +611,8 @@ HydrologyResult evaluateHydrology(
         delta_P_basin *= max_basin_step / b_step_len;
     }
 
-    float lake_shore_h = macro_h + dot(macro_grad_geo, delta_P_basin);
+    float basin_proj_delta = clamp(dot(smooth_grad_geo, delta_P_basin), -0.035, 0.035);
+    float lake_shore_h = macro_h + basin_proj_delta;
     vec3 n_basin = grad_basin_geo * inversesqrt(basin_grad_sq);
     vec3 grad_lake_shore_h = macro_grad_geo - n_basin * dot(macro_grad_geo, n_basin);
 
@@ -593,6 +627,8 @@ struct ErosionResult {
     vec2  slope;
     float ridge_map;
     float substrate;
+    vec2  flow_dir;
+    float stream_mask;
 };
 
 // Region 8: derives erosion parameters from the structural fields every earlier region
@@ -628,32 +664,35 @@ ErosionResult applyErosion(
                                 max(river_profile * river_mask,
                                     canyon_profile * canyon_mask));
 
-    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3));// * (1.0 - hydrology_protection);
+    float erosion_strength = mix(0.08, 0.20, clamp01(fault_mask * 0.7 + canyon_mask * 0.3)) * (1.0 - hydrology_protection);
 
     // Gully carving weight is sharper in steep mountain fault zones and canyon walls
     float erosion_gully_weight = mix(0.40, 0.70, clamp01(collision_intensity + canyon_mask * 0.5));
     // Detail restriction and spatial scale adjust according to ridge features
     float erosion_detail = mix(1.2, 1.8, clamp01(collision_intensity + canyon_mask));
 
-    float erosion_scale = mix(0.35, 0.55, fault_mask);
+    float erosion_scale = mix(0.28, 0.42, fault_mask);
+    float scale_arg     = 15.0 * erosion_scale; // 4.2..6.3 -> 4.2km..6.3km after scale *= 1000.0
+    float scale_norm    = 21.0 / (scale_arg + 10.0);
     vec4 erosion_rounding = vec4(mix(5.0, 10.0, t_macro), mix(0.25, 0.0, t_macro), 0.1, 2.0);
 
     float ridgeMapVal = 0.0;
     float substrateVal = 0.0;
-    float debugVal = 0.0;
+    float streamMask = 0.0;
+    vec2 flowDir = vec2(0.0);
 
     vec4 erosionDelta = ErosionFilter(
         p_xz,
         texelSize,
         heightAndSlope,
         erosionFadeTarget,
-        1*erosion_strength,
+        erosion_strength * scale_norm,
         20*erosion_gully_weight,
         erosion_detail,
         erosion_rounding,            // Rounding parameters (x: ridge, y: crease, z: input mult, w: octave mult)
         vec4(1.25, 1.25, 5.8, 1.5),  // effect onset (x: initial, y: octave, z: ridgemap initial, w: ridgemap octave).
         assumedSlopeDir,
-        50*erosion_scale,
+        scale_arg,
         erosionOctaves,
         2.3,                         // lacunarity
         0.42,                        // Alternatively, need to clamp wavelength to 6-8M
@@ -661,7 +700,8 @@ ErosionResult applyErosion(
         0.0,                         // normalization
         ridgeMapVal,
         substrateVal,
-        debugVal
+        flowDir,
+        streamMask
     );
 
     ErosionResult result;
@@ -669,6 +709,8 @@ ErosionResult applyErosion(
     result.slope = heightAndSlope.yz + erosionDelta.yz;
     result.ridge_map = ridgeMapVal;
     result.substrate = substrateVal;
+    result.flow_dir = flowDir;
+    result.stream_mask = streamMask;
     return result;
 }
 
@@ -704,25 +746,53 @@ float classifyGeoBiome(
 // their own fraction of their own carved depth, highest-coverage mask wins where they overlap.
 // Region 10: Unscaled flat water surface elevation inside wetted corridors
 float calculateLocalWaterLevel(
-    float final_h,
+    float pre_erosion_height,
+    float post_erosion_height,
+    float stream_mask,
     HydrologyResult hydrology,
     float min_height,
     float max_height
 ) {
+    float height_amp = max_height - min_height;
+    float ground_ref = min(pre_erosion_height, post_erosion_height);
+
+    // Keep dry water table well below ground so coarse LOD triangle interpolation never pokes through
+    float water_y = ground_ref - 60.0;
+
     float river_cov  = hydrology.river_profile * hydrology.river_mask;
     float canyon_cov = hydrology.canyon_profile * hydrology.canyon_mask;
     float basin_cov  = hydrology.basin_mask;
 
-    float local_water_norm = -1e5;
-    if (river_cov  > 0.02) local_water_norm = max(local_water_norm, hydrology.river_water_h);
-    if (canyon_cov > 0.02) local_water_norm = max(local_water_norm, hydrology.canyon_water_h);
-    if (basin_cov  > 0.05) local_water_norm = max(local_water_norm, hydrology.lake_water_level);
+    if (river_cov > 0.005) {
+        float w_y = remap(hydrology.river_water_h, 0.0, 1.0, min_height, max_height);
+        // Flat inside channel core (cov >= 0.35), smoothly tucked below bank as cov -> 0
+        float bank_tuck = (1.0 - smoothstep(0.02, 0.35, river_cov)) * (0.045 * height_amp);
+        water_y = max(water_y, w_y - bank_tuck);
+    }
 
-    // if (local_water_norm <= final_h) {
-        // return mix(final_h);
-    // }
-    local_water_norm = max(0.0, mix((0.95*final_h), local_water_norm, smoothstep(0.95*final_h, final_h, local_water_norm)));
-    return remap(local_water_norm, 0.0, 1.0, min_height, max_height);
+    if (canyon_cov > 0.005) {
+        float w_y = remap(hydrology.canyon_water_h, 0.0, 1.0, min_height, max_height);
+        float bank_tuck = (1.0 - smoothstep(0.02, 0.35, canyon_cov)) * (0.11 * height_amp);
+        water_y = max(water_y, w_y - bank_tuck);
+    }
+
+    if (basin_cov > 0.005) {
+        float w_y = remap(hydrology.lake_water_level, 0.0, 1.0, min_height, max_height);
+        float shore_tuck = (1.0 - smoothstep(0.05, 0.35, basin_cov)) * (0.035 * height_amp);
+        water_y = max(water_y, w_y - shore_tuck);
+    }
+
+    // Eroded tributary streams inside incised gully thalwegs (above sea level)
+    if (stream_mask > 0.25 && post_erosion_height > 0.5) {
+        float stream_t = smoothstep(0.25, 0.75, stream_mask);
+        float stream_water_y = post_erosion_height + mix(-1.5, 0.40, stream_t);
+        water_y = max(water_y, stream_water_y);
+    }
+
+    if (post_erosion_height < 0.0) {
+        water_y = max(water_y, 0.0);
+    }
+    return water_y;
 }
 
 struct MicroDetailResult {
@@ -737,125 +807,81 @@ MicroDetailResult evaluateMicroDetail(
     vec3  P_geo,
     vec3  dP_dx,
     vec3  dP_dz,
+    float world_y,
+    vec2  macro_slope,
     float texelSize,
     float phase,
     float ridge_map,
     float substrate,
-    float wetness_mask // max(river_w, max(canyon_w, basin_mask))
+    float water_level,
+    float wetness_mask
 ) {
     MicroDetailResult res = MicroDetailResult(0.0, vec2(0.0));
 
-    float minCleanWavelength = texelSize * 2.5;
-
-    // Start at ~24m wavelength (on a 600km sphere: 600000 / 24 = 25000 cycles/rad)
     float wavelength = 24.0;
-    if (wavelength <= minCleanWavelength) {
-        return res;
-    }
 
-    // Rock/exposed areas (high ridge_map or negative substrate) get sharper, higher-relief
-    // micro-facets; depositional plains (positive substrate) get gentle soil undulation.
-    float rockiness = clamp01(max(ridge_map, -substrate * 0.7));
-    float baseAmp = mix(0.18, 0.65, rockiness) * (1.0 - wetness_mask * 0.85);
+    float slopeMag = length(macro_slope);
+    float steepness = smoothstep(0.06, 0.40, slopeMag);
+    float depositional = smoothstep(-0.1, 0.6, substrate);
 
-    float amp = baseAmp;
-    const int MAX_MICRO_OCTAVES = 5; // 24m -> 12m -> 6m -> 3m -> 1.5m
+    // Only treat negative substrate as exposed bedrock if slope is steep enough to scour;
+    // keeps flat low-elevation plains smooth instead of ridged.
+    float scouredRock = clamp01(-substrate) * smoothstep(0.04, 0.22, slopeMag);
+    float rockiness = clamp01(
+        max(ridge_map * 0.85, scouredRock) * 0.75 +
+        steepness * 0.45 -
+        depositional * (1.0 - steepness) * 0.45
+    );
 
-    for (int i = 0; i < MAX_MICRO_OCTAVES; i++) {
-        float texelsPerCycle = wavelength / texelSize;
-        if (texelsPerCycle <= 2.5) break;
-
-        // Smooth Nyquist roll-off; spatially constant per LOD so d(lodFade)/dx == 0
-        float lodFade = smoothstep(2.5, 4.5, texelsPerCycle);
-
-        float freqGeo = FAKE_PLANET_RADIUS / wavelength;
-        vec3 pSample = P_geo * freqGeo + vec3(phase * 13.7 + float(i) * 31.1);
-
-        // noised() returns vec4(noise, dN/dx, dN/dy, dN/dz)
-        vec4 n = noised(pSample);
-
-        // Sharp ridge-like creases for rock vs smooth rolling mounds for soil
-        float billow = n.x;
-        vec3 gradBillow = n.yzw;
-
-        float crease = 1.0 - abs(n.x);
-        // Smooth sign around 0 to keep derivatives continuous
-        float softSign = n.x * inversesqrt(n.x * n.x + 1e-4);
-        vec3 gradCrease = -softSign * n.yzw;
-
-        float h = mix(billow, crease - 0.5, rockiness);
-        vec3 gradGeo = mix(gradBillow, gradCrease, rockiness) * freqGeo;
-
-        float w = amp * lodFade;
-        res.height_delta += h * w;
-        res.slope_delta += vec2(dot(gradGeo, dP_dx), dot(gradGeo, dP_dz)) * w;
-
-        wavelength *= 0.5;
-        amp *= 0.48; // Slightly below 0.5 so slope energy stays bounded
-    }
-
-    return res;
-}
-
-MicroDetailResult evaluateMicroDetail(
-    vec2  p_xz,
-    float world_y,
-    vec2  macro_slope,
-    float texel_size,
-    float ridge_map,
-    float substrate,
-    float water_level
-) {
-    MicroDetailResult res = MicroDetailResult(0.0, vec2(0.0));
-
-    // Base wavelength 24m -> ~1.1m over 5 octaves at lacunarity 2.15
-    float wavelength = 24.0;
-    float min_wavelength = 2.0 * texel_size;
-    if (wavelength <= min_wavelength) {
-        return res;
-    }
-
-    float slope_mag = length(macro_slope);
-    // Eroded rock & ridges get higher relief + strata; depositional plains stay subtle
-    float rockiness = clamp01(max(ridge_map, -substrate * 0.5 + 0.5) * 0.6 + slope_mag * 0.8);
+    // Suppress micro-relief underwater and inside wetted river/lake corridors
     float submergence = smoothstep(water_level - 1.5, water_level + 0.5, world_y);
+    float dryFactor = min(submergence, 1.0 - wetness_mask * 0.85);
 
-    // Base amplitude in meters (~0.35m on craggy rock, ~0.04m on flat soil/underwater)
-    float amp = mix(0.04, 0.35, rockiness) * mix(0.3, 1.0, submergence);
-    float strata_stretch = mix(0.2, 2.5, rockiness); // compresses vertical frequency for rock layers
+    float amp = mix(0.04, 0.38, rockiness) * mix(0.2, 1.0, dryFactor);
+    float strataStretch = mix(0.15, 1.4, rockiness) / (1.0 + slopeMag * 0.75);
+    float slopeCompression = sqrt(1.0 + (slopeMag * strataStretch) * (slopeMag * strataStretch));
+    float minWavelength = 2.0 * texelSize * slopeCompression;
+
+    if (wavelength <= minWavelength) {
+        return res;
+    }
 
     const int MICRO_OCTAVES = 5;
     const float LACUNARITY = 2.15;
-    const float GAIN = 0.44; // keep LACUNARITY * GAIN < 1.0 so normals don't blow up
+    const float GAIN = 0.44; // LACUNARITY * GAIN < 1.0 keeps normals bounded
 
     for (int i = 0; i < MICRO_OCTAVES; i++) {
-        if (wavelength <= min_wavelength) {
-            break;
-        }
+        if (wavelength <= minWavelength) break;
 
-        // Smooth Nyquist fade between 4x and 2x vertex spacing
-        float nyquist_fade = smoothstep(min_wavelength, 2.0 * min_wavelength, wavelength);
-        float w = amp * nyquist_fade;
+        float nyquistFade = smoothstep(minWavelength, 2.0 * minWavelength, wavelength);
+        float w = amp * nyquistFade;
         float freq = 1.0 / wavelength;
 
-        vec3 q = vec3(p_xz.x, world_y * strata_stretch, p_xz.y) * freq;
-        vec4 n = noised(q); // n.x = [-1, 1], n.yzw = d/dq
+        // Slicing radially along unit P_geo by (world_y * strataStretch) creates horizontal
+        // geological strata without losing float32 precision at planetary coordinates.
+        float freqGeo = FAKE_PLANET_RADIUS * freq;
+        float strataOffset = world_y * strataStretch * freq;
+        float radialScale = freqGeo + strataOffset;
 
-        // Ridged shaping on rocky terrain, smooth undulations on soil
-        float ridge_val = 1.0 - abs(n.x);
-        float ridge_deriv_scale = -sign(n.x);
-        float shaped_val = mix(n.x, ridge_val * 2.0 - 1.0, rockiness * 0.7);
-        float deriv_mult = mix(1.0, 2.0 * ridge_deriv_scale, rockiness * 0.7);
+        vec3 pSample = P_geo * radialScale + vec3(phase * 13.7 + float(i) * 31.1);
+        vec4 n = noised(pSample);
 
-        // Chain rule including vertical strata term (dq.y/dx = dH/dx * strata_stretch * freq)
-        vec3 dn_dq = n.yzw * deriv_mult * freq;
-        vec2 dH_dxz = vec2(
-            dn_dq.x + dn_dq.y * strata_stretch * macro_slope.x,
-            dn_dq.z + dn_dq.y * strata_stretch * macro_slope.y
+        // Smooth ridge creases for rock vs rolling mounds for soil
+        float crease = 1.0 - abs(n.x);
+        float softSign = n.x * inversesqrt(n.x * n.x + 1e-4);
+        float shapedVal = mix(n.x, crease * 2.0 - 1.0, rockiness * 0.75);
+        float derivMult = mix(1.0, -2.0 * softSign, rockiness * 0.75);
+
+        vec3 dnDp = n.yzw * derivMult;
+        float dNdY = dot(dnDp, P_geo) * strataStretch * freq;
+
+        vec2 dHdxz = vec2(
+            dot(dnDp, dP_dx) * radialScale + dNdY * macro_slope.x,
+            dot(dnDp, dP_dz) * radialScale + dNdY * macro_slope.y
         );
 
-        res.height_delta += shaped_val * w;
-        res.slope_delta  += dH_dxz * w;
+        res.height_delta += shapedVal * w;
+        res.slope_delta  += dHdxz * w;
 
         wavelength /= LACUNARITY;
         amp *= GAIN;
@@ -891,6 +917,7 @@ float evaluate_terrain_analytical(
     float radius_scale = FAKE_PLANET_RADIUS * config.spatial_scale;
     vec3 P_noise = tectonics.P_geo * radius_scale;
 
+    // int hillsOctaves = clamp(9 - int(round(log2(max(texelSize, 0.5)))), 4, 6);
     ContinentResult continentRegion = evaluateContinentAndBiomeRegions(
         P_noise, radius_scale, phase, tectonics.fault_mask, tectonics.grad_fault, 5, 3, 10
     );
@@ -912,7 +939,7 @@ float evaluate_terrain_analytical(
         tectonics.P_geo, radius_scale, tectonics.vel, tectonics.J_vel, warp_strength, phase,
         continentRegion.interior_mask, continentRegion.grad_interior_mask,
         tectonics.base_h, tectonics.grad_base_h,
-        macro_h, macro_grad_geo,
+        macro_h, macro_grad_geo, tectonics.grad_base_h + continentRegion.grad_continent_h,
         4, 4, 3
     );
 
@@ -946,6 +973,7 @@ float evaluate_terrain_analytical(
     vec2 tectonic_skewed_slope = grad_local.xz + local_vel * 0.5;
     vec3 heightAndSlope = vec3(true_height, tectonic_skewed_slope);
 
+    // 8. Erosion
     ErosionResult erosion = applyErosion(
         p_local.xz, texelSize, heightAndSlope,
         tectonics.fault_mask, tectonics.collision_intensity,
@@ -956,34 +984,34 @@ float evaluate_terrain_analytical(
         8
     );
 
-    float wetness_mask = clamp01(max(river_w, max(canyon_w, hydrology.basin_mask)));
+    // Keep positive ridges in out_ridge_map; negative creases are now in erosion.stream_mask
+    out_ridge_map = max(mountains.massive_ridge, max(0.0, erosion.ridge_map));
+    out_substrate = erosion.substrate;
+
+    // 9. Water level (computed before micro-detail so shoreline/underwater relief is suppressed)
+    out_water_level = calculateLocalWaterLevel(
+        true_height, erosion.true_height, erosion.stream_mask, hydrology,
+        config.min_height, config.max_height
+    );
+
+    // 10. Close-up band-limited mesostructure
+    float wetness_mask = clamp01(max(max(river_w, canyon_w), max(hydrology.basin_mask, erosion.stream_mask)));
     MicroDetailResult micro = evaluateMicroDetail(
         tectonics.P_geo, tectonics.dP_dx, tectonics.dP_dz,
+        erosion.true_height, erosion.slope,
         texelSize, phase,
-        max(mountains.massive_ridge, erosion.ridge_map),
-        erosion.substrate,
-        wetness_mask
+        out_ridge_map, erosion.substrate,
+        out_water_level, wetness_mask
     );
 
     true_height = erosion.true_height + micro.height_delta;
     vec2 final_slope = erosion.slope + micro.slope_delta;
     out_normal = normalize(vec3(-final_slope.x, 1.0, wrapped.poleFlipped ? final_slope.y : -final_slope.y));
 
-    // true_height = erosion.true_height;
-    // out_normal = normalize(vec3(-erosion.slope.x, 1.0, wrapped.poleFlipped ? erosion.slope.y : -erosion.slope.y));
-    out_ridge_map = max(mountains.massive_ridge, erosion.ridge_map);
-    out_substrate = erosion.substrate;
-
     // 9. Derive geological biome classification from regional lithology and tectonic/hydrological structure
     out_biome = classifyGeoBiome(
         tectonics.P_geo, phase, tectonics.fault_mask, tectonics.collision_intensity,
         hydrology.canyon_mask, hydrology.basin_mask, tectonics.base_h, 3
-    );
-
-    // 10. Calculate water level in normalized height space
-    out_water_level = calculateLocalWaterLevel(
-        final_h, hydrology,
-        config.min_height, config.max_height
     );
 
     return true_height;
