@@ -80,6 +80,8 @@ void main() {
 	uint chunksPerRow = push.gridParams.y;
 	uint chunksPerLOD = chunksPerRow * chunksPerRow;
 	uint lod = virtualChunkId / chunksPerLOD;
+	float baseTexelSize = 0.5;
+	float texelSize = baseTexelSize * getLODScale(float(lod));
 
 	float baseChunkSize = (push.baseChunkSize > 0.0) ? push.baseChunkSize : 64.0;
 	float chunkSize = baseChunkSize * getLODScale(float(lod));
@@ -100,7 +102,9 @@ void main() {
 	float substrate = 0.0;
 	vec3 normal = vec3(0.0, 1.0, 0.0);
 
-	h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
+	// h = evaluate_terrain_analytical(p, 0.1, 0.75, con, normal, waterLevel, ridgeMap, substrate, biome);
+	h = evaluate_terrain_analytical(p, 0.1, 0.75, lod, texelSize, con, normal, waterLevel, ridgeMap, substrate, biome);
+
 
 	// Planar, uncurved world position stored in buffer; planetary curvature Y displacement is deferred to the mesh shader
 	vec3 worldPos = vec3(worldXZ.x, h, worldXZ.y);

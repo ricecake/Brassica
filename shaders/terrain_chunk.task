@@ -88,15 +88,6 @@ void main() {
 					visible = false;
 				}
 			}
-
-			// HiZ occlusion culling (disabled by default to avoid false rejection)
-			#if 0
-			if (visible && push.hizIndex > 0u && lod >= 3u) {
-				if (isAABBOccludedByHiZ(relMinB, relMaxB, viewProjRel, push.hizIndex)) {
-					visible = false;
-				}
-			}
-			#endif
 		}
 	}
 
