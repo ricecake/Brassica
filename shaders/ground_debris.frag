@@ -27,6 +27,62 @@ layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outMaterial;
 
+mat2 rot2D(float a) {
+	float s = sin(a), c = cos(a);
+	return mat2(c, -s, s, c);
+}
+
+// Evaluates crisscrossed, curved thatch/grass blades in a 3x3 neighborhood
+float evaluateGrassMatLayer(vec2 pRotated, float scale, float density, out float bladeTone, out vec2 bladeGrad) {
+	vec2 grid = pRotated * scale;
+	vec2 cell = floor(grid);
+	vec2 fracP = fract(grid) - 0.5;
+
+	// Screen-space size of one pixel in cell units
+	float pixelWidth = length(fwidth(grid));
+
+	float bestCover = 0.0;
+	bladeTone = 0.5;
+	bladeGrad = vec2(0.0);
+
+	for (int dy = -1; dy <= 1; ++dy) {
+		for (int dx = -1; dx <= 1; ++dx) {
+			vec2 neighbor = vec2(float(dx), float(dy));
+			vec2 cID = cell + neighbor;
+			vec2 h1 = hash(cID * 23.71 + vec2(4.1, 8.9));
+			vec2 h2 = hash(cID * 59.13 + vec2(7.7, 2.3));
+
+			if (h1.x > density) continue;
+
+			vec2 center = (h2 - 0.5) * 0.85;
+			float angle = h1.y * 6.2831853;
+			vec2 dir = vec2(cos(angle), sin(angle));
+			vec2 perp = vec2(-dir.y, dir.x);
+
+			float halfLen = mix(0.28, 0.58, h2.x);
+			float bend = (fract(h1.x * 13.7) - 0.5) * 0.18;
+			vec2 p0 = center - dir * halfLen;
+			vec2 p1 = center + dir * halfLen;
+			vec2 mid = center + perp * bend;
+
+			vec2 rel = fracP - neighbor;
+			float d = min(sdLine(rel, p0, mid), sdLine(rel, mid, p1));
+			float rawWidth = mix(0.035, 0.075, h2.y);
+			float effWidth = max(rawWidth, pixelWidth);
+
+			// Energy-conserving coverage when sub-pixel
+			float cover = smoothstep(effWidth, effWidth * 0.25, d) * clamp(rawWidth / effWidth, 0.35, 1.0);
+			if (cover > bestCover) {
+				bestCover = cover;
+				bladeTone = fract(h1.y * 7.3 + h2.x);
+				float side = sign(dot(rel - mid, perp));
+				bladeGrad = perp * side * cover;
+			}
+		}
+	}
+	return bestCover;
+}
+
 // Helper to evaluate a seashell / bivalve shell near water shorelines
 float evaluateShellShape(vec2 uv, vec2 cellID, out float shellRidge, out float shellTint) {
 	vec2 h1 = hash(cellID * 29.41 + vec2(7.3, 1.8));
@@ -141,7 +197,7 @@ float evaluateLeafShape(vec2 uv, vec2 cellID, out float leafHue) {
 void main() {
 	// Global camera proximity fade
 	float distToCam = length(inWorldPos.xz - uCameraPosition.xz);
-	float distanceFade = smoothstep(45.0, 15.0, distToCam) * inHeightFactor;
+	float distanceFade = 1.0-smoothstep(50, 100.0, distToCam) * inHeightFactor;
 	if (distanceFade <= 0.001) {
 		discard;
 	}
@@ -152,12 +208,54 @@ void main() {
 	vec2 warp = vec2(
 		dot_noise_fbm(vec3(p * 0.4, 0.5), 2.0, 0.0),
 		dot_noise_fbm(vec3(p * 0.4 + vec2(5.2, 1.3), 1.7), 2.0, 2.0)
-	) * 0.35;
+	) * 0.35 + vec2(
+		dot_noise_fbm(vec3(p * 1.85 + vec2(9.1, 2.7), 0.8), 2.0, 1.0),
+		dot_noise_fbm(vec3(p * 1.85 + vec2(3.4, 7.9), 2.3), 2.0, 3.0)
+	) * 0.14;
 	vec2 warpedP = p + warp;
+
+	float temp = 0.5;
+	float severity = 0.0;
+	float waterLevel = 0.0;
+	float substrateSand = 0.0;
+	float moisture = 0.5;
+	vec3 biomeBaseTint = vec3(0.14, 0.22, 0.08);
+
+	if (push.weatherBiomeIndex > 0u && push.weatherBiomeIndex != 0xFFFFFFFFu) {
+		vec4 weatherData = sampleTerrainWeatherBiome(push.weatherBiomeIndex, inWorldPos);
+		temp = weatherData.g;
+		moisture = weatherData.b;
+		severity = weatherData.a;
+
+		float precipType = (temp < 0.25) ? 1.0 : ((temp < 0.35) ? 0.5 : 0.0);
+		WhittakerBiome wb = evaluateWhittakerBiome(temp, moisture, severity, precipType);
+		biomeBaseTint = evalCosinePalette(wb.palA, wb.palB, wb.palC, wb.palD, 0.45);
+	}
+
+	if (push.biomeIndex > 0u && push.biomeIndex != 0xFFFFFFFFu) {
+		vec4 biomeData = sampleTerrainBiome(push.biomeIndex, p, 0u, push.gridParams.w);
+		waterLevel = biomeData.g;
+		substrateSand = biomeData.a; // substrate map (sand/gravel vs soil)
+	}
+
+
+	float validSand = (substrateSand < 0.99) ? substrateSand : 0.0;
+	float sandMask  = 1.0 - smoothstep(0.35, 0.65, validSand);
+
+	// Height above water level: shoreline proximity
+	float heightAboveWater = inWorldPos.y - waterLevel;
+	bool nearWater = (heightAboveWater >= -0.2 && heightAboveWater <= 4.0);
+	float waterMask = (abs(waterLevel) > 1e-4) ? smoothstep(0.2, 2.0, heightAboveWater) : 1.0;
+	bool isSandy = (substrateSand > 0.45) || (nearWater && heightAboveWater <= 2.5);
+	float slopeMask   = smoothstep(0.55, 0.85, inNormal.y);
+	float dryLandMask = smoothstep(0.4, 2.2, heightAboveWater) * (1.0 - smoothstep(0.35, 0.65, substrateSand));
+	float climateMask = smoothstep(0.16, 0.32, temp) * smoothstep(0.22, 0.62, moisture);
+	float vegDensity  = slopeMask * sandMask * waterMask * climateMask;
 
 	// Multi-frequency macro distribution: debris clusters around natural patches
 	float clusterNoise = dot_noise_fbm(vec3(warpedP * 0.12, 0.0), 2.0, 0.0) * 0.6 + dot_noise_fbm(vec3(warpedP * 0.35, 1.5), 2.0, 1.0) * 0.4;
-	float clusterMask = smoothstep(0.0, 0.38, clusterNoise);
+	float clusterFloor = mix(0.05, -0.32, vegDensity);
+	float clusterMask  = smoothstep(clusterFloor, clusterFloor + 0.42, clusterNoise);
 	if (clusterMask <= 0.05) {
 		discard;
 	}
@@ -223,25 +321,6 @@ void main() {
 	float brushDist = length(brushFrac - brushCenter);
 	bool  isBrush = (hBrush.x > 0.62) && (brushDist < mix(0.12, 0.32, hBrush.y));
 
-	// 4. Sample biome data to determine environment conditions (water proximity, sand/rock substrate)
-	float waterLevel = 0.0;
-	float substrateSand = 0.0;
-	float moisture = 0.5;
-	if (push.biomeIndex > 0u && push.biomeIndex != 0xFFFFFFFFu) {
-		vec4 biomeData = sampleTerrainBiome(push.biomeIndex, p, 0u, push.gridParams.w);
-		waterLevel = biomeData.g;
-		substrateSand = biomeData.a; // substrate map (sand/gravel vs soil)
-	}
-	if (push.weatherBiomeIndex > 0u && push.weatherBiomeIndex != 0xFFFFFFFFu) {
-		vec4 weatherData = sampleTerrainWeatherBiome(push.weatherBiomeIndex, inWorldPos);
-		moisture = weatherData.b;
-	}
-
-	// Height above water level: shoreline proximity
-	float heightAboveWater = inWorldPos.y - waterLevel;
-	bool nearWater = (heightAboveWater >= -0.2 && heightAboveWater <= 4.0);
-	bool isSandy = (substrateSand > 0.45) || (nearWater && heightAboveWater <= 2.5);
-
 	// 5. Seashells evaluation near water shorelines
 	float shellScale = 6.0;
 	vec2  shellGrid = (warpedP + vec2(64.1, 19.4)) * shellScale;
@@ -294,6 +373,15 @@ void main() {
 	bool isPebble = isSandy && (minPebbleDist < 1.0);
 	float pebbleEdge = smoothstep(1.0, 0.75, minPebbleDist);
 
+	float toneA, toneB;
+	vec2 gradA, gradB;
+	float matDensity = mix(0.15, 0.88, vegDensity);
+	float matA = evaluateGrassMatLayer(rot2D(0.33) * warpedP, 17.5,  matDensity, toneA, gradA);
+	float matB = evaluateGrassMatLayer(rot2D(1.47) * (warpedP+ vec2(11.4, 27.8)), 13.0, matDensity * 0.9, toneB, gradB);
+
+	float grassMatCover = max(matA, matB * 0.85) * vegDensity;
+	bool isGrassMat = grassMatCover > 0.18;
+
 	// In sandy / water areas, prioritize shells and pebbles; reduce dense forest leaves
 	if (nearWater || isSandy) {
 		isLeaf = isLeaf && (!isShell && !isPebble);
@@ -301,7 +389,7 @@ void main() {
 	}
 
 	// If neither stick, leaf, brush, shell, nor pebble, this spot is transparent ground
-	if (!isStick && !isLeaf && !isBrush && !isShell && !isPebble) {
+	if (!isStick && !isLeaf && !isBrush && !isShell && !isPebble && !isGrassMat) {
 		discard;
 	}
 
@@ -363,6 +451,21 @@ void main() {
 		vec3 brushDry = vec3(0.32, 0.27, 0.15);
 		albedo = mix(brushGreen, brushDry, hBrush.y);
 		roughness = 0.75;
+	} else if (isGrassMat) {
+		// Dark shaded humus/thatch base mixed with scraggly muted green-brown stems
+		vec3 deepThatch  = biomeBaseTint * vec3(0.28, 0.30, 0.22);
+		vec3 scragglyDry = mix(biomeBaseTint * 0.55, vec3(0.22, 0.19, 0.09), 0.45);
+		vec3 scragglyGrn = mix(biomeBaseTint * 0.65, vec3(0.11, 0.22, 0.07), smoothstep(0.35, 0.75, moisture));
+
+		float tone = (matA >= matB * 0.85) ? toneA : toneB;
+		vec3 stemColor = mix(scragglyDry, scragglyGrn, smoothstep(0.25, 0.75, tone));
+		// Darken underlayer further in dense forest/high-moisture regions
+		float shadeFactor = mix(0.85, 0.52, smoothstep(0.4, 0.85, moisture));
+		albedo = mix(deepThatch, stemColor, grassMatCover) * shadeFactor;
+		roughness = 0.92;
+
+		vec2 matGrad = rot2D(-0.33) * gradA + rot2D(-1.47) * gradB * 0.7;
+		perturbedNormal = normalize(inNormal + vec3(matGrad.x, 0.0, matGrad.y) * 0.45);
 	}
 
 	// Bayer dither for smooth boundary transparency and distance fading

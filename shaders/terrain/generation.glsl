@@ -861,7 +861,9 @@ MicroDetailResult evaluateMicroDetail(
     vec3 windTangent = windDir3D - macroNormal * dot(windDir3D, macroNormal);
     windTangent = (length(windTangent) > 1e-4) ? normalize(windTangent) : T;
 
-    vec3 waveF = normalize(windTangent + warpCurl);
+    vec3 waveDirRaw = windTangent + warpCurl;
+    float waveDirLen = length(waveDirRaw);
+    vec3 waveF = (waveDirLen > 1e-4) ? (waveDirRaw / waveDirLen) : windTangent;
     vec3 warpedPos = warpNoise + worldPos;
 
     const int MICRO_OCTAVES = 4; // 20m -> 10m -> 5m -> 2.5m
@@ -874,16 +876,28 @@ MicroDetailResult evaluateMicroDetail(
 
         vec3 grad3D;
         vec2 valPhase = phasorNoise3DGrad(warpedPos * freq, 1.0, waveF, windTangent, 0.68, 0.0, grad3D);
-        float phasorCos = valPhase.x / max(length(valPhase), 0.0001);
+        float mag = length(valPhase);
 
-        // Chain rule: d/dxz [phasorCos(warpedPos * freq) * w] = grad3D.xz * freq * w
-        vec2 dHdxz = grad3D.xz * freq * w;
+        // Attenuate near destructive-interference nulls where phase and its gradient singularize
+        float nullFade = smoothstep(0.05, 0.35, mag);
+        if (nullFade > 0.0 && !any(isnan(grad3D.xz)) && !any(isinf(grad3D.xz))) {
+            float phasorCos = (valPhase.x / max(mag, 1e-4)) * nullFade;
 
-        res.height_delta += phasorCos * w;
-        res.slope_delta  += vec2(dHdxz.x, poleFlipped ? -dHdxz.y : dHdxz.y);
+            // Soft-clamp grad3D against 1/r phase-singularity spikes while preserving 2*PI slope scale
+            vec2 safeGrad = grad3D.xz / (1.0 + length(grad3D.xz) / 6.2831853);
+            vec2 dHdxz = safeGrad * freq * w * nullFade;
+
+            res.height_delta += phasorCos * w;
+            res.slope_delta  += vec2(dHdxz.x, poleFlipped ? -dHdxz.y : dHdxz.y);
+        }
 
         freq *= 2.0;
         amp *= 0.5;
+    }
+
+    float slopeDeltaLen = length(res.slope_delta);
+    if (slopeDeltaLen > 0.30) {
+        res.slope_delta *= 0.30 / slopeDeltaLen;
     }
 
     return res;

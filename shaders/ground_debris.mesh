@@ -79,9 +79,9 @@ void main() {
 	vec2 windDir = length(prevailingWind) > 1e-4 ? normalize(prevailingWind) : vec2(1.0, 0.0);
 
 	// High frequency ripple flutter along wind vector
-	float windRipple = phasimpleNoise(vertexWorldXZ * 4.0, windDir, push.time * 3.5);
+	float windRipple = phasimpleNoise(vertexWorldXZ * 4.0, windDir, push.time * 0.5);
 	// Secondary flutter cross-wind
-	float crossRipple = polyWave(dot(vertexWorldXZ, vec2(-windDir.y, windDir.x)) * 6.0 + push.time * 5.0) * 0.5 + 0.5;
+	float crossRipple = polyWave(dot(vertexWorldXZ, vec2(-windDir.y, windDir.x)) * 6.0 + push.time * 0.50) * 0.5 + 0.5;
 	float leafFlutter = (windRipple * 0.6 + crossRipple * 0.4 - 0.5) * 0.012;
 
 	vec3 displacedNormal = terrainNorm;
