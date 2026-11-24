@@ -197,7 +197,7 @@ float evaluateLeafShape(vec2 uv, vec2 cellID, out float leafHue) {
 void main() {
 	// Global camera proximity fade
 	float distToCam = length(inWorldPos.xz - uCameraPosition.xz);
-	float distanceFade = 1.0-smoothstep(50, 100.0, distToCam) * inHeightFactor;
+	float distanceFade = 1.0-smoothstep(25, 35.0, distToCam) * inHeightFactor;
 	if (distanceFade <= 0.001) {
 		discard;
 	}
@@ -380,7 +380,19 @@ void main() {
 	float matB = evaluateGrassMatLayer(rot2D(1.47) * (warpedP+ vec2(11.4, 27.8)), 13.0, matDensity * 0.9, toneB, gradB);
 
 	float grassMatCover = max(matA, matB * 0.85) * vegDensity;
-	bool isGrassMat = grassMatCover > 0.18;
+
+	// High-frequency organic breakup so the humus edge erodes into clumps rather than a smooth ramp
+	float thatchBreakup = dot_noise_fbm(vec3(warpedP * 2.4, 0.7), 2.0, 0.0) * 0.5 + 0.5;
+
+	// Continuous underlayer: saturates to 1.0 in dense interiors, drops to 0.0 at patch perimeters
+	float interiorMask = smoothstep(0.35, 0.85, clusterMask);
+	float denseVegMask = smoothstep(0.45, 0.85, vegDensity);
+	float humusBase    = clamp(denseVegMask * interiorMask * mix(0.65, 1.25, thatchBreakup), 0.0, 1.0);
+
+	// Gaps fill with humus in dense zones; only individual blades remain at patch borders
+	float bladeMask  = smoothstep(0.12, 0.45, grassMatCover);
+	float matAlpha   = max(humusBase, bladeMask * clusterMask);
+	bool  isGrassMat = matAlpha > 0.02;
 
 	// In sandy / water areas, prioritize shells and pebbles; reduce dense forest leaves
 	if (nearWater || isSandy) {
@@ -452,25 +464,32 @@ void main() {
 		albedo = mix(brushGreen, brushDry, hBrush.y);
 		roughness = 0.75;
 	} else if (isGrassMat) {
+		float humusGrain = fract(sin(dot(floor(warpedP * 95.0), vec2(127.1, 311.7))) * 43758.5453);
+		float humusMottle = mix(0.75, 1.25, thatchBreakup * 0.7 + humusGrain * 0.3);
+
 		// Dark shaded humus/thatch base mixed with scraggly muted green-brown stems
-		vec3 deepThatch  = biomeBaseTint * vec3(0.28, 0.30, 0.22);
+		vec3 deepThatch  = biomeBaseTint * vec3(0.26, 0.28, 0.20) * humusMottle;
 		vec3 scragglyDry = mix(biomeBaseTint * 0.55, vec3(0.22, 0.19, 0.09), 0.45);
 		vec3 scragglyGrn = mix(biomeBaseTint * 0.65, vec3(0.11, 0.22, 0.07), smoothstep(0.35, 0.75, moisture));
 
 		float tone = (matA >= matB * 0.85) ? toneA : toneB;
 		vec3 stemColor = mix(scragglyDry, scragglyGrn, smoothstep(0.25, 0.75, tone));
-		// Darken underlayer further in dense forest/high-moisture regions
-		float shadeFactor = mix(0.85, 0.52, smoothstep(0.4, 0.85, moisture));
-		albedo = mix(deepThatch, stemColor, grassMatCover) * shadeFactor;
-		roughness = 0.92;
 
-		vec2 matGrad = rot2D(-0.33) * gradA + rot2D(-1.47) * gradB * 0.7;
+		float shadeFactor = mix(0.85, 0.52, smoothstep(0.4, 0.85, moisture));
+		albedo = mix(deepThatch, stemColor, smoothstep(0.05, 0.65, grassMatCover)) * shadeFactor;
+		roughness = mix(0.96, 0.90, bladeMask);
+
+		vec2 humusGrad = vec2(thatchBreakup - 0.5, humusGrain - 0.5) * 0.22;
+		vec2 matGrad   = rot2D(-0.33) * gradA + rot2D(-1.47) * gradB * 0.7 + humusGrad * (1.0 - bladeMask);
 		perturbedNormal = normalize(inNormal + vec3(matGrad.x, 0.0, matGrad.y) * 0.45);
 	}
 
-	// Bayer dither for smooth boundary transparency and distance fading
+	// Keep upper debris solid where it sits atop an opaque humus mat, while preserving cluster edges elsewhere
+	bool  upperDebris       = isShell || isPebble || isStick || isLeaf || isBrush;
+	float effectiveCoverage = upperDebris ? max(clusterMask, matAlpha) : matAlpha;
+
 	float dither = bayerDither4x4(gl_FragCoord.xy);
-	if (dither >= distanceFade * clusterMask) {
+	if (dither >= distanceFade * effectiveCoverage) {
 		discard;
 	}
 
