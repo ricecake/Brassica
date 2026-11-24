@@ -23,29 +23,9 @@ layout(push_constant) uniform ModelLiveEvalPushConstants {
 }
 push;
 
-// Stateless analytic wind (the plan's own decision). Reuses the engine's single shared
-// prevailing-wind model (helpers/wind.glsl) instead of inventing a parallel one, fed a real
-// per-instance latitude derived from world position -- world +Z = +latitude (north), world
-// +X = +longitude (east), origin at the equator/prime-meridian (confirmed via
-// src/ui/QuickSettingsWidget.cpp's HUD lat/lon readout and climate_ca.comp/
-// climate_weather.comp's shared world<->weather-UV mapping, both independently corroborating
-// the same unnegated sign -- src/lighting/LightManager.cpp's sun-angle computation uses the
-// opposite sign, a real discrepancy in the existing codebase that this does NOT follow).
-// getPrevailingWind expects lat normalized to [-1, 1] (-1 = south pole, 1 = north pole); dividing
-// the true radians value by PI/2 converts "arc length / radius" into that range.
-float WorldPosToNormalizedLatitude(vec3 worldPos) {
-	return clamp((2.0 / PI) * worldPos.z / FAKE_PLANET_RADIUS, -1.0, 1.0);
-}
-
 const float kModelWindStrength = 0.6; // radians, bend angle at rigidity=0, gust=1
-const float kModelWindGustHz = 0.35;
 const float kModelSeedBendStrength = 0.25; // radians, max static per-instance asymmetry
 const float kTwoPi = 6.28318530718;
-
-float Gust(uint timeMs, uint seed) {
-	float phase = pcg_hash(seed) * kTwoPi;
-	return 0.5 + 0.5 * sin(float(timeMs) * 0.001 * (kTwoPi * kModelWindGustHz) + phase);
-}
 
 vec4 AxisAngleToQuat(vec3 axis, float angle) {
 	float halfAngle = angle * 0.5;

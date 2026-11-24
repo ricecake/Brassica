@@ -323,6 +323,7 @@ void main() {
 	// finalAlbedo = vec3(0.5+0.5*(dot_noise(worldPos*0.25, uTime)*0.25), 0, 0);
 	// finalAlbedo = worldPos;
 	// finalAlbedo = mCellS.barycentric;
+	// finalAlbedo = getLocalWind(worldPos, uTimeMs);
 	outPosition = vec4(inPosition, 0.0);
 	outNormal   = vec4(normalize(N), 1.0);
 	outAlbedo   = vec4(finalAlbedo, inAlbedo.a > 0.0 ? inAlbedo.a : 1.0);

@@ -7,6 +7,9 @@ layout(triangles, max_vertices = 128, max_primitives = 128) out;
 #include "bindless.glsl"
 #include "gltf_mesh.glsl"
 #include "model_instance.glsl"
+#include "helpers/material_system.glsl"
+#include "common.glsl"
+#include "helpers/wind.glsl"
 
 layout(push_constant) uniform ModelRenderPushConstants {
 	uint instanceBufIdx;
@@ -101,10 +104,31 @@ void main() {
 			localNormal = normalize(mat3(skin) * v.normal);
 		}
 
+		vec3 wind = getLocalWind(localPos + uCameraPosition.xyz, uTimeMs);
+		MaterialData mat = uMaterialBuffers[nonuniformEXT(push.materialBufferIndex)].data[meshlet.materialIndex];
+		if (mat.material_role == MATERIAL_ROLE_PROCEDURAL_LEAF && length(wind) > 0.00) {
+			// Convert world wind direction into unrotated model space
+			vec4 invRot       = vec4(-rotation.xyz, rotation.w);
+			vec3 localWindDir = RotateByQuat(invRot, normalize(wind));
+
+			// Spatial wave in rest space breaks up uniform hull translation
+			float timeSec     = float(uTimeMs) * 0.001;
+			float hullPhase   = dot(v.position, vec3(4.3, 3.7, 5.1)) + dot(relPosition, vec3(0.7));
+			float flutterWave = sin(timeSec * 3.2 + hullPhase) * 0.65
+							+ sin(timeSec * 5.7 + hullPhase * 1.7) * 0.35;
+			// float flutterWave = dot_noise_fbm(relPosition, 4, timeSec*hullPhase);
+
+			// Directional compliance along wind + subtle normal breathing
+			vec3 flutterOffset = (localWindDir * 0.7 + localNormal * 0.3)
+							* (flutterWave * 0.035 * length(wind));
+
+			localPos   += flutterOffset;
+			localNormal = normalize(localNormal + localWindDir * (flutterWave * 0.08 * length(wind)));
+		}
+
 		vec3 instancePos = RotateByQuat(rotation, localPos * scale);
 		vec3 relWorldPos = relPosition + instancePos;
 		vec3 instanceNormal = RotateByQuat(rotation, localNormal);
-
 		vec3 viewPos = mat3(uViewMatrix) * relWorldPos;
 		gl_MeshVerticesEXT[i].gl_Position = uProjMatrix * vec4(viewPos, 1.0);
 		outWorldPos[i] = relWorldPos + uCameraPosition.xyz;

@@ -1117,3 +1117,14 @@ NoiseCascade calculateDynamicLOD(float dist, float baseFreq, float growthFactor)
 
     return cascade;
 }
+
+vec3 RotateByQuat(vec4 q, vec3 v) {
+	return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+// Rotates v by q's inverse (q is always unit-length here, so inverse == conjugate) -- used by
+// model_live_eval.comp to convert a world-space wind direction into an instance's own local
+// space once per instance (the plan's own phrase), rather than per joint.
+vec3 InverseRotateByQuat(vec4 q, vec3 v) {
+	return RotateByQuat(vec4(-q.xyz, q.w), v);
+}

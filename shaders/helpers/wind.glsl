@@ -1,5 +1,4 @@
-#ifndef HELPERS_WIND_GLSL
-#define HELPERS_WIND_GLSL
+#include "common.glsl"
 
 // Requires noise/trig_noise.glsl's cross_noise() already included by the caller (via
 // common.glsl, which every current caller already includes before this) -- trig_noise.glsl
@@ -57,4 +56,43 @@ ivec2 getDiscretizedWindOffset(vec2 prevailingWind, vec3 worldPos, float time) {
 	return clamp(windDir, -1, 1);
 }
 
-#endif // HELPERS_WIND_GLSL
+// Stateless analytic wind (the plan's own decision). Reuses the engine's single shared
+// prevailing-wind model (helpers/wind.glsl) instead of inventing a parallel one, fed a real
+// per-instance latitude derived from world position -- world +Z = +latitude (north), world
+// +X = +longitude (east), origin at the equator/prime-meridian (confirmed via
+// src/ui/QuickSettingsWidget.cpp's HUD lat/lon readout and climate_ca.comp/
+// climate_weather.comp's shared world<->weather-UV mapping, both independently corroborating
+// the same unnegated sign -- src/lighting/LightManager.cpp's sun-angle computation uses the
+// opposite sign, a real discrepancy in the existing codebase that this does NOT follow).
+// getPrevailingWind expects lat normalized to [-1, 1] (-1 = south pole, 1 = north pole); dividing
+// the true radians value by PI/2 converts "arc length / radius" into that range.
+float WorldPosToNormalizedLatitude(vec3 worldPos) {
+	return clamp((2.0 / PI) * worldPos.z / FAKE_PLANET_RADIUS, -1.0, 1.0);
+}
+
+const float kModelWindGustHz = 0.35;
+
+float Gust(uint timeMs, uint seed) {
+	float phase = pcg_hash(seed) * TAU;
+	return 0.5 + 0.5 * sin(float(timeMs) * 0.001 * (TAU * kModelWindGustHz) + phase);
+}
+
+vec2 getPrevailingWind(vec3 worldPos) {
+	return getPrevailingWind(WorldPosToNormalizedLatitude(worldPos));
+}
+
+vec3 getPrevailingWind3(vec3 worldPos) {
+	vec2 wind = getPrevailingWind(WorldPosToNormalizedLatitude(worldPos));
+	return vec3(wind.x, 0.0, wind.y);
+}
+
+vec3 getLocalWind(vec3 worldPos, uint timeMs) {
+	uint seed = encodeMorton3D(uvec3(1000*worldPos));
+	float gust = Gust(timeMs, seed);
+	vec3 prevailing = getPrevailingWind3(worldPos);
+	mat3 grad;
+	vec3 local = cross_noise_fbm(0.001*worldPos, 4, 0.0001 * timeMs, grad);
+	vec3 curl = get_curl(grad);
+
+	return prevailing + (0.5 * local + mix(0.5*local, curl, gust));
+}
