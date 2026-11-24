@@ -42,6 +42,8 @@ taskPayloadSharedEXT ModelTaskPayload payload;
 layout(location = 0) out vec3      outWorldPos[];
 layout(location = 1) out vec3      outNormal[];
 layout(location = 2) out vec2      outUv[];
+layout(location = 5) out vec3 outRestPos[];
+layout(location = 6) out vec3 outRestNormal[];
 layout(location = 3) flat out uint outMaterialIndex[];
 layout(location = 4) flat out uint outMaterialBufferIndex[];
 
@@ -108,6 +110,8 @@ void main() {
 		outWorldPos[i] = relWorldPos + uCameraPosition.xyz;
 		outNormal[i] = instanceNormal;
 		outUv[i] = v.uv;
+		outRestPos[i] = v.position;
+		outRestNormal[i] = v.normal;
 		outMaterialIndex[i] = meshlet.materialIndex;
 		outMaterialBufferIndex[i] = push.materialBufferIndex;
 	}

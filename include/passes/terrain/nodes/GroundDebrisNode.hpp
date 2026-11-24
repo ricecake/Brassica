@@ -46,7 +46,7 @@ namespace brassica {
 			.depthTest = true,
 			.depthWrite = true,
 			.depthCompareOp = vk::CompareOp::eLess,
-			.enableShadingRate = false,
+			.enableShadingRate = true,
 		};
 
 		render::PipelineLibrary*               pipelineLibrary = nullptr;
@@ -112,6 +112,10 @@ namespace brassica {
 			r.Read<TerrainMinMaxTexture>();
 			r.Read<TerrainBiomeTexture>();
 			r.Read<TerrainWeatherBiomeTexture>();
+			r.ReadPrevious<ShadingRateMap>().ShadingRateTexelSize(
+				{s_shadingRateTileWidth, s_shadingRateTileHeight}
+			);
+
 		}
 
 		void Execute(graph::NodeContext& ctx) {
