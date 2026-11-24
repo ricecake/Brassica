@@ -88,7 +88,7 @@ void main() {
 	vec4 normalSample = SAMPLE_NEAREST(params.gNormalIndex, uv);
 
 	// If background / unrendered pixel, write 1.0 (unoccluded)
-	if (posSample.a <= 0.0 || normalSample.a <= 0.0 || length(normalSample.rgb) < 0.1 || length(posSample.rgb) < 0.001) {
+	if (normalSample.a <= 0.0 || length(normalSample.rgb) < 0.1 || length(posSample.rgb) < 0.001) {
 		imageStore(uImagesGenericWrite[nonuniformEXT(params.outGtaoIndex)], pixel, vec4(1.0, 0.0, 0.0, 0.0));
 		return;
 	}

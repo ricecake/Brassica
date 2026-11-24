@@ -390,7 +390,7 @@ void main() {
 			vec3 rainScatteringCoeff = vec3(0.98, 0.99, 1.0);
 			vec3 snowScatteringCoeff = vec3(1.0, 1.0, 1.0); // Pure white, neutral crystalline scattering
 			vec3 precipScatteringCoeff = mix(rainScatteringCoeff, snowScatteringCoeff, snowFraction);
-			vec3 fogScatCoeff = density * mix(baseScatteringCoeff, precipScatteringCoeff, precipFactor);
+			vec3 fogScatCoeff = 0.125*density * mix(baseScatteringCoeff, precipScatteringCoeff, precipFactor);
 
 			// Force ALL moisture to strictly conserve energy (albedo == 1.0 everywhere in air)
 			vec3 fogExtCoeff = fogScatCoeff;

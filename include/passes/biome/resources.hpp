@@ -63,4 +63,24 @@ namespace brassica {
 		static constexpr std::uint32_t kDim = constants::Weather::kBiomeTextureDim;
 	};
 
+	// struct BiomeCaCell {
+	// 	float elevation;    // Static height (0.0 to 1.0)
+	// 	float airMoisture;  // Moisture carried in the air
+	// 	float groundwater;  // Pooled water in soil
+	// 	float vegetation;   // Plant coverage (>0 alive, 0 absent, -1 dead, <-1 active dieoff/fire)
+	// 	float waterLevel;   // Geology groundwater table elevation
+	// 	float slope;        // Directionless steepness [0, 1]
+	// 	float substrate;    // Sediment / nutrient capacity [0, 1]
+	// 	float aerosol;      // Non-water air particles (CCN / smoke)
+	// };
+	// static_assert(sizeof(BiomeCaCell) == 32);
+
+	// struct BiomeCaCellBufferA: FixedBuffer<BiomeCaCellBufferA> {
+	// 	static constexpr std::uint64_t kByteSize = static_cast<std::uint64_t>(constants::Weather::kSimTextureDim * constants::Weather::kSimTextureDim) * sizeof(BiomeCaCell);
+	// 	static constexpr vk::BufferUsageFlags kUsage = vk::BufferUsageFlagBits::eStorageBuffer;
+	// };
+	// struct BiomeCaCellBufferB: FixedBuffer<BiomeCaCellBufferB> {
+	// 	static constexpr std::uint64_t kByteSize = static_cast<std::uint64_t>(constants::Weather::kSimTextureDim * constants::Weather::kSimTextureDim) * sizeof(BiomeCaCell);
+	// 	static constexpr vk::BufferUsageFlags kUsage = vk::BufferUsageFlagBits::eStorageBuffer;
+	// };
 } // namespace brassica

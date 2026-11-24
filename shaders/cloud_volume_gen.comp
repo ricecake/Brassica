@@ -111,7 +111,7 @@ void main() {
 	float amplitude = 1.0;
 	float maxAmplitude = 0.0;
 
-	for (int i = 0; i < 8; i++) {
+	for (int i = 0; i < 32; i++) {
 		// Nyquist clamp: stop accumulating detail once a noise cell would be smaller than
 		// 2 voxels, faded smoothly so there's no hard cutoff.
 		float voxelsPerCell = float(dim) / gridSize;
@@ -131,7 +131,7 @@ void main() {
 	float voxelNormY = float(vox.y) / 256.0;
 	// density *= smoothstep(0.1, 0.15, voxelNormY) * (1.0 - smoothstep(0.85, 1.0, voxelNormY));
 	// density *= smoothstep(0.05, 0.85, density);
-	density *= smoothstep(0.0, 0.85, density);
+	// density *= smoothstep(0.0, 0.85, density);
 
 	ivec3 outVox = ivec3(vox);
 	// density = 0.0;

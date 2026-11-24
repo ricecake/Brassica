@@ -244,8 +244,8 @@ namespace brassica {
 	// default users can retune same as any other layer.
 	inline ExposureDataHost s_exposureData{
 		.layers = {
-			ExposureLayerHost{.data = {.targetLuminance = 0.35f}, .isMain = 1},
-			ExposureLayerHost{.data = {.targetLuminance = 0.75f}, .isSky = 1},
+			ExposureLayerHost{.data = {.targetLuminance = 0.25f}, .isMain = 1},
+			ExposureLayerHost{.data = {.targetLuminance = 0.50f}, .isSky = 1},
 			ExposureLayerHost{.data = {.targetLuminance = 0.60f}, .isCloud = 1},
 		},
 		.numLayers = 3,
