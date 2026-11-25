@@ -17,6 +17,7 @@ namespace brassica {
 		constexpr std::uint32_t kSimTextureDim = 2048;
 		constexpr std::uint32_t kCoverageTextureDim = 2048;
 		constexpr std::uint32_t kBiomeTextureDim = 2048;
+		constexpr std::uint32_t kHydroTextureDim = 2048;
 		constexpr std::uint32_t kBlendDitherDivisor = 8;
 		constexpr std::uint32_t kUpdateInterval = 300;
 		constexpr std::uint32_t kCellsPerUpdate = 512;
@@ -43,10 +44,6 @@ namespace brassica {
 		static constexpr std::uint32_t kDim = constants::Weather::kCoverageTextureDim;
 	};
 
-	struct TerrainWeatherPingPongTexture: WeatherBiomeImage2D<TerrainWeatherPingPongTexture> {
-		static constexpr std::uint32_t kDim = constants::Weather::kSimTextureDim;
-	};
-
 	struct TerrainWeatherMapATexture: WeatherBiomeImage2D<TerrainWeatherMapATexture> {
 		static constexpr std::uint32_t kDim = constants::Weather::kCoverageTextureDim;
 	};
@@ -61,6 +58,18 @@ namespace brassica {
 
 	struct TerrainBiomeMapBTexture: WeatherBiomeImage2D<TerrainBiomeMapBTexture> {
 		static constexpr std::uint32_t kDim = constants::Weather::kBiomeTextureDim;
+	};
+
+	struct TerrainHydroMapATexture: WeatherBiomeImage2D<TerrainHydroMapATexture> {
+		static constexpr std::uint32_t kDim = constants::Weather::kHydroTextureDim;
+	};
+
+	struct TerrainHydroMapBTexture: WeatherBiomeImage2D<TerrainHydroMapBTexture> {
+		static constexpr std::uint32_t kDim = constants::Weather::kHydroTextureDim;
+	};
+
+	struct TerrainHydroMapTexture: WeatherBiomeImage2D<TerrainHydroMapTexture> {
+		static constexpr std::uint32_t kDim = constants::Weather::kHydroTextureDim;
 	};
 
 	// struct BiomeCaCell {

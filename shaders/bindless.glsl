@@ -159,4 +159,7 @@ layout(set = 1, binding = 7) uniform utexture2D uUTextures2D[];
 #define SAMPLE_STENCIL_NEAREST(idx, uv)                                                                               \
 	texture(usampler2D(uUTextures2D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_NEAREST_CLAMP]), uv).r
 
+#define SAMPLE_2D_NEAREST_FETCH(idx, uvw, lod)                                                                           \
+	texelFetch(sampler2D(uTextures2D[nonuniformEXT(idx)], uSamplers[BRASSICA_SAMPLER_NEAREST_REPEAT]), uvw, lod)
+
 #endif // BRASSICA_BINDLESS_GLSL

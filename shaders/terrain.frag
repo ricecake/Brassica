@@ -1,4 +1,7 @@
 #version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_samplerless_texture_functions : require
+
 #include "bindless.glsl"
 #include "common.glsl"
 #include "terrain.glsl"
@@ -18,12 +21,72 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
+	uint  hydroMapIndex;
 } params;
 
 layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outMaterial;
+
+
+const ivec2 HYDRO_D8_OFFSETS[8] = ivec2[8](
+	ivec2( 1,  0), ivec2( 1,  1), ivec2( 0,  1), ivec2(-1,  1),
+	ivec2(-1,  0), ivec2(-1, -1), ivec2( 0, -1), ivec2( 1, -1)
+);
+
+const vec2 D8_DIR_XZ[8] = vec2[8](
+	vec2( 1.0,  0.0), normalize(vec2( 1.0,  1.0)), vec2( 0.0,  1.0), normalize(vec2(-1.0,  1.0)),
+	vec2(-1.0,  0.0), normalize(vec2(-1.0, -1.0)), vec2( 0.0, -1.0), normalize(vec2( 1.0, -1.0))
+);
+
+vec2 decodeFlowDir(float encodedDir) {
+	int dir = int(round(encodedDir));
+	if (dir < 0 || dir > 7) return vec2(0.0);
+	return normalize(vec2(HYDRO_D8_OFFSETS[dir]));
+}
+
+vec4 sampleHydrologySmooth(uint texIdx, vec2 worldXZ, out vec2 outFlowVec) {
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+	vec2 uv = fract((worldXZ / worldExtent) + 0.5); // Toroidal wrap matching climate_ca.comp
+
+	ivec2 texDim = textureSize(uTextures2D[nonuniformEXT(texIdx)], 0);
+	vec2 texelCoord = uv * vec2(texDim) - 0.5;
+	ivec2 p00 = ivec2(floor(texelCoord));
+	vec2 f = fract(texelCoord);
+
+	ivec2 c00 = (p00 + ivec2(0, 0) + texDim) % texDim;
+	ivec2 c10 = (p00 + ivec2(1, 0) + texDim) % texDim;
+	ivec2 c01 = (p00 + ivec2(0, 1) + texDim) % texDim;
+	ivec2 c11 = (p00 + ivec2(1, 1) + texDim) % texDim;
+
+	// vec4 s00 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c00, 0);
+	// vec4 s10 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c10, 0);
+	// vec4 s01 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c01, 0);
+	// vec4 s11 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c11, 0);
+	vec4 s00 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c00);
+	vec4 s10 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c10);
+	vec4 s01 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c01);
+	vec4 s11 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c11);
+
+	// Bilinear blend for continuous channels (filledElevation, discharge, bakedDischarge)
+	vec4 blended = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+
+	// Decode discrete D8 indices to 2D vectors BEFORE bilinear interpolation
+	int d00 = int(round(s00.b));
+	int d10 = int(round(s10.b));
+	int d01 = int(round(s01.b));
+	int d11 = int(round(s11.b));
+
+	vec2 v00 = (d00 >= 0 && d00 < 8) ? D8_DIR_XZ[d00] : vec2(0.0);
+	vec2 v10 = (d10 >= 0 && d10 < 8) ? D8_DIR_XZ[d10] : vec2(0.0);
+	vec2 v01 = (d01 >= 0 && d01 < 8) ? D8_DIR_XZ[d01] : vec2(0.0);
+	vec2 v11 = (d11 >= 0 && d11 < 8) ? D8_DIR_XZ[d11] : vec2(0.0);
+
+	outFlowVec = mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+	return blended;
+}
+
 
 void main() {
 	vec3 worldPos = inPosition + uCameraPosition.xyz;
@@ -345,6 +408,146 @@ void main() {
 	// finalAlbedo = windVal * wind;
 	finalAlbedo *= 1.0 + 0.15 * clamp(windVal,0,1);
 	roughness *= 1.0 - 0.15 * windVal;
+
+/*
+// --- Insert before `outPosition = ...` in terrain fragment shader ---
+if (params.hydroMapIndex > 0u) {
+	int dim = int(params.gridParams.w);
+	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
+
+	// Toroidal UV matching climate_ca's `(pos + dim) % dim` wrapping
+	vec2 hydroUV = fract(worldPos.xz / worldExtent + 0.5);
+	vec2 texelPos = hydroUV * float(dim) - 0.5;
+	ivec2 p00 = (ivec2(floor(texelPos)) + dim) % dim;
+	ivec2 p10 = (p00 + ivec2(1, 0)) % dim;
+	ivec2 p01 = (p00 + ivec2(0, 1)) % dim;
+	ivec2 p11 = (p00 + ivec2(1, 1)) % dim;
+	vec2 f = fract(texelPos);
+
+	vec4 h00 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p00);
+	vec4 h10 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p10);
+	vec4 h01 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p01);
+	vec4 h11 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p11);
+
+	// vec4 h00 = texelFetch(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p00, 0);
+	// vec4 h10 = texelFetch(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p10, 0);
+	// vec4 h01 = texelFetch(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p01, 0);
+	// vec4 h11 = texelFetch(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], p11, 0);
+	// vec4 h00 = SAMPLE_2D_NEAREST_FETCH(params.hydroMapIndex, p00, 0);
+	// vec4 h10 = SAMPLE_2D_NEAREST_FETCH(params.hydroMapIndex, p10, 0);
+	// vec4 h01 = SAMPLE_2D_NEAREST_FETCH(params.hydroMapIndex, p01, 0);
+	// vec4 h11 = SAMPLE_2D_NEAREST_FETCH(params.hydroMapIndex, p11, 0);
+
+	// Bilinear interpolation of continuous scalar fields
+	float filledElevNorm = mix(mix(h00.r, h10.r, f.x), mix(h01.r, h11.r, f.x), f.y);
+	float discharge      = mix(mix(h00.g, h10.g, f.x), mix(h01.g, h11.g, f.x), f.y);
+	// finalAlbedo = vec3(0,0,filledElevNorm);
+
+	// Bilinear interpolation of decoded 2D flow vectors (avoids discrete index averaging)
+	vec2 v00 = decodeFlowDir(h00.b);
+	vec2 v10 = decodeFlowDir(h10.b);
+	vec2 v01 = decodeFlowDir(h01.b);
+	vec2 v11 = decodeFlowDir(h11.b);
+	vec2 flowVec = mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+	float flowMag = length(flowVec);
+	vec2 flowDir2D = (flowMag > 1e-4) ? (flowVec / flowMag) : vec2(0.0);
+
+	// 1. Lakes / Filled Basins: compare filled elevation (0..1000m) against actual terrain Y
+	float filledHeightMeters = filledElevNorm * 1000.0;
+	float lakeDepth = filledHeightMeters - worldPos.y;
+	bool aboveOcean = worldPos.y > (params.waterLevel + 2.0);
+
+	if (aboveOcean && lakeDepth > 0.5) {
+		float depthMask = clamp(lakeDepth / 25.0, 0.25, 0.90);
+		// Contour rings every 2 meters to inspect basin spill points
+		float contour = smoothstep(0.90, 1.0, abs(fract(lakeDepth * 0.5) * 2.0 - 1.0));
+		vec3 lakeColor = mix(vec3(0.04, 0.38, 0.55), vec3(0.01, 0.12, 0.28), depthMask);
+		lakeColor = mix(lakeColor, vec3(0.45, 0.85, 0.95), contour * 0.45);
+
+		finalAlbedo = mix(finalAlbedo, lakeColor, 0.78);
+		roughness = 0.08;
+	}
+
+	// 2. Rivers & Animated Flow Chevrons (log-scaled discharge)
+	const float RIVER_VIS_MIN = 1.5;
+	if (aboveOcean && discharge > RIVER_VIS_MIN) {
+		float logDischarge = clamp(log2(discharge / RIVER_VIS_MIN) / 7.0, 0.0, 1.0);
+		vec3 riverColor = mix(vec3(0.10, 0.55, 0.85), vec3(0.05, 0.90, 0.95), logDischarge);
+
+		// Project world XZ onto local flow frame to draw downstream-scrolling chevrons
+		if (flowMag > 1e-4) {
+			vec2 flowPerp = vec2(-flowDir2D.y, flowDir2D.x);
+			float cellSize = worldExtent / float(dim);
+			float along = dot(worldPos.xz, flowDir2D) / (cellSize * 0.5);
+			float across = abs(fract(dot(worldPos.xz, flowPerp) / (cellSize * 0.5)) - 0.5) * 2.0;
+
+			// V-shaped chevron pointing downstream, animated by uTime
+			float chevronPhase = fract(along - across * 0.75 - uTime * (0.4 + logDischarge * 0.8));
+			float chevron = smoothstep(0.72, 0.88, chevronPhase) * (1.0 - smoothstep(0.92, 1.0, chevronPhase));
+			riverColor = mix(riverColor, vec3(1.0, 0.95, 0.45), chevron * 0.85);
+		}
+
+		float riverBlend = mix(0.45, 0.92, logDischarge);
+		finalAlbedo = mix(finalAlbedo, riverColor, riverBlend);
+		roughness = mix(roughness, 0.12, riverBlend);
+	}
+
+	// 3. Diagnostic Alert: inland cell with no valid outflow (incomplete fill convergence)
+	if (aboveOcean && flowMag < 1e-4 && discharge > RIVER_VIS_MIN) {
+		finalAlbedo = vec3(1.0, 0.0, 0.75);
+	}
+}
+*/
+
+	float dropOff = dot(worldPos.xz, worldPos.xz) / (2.0 * FAKE_PLANET_RADIUS);
+	float flatWorldY = worldPos.y + dropOff;
+
+	if (params.hydroMapIndex > 0u && flatWorldY > params.waterLevel) {
+		vec2 flowVec;
+		vec4 hydro = sampleHydrologySmooth(params.hydroMapIndex, worldPos.xz, flowVec);
+
+		float filledWorldY = hydro.r * 1000.0; // Must match climate_initial_2.comp's elevation scale
+		float discharge    = max(0.0, hydro.g);
+		float flowMag      = length(flowVec);
+
+		// 1. LAKES & FILLED BASINS (using curvature-corrected flatWorldY)
+		float lakeDepth = filledWorldY - flatWorldY;
+		if (lakeDepth > 0.25) {
+			float depthFactor = clamp(lakeDepth / 25.0, 0.0, 1.0);
+			vec3 lakeColor = mix(vec3(0.08, 0.38, 0.48), vec3(0.02, 0.14, 0.26), depthFactor);
+
+			float shoreFoam = 1.0 - smoothstep(0.25, 1.8, lakeDepth);
+			lakeColor = mix(lakeColor, vec3(0.75, 0.88, 0.92), shoreFoam * 0.65);
+
+			finalAlbedo = mix(finalAlbedo, lakeColor, 0.85);
+			roughness = 0.06;
+		}
+
+		// 2. RIVERS & DRAINAGE ACCUMULATION
+		float logDischarge = log2(1.0 + discharge * 4.0);
+		float riverIntensity = smoothstep(0.25, 3.2, logDischarge);
+
+		if (riverIntensity > 0.01) {
+			float edgeBreakup = smoothstep(0.15, 0.55, riverIntensity + warpNoise.x * 0.12);
+			vec3 riverColor = mix(vec3(0.10, 0.45, 0.65), vec3(0.04, 0.22, 0.55), riverIntensity);
+
+			// 3. ANIMATED FLOW CHEVRONS (anchored to camera-relative inPosition.xz to avoid float shear)
+			if (flowMag > 0.05) {
+				vec2 dir = flowVec / flowMag;
+				vec2 perp = vec2(-dir.y, dir.x);
+
+				vec2 localFlowUV = fract(vec2(dot(inPosition.xz, perp), dot(inPosition.xz, dir)) / 250.0) - 0.5;
+				float chevronCoord = localFlowUV.y + abs(localFlowUV.x) * 1.4 - (uTime * 0.35 * (0.5 + riverIntensity));
+				float chevronPulse = smoothstep(0.35, 0.5, abs(fract(chevronCoord) - 0.5));
+
+				riverColor = mix(riverColor, vec3(0.55, 0.92, 1.0), chevronPulse * 0.75);
+			}
+
+			finalAlbedo = mix(finalAlbedo, riverColor, edgeBreakup * 0.85);
+			roughness = mix(roughness, 0.08, edgeBreakup * 0.8);
+		}
+	}
+
 
 	outPosition = vec4(inPosition, 0.0);
 	outNormal   = vec4(normalize(N), 1.0);

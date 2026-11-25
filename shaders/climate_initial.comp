@@ -11,8 +11,8 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(push_constant) uniform ClimateInitialPushConstants {
 	uint outStorageIdx1; // Storage image index for Map 1 (elevation, airMoisture, groundwater, vegetation)
 	uint outStorageIdx2; // Storage image index for Map 2 (waterLevel, slope, substrate, aerosol)
+	uint outStorageIdx3; // Storage image index for Map 3
 	uint textureDim;     // e.g. 2048
-	uint pad;
 } push;
 
 void main() {
@@ -52,6 +52,12 @@ void main() {
 	// Abstracted aerosol particles (higher in dry/barren regions)
 	float aerosol = 0.05 + 0.1 * (1.0 - vegetation);
 
+	bool isOcean = (elevation <= 0.02); //
+	float initFilled = isOcean ? elevation : 1.0;
+	float initDischarge = 0.0;
+	float initFlowDir = -1.0;
+	float initBakedDischarge = -1.0; // Forces initial spline extraction pass
+
 	imageStore(
 		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx1)],
 		ivec2(pixel),
@@ -62,5 +68,11 @@ void main() {
 		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx2)],
 		ivec2(pixel),
 		vec4(waterLevelNorm, slope, sediment, aerosol)
+	);
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outStorageIdx3)],
+		ivec2(pixel),
+		vec4(initFilled, initDischarge, initFlowDir, initBakedDischarge)
 	);
 }

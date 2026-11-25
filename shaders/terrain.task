@@ -23,6 +23,7 @@ layout(push_constant) uniform TerrainPushConstants {
 	uint  biomeIndex;
 	float waterLevel;
 	uint  weatherBiomeIndex;
+	uint  hydroMapIdx;
 }
 params;
 

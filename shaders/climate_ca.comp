@@ -17,10 +17,13 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(push_constant) uniform ClimateCAPushConstants {
 	uint inMapStorageIdx1;      // Input CA Map 1 (elevation, airMoisture, groundwater, vegetation)
 	uint inMapStorageIdx2;      // Input CA Map 2 (waterLevel, slope, substrate, aerosol)
+	uint inMapStorageIdx3;      // Input CA Map 3 (waterLevel, slope, substrate, aerosol)
 	uint outMapStorageIdx1;     // Output CA Map 1
 	uint outMapStorageIdx2;     // Output CA Map 2
+	uint outMapStorageIdx3;     // Output CA Map 3
 	uint weatherOutStorageIdx;  // Output weather coverage storage image
 	uint biomeOutStorageIdx;    // Output Whittaker biome storage image
+	uint hydroOutStorageIdx;    // Output hydrology map
 	uint textureDim;            // Texture grid dimension (e.g. 2048)
 	uint cellOffset;            // Row offset for partial update
 	uint cellsPerUpdate;        // Number of rows in partial update
@@ -42,6 +45,13 @@ struct Cell2 {
 	float aerosol;      // Non-water air particles (CCN / smoke)
 };
 
+struct Cell3 {
+	float filledElevation; // Depression-filled elevation in your normalized [0, 1] scale.
+	float discharge;       // Accumulated surface runoff flux.
+	int flowDir;         // Downstream D8 neighbor index 0..7 encoded as float (-1.0 for ocean/sink).
+	float bakedDischarge;  // The discharge value last baked into your river spline SSBO (for hysteresis).
+};
+
 // Climate tunable constants
 const float MAX_TEMP = 35.0;        // Celsius at Equator sea-level
 const float MIN_TEMP = -20.0;       // Celsius at Pole
@@ -49,6 +59,12 @@ const float LAPSE_RATE = 25.0;      // Temp drop per 1.0 elevation unit
 const float CONDENSATION_RATE = 0.125;
 const float DIFFUSION_RATE = 0.15;   // How fast groundwater spreads
 const float BASE_EVAPORATION = 0.0125;
+
+const ivec2 D8_OFFSETS[8] = ivec2[8](
+	ivec2( 1,  0), ivec2( 1,  1), ivec2( 0,  1), ivec2(-1,  1),
+	ivec2(-1,  0), ivec2(-1, -1), ivec2( 0, -1), ivec2( 1, -1)
+);
+const float D8_DIST[8] = float[8](1.0, 1.41421356, 1.0, 1.41421356, 1.0, 1.41421356, 1.0, 1.41421356);
 
 void main() {
 	ivec2 pos = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + push.cellOffset);
@@ -59,12 +75,15 @@ void main() {
 
 	vec4 me1Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx1)], pos);
 	vec4 me2Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx2)], pos);
+	vec4 me3Data = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx3)], pos);
 
 	Cell1 me1 = Cell1(me1Data.r, me1Data.g, me1Data.b, me1Data.a);
 	Cell2 me2 = Cell2(me2Data.r, me2Data.g, me2Data.b, me2Data.a);
+	Cell3 me3 = Cell3(me3Data.r, me3Data.g, int(round(me3Data.b)), me3Data.a);
 
 	Cell1 next1 = me1;
 	Cell2 next2 = me2;
+	Cell3 next3 = me3;
 
 	// 1. LATITUDE & TEMPERATURE
 	float lat = (float(pos.y) / float(dim)) * 2.0 - 1.0;
@@ -239,6 +258,78 @@ void main() {
 	gwOutflow = min(gwOutflow, me1.groundwater);
 	next1.groundwater = max(0.0, me1.groundwater + rain + (gwInflow - gwOutflow) - soilEvaporation);
 
+
+float filledElev     = me3.filledElevation;
+float prevDischarge  = me3.discharge;
+int   myFlowDir      = me3.flowDir;
+float bakedDischarge = me3.bakedDischarge;
+
+bool isOcean = (me1.elevation <= 0.02); //
+
+// 1. Saturation-excess + slope-driven surface runoff from your existing CA moisture balance
+float saturationExcess = max(0.0, next1.groundwater - 1.0);
+next1.groundwater = clamp(next1.groundwater, 0.0, 1.0); // Prevent unbounded soil pooling[cite: 1]
+
+float directRunoff = rain * mix(0.15, 0.85, me2.slope); //[cite: 1]
+float localRunoff = isOcean ? 0.0 : (directRunoff + saturationExcess);
+
+// 2. Single-step Planchon-Darboux maintenance & D8 direction update (handles any dynamic elevation edits)
+if (isOcean) {
+	filledElev = me1.elevation;
+	myFlowDir = -1;
+} else {
+	float minNeighborW = 1e9;
+	for (int i = 0; i < 8; ++i) {
+		ivec2 nPos = ivec2((pos.x + D8_OFFSETS[i].x + dim) % dim, (pos.y + D8_OFFSETS[i].y + dim) % dim);
+		float nW = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx3)], nPos).r;
+		minNeighborW = min(minNeighborW, nW + 5e-6 * D8_DIST[i]);
+	}
+	filledElev = max(me1.elevation, minNeighborW);
+
+	float maxSlope = 0.0;
+	int bestDir = -1;
+	for (int i = 0; i < 8; ++i) {
+		ivec2 nPos = ivec2((pos.x + D8_OFFSETS[i].x + dim) % dim, (pos.y + D8_OFFSETS[i].y + dim) % dim);
+		float nW = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx3)], nPos).r;
+		float slope = (filledElev - nW) / D8_DIST[i];
+		if (slope > maxSlope) {
+			maxSlope = slope;
+			bestDir = i;
+		}
+	}
+	myFlowDir = bestDir;
+}
+
+// 3. Atomic-free upstream gather: sum discharge from neighbors whose D8 pointer targets `pos`
+float upstreamDischarge = 0.0;
+if (!isOcean) {
+	for (int i = 0; i < 8; ++i) {
+		ivec2 nPos = ivec2((pos.x + D8_OFFSETS[i].x + dim) % dim, (pos.y + D8_OFFSETS[i].y + dim) % dim); //[cite: 1]
+		vec4 n3 = imageLoad(uImageStorageRGBA32F[nonuniformEXT(push.inMapStorageIdx3)], nPos);
+		int nDir = int(round(n3.b));
+		// Neighbor `i` points back to `pos` if its direction is opposite `(i + 4) & 7`
+		if (nDir == ((i + 4) & 7)) {
+			upstreamDischarge += n3.g;
+		}
+	}
+}
+
+// Damped update prevents oscillation across row-banded sweeps[cite: 1]
+float nextDischarge = isOcean ? 0.0 : mix(prevDischarge, localRunoff + upstreamDischarge, 0.4);
+
+// 4. Hysteresis check: only flag macro-tile dirty if discharge crosses river threshold or shifts >25%
+const float RIVER_MIN_DISCHARGE = 2.5;
+bool wasRiver = bakedDischarge >= RIVER_MIN_DISCHARGE;
+bool isRiver  = nextDischarge >= RIVER_MIN_DISCHARGE;
+float relChange = abs(nextDischarge - bakedDischarge) / max(bakedDischarge, 0.1);
+
+// if ((wasRiver != isRiver) || (isRiver && relChange > 0.25)) {
+// 	// Mark the 64x64 macro-chunk dirty in a bitmask SSBO so spline extraction only updates changed regions
+// 	ivec2 chunkPos = pos / 64;
+// 	uint chunkIdx = uint(chunkPos.y * (dim / 64) + chunkPos.x);
+// 	atomicOr(b_DirtyChunks[chunkIdx >> 5u], 1u << (chunkIdx & 31u));
+// }
+
 	// Write updated CA state to OutMap1 and OutMap2
 	imageStore(
 		uImageStorageRGBA32F[nonuniformEXT(push.outMapStorageIdx1)],
@@ -250,6 +341,12 @@ void main() {
 		uImageStorageRGBA32F[nonuniformEXT(push.outMapStorageIdx2)],
 		pos,
 		vec4(next2.waterLevel, next2.slope, next2.substrate, next2.aerosol)
+	);
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.outMapStorageIdx3)],
+		pos,
+		vec4(filledElev, nextDischarge, float(myFlowDir), bakedDischarge)
 	);
 
 	// // Derive and write outputs for Weather and Biome maps
@@ -468,5 +565,11 @@ void main() {
 		uImageStorageRGBA32F[nonuniformEXT(push.biomeOutStorageIdx)],
 		pos,
 		vec4(clamp(wb.biomeIndex / 9.0, 0.0, 1.0), wb.roughness, wb.snowCover, normMoisture)
+	);
+
+	imageStore(
+		uImageStorageRGBA32F[nonuniformEXT(push.hydroOutStorageIdx)],
+		pos,
+		vec4(filledElev, nextDischarge, float(myFlowDir), bakedDischarge)
 	);
 }

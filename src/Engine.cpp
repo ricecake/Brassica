@@ -555,7 +555,6 @@ namespace brassica {
 		textureDumpService.Init(device, graphicsQueue, graphicsQueueFamily, allocator, physicalRegistry);
 		textureDumpService.RegisterDumpable<TerrainBiomeMainTexture>("Biome Map");
 		textureDumpService.RegisterDumpable<TerrainWeatherBiomeTexture>("Weather/Cloud Coverage Map");
-		textureDumpService.RegisterDumpable<TerrainWeatherPingPongTexture>("Weather CA Ping-Pong State");
 		textureDumpService.RegisterDumpable<TerrainWeatherMapATexture>("Weather CA State (A)");
 		textureDumpService.RegisterDumpable<TerrainWeatherMapBTexture>("Weather CA State (B)");
 		textureDumpService.RegisterDumpable<TerrainBiomeMapATexture>("Biome CA State (A)");

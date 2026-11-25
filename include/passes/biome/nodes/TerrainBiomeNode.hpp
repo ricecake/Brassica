@@ -34,17 +34,20 @@ namespace brassica {
 	struct ClimateInitialPushConstants {
 		std::uint32_t outStorageIdx1{0};
 		std::uint32_t outStorageIdx2{0};
+		std::uint32_t outStorageIdx3{0};
 		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
-		std::uint32_t pad{0};
 	};
 
 	struct ClimateCAPushConstants {
 		std::uint32_t inMapStorageIdx1{0};
 		std::uint32_t inMapStorageIdx2{0};
+		std::uint32_t inMapStorageIdx3{0};
 		std::uint32_t outMapStorageIdx1{0};
 		std::uint32_t outMapStorageIdx2{0};
+		std::uint32_t outMapStorageIdx3{0};
 		std::uint32_t weatherOutStorageIdx{0};
 		std::uint32_t biomeOutStorageIdx{0};
+		std::uint32_t hydroOutStorageIdx{0};
 		std::uint32_t textureDim{constants::Weather::kCoverageTextureDim};
 		std::uint32_t cellOffset{0};
 		std::uint32_t cellsPerUpdate{constants::Weather::kCellsPerUpdate};
@@ -109,12 +112,14 @@ namespace brassica {
 		void Setup(graph::SetupBuilder& r, const graph::FrameContext&) {
 			r.Domain(graph::ExecutionDomain::Compute);
 			r.Modify<TerrainWeatherBiomeTexture>();
-			r.Modify<TerrainWeatherPingPongTexture>();
 			r.Modify<TerrainWeatherMapATexture>();
 			r.Modify<TerrainWeatherMapBTexture>();
 			r.Modify<TerrainBiomeMainTexture>();
 			r.Modify<TerrainBiomeMapATexture>();
 			r.Modify<TerrainBiomeMapBTexture>();
+			r.Modify<TerrainHydroMapTexture>();
+			r.Modify<TerrainHydroMapATexture>();
+			r.Modify<TerrainHydroMapBTexture>();
 			// shaders/climate_ca.comp reads uCpuLightsBuffers[...].lights[0].direction (the sun).
 			r.Read<CpuLightsBuffer>();
 			// climate_ca.comp's lightning trigger claims a ring-buffer slot and writes a fresh
@@ -160,6 +165,9 @@ namespace brassica {
 			std::uint32_t biomeMapAIdx = ctx.StorageIndex<TerrainBiomeMapATexture>();
 			std::uint32_t biomeMapBIdx = ctx.StorageIndex<TerrainBiomeMapBTexture>();
 			std::uint32_t mainBiomeIdx = ctx.StorageIndex<TerrainBiomeMainTexture>();
+			std::uint32_t hydroMapAIdx = ctx.StorageIndex<TerrainHydroMapATexture>();
+			std::uint32_t hydroMapBIdx = ctx.StorageIndex<TerrainHydroMapBTexture>();
+			std::uint32_t hydroMapIdx = ctx.StorageIndex<TerrainHydroMapTexture>();
 
 			auto insertComputeBarrier = [&](vk::CommandBuffer cmd) {
 				vk::MemoryBarrier2 barrier{};
@@ -185,8 +193,8 @@ namespace brassica {
 					ClimateInitialPushConstants{
 						.outStorageIdx1 = weatherMapAIdx,
 						.outStorageIdx2 = biomeMapAIdx,
+						.outStorageIdx3 = hydroMapAIdx,
 						.textureDim = textureDim,
-						.pad = 0
 					},
 					textureDim
 				);
@@ -202,10 +210,13 @@ namespace brassica {
 					ClimateCAPushConstants{
 						.inMapStorageIdx1 = weatherMapAIdx,
 						.inMapStorageIdx2 = biomeMapAIdx,
+						.inMapStorageIdx3 = hydroMapAIdx,
 						.outMapStorageIdx1 = weatherMapBIdx,
 						.outMapStorageIdx2 = biomeMapBIdx,
+						.outMapStorageIdx3 = hydroMapBIdx,
 						.weatherOutStorageIdx = mainWeatherIdx,
 						.biomeOutStorageIdx = mainBiomeIdx,
+						.hydroOutStorageIdx = hydroMapIdx,
 						.textureDim = textureDim,
 						.cellOffset = cellOffset,
 						.cellsPerUpdate = cellsToProcess,
@@ -227,8 +238,10 @@ namespace brassica {
 			} else {
 				std::uint32_t inStateIdx1 = pingPongState ? weatherMapBIdx : weatherMapAIdx;
 				std::uint32_t inStateIdx2 = pingPongState ? biomeMapBIdx : biomeMapAIdx;
+				std::uint32_t inStateIdx3 = pingPongState ? hydroMapBIdx : hydroMapAIdx;
 				std::uint32_t outStateIdx1 = pingPongState ? weatherMapAIdx : weatherMapBIdx;
 				std::uint32_t outStateIdx2 = pingPongState ? biomeMapAIdx : biomeMapBIdx;
+				std::uint32_t outStateIdx3 = pingPongState ? hydroMapAIdx : hydroMapBIdx;
 
 				std::uint32_t cellsToProcess = std::min(cellsPerUpdate, textureDim - cellOffset);
 
@@ -239,10 +252,13 @@ namespace brassica {
 					ClimateCAPushConstants{
 						.inMapStorageIdx1 = inStateIdx1,
 						.inMapStorageIdx2 = inStateIdx2,
+						.inMapStorageIdx3 = inStateIdx3,
 						.outMapStorageIdx1 = outStateIdx1,
 						.outMapStorageIdx2 = outStateIdx2,
+						.outMapStorageIdx3 = outStateIdx3,
 						.weatherOutStorageIdx = mainWeatherIdx,
 						.biomeOutStorageIdx = mainBiomeIdx,
+						.hydroOutStorageIdx = hydroMapIdx,
 						.textureDim = textureDim,
 						.cellOffset = cellOffset,
 						.cellsPerUpdate = cellsToProcess,
