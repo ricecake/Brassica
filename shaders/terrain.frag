@@ -324,6 +324,7 @@ void main() {
 	// finalAlbedo = worldPos;
 	// finalAlbedo = mCellS.barycentric;
 	// finalAlbedo = getLocalWind(worldPos, uTimeMs);
+	roughness *= 1.0+dot(N, getLocalWind(worldPos, uTimeMs));
 	outPosition = vec4(inPosition, 0.0);
 	outNormal   = vec4(normalize(N), 1.0);
 	outAlbedo   = vec4(finalAlbedo, inAlbedo.a > 0.0 ? inAlbedo.a : 1.0);

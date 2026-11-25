@@ -23,8 +23,8 @@ layout(push_constant) uniform ModelLiveEvalPushConstants {
 }
 push;
 
-const float kModelWindStrength = 0.6; // radians, bend angle at rigidity=0, gust=1
-const float kModelSeedBendStrength = 0.25; // radians, max static per-instance asymmetry
+const float kModelWindStrength = 0.125; // radians, bend angle at rigidity=0, gust=1
+const float kModelSeedBendStrength = 0.45; // radians, max static per-instance asymmetry
 const float kTwoPi = 6.28318530718;
 
 vec4 AxisAngleToQuat(vec3 axis, float angle) {
@@ -50,13 +50,8 @@ void main() {
 	ModelInstance  inst = uModelInstanceBuffers[nonuniformEXT(push.instanceBufIdx)].instances[instanceIndex];
 	ModelDescEntry desc = uModelDescBuffers[nonuniformEXT(push.modelDescBufIdx)].entries[inst.modelIndex];
 
-	vec2 prevailing = getPrevailingWind(WorldPosToNormalizedLatitude(inst.position));
-	vec3 worldWindDir =
-		(length(prevailing) > 1e-4) ? normalize(vec3(prevailing.x, 0.0, prevailing.y)) : vec3(1.0, 0.0, 0.0);
-	// Converted into the instance's own local space once per instance, not per joint (the
-	// plan's own phrase).
+	vec3 worldWindDir = getLocalWind(inst.position, uTimeMs);
 	vec3  localWind = InverseRotateByQuat(inst.rotation, worldWindDir);
-	float gustVal = Gust(uTimeMs, inst.seed);
 
 	// Sized to the fixed pool stride, not desc.jointCount -- GLSL arrays can't be dynamically
 	// sized, so every invocation reserves the full kModelLiveMaxJointCount slots regardless of
@@ -72,7 +67,7 @@ void main() {
 		ModelSkeletonJoint sj = uModelSkeletonBuffers[nonuniformEXT(push.skeletonBufIdx)].joints[desc.skeletonBase + j];
 
 		vec3  windAxis = SafeBendAxis(sj.restUpAxis, localWind);
-		float windAngle = kModelWindStrength * (1.0 - sj.rigidity) * gustVal;
+		float windAngle = kModelWindStrength * (1.0 - sj.rigidity) * length(localWind);
 		vec4  windBend = AxisAngleToQuat(windAxis, windAngle);
 
 		// Static per-instance, per-joint asymmetry -- same rigidity damping as windBend, a

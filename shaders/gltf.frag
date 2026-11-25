@@ -10,6 +10,7 @@ layout(location = 5) in vec3 vRestPos;
 layout(location = 6) in vec3 vRestNormal;
 layout(location = 3) flat in uint vMaterialIndex;
 layout(location = 4) flat in uint vMaterialBufferIndex;
+layout(location = 7) flat in vec3 vInstanceWind;
 
 layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
@@ -53,63 +54,58 @@ vec3 valueNoise3(vec3 p) {
 LeafSample evaluateLeafCanopy(vec3 p, vec3 macroNormal, float warp, float sharpness) {
 	p += (valueNoise3(p * 0.37) - 0.5) * warp;
 
-	vec3 n = floor(p);
-	vec3 f = fract(p);
+	vec3 n    = floor(p);
+	vec3 f    = fract(p);
+	vec3 base = step(0.5, f) - 1.0;
 
-	float f1 = 8.0;
-	float f2 = 8.0;
+	float f1Sq       = 64.0;
+	float f2Sq       = 64.0;
 	vec3  bestId     = vec3(0.0);
 	vec3  bestNormal = macroNormal;
 	vec3  bestLocalR = vec3(0.0);
 
-	for (int k = -1; k <= 1; k++) {
-		for (int j = -1; j <= 1; j++) {
-			for (int i = -1; i <= 1; i++) {
-				vec3 g = vec3(float(i), float(j), float(k));
+	for (int k = 0; k <= 1; k++) {
+		for (int j = 0; j <= 1; j++) {
+			for (int i = 0; i <= 1; i++) {
+				vec3 g         = base + vec3(float(i), float(j), float(k));
 				vec3 cellCoord = n + g;
-				vec3 o = hash33(cellCoord);
+				vec3 o         = 0.15 + 0.70 * hash33(cellCoord);
 
-				// Randomize individual leaf normal, biased outward along the hull normal
-				vec3 randDir = normalize(hash33(cellCoord + 19.19) - 0.5);
-				vec3 leafN   = normalize(macroNormal * 0.85 + randDir * 0.75);
+				vec3 randDir = hash33(cellCoord + 19.19) - 0.5;
+				vec3 leafN   = normalize(macroNormal * 0.85 + randDir * 1.3);
 
-				// Build an orthonormal tangent frame for this leaf and spin it randomly
-				vec3 ref   = abs(leafN.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-				vec3 baseT = normalize(cross(ref, leafN));
-				vec3 baseB = cross(leafN, baseT);
+				// Cheap orthonormal frame without trig or branch
+				vec3 randT = hash33(cellCoord + 31.7) - 0.5;
+				vec3 T     = normalize(randT - leafN * dot(randT, leafN) + vec3(1e-5));
+				vec3 B     = cross(leafN, T);
 
-				float angle = o.z * 6.2831853;
-				float ca = cos(angle), sa = sin(angle);
-				vec3 T = baseT * ca + baseB * sa;
-				vec3 B = -baseT * sa + baseB * ca;
-
-				// Anisotropic projection turns isotropic Voronoi blobs into elongated leaf blades
-				vec3 r = g + o - f;
+				vec3 r      = g + o - f;
 				vec3 localR = vec3(
-					dot(r, T) * 0.55,     // Elongate along leaf length
-					dot(r, B) * 1.15,     // Narrow across leaf width
-					dot(r, leafN) * 1.45  // Flatten leaf thickness
+					dot(r, T) * 0.55,
+					dot(r, B) * 1.15,
+					dot(r, leafN) * 1.45
 				);
 
-				float d = length(localR);
-				if (d < f1) {
-					f2 = f1;
-					f1 = d;
+				float d2 = dot(localR, localR);
+				if (d2 < f1Sq) {
+					f2Sq       = f1Sq;
+					f1Sq       = d2;
 					bestId     = o;
 					bestNormal = leafN;
 					bestLocalR = localR;
-				} else if (d < f2) {
-					f2 = d;
+				} else if (d2 < f2Sq) {
+					f2Sq = d2;
 				}
 			}
 		}
 	}
 
+	float f1 = sqrt(f1Sq);
+	float f2 = sqrt(f2Sq);
+
 	LeafSample res;
 	res.normal     = bestNormal;
 	res.cellId     = bestId;
-	// max() guards smoothstep's edge0 < edge1 requirement -- sharpness could be driven to 0 by a
-	// material author.
 	res.edgeMask   = smoothstep(0.0, max(sharpness, 1e-4), f2 - f1);
 	res.midrib     = 1.0 - smoothstep(0.0, 0.06, abs(bestLocalR.y));
 	res.radialDist = clamp(f1, 0.0, 1.0);
@@ -287,29 +283,32 @@ void main() {
 	float ao = 1.0;
 
 	if (mat.material_role == MATERIAL_ROLE_PROCEDURAL_LEAF) {
-		// Wrap vWorldPos to preserve fp32 precision at planet-scale coordinates
-		vec3 wPosWrapped = mod(vWorldPos, 64.0);
+		float windSpeed   = length(vInstanceWind);
+		vec3  windDir     = windSpeed > 1e-4 ? (vInstanceWind / windSpeed) : vec3(1.0, 0.0, 0.0);
+		vec3  wPosWrapped = mod(vWorldPos, 64.0);
 
-		// 1. Subtle world-space domain displacement keeps leaves bound to vRestPos
-		//    while shifting blade overlaps as the branch moves through space
-		vec3 worldWiggle = (valueNoise3(wPosWrapped * 2.5) - 0.5) * 0.5;
+		// Bias domain wiggle and flutter phase along the actual wind vector
+		vec3 worldWiggle   = (valueNoise3(wPosWrapped * 2.5 - windDir * 2.5) - 0.5) * 0.5 * clamp(windSpeed, 0.0, 1.5);
 		vec3 leafSamplePos = vRestPos * mat.noise_scale + worldWiggle;
+		float distFade = 1.0 - smoothstep(50.0, 75.0, length(relPos));
+		LeafSample ls;
+		if (distFade > 0) {
+		ls = evaluateLeafCanopy(leafSamplePos, nRest, mat.noise_warp, mat.noise_sharpness);
 
-		LeafSample ls = evaluateLeafCanopy(leafSamplePos, nRest, mat.noise_warp, mat.noise_sharpness);
-
-		// 2. Per-leaf normal flutter driven by spatial traversal through vWorldPos
 		float leafPhase  = ls.cellId.x * 23.7 + ls.cellId.y * 41.3;
-		float worldPhase = dot(wPosWrapped, vec3(3.1, 4.7, 2.9)) + leafPhase;
-		float tiltAngle  = sin(worldPhase) * 0.25 * WIND_STRENGTH;
+		float worldPhase = dot(wPosWrapped, windDir * 0.25 + vec3(1.7, 2.3, 1.9)) + leafPhase;
+		float tiltAngle  = sin(worldPhase) * 0.25 * clamp(windSpeed, 0.0, 1.5);
 
 		vec3 flutterAxis = normalize(cross(nRest, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
 		vec3 tiltedRestN = normalize(ls.normal + flutterAxis * tiltAngle);
 		vec3 leafWorldN  = rotateNormalRestToWorld(tiltedRestN, nRest, nWorld);
+		shadingNormal = distFade*normalize(mix(nWorld, leafWorldN, mat.procedural_shading.x));
+		// if (abs(dot(tiltedRestN, normalize(vWorldPos-uCameraPosition.xyz))) < 0.05 && distFade > fract(ls.cellId.x/ls.cellId.y)) discard;
 
 		ao = mix(0.45, 1.0, ls.edgeMask) * mix(0.65, 1.0, nWorld.y * 0.5 + 0.5);
-		shadingNormal = normalize(mix(nWorld, leafWorldN, mat.procedural_shading.x));
+		}
 
-		vec3 leafColor = evaluateCosinePalette(mat, ls.cellId.x) * mix(1.0, 0.65, ls.midrib);
+		vec3 leafColor = evaluateCosinePalette(mat, distFade*ls.cellId.x) * mix(1.0, 0.65, ls.midrib);
 		baseColor.rgb = leafColor;
 
 	} else if (mat.material_role == MATERIAL_ROLE_PROCEDURAL_BARK) {

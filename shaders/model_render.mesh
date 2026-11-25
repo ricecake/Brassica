@@ -49,6 +49,7 @@ layout(location = 5) out vec3 outRestPos[];
 layout(location = 6) out vec3 outRestNormal[];
 layout(location = 3) flat out uint outMaterialIndex[];
 layout(location = 4) flat out uint outMaterialBufferIndex[];
+layout(location = 7) flat out vec3 outInstanceWind[];
 
 void main() {
 	// The task shader's own EmitMeshTasksEXT(desc.meshletCount, 1, 1) call is scoped to this
@@ -73,6 +74,8 @@ void main() {
 	uint vCount = min(meshlet.vertexCount, 128u);
 	uint pCount = min(meshlet.triangleCount, 128u);
 	SetMeshOutputsEXT(vCount, pCount);
+
+	vec3 wind = getLocalWind(relPosition + uCameraPosition.xyz, uTimeMs);
 
 	for (uint i = 0u; i < vCount; ++i) {
 		uint srcVertexIndexLocal = uGltfMeshletVertexBuffers[nonuniformEXT(push.meshletVertexBufIdx)]
@@ -104,7 +107,6 @@ void main() {
 			localNormal = normalize(mat3(skin) * v.normal);
 		}
 
-		vec3 wind = getLocalWind(localPos + uCameraPosition.xyz, uTimeMs);
 		MaterialData mat = uMaterialBuffers[nonuniformEXT(push.materialBufferIndex)].data[meshlet.materialIndex];
 		if (mat.material_role == MATERIAL_ROLE_PROCEDURAL_LEAF && length(wind) > 0.00) {
 			// Convert world wind direction into unrotated model space
@@ -113,10 +115,10 @@ void main() {
 
 			// Spatial wave in rest space breaks up uniform hull translation
 			float timeSec     = float(uTimeMs) * 0.001;
-			float hullPhase   = dot(v.position, vec3(4.3, 3.7, 5.1)) + dot(relPosition, vec3(0.7));
-			float flutterWave = sin(timeSec * 3.2 + hullPhase) * 0.65
-							+ sin(timeSec * 5.7 + hullPhase * 1.7) * 0.35;
-			// float flutterWave = dot_noise_fbm(relPosition, 4, timeSec*hullPhase);
+			// float hullPhase   = dot(v.position, vec3(4.3, 3.7, 5.1)) + dot(relPosition, vec3(0.7));
+			// float flutterWave = sin(timeSec * 3.2 + hullPhase) * 0.65
+			// 				+ sin(timeSec * 5.7 + hullPhase * 1.7) * 0.35;
+			float flutterWave = dot_noise_fbm(v.position*5, 2, 0.25*smoothstep(0.0, 3.0, length(wind))*timeSec);
 
 			// Directional compliance along wind + subtle normal breathing
 			vec3 flutterOffset = (localWindDir * 0.7 + localNormal * 0.3)
@@ -138,6 +140,7 @@ void main() {
 		outRestNormal[i] = v.normal;
 		outMaterialIndex[i] = meshlet.materialIndex;
 		outMaterialBufferIndex[i] = push.materialBufferIndex;
+		outInstanceWind[i] = wind;
 	}
 
 	// meshlet.triangleOffset is model-local (as its producer authored it); meshletTriangleWordBase
