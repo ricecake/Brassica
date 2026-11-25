@@ -112,13 +112,16 @@ float Gust(vec3 worldPos, vec2 windDir, uint timeMs) {
 }
 
 vec3 getLocalWind(vec3 worldPos, uint timeMs) {
-	vec3 prevailing = getPrevailingWind3(worldPos);
-	vec2 dir2D      = prevailing.xz;//length(prevailing.xz) > 1e-4 ? normalize(prevailing.xz) : vec2(1.0, 0.0);
-	float gust      = Gust(0.1*worldPos, dir2D, timeMs);
+	// return vec3(10*(0.5+0.5*sin(0.1*timeMs)),0,0);
+	vec3 prevailing = (dot_noise_fbm(0.001*worldPos, 3, 0.0004*timeMs))*getPrevailingWind3(worldPos);
+	vec3 T = cross(prevailing, vec3(0,1,0));
+	worldPos *= 0.0001*normalize(T);
+	vec2 dir2D      = length(prevailing.xz) > 1e-4 ? normalize(prevailing.xz) : vec2(1.0, 0.0);
+	float gust      = Gust(worldPos, dir2D, int(1*timeMs));
 
 	mat3 grad;
-	vec3 local = cross_noise_fbm(0.0005 * worldPos, 2, 0.0001 * float(timeMs), grad);
+	vec3 local = cross_noise_fbm(0.1 * worldPos, 2, 0.00001 * float(timeMs), grad);
 	vec3 curl  = get_curl(grad);
 
-	return prevailing + (0.5 * local + mix(0.5 * local, curl, gust));
+	return prevailing + (0.5 * local + mix(local, curl, 0.125*gust));
 }
