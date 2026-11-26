@@ -138,9 +138,7 @@ void main() {
 		if (p.y < terrainIntersectionY) break;
 
 		float cloudExt = sampleCloudExtinction(p);
-		float fogDiff = max(0.0, p.y - u_fogBaseHeight);
-		float fogExt = u_fogDensity * exp(-u_fogHeightFalloff * fogDiff);
-		float ext = cloudExt + fogExt;
+		float ext = cloudExt;
 
 		if (ext > kCloudThreshold) {
 			cloudStartDist = t;
@@ -181,9 +179,7 @@ void main() {
 		if (p.y < terrainIntersectionY) break;
 
 		float cloudExt = sampleCloudExtinction(p);
-		float fogDiff = max(0.0, p.y - u_fogBaseHeight);
-		float fogExt = u_fogDensity * exp(-u_fogHeightFalloff * fogDiff);
-		float ext = cloudExt + fogExt;
+		float ext = cloudExt;
 		ext *= smoothstep(0.01, 0.02, ext);
 
 		maxExt = max(maxExt, ext);
