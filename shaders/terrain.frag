@@ -46,11 +46,10 @@ vec2 decodeFlowDir(float encodedDir) {
 	return normalize(vec2(HYDRO_D8_OFFSETS[dir]));
 }
 
-vec4 sampleHydrologySmooth(uint texIdx, vec2 worldXZ, out vec2 outFlowVec) {
+vec4 sampleHydrologySmooth(uint texIdx, vec2 worldXZ, ivec2 texDim, out vec2 outFlowVec) {
 	float worldExtent = 2.0 * FAKE_PLANET_RADIUS * PI;
-	vec2 uv = fract((worldXZ / worldExtent) + 0.5); // Toroidal wrap matching climate_ca.comp
+	vec2 uv = fract((worldXZ / worldExtent) + 0.5);
 
-	ivec2 texDim = textureSize(uTextures2D[nonuniformEXT(texIdx)], 0);
 	vec2 texelCoord = uv * vec2(texDim) - 0.5;
 	ivec2 p00 = ivec2(floor(texelCoord));
 	vec2 f = fract(texelCoord);
@@ -60,19 +59,13 @@ vec4 sampleHydrologySmooth(uint texIdx, vec2 worldXZ, out vec2 outFlowVec) {
 	ivec2 c01 = (p00 + ivec2(0, 1) + texDim) % texDim;
 	ivec2 c11 = (p00 + ivec2(1, 1) + texDim) % texDim;
 
-	// vec4 s00 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c00, 0);
-	// vec4 s10 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c10, 0);
-	// vec4 s01 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c01, 0);
-	// vec4 s11 = texelFetch(uTextures2D[nonuniformEXT(texIdx)], c11, 0);
-	vec4 s00 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c00);
-	vec4 s10 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c10);
-	vec4 s01 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c01);
-	vec4 s11 = imageLoad(uImagesRGBA32F[nonuniformEXT(params.hydroMapIndex)], c11);
+	vec4 s00 = SAMPLE_2D_NEAREST_FETCH(texIdx, c00, 0);
+	vec4 s10 = SAMPLE_2D_NEAREST_FETCH(texIdx, c10, 0);
+	vec4 s01 = SAMPLE_2D_NEAREST_FETCH(texIdx, c01, 0);
+	vec4 s11 = SAMPLE_2D_NEAREST_FETCH(texIdx, c11, 0);
 
-	// Bilinear blend for continuous channels (filledElevation, discharge, bakedDischarge)
 	vec4 blended = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 
-	// Decode discrete D8 indices to 2D vectors BEFORE bilinear interpolation
 	int d00 = int(round(s00.b));
 	int d10 = int(round(s10.b));
 	int d01 = int(round(s01.b));
@@ -499,12 +492,12 @@ if (params.hydroMapIndex > 0u) {
 }
 */
 
-	float dropOff = dot(worldPos.xz, worldPos.xz) / (2.0 * FAKE_PLANET_RADIUS);
-	float flatWorldY = worldPos.y + dropOff;
+float dropOff = dot(inPosition.xz, inPosition.xz) / (2.0 * FAKE_PLANET_RADIUS);
+float flatWorldY = worldPos.y + dropOff;
 
 	if (params.hydroMapIndex > 0u && flatWorldY > params.waterLevel) {
 		vec2 flowVec;
-		vec4 hydro = sampleHydrologySmooth(params.hydroMapIndex, worldPos.xz, flowVec);
+		vec4 hydro = sampleHydrologySmooth(params.hydroMapIndex, worldPos.xz, ivec2(2048), flowVec);
 
 		float filledWorldY = hydro.r * 1000.0; // Must match climate_initial_2.comp's elevation scale
 		float discharge    = max(0.0, hydro.g);
@@ -524,8 +517,10 @@ if (params.hydroMapIndex > 0u) {
 		}
 
 		// 2. RIVERS & DRAINAGE ACCUMULATION
-		float logDischarge = log2(1.0 + discharge * 4.0);
-		float riverIntensity = smoothstep(0.25, 3.2, logDischarge);
+		// Require multi-cell upstream accumulation (single-cell rain runoff stays < 1.0)
+		const float RIVER_VIS_MIN = 1.0;
+		float logDischarge = log2(1.0 + max(0.0, discharge - RIVER_VIS_MIN) * 2.0);
+		float riverIntensity = smoothstep(0.15, 4.0, logDischarge);
 
 		if (riverIntensity > 0.01) {
 			float edgeBreakup = smoothstep(0.15, 0.55, riverIntensity + warpNoise.x * 0.12);
@@ -535,8 +530,9 @@ if (params.hydroMapIndex > 0u) {
 			if (flowMag > 0.05) {
 				vec2 dir = flowVec / flowMag;
 				vec2 perp = vec2(-dir.y, dir.x);
+				vec2 wrappedXZ = mod(worldPos.xz, 250.0);
+				vec2 localFlowUV = fract(vec2(dot(wrappedXZ, perp), dot(wrappedXZ, dir)) / 250.0) - 0.5;
 
-				vec2 localFlowUV = fract(vec2(dot(inPosition.xz, perp), dot(inPosition.xz, dir)) / 250.0) - 0.5;
 				float chevronCoord = localFlowUV.y + abs(localFlowUV.x) * 1.4 - (uTime * 0.35 * (0.5 + riverIntensity));
 				float chevronPulse = smoothstep(0.35, 0.5, abs(fract(chevronCoord) - 0.5));
 

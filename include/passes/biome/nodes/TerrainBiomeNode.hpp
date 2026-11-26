@@ -156,7 +156,7 @@ namespace brassica {
 			DispatchCompute2D(ctx, shader, push, dispatchDim, dispatchDim);
 		}
 
-		void Execute(graph::NodeContext& ctx) {
+void Execute(graph::NodeContext& ctx) {
 			vk::CommandBuffer vkCmd(static_cast<VkCommandBuffer>(ctx.cmd.vkCmd));
 
 			std::uint32_t mainWeatherIdx = ctx.StorageIndex<TerrainWeatherBiomeTexture>();
@@ -169,24 +169,9 @@ namespace brassica {
 			std::uint32_t hydroMapBIdx = ctx.StorageIndex<TerrainHydroMapBTexture>();
 			std::uint32_t hydroMapIdx = ctx.StorageIndex<TerrainHydroMapTexture>();
 
-			auto insertComputeBarrier = [&](vk::CommandBuffer cmd) {
-				vk::MemoryBarrier2 barrier{};
-				barrier.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader)
-					.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite)
-					.setDstStageMask(vk::PipelineStageFlagBits2::eComputeShader)
-					.setDstAccessMask(
-						vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
-					);
-
-				vk::DependencyInfo depInfo{};
-				depInfo.setMemoryBarriers(barrier);
-				cmd.pipelineBarrier2(depInfo);
-			};
-
 			const std::uint32_t textureDim = constants::Weather::kCoverageTextureDim;
 
 			if (!hasEverGenerated || forceRegeneration) {
-				// Initial baseline CA generation
 				DispatchCompute(
 					ctx,
 					initialShader,
@@ -198,82 +183,60 @@ namespace brassica {
 					},
 					textureDim
 				);
-				insertComputeBarrier(vkCmd);
+
+				vk::MemoryBarrier2 barrier{};
+				barrier.setSrcStageMask(vk::PipelineStageFlagBits2::eComputeShader)
+					.setSrcAccessMask(vk::AccessFlagBits2::eShaderStorageWrite)
+					.setDstStageMask(vk::PipelineStageFlagBits2::eComputeShader)
+					.setDstAccessMask(
+						vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
+					);
+
+				vk::DependencyInfo depInfo{};
+				depInfo.setMemoryBarriers(barrier);
+				vkCmd.pipelineBarrier2(depInfo);
 
 				cellOffset = 0;
-				std::uint32_t cellsToProcess = std::min(cellsPerUpdate, textureDim - cellOffset);
-
-				// First Cellular Automata partial update step from Map A -> Map B, writing outputs to main weather and biome maps
-				DispatchCompute2D(
-					ctx,
-					caShader,
-					ClimateCAPushConstants{
-						.inMapStorageIdx1 = weatherMapAIdx,
-						.inMapStorageIdx2 = biomeMapAIdx,
-						.inMapStorageIdx3 = hydroMapAIdx,
-						.outMapStorageIdx1 = weatherMapBIdx,
-						.outMapStorageIdx2 = biomeMapBIdx,
-						.outMapStorageIdx3 = hydroMapBIdx,
-						.weatherOutStorageIdx = mainWeatherIdx,
-						.biomeOutStorageIdx = mainBiomeIdx,
-						.hydroOutStorageIdx = hydroMapIdx,
-						.textureDim = textureDim,
-						.cellOffset = cellOffset,
-						.cellsPerUpdate = cellsToProcess,
-						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
-						.deltaTime = deltaTime
-					},
-					textureDim,
-					cellsToProcess
-				);
-
-				cellOffset += cellsToProcess;
-				if (cellOffset >= textureDim) {
-					cellOffset = 0;
-					pingPongState = true;
-				} else {
-					pingPongState = false;
-				}
+				pingPongState = false;
 				hasEverGenerated = true;
-			} else {
-				std::uint32_t inStateIdx1 = pingPongState ? weatherMapBIdx : weatherMapAIdx;
-				std::uint32_t inStateIdx2 = pingPongState ? biomeMapBIdx : biomeMapAIdx;
-				std::uint32_t inStateIdx3 = pingPongState ? hydroMapBIdx : hydroMapAIdx;
-				std::uint32_t outStateIdx1 = pingPongState ? weatherMapAIdx : weatherMapBIdx;
-				std::uint32_t outStateIdx2 = pingPongState ? biomeMapAIdx : biomeMapBIdx;
-				std::uint32_t outStateIdx3 = pingPongState ? hydroMapAIdx : hydroMapBIdx;
+			}
 
-				std::uint32_t cellsToProcess = std::min(cellsPerUpdate, textureDim - cellOffset);
+			std::uint32_t inStateIdx1 = pingPongState ? weatherMapBIdx : weatherMapAIdx;
+			std::uint32_t inStateIdx2 = pingPongState ? biomeMapBIdx : biomeMapAIdx;
+			std::uint32_t inStateIdx3 = pingPongState ? hydroMapBIdx : hydroMapAIdx;
+			std::uint32_t outStateIdx1 = pingPongState ? weatherMapAIdx : weatherMapBIdx;
+			std::uint32_t outStateIdx2 = pingPongState ? biomeMapAIdx : biomeMapBIdx;
+			std::uint32_t outStateIdx3 = pingPongState ? hydroMapAIdx : hydroMapBIdx;
 
-				// Run cellular automata step for fixed subset of cells
-				DispatchCompute2D(
-					ctx,
-					caShader,
-					ClimateCAPushConstants{
-						.inMapStorageIdx1 = inStateIdx1,
-						.inMapStorageIdx2 = inStateIdx2,
-						.inMapStorageIdx3 = inStateIdx3,
-						.outMapStorageIdx1 = outStateIdx1,
-						.outMapStorageIdx2 = outStateIdx2,
-						.outMapStorageIdx3 = outStateIdx3,
-						.weatherOutStorageIdx = mainWeatherIdx,
-						.biomeOutStorageIdx = mainBiomeIdx,
-						.hydroOutStorageIdx = hydroMapIdx,
-						.textureDim = textureDim,
-						.cellOffset = cellOffset,
-						.cellsPerUpdate = cellsToProcess,
-						.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
-						.deltaTime = deltaTime
-					},
-					textureDim,
-					cellsToProcess
-				);
+			std::uint32_t cellsToProcess = std::min(cellsPerUpdate, textureDim - cellOffset);
 
-				cellOffset += cellsToProcess;
-				if (cellOffset >= textureDim) {
-					cellOffset = 0;
-					pingPongState = !pingPongState;
-				}
+			DispatchCompute2D(
+				ctx,
+				caShader,
+				ClimateCAPushConstants{
+					.inMapStorageIdx1 = inStateIdx1,
+					.inMapStorageIdx2 = inStateIdx2,
+					.inMapStorageIdx3 = inStateIdx3,
+					.outMapStorageIdx1 = outStateIdx1,
+					.outMapStorageIdx2 = outStateIdx2,
+					.outMapStorageIdx3 = outStateIdx3,
+					.weatherOutStorageIdx = mainWeatherIdx,
+					.biomeOutStorageIdx = mainBiomeIdx,
+					.hydroOutStorageIdx = hydroMapIdx,
+					.textureDim = textureDim,
+					.cellOffset = cellOffset,
+					.cellsPerUpdate = cellsToProcess,
+					.cpuLightsIndex = ctx.BufferIndex<CpuLightsBuffer>(),
+					.deltaTime = deltaTime
+				},
+				textureDim,
+				cellsToProcess
+			);
+
+			cellOffset += cellsToProcess;
+			if (cellOffset >= textureDim) {
+				cellOffset = 0;
+				pingPongState = !pingPongState;
 			}
 		}
 	};

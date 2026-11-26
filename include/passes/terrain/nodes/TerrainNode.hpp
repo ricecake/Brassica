@@ -139,7 +139,7 @@ namespace brassica {
 			push.minMaxIndex = ctx.Index<TerrainMinMaxTexture>();
 			push.biomeIndex = ctx.Index<TerrainBiomeTexture>();
 			push.weatherBiomeIndex = ctx.Index<TerrainWeatherBiomeTexture>();
-			push.hydroMapIdx = ctx.StorageIndex<TerrainHydroMapTexture>();
+			push.hydroMapIdx = ctx.Index<TerrainHydroMapTexture>();
 
 			std::array<GraphicsShader*, 3> stages{&taskShader, &meshShader, &fragShader};
 			std::array<vk::Format, 4>      colorFormats{
