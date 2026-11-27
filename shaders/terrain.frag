@@ -327,25 +327,31 @@ void main() {
 	// finalAlbedo = mCellS.barycentric;
 	// finalAlbedo = getLocalWind(worldPos, uTimeMs);
 	// roughness *= 1.0+dot(N, getLocalWind(worldPos, uTimeMs));
-	vec3 wind = getLocalWind(worldPos, uTimeMs);
 
-// 	vec2  pXZ      = mod(worldPos.xz, 256.0);
-// 	float timeSec  = float(uTimeMs) * 0.001;
-// 	float gustWave = 0.5 + 0.5 * sin(dot(pXZ, normalize(wind.xz)) * 0.0135 - timeSec * (0.15 + length(wind) * 0.150)
-// 									+ sin(dot(pXZ, vec2(-normalize(wind.xz).y, normalize(wind.xz).x)) * 0.017) * 01.4);
-// 	float lean     = gustWave * clamp(length(wind), 0.0, 1.5);
+	float windFade = 1.0 - smoothstep(5000, 10000, effDist);
+	if (windFade > 0.0) {
+		vec3 wind = getLocalWind(worldPos, uTimeMs);
 
-// // vec2 grassSampleXZ = worldPos.xz - dir2D * (lean * 0.18 * bladeHeight);
-// 	finalAlbedo *= 1.0 + 0.15 * lean;
+	// 	vec2  pXZ      = mod(worldPos.xz, 256.0);
+	// 	float timeSec  = float(uTimeMs) * 0.001;
+	// 	float gustWave = 0.5 + 0.5 * sin(dot(pXZ, normalize(wind.xz)) * 0.0135 - timeSec * (0.15 + length(wind) * 0.150)
+	// 									+ sin(dot(pXZ, vec2(-normalize(wind.xz).y, normalize(wind.xz).x)) * 0.017) * 01.4);
+	// 	float lean     = gustWave * clamp(length(wind), 0.0, 1.5);
 
-	// finalAlbedo = wind;
-	vec3 windGrad3D;
-	vec2 windValPhase = phasorNoise3DGrad(worldPos*0.0001, smoothstep(0.0, 10.0, length(wind)), wind, N, 0.0, 0.0001*uTime, windGrad3D);
-	float windVal = windValPhase.x / max(length(windValPhase), 0.0001);
-	// finalAlbedo = windVal * wind;
-	finalAlbedo *= 1.0 + 0.15 * clamp(windVal,0,1);
-	roughness *= 1.0 - 0.15 * windVal;
+	// // vec2 grassSampleXZ = worldPos.xz - dir2D * (lean * 0.18 * bladeHeight);
+	// 	finalAlbedo *= 1.0 + 0.15 * lean;
 
+		// finalAlbedo = wind;
+		if (length(wind) > 0.0) {
+			vec3 windGrad3D;
+			vec2 windValPhase = phasorNoise3DGrad(worldPos*0.0001, smoothstep(1, 10.0, 10*length(wind)), wind, N, 0.10, 0.0001*uTime, windGrad3D);
+			float windVal = windValPhase.x / max(length(windValPhase), 0.0001);
+			// finalAlbedo = windVal * wind;
+			finalAlbedo *= 1.0 + (0.15 * clamp(windVal,0,1))*windFade;
+			roughness *= 1.0 - (0.15 * windVal)*windFade;
+			// finalAlbedo = windVal * wind;
+		}
+	}
 	outPosition = vec4(inPosition, 0.0);
 	outNormal   = vec4(normalize(N), 1.0);
 	outAlbedo   = vec4(finalAlbedo, inAlbedo.a > 0.0 ? inAlbedo.a : 1.0);
